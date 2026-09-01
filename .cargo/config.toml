@@ -1,0 +1,15 @@
+# dd-run 仓库级工具链配置（免 VS / Windows SDK，对应设计文档 §8.3）
+#
+# 环境事实（2026-09-01 实测，rustup 阿里云镜像 + NO_PROXY 直连安装）：
+# 1. 默认 target x86_64-pc-windows-msvc 无法链接——本机未安装 VS Build Tools，
+#    且 PATH 里的 link.exe 是 Git Bash 自带的 coreutils link（非 MSVC 链接器）。
+# 2. 宿主工具链已整体切换为 stable-x86_64-pc-windows-gnu（rustc 1.96.0，
+#    `rustup default`），自带 windows-gnu std 与自足链接器，无需交叉编译配置。
+# 3. 本仓库构建工具链通过国内代理时须 NO_PROXY 直连 mirrors.aliyun.com，
+#    否则下载会经海外代理出口而极慢/卡死。
+#
+# 如需交叉编译产物 .exe（Linux/macOS 产出），改用 cargo-xwin（§8.3 备选路径），
+# 不要改回 msvc 目标。
+
+[build]
+target = "x86_64-pc-windows-gnu"

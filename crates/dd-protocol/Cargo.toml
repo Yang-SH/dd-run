@@ -1,0 +1,10 @@
+[package]
+name = "dd-protocol"
+version = "1.0.0"
+edition = "2021"
+description = "dd-run Extension Protocol v1.0 的 Rust 类型投影与 NDJSON 成帧（契约来源：docs/protocol.md）"
+publish = false
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
