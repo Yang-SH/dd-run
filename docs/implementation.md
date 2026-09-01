@@ -1,6 +1,6 @@
 # dd-run 实施方案
 
-> **状态**：M0 之前（**尚无代码**，仓库只有设计文档与设计稿）。
+> **状态**：M0 已完成（`dd-protocol` / `dd-host` / `dd-ext-sample` / `dd-run` CLI 均已落地，40/40 测试全绿）；下一步 M1（最小可用面板）。
 > **关联**：[`protocol.md`](./protocol.md)（扩展协议 v1.0）· [`manifest-schema.md`](./manifest-schema.md)（清单 v1.0）· [`../cmdpal-platform-agnostic-design.md`](../cmdpal-platform-agnostic-design.md)（设计参考与验收标准 A1–A12）。
 
 ---
@@ -27,7 +27,7 @@
 
 **目标**：Cargo workspace 可构建，宿主能与一个示例扩展完成完整握手与一次命令拉取。
 
-> **实施记录**：M0 第一步（workspace 脚手架 + `dd-protocol` 协议类型 + 协议一致性测试）已完成，过程、验收标准与测试结果见 [`./m0-record.md`](./m0-record.md)。
+> **实施记录**：M0 已完成（2026-09-01）。分两步实施：第一步 workspace 脚手架 + `dd-protocol` 协议类型 + 协议一致性测试；第二步 `dd-host` 清单扫描/进程管理 + `dd-ext-sample` 示例扩展 + `dd-run` CLI + 全链路往返。过程、验收标准与测试结果（40/40 测试全绿 + CLI 实跑）见 [`./m0-record.md`](./m0-record.md)。
 
 **为什么先做协议**：协议是宿主与扩展之间**唯一的硬契约**。它一旦变动，两侧代码都要改；先冻结再写业务，可避免返工。
 
@@ -217,7 +217,7 @@
 
 | 里程碑 | 状态 | 说明 |
 |---|---|---|
-| M0 地基与协议冻结 | 🟨 进行中 | 第一步已完成（workspace + `dd-protocol` + 一致性测试 11/11 绿），见 [`./m0-record.md`](./m0-record.md)；示例扩展 / CLI / 宿主全链路未开始 |
+| M0 地基与协议冻结 | ✅ 已完成 | 全部任务完成：workspace + `dd-protocol`（一致性测试 46/46）+ `dd-host`（清单扫描 §7 九规则 / 进程管理）+ `dd-ext-sample` + `dd-run` CLI；验收 40/40 测试全绿、clippy 0 告警、CLI 全链路实跑通过，见 [`./m0-record.md`](./m0-record.md) |
 | M1 最小可用面板 | ⬜ 未开始 | — |
 | M2 命令执行与状态机 | ⬜ 未开始 | — |
 | M3 缓存与懒加载 | ⬜ 未开始 | — |
@@ -240,7 +240,7 @@
 | R1 | **egui 键盘焦点**可能无法满足 A11 的 100% 键盘可达 | M1 验证点；不通过则重新评估 ADR-2 |
 | R2 | **冷启动 A2 < 200ms** 可能被 egui/wgpu 初始化吃掉 | M3 实测；未达成则记录实测值与瓶颈并决策，不下调目标 |
 | R3 | **A3 < 16ms/帧** 在大结果集下可能不达标 | M4 实测；考虑异步过滤或结果截断 |
-| R4 | 项目**尚未确定 LICENSE**（且需复核上游 PowerToys 文档引用边界） | 公开仓库前必须补 |
+| R4 | 上游 PowerToys 文档引用边界需复核（许可证本身已定） | 已采用 **MIT**（根 `LICENSE` + 各 crate `license = "MIT"`），与 README 声明一致；引用边界复核留待专项一轮 |
 | R5 | 设计文档 §7 中 **9 个 `🪟` Windows 专属扩展**不可移植 | 已在 §7 加平台列标记；MVP 不纳入 |
 | R6 | CmdPal 仍处于 **preview**，上游接口可能演进 | 设计文档已标注 ✅ 核验日期；协议 v1.0 冻结后以本协议为准 |
 | R7 | 设计稿字体依赖 Google Fonts（国内可能不可达） | 已改为本地优先分层字体栈（Archivo → Segoe UI Variable Display → …），CDN 仅作渐进增强 |
@@ -249,4 +249,4 @@
 
 ## 7. 下一步
 
-**M0 的第一个动作**：建 Cargo workspace，把 [`docs/protocol.md`](./protocol.md) 的 JSON 示例做成 `dd-protocol` 的一致性测试用例——**先让协议在实现里立住，再往上盖 UI**。
+**M0 已完成**（见 [`./m0-record.md`](./m0-record.md)）。**M1 的第一个动作**：egui 窗口骨架 + Windows 全局热键（`RegisterHotKey`），并优先验证风险 R1（egui 键盘焦点）——R1 若不成立，按 ADR-2 启用备选框架退路。

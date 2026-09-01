@@ -3,10 +3,35 @@
 version = 4
 
 [[package]]
+name = "dd-ext-sample"
+version = "0.1.0"
+dependencies = [
+ "dd-protocol",
+ "serde_json",
+]
+
+[[package]]
+name = "dd-host"
+version = "0.1.0"
+dependencies = [
+ "dd-protocol",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "dd-protocol"
 version = "1.0.0"
 dependencies = [
  "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "dd-run"
+version = "0.1.0"
+dependencies = [
+ "dd-host",
  "serde_json",
 ]
 

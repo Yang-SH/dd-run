@@ -1,0 +1,12 @@
+{
+  "schema_version": "1.0",
+  "id": "com.example.sample",
+  "name": "Sample",
+  "version": "1.0.0",
+  "description": "M0 示例扩展：响应 initialize / top_level_commands / close。",
+  "author": "dd-run",
+  "entry": { "command": "${EXT_DIR}/dd-ext-sample" },
+  "frozen": true,
+  "capabilities": [],
+  "platforms": ["windows", "macos", "linux"]
+}

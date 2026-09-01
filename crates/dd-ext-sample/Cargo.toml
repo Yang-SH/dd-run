@@ -1,0 +1,11 @@
+[package]
+name = "dd-ext-sample"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "dd-run M0 示例扩展：以子进程身份响应 initialize / top_level_commands / close（契约来源：docs/protocol.md）"
+publish = false
+
+[dependencies]
+dd-protocol = { path = "../dd-protocol" }
+serde_json = "1"
