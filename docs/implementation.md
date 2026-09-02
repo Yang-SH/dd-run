@@ -1,6 +1,6 @@
 # dd-run 实施方案
 
-> **状态**：M0 已完成（`dd-protocol` / `dd-host` / `dd-ext-sample` / `dd-run` CLI 均已落地，40/40 测试全绿）；M1（`dd-gui` 窗口骨架 + 热键 + 首屏聚合 + 键盘全流程）已关闭（2026-09-02 真机人工验收通过，A1/A11/A12 全过，见 [`./m1-record.md`](./m1-record.md)）；M2（命令执行 + 8 种 Kind 状态机 + 页面栈 + UI 接线）代码已完成并通过工程验收（24/24 单测 + 全 workspace 构建无回归），真机验收第一轮 5/10 通过、其余问题（Toast 渲裁剪等 7 轮修复）已修，**待全量复验**后关闭（见 [`./m2-record.md`](./m2-record.md)）。
+> **状态**：M0 已完成（`dd-protocol` / `dd-host` / `dd-ext-sample` / `dd-run` CLI 均已落地，40/40 测试全绿）；M1（`dd-gui` 窗口骨架 + 热键 + 首屏聚合 + 键盘全流程）已关闭（2026-09-02 真机人工验收通过，A1/A11/A12 全过，见 [`./m1-record.md`](./m1-record.md)）；M2（命令执行 + 8 种 Kind 状态机 + 页面栈 + UI 接线）已关闭（2026-09-02 十项真机复验全部通过，A4/A5/A9 达成，24/24 单测 + 全 workspace 构建无回归，见 [`./m2-record.md`](./m2-record.md) §4.5）。M3（缓存与懒加载）逻辑层 `cache.rs` 已落地并通过工程验收，UI 接线待后续。
 > **关联**：[`protocol.md`](./protocol.md)（扩展协议 v1.0）· [`manifest-schema.md`](./manifest-schema.md)（清单 v1.0）· [`../cmdpal-platform-agnostic-design.md`](../cmdpal-platform-agnostic-design.md)（设计参考与验收标准 A1–A12）。
 
 ---
@@ -219,7 +219,7 @@
 |---|---|---|
 | M0 地基与协议冻结 | ✅ 已完成 | 全部任务完成：workspace + `dd-protocol`（一致性测试 46/46）+ `dd-host`（清单扫描 §7 九规则 / 进程管理）+ `dd-ext-sample` + `dd-run` CLI；验收 40/40 测试全绿、clippy 0 告警、CLI 全链路实跑通过，见 [`./m0-record.md`](./m0-record.md) |
 | M1 最小可用面板 | ✅ 已关闭 | 全部任务完成：GUI 骨架 + 全局热键 + Root View 渲染 + 清单扫描接入 + 进程管理（保活/崩溃检测骨架）+ 键盘导航（↑↓/Tab/Enter/Esc）+ **首屏并行聚合 `top_level_commands`**（错误隔离 + 示例扩展兜底）；12/12 单测 + 工程验收全绿；**2026-09-02 真机人工验收 11 项全过，R1 通过、ADR-2 成立**，见 [`./m1-record.md`](./m1-record.md)。残留：启动一帧闪屏（视觉瑕疵，见其 §4.6，未排期） |
-| M2 命令执行与状态机 | 🟨 待全量复验 | 逻辑层（页面栈 `navigation.rs` A5 + 8 种 Kind 裁决 `result.rs` A4 + Confirm 挂起重发 + invoke 参数 + `PanelItem` 透传 id/ext_id/command）+ UI 接线（`main.rs`：Enter 分派 `Invoke`→后台 `invoke` 并裁决 / `Page`→推页+`get_items`；Esc 非 Root 先返回、Root 隐藏；Toast（独立 Area）；Confirm 对话框；嵌套页；`items_changed` 100ms 合并全量重拉 A9）；**24/24 单测** + 工程验收全绿 + 全 workspace 构建无回归。真机第一轮 5/10 通过，Toast 渲染裁剪 / 滚动跟随 / 键鼠选择冲突等 7 轮修复已落地（13:38 版 exe），**待按 §4 清单全量复验**，见 [`./m2-record.md`](./m2-record.md) |
+| M2 命令执行与状态机 | ✅ 已关闭 | 逻辑层（页面栈 `navigation.rs` A5 + 8 种 Kind 裁决 `result.rs` A4 + Confirm 挂起重发 + invoke 参数 + `PanelItem` 透传 id/ext_id/command）+ UI 接线（`main.rs`：Enter 分派 `Invoke`→后台 `invoke` 并裁决 / `Page`→推页+`get_items`；Esc 非 Root 先返回、Root 隐藏；Toast（独立 Area）；Confirm 对话框；嵌套页；`items_changed` 100ms 合并全量重拉 A9）；**24/24 单测** + 工程验收全绿 + 全 workspace 构建无回归。十项真机复验全部通过（2026-09-02，见 [`./m2-record.md`](./m2-record.md) §4.5），完成判据 A4/A5/A9 全部达成。下一项进入 M3 UI 接线 |
 | M3 缓存与懒加载 | 🟨 逻辑层进行中 | 逻辑层 `cache.rs` 已落地（FrozenCache/LruWarmSet/ColdStartTimer，对齐 A6/A7/A2）+ 8 单测，工程验收全绿（dd-host 37 测 + clippy/fmt 0 告警）；UI 接线（冷启动读桩 / 点击桩复热 / LRU 超容驱逐标 stub）未开始 |
 | M4 内置扩展与健壮性 | ⬜ 未开始 | — |
 
@@ -251,6 +251,6 @@
 
 **M1 已关闭**（2026-09-02 真机人工验收 11 项全过，R1 通过、ADR-2 成立，见 [`./m1-record.md`](./m1-record.md)；残留启动一帧闪屏，见其 §4.6，未排期）。
 
-**M2 待全量复验**（逻辑层 + UI 接线 + 7 轮真机反馈修复均已落地，24/24 单测 + 工程验收全绿，见 [`./m2-record.md`](./m2-record.md)）：用最新 `./target/x86_64-pc-windows-gnu/debug/dd-gui.exe`（终端启动，日志权威）按其 §4 十项清单**全量复验**，通过后关闭 M2，进入 **M3 缓存与懒加载** UI 接线（frozen 桩 + 冷启动 + LRU，对应 A6/A7/A2 实测）。
+**M2 已关闭**（2026-09-02 十项真机复验全部通过，A4/A5/A9 达成，见 [`./m2-record.md`](./m2-record.md) §4.5）。下一项进入 **M3 缓存与懒加载** UI 接线（frozen 桩 + 冷启动 + LRU，对应 A6/A7/A2 实测）。
 
-**当前状态（2026-09-02 13:49）**：M1 关闭；M2 复验就绪——`dd-gui.exe`（13:38 版，含 Toast 独立 Area / 滚动跟随 / 键鼠冲突 / 滚顶回归全部修复）与 `dd-ext-sample.exe`（11 条命令，M2 验收扩展）已在 `target/x86_64-pc-windows-gnu/debug/` 就位；扩展清单扫描目录为 `%APPDATA%\dd-run\extensions.d`（见 `manifest.rs` §2）。M3 逻辑层 `cache.rs` 已落地并通过工程验收（dd-host 37 测全绿 + clippy/fmt 0 告警），UI 接线（冷启动读桩 / 点击桩复热 / LRU 超容驱逐标 stub）与 A6/A7/A2 真机实测待后续。M1/M2/M3 全部改动未 commit，待用户审核。
+**当前状态（2026-09-02 14:45）**：M1 已关闭；M2 已关闭（十项真机复验全过）；M3 逻辑层 `cache.rs` 已落地并通过工程验收（dd-host 37 测全绿 + clippy/fmt 0 告警），UI 接线（冷启动读桩 / 点击桩复热 / LRU 超容驱逐标 stub）与 A6/A7/A2 真机实测待后续。M1/M2 全部代码与文档改动已于 14:38 提交并推送（commit `7375355`）。
