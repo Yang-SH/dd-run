@@ -1,0 +1,20 @@
+[package]
+name = "dd-gui"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "dd-run host UI: frameless always-on-top command palette panel (egui)"
+
+[dependencies]
+dd-host = { path = "../dd-host" }
+dd-protocol = { path = "../dd-protocol" }
+serde_json = "1"
+eframe = { version = "0.36", default-features = false, features = [
+    "glow",
+    "default_fonts",
+] }
+windows-sys = { version = "0.61", features = [
+    "Win32_Foundation",
+    "Win32_UI_Input_KeyboardAndMouse",
+    "Win32_UI_WindowsAndMessaging",
+] }

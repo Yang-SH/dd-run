@@ -1,24 +1,37 @@
-//! dd-ext-sample —— M0 示例扩展。
+//! dd-ext-sample —— M0 示例扩展 + M2 人工验收扩展。
 //!
 //! 契约来源：[`docs/protocol.md`](../../docs/protocol.md)。
-//! 覆盖 M0 任务表中的"示例扩展"一项：响应 `initialize`（§5.1）、
-//! `top_level_commands`（§6.1，返回 2 条硬编码命令）、`close`（§6.6）。
+//! M0：`initialize`（§5.1）、`top_level_commands`（§6.1）、`close`（§6.6）。
+//! M2（人工验收支撑，见 m2-record.md §4 清单）：
+//! - `invoke`（§6.5）：按命令 id 分派，覆盖全部 **8 种 `CommandResult` Kind**；
+//! - `get_items`（§6.3）：`m2.page` 嵌套页（含 GoBack/GoHome/Dismiss 子命令）；
+//! - `items_changed`（§7.1）：`m2.page.notify`（页级，验 A9 刷新）与
+//!   `m2.top.notify`（顶层）两个触发命令。
 //!
 //! 传输层约定（§2）：stdin 读 NDJSON、stdout **只写协议消息**，
 //! 任何日志一律走 stderr（§2.5）。
 
 use std::io::{self, Read, Write};
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use dd_protocol::framing::{encode, Decoder, Frame};
 use dd_protocol::messages::{
-    error_codes, CommandListResult, InitializeResult, ProviderInfo, RawMessage, JSONRPC_VERSION,
+    error_codes, CommandListResult, GetItemsParams, GetItemsResult, InitializeResult, InvokeParams,
+    ItemsChangedParams, ProviderInfo, RawMessage, JSONRPC_VERSION,
 };
-use dd_protocol::model::{CommandItem, CommandRef, Details, Icon, IconKind, MetadataEntry};
+use dd_protocol::model::{
+    CommandItem, CommandRef, CommandResult, Details, Icon, IconKind, MetadataEntry,
+};
 
 /// 必须与示例清单的 `id` 一致（清单 schema §8：不一致时宿主以清单为准并记警告）。
 const PROVIDER_ID: &str = "com.example.sample";
 /// §5.3：v1.0 阶段扩展回 `"1.0"`。
 const PROTOCOL_VERSION: &str = "1.0";
+/// M2 验收嵌套页 id（`CommandRef::Page` / `get_items` / 页级 `items_changed` 共用）。
+const PAGE_ID: &str = "m2.page";
+/// `m2.page` 被 `get_items` 拉取的次数（验证 A9：`items_changed` → 全量重拉后
+/// 副标题计数自增，刷新肉眼可见）。
+static PAGE_FETCHES: AtomicUsize = AtomicUsize::new(0);
 
 fn main() {
     let stdin = io::stdin();
@@ -95,6 +108,79 @@ fn handle(line: &str, out: &mut dyn Write) -> bool {
             .expect("序列化 CommandListResult");
             send_result(out, id, result);
         }
+        "invoke" => {
+            let parsed = msg
+                .params
+                .and_then(|v| serde_json::from_value::<InvokeParams>(v).ok());
+            let Some(params) = parsed else {
+                send_error(
+                    out,
+                    Some(id),
+                    error_codes::INVALID_PARAMS,
+                    "Invalid params",
+                    None,
+                );
+                return false;
+            };
+            log(&format!(
+                "<- invoke id={} confirmed={}",
+                params.id,
+                params
+                    .context
+                    .as_ref()
+                    .and_then(|c| c.confirmed)
+                    .unwrap_or(false)
+            ));
+            let result = invoke_result(&params);
+            log(&format!("-> invoke {} => {:?}", params.id, result));
+            send_result(
+                out,
+                id,
+                serde_json::to_value(&result).expect("序列化 CommandResult"),
+            );
+            // §7.1：通知型命令在回包后补发 items_changed（验 A9：通知 + 全量重拉）
+            match params.id.as_str() {
+                "m2.page.notify" => send_items_changed(out, Some(PAGE_ID.to_string())),
+                "m2.top.notify" => send_items_changed(out, None),
+                _ => {}
+            }
+        }
+        "get_items" => {
+            let parsed = msg
+                .params
+                .and_then(|v| serde_json::from_value::<GetItemsParams>(v).ok());
+            let Some(params) = parsed else {
+                send_error(
+                    out,
+                    Some(id),
+                    error_codes::INVALID_PARAMS,
+                    "Invalid params",
+                    None,
+                );
+                return false;
+            };
+            if params.page_id == PAGE_ID {
+                let result = GetItemsResult {
+                    items: page_items(),
+                    has_more_items: false,
+                    is_loading: false,
+                };
+                send_result(
+                    out,
+                    id,
+                    serde_json::to_value(result).expect("序列化 GetItemsResult"),
+                );
+            } else {
+                // §9.2：未知页 → -32005
+                send_error(
+                    out,
+                    Some(id),
+                    error_codes::PAGE_NOT_FOUND,
+                    "Page not found",
+                    Some(serde_json::json!({ "page_id": params.page_id })),
+                );
+            }
+        }
         "close" => {
             // §6.6 后置规则 2：返回 result 后尽快自行退出
             send_result(out, id, serde_json::json!({}));
@@ -121,15 +207,16 @@ fn initialize_result() -> InitializeResult {
             frozen: true,
             has_fallback: false,
         },
-        // M0 不调用任何 host/* 方法；声明后宿主才会响应（§7.4 能力前置）
+        // M0/M2 不调用任何 host/* 方法；声明后宿主才会响应（§7.4 能力前置）
         capabilities: vec![],
         timeouts: None,
     }
 }
 
-/// §6.1：2 条硬编码顶层命令。字段覆盖 §8.1 的可选成员，供 M1 渲染联调。
+/// §6.1：顶层命令 = M0 原有 2 条 + 「M2 验收」分组（8 种 Kind 除 GoBack 外
+/// 全部在顶层可触发；GoBack 在 Root 上无上级、属 A5 边界，放进嵌套页验证）。
 fn top_level_commands() -> Vec<CommandItem> {
-    vec![
+    let mut cmds = vec![
         CommandItem {
             id: "sample.hello".to_string(),
             title: "Say Hello".to_string(),
@@ -181,7 +268,199 @@ fn top_level_commands() -> Vec<CommandItem> {
             }]),
             command: CommandRef::Invoke,
         },
+    ];
+    // 「M2 验收」分组：每条命令的标题即其验证点
+    cmds.push(item(
+        "m2.page",
+        "Page：进入子页",
+        "验证 A5：嵌套页 + get_items + Esc 返回",
+        &["page"],
+        CommandRef::Page {
+            page_id: PAGE_ID.to_string(),
+        },
+    ));
+    cmds.push(item(
+        "m2.kind.dismiss",
+        "Kind：Dismiss",
+        "关闭并清空状态：再次唤起回到首页（与 Hide 对比）",
+        &["kind"],
+        CommandRef::Invoke,
+    ));
+    cmds.push(item(
+        "m2.kind.hide",
+        "Kind：Hide",
+        "隐藏但保留状态：再次唤起仍回到当前页与查询（与 Dismiss 对比）",
+        &["kind"],
+        CommandRef::Invoke,
+    ));
+    cmds.push(item(
+        "m2.kind.go_home",
+        "Kind：GoHome",
+        "清空嵌套页回首页（Root 上执行无视觉变化，正常）",
+        &["kind"],
+        CommandRef::Invoke,
+    ));
+    cmds.push(item(
+        "m2.kind.keep_open",
+        "Kind：KeepOpen",
+        "面板保持打开（无视觉变化，正常）",
+        &["kind"],
+        CommandRef::Invoke,
+    ));
+    cmds.push(item(
+        "m2.kind.go_to_page",
+        "Kind：GoToPage",
+        "跳转到 m2.page（等价于 Page 命令的 invoke 形态）",
+        &["kind"],
+        CommandRef::Invoke,
+    ));
+    cmds.push(item(
+        "m2.kind.show_toast",
+        "Kind：ShowToast",
+        "底部弹出提示条，3 秒后消失",
+        &["kind"],
+        CommandRef::Invoke,
+    ));
+    cmds.push(item(
+        "m2.kind.confirm",
+        "Kind：Confirm",
+        "弹二次确认；确认后宿主带 confirmed=true 重发本命令",
+        &["kind"],
+        CommandRef::Invoke,
+    ));
+    cmds.push(item(
+        "m2.top.notify",
+        "通知：顶层 items_changed",
+        "发送顶层通知（宿主当前仅提示，Root 重聚合属已知遗留）",
+        &["a9"],
+        CommandRef::Invoke,
+    ));
+    cmds
+}
+
+/// §6.3 `m2.page` 内容：GoBack / GoHome / Dismiss 子命令 + 页级 items_changed 触发。
+/// 副标题带拉取计数：`items_changed` → 宿主全量重拉 → 计数 +1（A9 刷新肉眼可见）。
+fn page_items() -> Vec<CommandItem> {
+    let n = PAGE_FETCHES.fetch_add(1, Ordering::Relaxed) + 1;
+    let fetched = format!("本页第 {n} 次被拉取");
+    vec![
+        item(
+            "m2.page.back",
+            "GoBack：返回上一级",
+            &fetched,
+            &["kind"],
+            CommandRef::Invoke,
+        ),
+        item(
+            "m2.page.home",
+            "GoHome：回首页",
+            &fetched,
+            &["kind"],
+            CommandRef::Invoke,
+        ),
+        item(
+            "m2.page.dismiss",
+            "Dismiss：关闭面板",
+            &fetched,
+            &["kind"],
+            CommandRef::Invoke,
+        ),
+        item(
+            "m2.page.notify",
+            "通知：本页 items_changed",
+            &fetched,
+            &["a9"],
+            CommandRef::Invoke,
+        ),
     ]
+}
+
+/// §6.5 `invoke`：按命令 id 分派，覆盖全部 8 种 Kind（A4）。
+/// Confirm 二次确认靠 `context.confirmed` 区分首发/重发（§8.3 注）。
+fn invoke_result(params: &InvokeParams) -> CommandResult {
+    let confirmed = params
+        .context
+        .as_ref()
+        .and_then(|c| c.confirmed)
+        .unwrap_or(false);
+    match params.id.as_str() {
+        "sample.hello" => CommandResult::ShowToast {
+            message: "Hello from dd-ext-sample！".to_string(),
+            duration_ms: None,
+        },
+        // 保持打开：M4 接入 set_clipboard 前仅演示 KeepOpen Kind
+        "sample.copy" | "sample.copy.plain" => CommandResult::KeepOpen,
+        "m2.kind.dismiss" | "m2.page.dismiss" => CommandResult::Dismiss,
+        "m2.kind.hide" => CommandResult::Hide,
+        "m2.kind.go_home" | "m2.page.home" => CommandResult::GoHome,
+        "m2.page.back" => CommandResult::GoBack,
+        "m2.kind.keep_open" => CommandResult::KeepOpen,
+        "m2.kind.go_to_page" => CommandResult::GoToPage {
+            page_id: PAGE_ID.to_string(),
+        },
+        "m2.kind.show_toast" => CommandResult::ShowToast {
+            message: "ShowToast：3 秒后自动消失".to_string(),
+            duration_ms: Some(3_000),
+        },
+        "m2.kind.confirm" => {
+            if confirmed {
+                CommandResult::ShowToast {
+                    message: "确认流程闭环：已收到 confirmed=true 重发".to_string(),
+                    duration_ms: None,
+                }
+            } else {
+                CommandResult::Confirm {
+                    title: "二次确认".to_string(),
+                    description:
+                        "这是一条 Confirm 结果。确认后宿主应带 confirmed=true 重新 invoke 本命令。"
+                            .to_string(),
+                    confirm_label: "确认执行".to_string(),
+                    is_critical: false,
+                }
+            }
+        }
+        "m2.page.notify" => CommandResult::ShowToast {
+            message: "已发送本页 items_changed，观察副标题计数 +1".to_string(),
+            duration_ms: Some(3_000),
+        },
+        // 顶层通知不改 Toast，避免覆盖宿主的「扩展命令已更新」提示
+        "m2.top.notify" => CommandResult::KeepOpen,
+        other => CommandResult::ShowToast {
+            message: format!("未知命令：{other}"),
+            duration_ms: Some(3_000),
+        },
+    }
+}
+
+/// §7.1 `items_changed` 通知；`page_id=None` 表示顶层命令变了。
+fn send_items_changed(out: &mut dyn Write, page_id: Option<String>) {
+    let params =
+        serde_json::to_value(ItemsChangedParams { page_id }).expect("序列化 ItemsChangedParams");
+    send(
+        out,
+        &serde_json::json!({
+            "jsonrpc": JSONRPC_VERSION,
+            "method": "items_changed",
+            "params": params
+        }),
+    );
+    log("-> items_changed");
+}
+
+/// 构造一条「M2 验收」分组命令（section 固定，字段取最小集）。
+fn item(id: &str, title: &str, subtitle: &str, tags: &[&str], command: CommandRef) -> CommandItem {
+    CommandItem {
+        id: id.to_string(),
+        title: title.to_string(),
+        subtitle: (!subtitle.is_empty()).then(|| subtitle.to_string()),
+        icon: None,
+        section: Some("M2 验收".to_string()),
+        tags: (!tags.is_empty()).then(|| tags.iter().map(|t| t.to_string()).collect()),
+        details: None,
+        text_to_suggest: None,
+        more_commands: None,
+        command,
+    }
 }
 
 fn send_result(out: &mut dyn Write, id: u64, result: serde_json::Value) {

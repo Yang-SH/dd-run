@@ -11,9 +11,11 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use dd_host::manifest::{Entry, LoadedExtension, Manifest, ScanOptions};
-use dd_host::process::{ExtensionProcess, ProtocolError};
-use dd_protocol::messages::error_codes;
-use dd_protocol::model::CommandRef;
+use dd_host::process::{ExtensionProcess, ProtocolError, TIMEOUT_GET_ITEMS, TIMEOUT_INVOKE};
+use dd_protocol::messages::{
+    error_codes, GetItemsParams, GetItemsResult, InvokeContext, InvokeParams,
+};
+use dd_protocol::model::{CommandRef, CommandResult, Sender};
 
 /// 示例扩展可执行文件由 cargo 与测试二进制放在同一目录（测试二进制在 `deps/`
 /// 子目录），按此定位——`CARGO_BIN_EXE_*` 只对**自身 package** 的 bin 生效，
@@ -137,13 +139,41 @@ fn roundtrip_initialize_top_level_commands_close() {
         "M0 示例不使用任何 host/* 能力"
     );
 
-    // ③ top_level_commands（§6.1：2 条硬编码命令）
+    // ③ top_level_commands（§6.1：M0 2 条 + 「M2 验收」分组 9 条，共 11 条）
     let commands = process.top_level_commands().expect("拉取顶层命令");
-    assert_eq!(commands.len(), 2, "M0 任务表要求 2 条硬编码命令");
+    assert_eq!(
+        commands.len(),
+        11,
+        "M0 2 条 + M2 验收 9 条（Page + 7 种 Kind + 顶层通知；GoBack 属 A5 边界只在嵌套页）"
+    );
     let ids: Vec<&str> = commands.iter().map(|c| c.id.as_str()).collect();
-    assert_eq!(ids, vec!["sample.hello", "sample.copy"]);
+    assert_eq!(
+        ids,
+        vec![
+            "sample.hello",
+            "sample.copy",
+            "m2.page",
+            "m2.kind.dismiss",
+            "m2.kind.hide",
+            "m2.kind.go_home",
+            "m2.kind.keep_open",
+            "m2.kind.go_to_page",
+            "m2.kind.show_toast",
+            "m2.kind.confirm",
+            "m2.top.notify",
+        ]
+    );
     for item in &commands {
         assert!(!item.title.is_empty());
+    }
+    // M2：m2.page 为 Page 引用（A5 嵌套页），其余 10 条均为 Invoke
+    assert_eq!(
+        commands[2].command,
+        CommandRef::Page {
+            page_id: "m2.page".to_string()
+        }
+    );
+    for item in commands.iter().skip(3) {
         assert_eq!(item.command, CommandRef::Invoke);
     }
     // §8.1 可选字段：第 1 条带 section/tags/details/text_to_suggest
@@ -153,8 +183,134 @@ fn roundtrip_initialize_top_level_commands_close() {
     let more = commands[1].more_commands.as_ref().expect("more_commands");
     assert_eq!(more.len(), 1);
     assert_eq!(more[0].id, "sample.copy.plain");
+    // 「M2 验收」分组 section（第 3 条起）
+    assert!(
+        commands[2..]
+            .iter()
+            .all(|c| c.section.as_deref() == Some("M2 验收")),
+        "M2 命令应在同一分组"
+    );
 
     // ④ close（§6.6：返回 result 后进程自行退出）
+    process.close().expect("优雅关闭");
+}
+
+/// M2 链路运行时验证（支撑 m2-record.md §4 人工验收清单）：
+/// `invoke`（8 种 Kind 分派 + Confirm 重发）/ `get_items`（嵌套页 + 未知页 -32005）/
+/// `items_changed`（页级 + 顶层通知，A9 全量重拉计数自增）。
+#[test]
+fn roundtrip_m2_invoke_get_items_items_changed() {
+    let tmp = TempDir::new("m2");
+    let ext = load_sample(&tmp);
+    let mut process = ExtensionProcess::spawn(&ext).expect("spawn 示例扩展");
+    process.initialize("1.0", "0.1.0").expect("握手成功");
+
+    let invoke = |process: &mut ExtensionProcess, id: &str, confirmed: bool| {
+        process
+            .call(
+                "invoke",
+                serde_json::json!(InvokeParams {
+                    id: id.to_string(),
+                    sender: Sender::TopLevel,
+                    context: Some(InvokeContext {
+                        query: None,
+                        selected_item_id: None,
+                        form_data: None,
+                        confirmed: confirmed.then_some(true),
+                    }),
+                }),
+                TIMEOUT_INVOKE,
+            )
+            .expect("invoke 成功")
+    };
+
+    // ① sample.hello → ShowToast（M2 清单 #1/#5）
+    let value = invoke(&mut process, "sample.hello", false);
+    let result: CommandResult = serde_json::from_value(value).expect("解析 CommandResult");
+    assert_eq!(
+        result,
+        CommandResult::ShowToast {
+            message: "Hello from dd-ext-sample！".to_string(),
+            duration_ms: None,
+        }
+    );
+
+    // ② Confirm 首发 → Confirm Kind；confirmed=true 重发 → ShowToast（§8.3 注，清单 #6）
+    let value = invoke(&mut process, "m2.kind.confirm", false);
+    let result: CommandResult = serde_json::from_value(value).expect("解析 CommandResult");
+    assert!(
+        matches!(result, CommandResult::Confirm { .. }),
+        "首发应返回 Confirm，实际 {:?}",
+        result
+    );
+    let value = invoke(&mut process, "m2.kind.confirm", true);
+    let result: CommandResult = serde_json::from_value(value).expect("解析 CommandResult");
+    assert!(
+        matches!(result, CommandResult::ShowToast { .. }),
+        "确认重发应返回 ShowToast，实际 {:?}",
+        result
+    );
+
+    // ③ get_items（§6.3）：m2.page 4 条 + 拉取计数（清单 #2）；未知页 → -32005
+    let get_page = |process: &mut ExtensionProcess, page_id: &str| {
+        process.call(
+            "get_items",
+            serde_json::json!(GetItemsParams {
+                page_id: page_id.to_string(),
+                search_text: None,
+            }),
+            TIMEOUT_GET_ITEMS,
+        )
+    };
+    let value = get_page(&mut process, "m2.page").expect("get_items 成功");
+    let page: GetItemsResult = serde_json::from_value(value).expect("解析 GetItemsResult");
+    assert_eq!(page.items.len(), 4, "m2.page 应返回 4 条子命令");
+    assert!(
+        page.items[0]
+            .subtitle
+            .as_deref()
+            .unwrap_or_default()
+            .contains("第 1 次被拉取"),
+        "首次拉取计数应为 1：{:?}",
+        page.items[0].subtitle
+    );
+    let err = get_page(&mut process, "nope").expect_err("未知页应报错");
+    match err {
+        ProtocolError::Rpc(e) => assert_eq!(e.code, error_codes::PAGE_NOT_FOUND, "§9.2 -32005"),
+        other => panic!("应为 Rpc 错误，实际 {other:?}"),
+    }
+
+    // ④ items_changed（§7.1，A9）：页级通知 → poll 收到 → 重拉后计数 +1（清单 #8）
+    let value = invoke(&mut process, "m2.page.notify", false);
+    let result: CommandResult = serde_json::from_value(value).expect("解析 CommandResult");
+    assert!(matches!(result, CommandResult::ShowToast { .. }));
+    assert_eq!(
+        process.poll_notifications(),
+        vec![Some("m2.page".to_string())],
+        "应收到页级 items_changed"
+    );
+    let value = get_page(&mut process, "m2.page").expect("通知后重拉");
+    let page: GetItemsResult = serde_json::from_value(value).expect("解析 GetItemsResult");
+    assert!(
+        page.items[0]
+            .subtitle
+            .as_deref()
+            .unwrap_or_default()
+            .contains("第 2 次被拉取"),
+        "重拉后计数应为 2：{:?}",
+        page.items[0].subtitle
+    );
+
+    // ⑤ 顶层通知（page_id 缺省 = 顶层命令变了）
+    let value = invoke(&mut process, "m2.top.notify", false);
+    let result: CommandResult = serde_json::from_value(value).expect("解析 CommandResult");
+    assert_eq!(result, CommandResult::KeepOpen);
+    assert_eq!(
+        process.poll_notifications(),
+        vec![None],
+        "page_id 缺省应表示顶层"
+    );
+
     process.close().expect("优雅关闭");
 }
 

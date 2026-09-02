@@ -11,15 +11,15 @@
 use std::io::Read;
 use std::io::Write as _;
 use std::process::{Child, ChildStdin, Command, ExitStatus, Stdio};
-use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
+use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender, TryRecvError};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
 use dd_protocol::framing::{encode, Decoder, Frame, DEFAULT_MAX_MESSAGE_BYTES};
 use dd_protocol::messages::{
-    error_codes, CommandListResult, HostInfo, InitializeParams, InitializeResult, RawMessage,
-    RpcError, TransportInfo, JSONRPC_VERSION,
+    error_codes, CommandListResult, HostInfo, InitializeParams, InitializeResult,
+    ItemsChangedParams, RawMessage, RpcError, TransportInfo, JSONRPC_VERSION,
 };
 use dd_protocol::model::CommandItem;
 
@@ -28,6 +28,10 @@ use crate::manifest::{current_platform, LoadedExtension, HOST_CAPABILITIES};
 /// §10 各阶段默认超时。
 pub const TIMEOUT_INITIALIZE: Duration = Duration::from_millis(5_000);
 pub const TIMEOUT_TOP_LEVEL_COMMANDS: Duration = Duration::from_millis(3_000);
+/// §10 `get_items` = 2000 ms（首屏路径上的热路径）。
+pub const TIMEOUT_GET_ITEMS: Duration = Duration::from_millis(2_000);
+/// §10 `invoke` = 10000 ms（命令可能耗时，如启动应用）。
+pub const TIMEOUT_INVOKE: Duration = Duration::from_millis(10_000);
 /// §6.6 后置规则 3：`close` 超时即强杀。
 pub const TIMEOUT_CLOSE_RESPONSE: Duration = Duration::from_millis(1_000);
 pub const TIMEOUT_CLOSE_EXIT: Duration = Duration::from_millis(1_000);
@@ -329,6 +333,45 @@ impl ExtensionProcess {
     pub fn stderr(&self) -> String {
         let bytes = self.stderr.lock().map(|g| g.clone()).unwrap_or_default();
         String::from_utf8_lossy(&bytes).to_string()
+    }
+
+    /// §7.1 通知轮询（非阻塞）：在没有 in-flight 请求时消费扩展发来的通知。
+    ///
+    /// 返回本次轮询收到的 `items_changed` 的 `page_id`（`None` 表示"顶层
+    /// 命令变了"）。宿主据此在 UI 空闲时触发**全量重拉**
+    /// （§6.3 + 验收 A9：协议层不做增量推送）。
+    ///
+    /// 所有通知仍会记入 [`Self::notifications`]，供诊断与后续处理。
+    pub fn poll_notifications(&mut self) -> Vec<Option<String>> {
+        let mut changed = Vec::new();
+        loop {
+            match self.rx.try_recv() {
+                Ok(Frame::Message(line)) => {
+                    let Ok(msg) = serde_json::from_str::<RawMessage>(&line) else {
+                        continue;
+                    };
+                    if msg.jsonrpc != JSONRPC_VERSION {
+                        continue;
+                    }
+                    if msg.method.as_deref() == Some("items_changed") {
+                        // §7.1：params 可缺省，缺省即"顶层"
+                        let page_id = msg
+                            .params
+                            .as_ref()
+                            .and_then(|v| {
+                                serde_json::from_value::<ItemsChangedParams>(v.clone()).ok()
+                            })
+                            .and_then(|p| p.page_id);
+                        changed.push(page_id);
+                    }
+                    self.notifications.push(msg);
+                }
+                // 超限/非法编码的通知：与 call 侧同口径，忽略不致命
+                Ok(_) => {}
+                Err(TryRecvError::Empty) | Err(TryRecvError::Disconnected) => break,
+            }
+        }
+        changed
     }
 
     /// 发出一次请求并等待**属于该请求**的响应。
