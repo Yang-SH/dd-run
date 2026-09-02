@@ -18,8 +18,8 @@ use std::time::{Duration, Instant};
 
 use dd_protocol::framing::{encode, Decoder, Frame, DEFAULT_MAX_MESSAGE_BYTES};
 use dd_protocol::messages::{
-    error_codes, CommandListResult, HostInfo, InitializeParams, InitializeResult,
-    ItemsChangedParams, RawMessage, RpcError, TransportInfo, JSONRPC_VERSION,
+    error_codes, CommandListResult, GetCommandParams, GetCommandResult, HostInfo, InitializeParams,
+    InitializeResult, ItemsChangedParams, RawMessage, RpcError, TransportInfo, JSONRPC_VERSION,
 };
 use dd_protocol::model::CommandItem;
 
@@ -28,6 +28,8 @@ use crate::manifest::{current_platform, LoadedExtension, HOST_CAPABILITIES};
 /// §10 各阶段默认超时。
 pub const TIMEOUT_INITIALIZE: Duration = Duration::from_millis(5_000);
 pub const TIMEOUT_TOP_LEVEL_COMMANDS: Duration = Duration::from_millis(3_000);
+/// §10 `get_command` = 5000 ms（含冷启动进程的 spawn 开销，协议 §10 表）。
+pub const TIMEOUT_GET_COMMAND: Duration = Duration::from_millis(5_000);
 /// §10 `get_items` = 2000 ms（首屏路径上的热路径）。
 pub const TIMEOUT_GET_ITEMS: Duration = Duration::from_millis(2_000);
 /// §10 `invoke` = 10000 ms（命令可能耗时，如启动应用）。
@@ -299,6 +301,21 @@ impl ExtensionProcess {
         )?;
         let result: CommandListResult = serde_json::from_value(value)?;
         Ok(result.commands)
+    }
+
+    /// §6.4 按 id 取回真实命令——**frozen 桩复热链路**的一环
+    /// （协议 §6.4：点击 frozen 桩 → spawn → `initialize` → `get_command` → 取回真实命令后执行）。
+    ///
+    /// `Ok(None)` = 扩展答复 `command: null`（该桩已失效，**正常结果、非错误**，
+    /// 宿主应回退 stub 并向用户报错）；`Err` 才是协议/超时/进程故障。
+    pub fn get_command(&mut self, id: &str) -> Result<Option<CommandItem>, ProtocolError> {
+        let value = self.call(
+            "get_command",
+            serde_json::to_value(GetCommandParams { id: id.to_string() })?,
+            TIMEOUT_GET_COMMAND,
+        )?;
+        let result: GetCommandResult = serde_json::from_value(value)?;
+        Ok(result.command)
     }
 
     /// §6.6 优雅关闭：发 `close` → 等 result → 等进程自行退出；超时则强杀。

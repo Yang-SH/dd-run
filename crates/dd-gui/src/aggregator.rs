@@ -1,5 +1,4 @@
-//! 首屏聚合层：扫描扩展 → 并行 `spawn → initialize → top_level_commands`
-//! → 合并为可渲染的 [`PanelItem`] 列表。
+//! 首屏聚合层：扫描扩展 → 并行拉取 → 合并为可渲染的 [`PanelItem`] 列表。
 //!
 //! 对齐 [`docs/protocol.md`](../../docs/protocol.md) §5（握手）/ §6.1（顶层命令）
 //! 与 [`docs/implementation.md`](../../docs/implementation.md) M1「首屏聚合」任务：
@@ -7,10 +6,17 @@
 //! - **错误隔离**：单个扩展失败只记入 [`SourceSummary`]，不影响其他扩展与整体渲染；
 //! - **兜底**：扩展目录无清单时，回退到与 `dd-gui` 同目录的 `dd-ext-sample.exe`
 //!   （M0 `--roundtrip` 同款思路，保证无扩展环境的开发验收路径）。
+//!
+//! M3 缓存与懒加载（见 [`docs/implementation.md`](../../docs/implementation.md) §M3）：
+//! - **frozen + 磁盘桩命中** → [`ExtItems::Stub`]：**不拉起进程**（A6），首屏读桩渲染；
+//! - **frozen 无桩**（首次运行）→ 照常 spawn 拉取并**落盘**（下次冷启动读桩）；
+//! - **fresh**（`frozen=false`）→ spawn 拉取，**不落盘**；
+//! - 源状态三态：Warm（进程活）/ Stub（仅桩）/ Failed（失败），供页脚展示与 A6 观察。
 
 use std::path::PathBuf;
 use std::thread;
 
+use dd_host::cache::{FrozenCache, FrozenSnapshot};
 use dd_host::manifest::{self, LoadedExtension, ScanOptions};
 use dd_host::process::ExtensionProcess;
 use dd_protocol::model::CommandItem;
@@ -25,7 +31,14 @@ pub const HOST_VERSION: &str = env!("CARGO_PKG_VERSION");
 /// 单个扩展的拉取结果（**不携带进程**，便于纯逻辑单测构造）。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ExtItems {
+    /// 进程保活、命令已取回（warm）。
     Ready {
+        id: String,
+        name: String,
+        items: Vec<CommandItem>,
+    },
+    /// 磁盘桩命中（frozen 冷启动，**无进程**，A6）；点击其命令触发复热。
+    Stub {
         id: String,
         name: String,
         items: Vec<CommandItem>,
@@ -54,11 +67,20 @@ pub struct SourceSummary {
     pub status: SourceStatus,
 }
 
-/// 单个扩展源的展示状态。
+/// 单个扩展源的展示状态（M3 起为**三态**，供页脚展示与 A6 真机观察）。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SourceStatus {
-    Ready { commands: usize },
-    Failed { error: String },
+    /// 进程保活中（warm）：冷启动 fresh 扩展、或桩项复热成功后。
+    Warm {
+        commands: usize,
+    },
+    /// 仅磁盘桩、无活进程（frozen 冷启动读桩；LRU 驱逐后回落）。点击其命令会触发复热。
+    Stub {
+        commands: usize,
+    },
+    Failed {
+        error: String,
+    },
 }
 
 impl SourceStatus {
@@ -66,17 +88,24 @@ impl SourceStatus {
     pub fn is_failed(&self) -> bool {
         matches!(self, Self::Failed { .. })
     }
+
+    /// 是否处于桩态（无进程，点击需复热）。
+    pub fn is_stub(&self) -> bool {
+        matches!(self, Self::Stub { .. })
+    }
 }
 
 impl ExtItems {
-    /// 扩展清单 id（`Ready` / `Failed` 均有，供进程配对与诊断）。
+    /// 扩展清单 id（`Ready` / `Stub` / `Failed` 均有，供进程配对与诊断）。
     pub fn id(&self) -> &str {
         match self {
-            ExtItems::Ready { id, .. } | ExtItems::Failed { id, .. } => id,
+            ExtItems::Ready { id, .. }
+            | ExtItems::Stub { id, .. }
+            | ExtItems::Failed { id, .. } => id,
         }
     }
 
-    /// 是否成功拉取。
+    /// 是否已成功拉取并保活进程（warm）。
     pub fn is_ready(&self) -> bool {
         matches!(self, ExtItems::Ready { .. })
     }
@@ -147,6 +176,12 @@ enum ExtOutcome {
         name: String,
         items: Vec<CommandItem>,
     },
+    /// 磁盘桩命中：无进程（A6）。
+    Stub {
+        id: String,
+        name: String,
+        items: Vec<CommandItem>,
+    },
     Failed {
         id: String,
         name: String,
@@ -154,71 +189,103 @@ enum ExtOutcome {
     },
 }
 
-/// 并行拉取：每扩展一个线程，进程对象线程独占，join 回传。
-pub fn collect_top_level(exts: &[LoadedExtension]) -> CollectResult {
-    let mut handles = Vec::with_capacity(exts.len());
-    for ext in exts {
-        let ext = ext.clone();
-        handles.push(thread::spawn(move || load_one(ext)));
-    }
-
+/// 并行收集首屏：每扩展一个线程，进程对象线程独占，join 回传。
+///
+/// M3 分流（见模块文档）：frozen + 磁盘桩命中 → [`ExtOutcome::Stub`]（不 spawn）；
+/// frozen 无桩（首启）→ spawn 拉取并落盘；fresh → spawn 拉取不落盘。
+/// `cache` 用 scoped thread 共享只读借用（`FrozenCache` 仅含目录路径，无内部状态）。
+pub fn collect_top_level(exts: &[LoadedExtension], cache: Option<&FrozenCache>) -> CollectResult {
     let mut processes = Vec::new();
-    let mut per_ext = Vec::with_capacity(handles.len());
-    for handle in handles {
-        match handle.join() {
-            Ok(ExtOutcome::Ready {
-                proc,
-                id,
-                name,
-                items,
-            }) => {
-                processes.push(*proc);
-                per_ext.push(ExtItems::Ready { id, name, items });
-            }
-            Ok(ExtOutcome::Failed { id, name, error }) => {
-                per_ext.push(ExtItems::Failed { id, name, error });
-            }
-            Err(_) => per_ext.push(ExtItems::Failed {
-                id: "unknown".to_string(),
-                name: "扩展线程".to_string(),
-                error: "拉取线程 panic".to_string(),
-            }),
+    let mut per_ext = Vec::with_capacity(exts.len());
+    thread::scope(|scope| {
+        let mut handles = Vec::with_capacity(exts.len());
+        for ext in exts {
+            let ext = ext.clone();
+            handles.push(scope.spawn(move || load_one(ext, cache)));
         }
-    }
+        for handle in handles {
+            match handle.join() {
+                Ok(ExtOutcome::Ready {
+                    proc,
+                    id,
+                    name,
+                    items,
+                }) => {
+                    processes.push(*proc);
+                    per_ext.push(ExtItems::Ready { id, name, items });
+                }
+                Ok(ExtOutcome::Stub { id, name, items }) => {
+                    per_ext.push(ExtItems::Stub { id, name, items });
+                }
+                Ok(ExtOutcome::Failed { id, name, error }) => {
+                    per_ext.push(ExtItems::Failed { id, name, error });
+                }
+                Err(_) => per_ext.push(ExtItems::Failed {
+                    id: "unknown".to_string(),
+                    name: "扩展线程".to_string(),
+                    error: "拉取线程 panic".to_string(),
+                }),
+            }
+        }
+    });
     CollectResult { processes, per_ext }
 }
 
-/// 一个扩展的完整链路：spawn → initialize（握手+版本协商）→ top_level_commands。
-fn load_one(ext: LoadedExtension) -> ExtOutcome {
+/// spawn → `initialize`（握手+版本协商）。供首屏拉取与 **GUI 桩复热链路**复用。
+pub fn spawn_and_initialize(ext: &LoadedExtension) -> Result<ExtensionProcess, String> {
+    let mut spawned = ExtensionProcess::spawn(ext).map_err(|e| format!("spawn 失败：{e}"))?;
+    spawned
+        .initialize(PROTOCOL_VERSION, HOST_VERSION)
+        .map_err(|e| format!("initialize 失败：{e}"))?;
+    Ok(spawned)
+}
+
+/// 一个扩展的完整链路：M3 分流后 spawn → initialize → top_level_commands（+落盘）。
+fn load_one(ext: LoadedExtension, cache: Option<&FrozenCache>) -> ExtOutcome {
     let id = ext.manifest.id.clone();
     let name = ext.manifest.name.clone();
-    let mut spawned = match ExtensionProcess::spawn(&ext) {
-        Ok(p) => p,
-        Err(e) => {
-            return ExtOutcome::Failed {
+    let version = ext.manifest.version.clone();
+
+    // M3：frozen 且磁盘桩命中（键 = id + version，`FrozenCache::load` 已按当前
+    // version 精确定位）→ **不拉起进程**（A6），首屏直接渲染桩。
+    if ext.manifest.frozen {
+        if let Some(snap) = cache.and_then(|c| c.load(&id, &version)) {
+            return ExtOutcome::Stub {
                 id,
                 name,
-                error: format!("spawn 失败：{e}"),
-            }
-        }
-    };
-    match spawned.initialize(PROTOCOL_VERSION, HOST_VERSION) {
-        Ok(_) => {}
-        Err(e) => {
-            return ExtOutcome::Failed {
-                id,
-                name,
-                error: format!("initialize 失败：{e}"),
-            }
+                items: snap.commands,
+            };
         }
     }
+
+    // 无桩（frozen 首启）或 fresh：spawn → initialize → top_level_commands。
+    let mut spawned = match spawn_and_initialize(&ext) {
+        Ok(p) => p,
+        Err(e) => return ExtOutcome::Failed { id, name, error: e },
+    };
     match spawned.top_level_commands() {
-        Ok(items) => ExtOutcome::Ready {
-            proc: Box::new(spawned),
-            id,
-            name,
-            items,
-        },
+        Ok(items) => {
+            // M3：frozen 成功拉取 → 落盘桩（下次冷启动读桩不拉起）。
+            // 先清同 id 的旧版本桩，避免旧文件残留；落盘失败不致命（本次仍 warm 服务，
+            // 仅下次冷启动退化为再拉一次）。
+            if ext.manifest.frozen {
+                if let Some(c) = cache {
+                    c.invalidate_if_version_changed(&id, &version);
+                    let snap = FrozenSnapshot {
+                        ext_id: id.clone(),
+                        version: version.clone(),
+                        commands: items.clone(),
+                    };
+                    let _ = c.save(&snap);
+                }
+            }
+            ExtOutcome::Ready {
+                proc: Box::new(spawned),
+                id,
+                name,
+                items,
+            }
+        }
         Err(e) => ExtOutcome::Failed {
             id,
             name,
@@ -241,7 +308,23 @@ pub fn flatten(per_ext: &[ExtItems]) -> (Vec<PanelItem>, Vec<SourceSummary>) {
                 sources.push(SourceSummary {
                     id: id.clone(),
                     name: name.clone(),
-                    status: SourceStatus::Ready {
+                    status: SourceStatus::Warm {
+                        commands: cmds.len(),
+                    },
+                });
+                for cmd in cmds {
+                    items.push(to_panel_item(cmd, id, name));
+                }
+            }
+            ExtItems::Stub {
+                id,
+                name,
+                items: cmds,
+            } => {
+                sources.push(SourceSummary {
+                    id: id.clone(),
+                    name: name.clone(),
+                    status: SourceStatus::Stub {
                         commands: cmds.len(),
                     },
                 });
@@ -325,39 +408,48 @@ mod tests {
     }
 
     #[test]
-    fn flatten_merges_ready_and_keeps_failed_isolated() {
+    fn flatten_merges_warm_stub_and_keeps_failed_isolated() {
         let per_ext = vec![
             ready(
                 "com.example.a",
                 "Ext A",
                 vec![cmd("a.1", "A1", None), cmd("a.2", "A2", Some("系统"))],
             ),
-            ExtItems::Failed {
+            // M3：磁盘桩（frozen 冷启动，无进程）也并入列表，源状态为 Stub
+            ExtItems::Stub {
                 id: "com.example.b".to_string(),
                 name: "Ext B".to_string(),
+                items: vec![cmd("b.1", "B1", None)],
+            },
+            ExtItems::Failed {
+                id: "com.example.c".to_string(),
+                name: "Ext C".to_string(),
                 error: "initialize 失败：超时".to_string(),
             },
-            ready("com.example.c", "Ext C", vec![]),
+            ready("com.example.d", "Ext D", vec![]),
         ];
 
         let (items, sources) = flatten(&per_ext);
 
-        // 合并 2 条 + 兜底 section；B 的失败不影响 A/C
-        assert_eq!(items.len(), 2);
+        // 合并 2 条(warm) + 1 条(stub) = 3；C 的失败不影响 A/B/D
+        assert_eq!(items.len(), 3);
         assert_eq!(items[0].section, "Ext A");
         assert_eq!(items[0].ext_id, "com.example.a", "项带来源扩展 id");
         assert_eq!(items[1].section, "系统");
+        assert_eq!(items[2].section, "Ext B", "桩项并入列表并带 section");
 
-        assert_eq!(sources.len(), 3);
-        assert_eq!(sources[0].status, SourceStatus::Ready { commands: 2 });
+        assert_eq!(sources.len(), 4);
+        assert_eq!(sources[0].status, SourceStatus::Warm { commands: 2 });
+        assert_eq!(sources[1].status, SourceStatus::Stub { commands: 1 });
+        assert!(sources[1].status.is_stub());
         assert_eq!(
-            sources[1].status,
+            sources[2].status,
             SourceStatus::Failed {
                 error: "initialize 失败：超时".to_string()
             }
         );
-        assert!(sources[1].status.is_failed());
-        assert_eq!(sources[2].status, SourceStatus::Ready { commands: 0 });
+        assert!(sources[2].status.is_failed());
+        assert_eq!(sources[3].status, SourceStatus::Warm { commands: 0 });
     }
 
     #[test]

@@ -8,6 +8,9 @@
 //! - `items_changed`（§7.1）：`m2.page.notify`（页级，验 A9 刷新）与
 //!   `m2.top.notify`（顶层）两个触发命令。
 //!
+//! M3（桩复热支撑，见 m3-record.md）：`get_command`（§6.4）——按 id 从顶层目录
+//! 取回真实命令，供宿主在 frozen 桩复热链路使用；找不到回 `command: null`（非错误）。
+//!
 //! 传输层约定（§2）：stdin 读 NDJSON、stdout **只写协议消息**，
 //! 任何日志一律走 stderr（§2.5）。
 
@@ -16,8 +19,9 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use dd_protocol::framing::{encode, Decoder, Frame};
 use dd_protocol::messages::{
-    error_codes, CommandListResult, GetItemsParams, GetItemsResult, InitializeResult, InvokeParams,
-    ItemsChangedParams, ProviderInfo, RawMessage, JSONRPC_VERSION,
+    error_codes, CommandListResult, GetCommandParams, GetCommandResult, GetItemsParams,
+    GetItemsResult, InitializeResult, InvokeParams, ItemsChangedParams, ProviderInfo, RawMessage,
+    JSONRPC_VERSION,
 };
 use dd_protocol::model::{
     CommandItem, CommandRef, CommandResult, Details, Icon, IconKind, MetadataEntry,
@@ -107,6 +111,34 @@ fn handle(line: &str, out: &mut dyn Write) -> bool {
             })
             .expect("序列化 CommandListResult");
             send_result(out, id, result);
+        }
+        "get_command" => {
+            let parsed = msg
+                .params
+                .and_then(|v| serde_json::from_value::<GetCommandParams>(v).ok());
+            let Some(params) = parsed else {
+                send_error(
+                    out,
+                    Some(id),
+                    error_codes::INVALID_PARAMS,
+                    "Invalid params",
+                    None,
+                );
+                return false;
+            };
+            // §6.4：找不到 → `command: null`（正常结果，非错误）
+            let command = top_level_commands().into_iter().find(|c| c.id == params.id);
+            log(&format!(
+                "-> get_command {} => {}",
+                params.id,
+                if command.is_some() { "found" } else { "null" }
+            ));
+            send_result(
+                out,
+                id,
+                serde_json::to_value(GetCommandResult { command })
+                    .expect("序列化 GetCommandResult"),
+            );
         }
         "invoke" => {
             let parsed = msg

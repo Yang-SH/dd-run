@@ -192,27 +192,39 @@ pub fn home_dir() -> Option<PathBuf> {
     }
 }
 
-/// §2 三平台扩展目录。
-pub fn extensions_dir() -> Option<PathBuf> {
+/// dd-run 数据根目录（三平台对称）：
+/// Windows `%APPDATA%\dd-run`、macOS `~/Library/Application Support/dd-run`、
+/// Linux `$XDG_CONFIG_HOME/dd-run`（缺省 `~/.config/dd-run`）。
+fn dd_run_dir() -> Option<PathBuf> {
     let home = home_dir()?;
     if cfg!(windows) {
         let appdata = std::env::var_os("APPDATA")
             .map(PathBuf::from)
             .unwrap_or_else(|| home.join("AppData").join("Roaming"));
-        Some(appdata.join("dd-run").join("extensions.d"))
+        Some(appdata.join("dd-run"))
     } else if cfg!(target_os = "macos") {
         Some(
             home.join("Library")
                 .join("Application Support")
-                .join("dd-run")
-                .join("extensions.d"),
+                .join("dd-run"),
         )
     } else {
         let xdg = std::env::var_os("XDG_CONFIG_HOME")
             .map(PathBuf::from)
             .unwrap_or_else(|| home.join(".config"));
-        Some(xdg.join("dd-run").join("extensions.d"))
+        Some(xdg.join("dd-run"))
     }
+}
+
+/// §2 三平台扩展目录 = 数据根目录下 `extensions.d`。
+pub fn extensions_dir() -> Option<PathBuf> {
+    dd_run_dir().map(|d| d.join("extensions.d"))
+}
+
+/// M3 磁盘桩缓存目录 = 数据根目录下 `cache`（`FrozenCache` 落盘位置，
+/// 键 = 扩展 id + version，见 [`crate::cache`]）。
+pub fn cache_dir() -> Option<PathBuf> {
+    dd_run_dir().map(|d| d.join("cache"))
 }
 
 /// §4 路径展开：`${EXT_DIR}` → 清单目录，`~` → home，相对路径 → 相对清单目录，

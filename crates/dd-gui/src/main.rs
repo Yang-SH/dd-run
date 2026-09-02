@@ -1,6 +1,6 @@
 //! dd-gui 宿主面板（bin 入口）：egui 窗口骨架 + 页面栈渲染 + 命令执行链路。
 //!
-//! M1–M2 职责（见 [`docs/implementation.md`](../../docs/implementation.md)）：
+//! M1–M3 职责（见 [`docs/implementation.md`](../../docs/implementation.md)）：
 //! 1. **键盘焦点**：FilterBox 有焦点时，`↑↓/Tab/Enter/Esc` 仍能经
 //!    `ctx.input_mut(|i| i.consume_key(...))` 在应用层可靠拦截（A11）；
 //! 2. **窗口行为**：无边框、置顶、初始隐藏、失焦自动隐藏、热键唤起（A1）；
@@ -12,12 +12,17 @@
 //!    宿主动作（关闭/隐藏/回首页/返回/保持/跳页/Toast/确认，A4）；`Confirm` 弹确认框，
 //!    确认后带 `context.confirmed = true` 重发（协议 §8.3 注）；
 //! 6. **列表刷新**（M2）：`items_changed` 通知 → 100ms 合并 → 全量重拉 `get_items`
-//!    （协议 §6.3 + 验收 A9：协议层不做增量推送）。
+//!    （协议 §6.3 + 验收 A9：协议层不做增量推送）；
+//! 7. **缓存与懒加载**（M3）：冷启动按 `frozen` 分流——磁盘桩命中直接渲染、**不拉起进程**
+//!    （A6，桩缓存由 `dd-host::cache::FrozenCache` 落盘）；点击桩项走**复热链路**
+//!    （spawn → initialize → `get_command` → 执行，协议 §6.4）；warm 进程经
+//!    `LruWarmSet` 保活、超容驱逐回落 stub（A7）；`ColdStartTimer` 埋点供 A2 实测。
 //!
 //! eframe 0.36 的 `App` trait 为 `ui()` + `logic()` 两个回调：
 //! - `logic`：窗口**隐藏时也会被调用**（经 `request_repaint` 唤醒）→ 热键与失焦；
 //! - `ui`：窗口可见/需重绘时调用 → 后台结果轮询、键盘导航与绘制。
 
+use std::collections::HashSet;
 use std::sync::mpsc::{self, Receiver, TryRecvError};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -29,6 +34,8 @@ use dd_gui::hotkey::{HotkeyEvent, HotkeyThread};
 use dd_gui::navigation::{PageStack, PageState};
 use dd_gui::result::{self, HostAction, PendingConfirm};
 use dd_gui::state::{PanelItem, PanelState};
+use dd_host::cache::{ColdStartTimer, FrozenCache, LruWarmSet};
+use dd_host::manifest::{self, LoadedExtension};
 use dd_host::process::{ExtensionProcess, TIMEOUT_GET_ITEMS, TIMEOUT_INVOKE};
 use dd_protocol::messages::{GetItemsParams, GetItemsResult, InvokeParams};
 use dd_protocol::model::{CommandRef, CommandResult};
@@ -37,30 +44,45 @@ use dd_protocol::model::{CommandRef, CommandResult};
 const REFRESH_WINDOW: Duration = Duration::from_millis(100);
 /// Toast 默认显示时长（扩展未指定 `duration_ms` 时）。
 const TOAST_DEFAULT_MS: u64 = 2_000;
+/// M3 LRU 保活容量（设计文档 §6.3"最近 N 个"；超出则 close+释放、命令回落 stub，A7）。
+const LRU_WARM_CAPACITY: usize = 8;
 
 /// 首屏聚合的后台线程回传内容。
 struct AggregatePayload {
     items: Vec<PanelItem>,
     sources: Vec<aggregator::SourceSummary>,
-    /// 保活进程：`(扩展清单 id, 进程)`。
+    /// 保活进程：`(扩展清单 id, 进程)`（仅 warm；frozen 读桩无进程）。
     processes: Vec<(String, ExtensionProcess)>,
+    /// 已扫描扩展（含 manifest frozen/entry），供桩复热 spawn（M3）。
+    exts: Vec<LoadedExtension>,
     /// 来源备注（兜底/异常提示，空串表示正常扫描）。
     note: String,
+    /// 聚合线程内从"开始 scan"到"完成 collect+flatten"耗时（ms）。
+    /// 与 [`PaletteApp::cold`] 的"进程启动→首屏就绪"总耗时对照，便于 A2 瓶颈定位
+    /// （implementation.md R2：未达标记录实测与瓶颈，不调目标）。
+    agg_ms: u64,
 }
 
 /// 后台 `invoke` 的结果（进程随结果归还主线程）。
 struct InvokeOutcome {
     ext_id: String,
-    proc: ExtensionProcess,
+    /// `Some` = 进程对象（成功或链路内错误都归还，由 poll 按 `stub_reheat` 决定取舍）；
+    /// `None` = 复热 spawn 本身失败（无进程可归还）。
+    proc: Option<ExtensionProcess>,
     result: Result<CommandResult, String>,
+    /// 本次是否由**桩复热**发起（spawn 的新进程）：失败时不归还进程、回退 stub。
+    stub_reheat: bool,
 }
 
 /// 后台 `get_items` 的结果。
 struct PageOutcome {
     ext_id: String,
-    proc: ExtensionProcess,
+    /// 同 [`InvokeOutcome::proc`]。
+    proc: Option<ExtensionProcess>,
     page_id: String,
     result: Result<GetItemsResult, String>,
+    /// 本次是否由**桩复热**发起：失败时不归还进程、回退 stub。
+    stub_reheat: bool,
 }
 
 /// Toast 提示条（过期即清除）。
@@ -88,6 +110,12 @@ struct RefreshState {
 }
 
 fn main() -> eframe::Result {
+    // A2 冷启动计时起点：**进程进入 main 即开始**，覆盖 eframe/wgpu 窗口创建 +
+    // 字体加载（msyh.ttc ~19.7MB + seguisym 2.5MB）+ 聚合全过程。
+    // 之前放在 setup 闭包内、且位于 setup_cjk_fonts 之后，把最重的字体加载整段漏掉了
+    // （实测只剩 4~6 ms，测的几乎什么都不是）。
+    let mut cold = ColdStartTimer::new();
+    cold.mark_spawn_start();
     let viewport = egui::ViewportBuilder::default()
         .with_inner_size([560.0, 460.0])
         .with_decorations(false)
@@ -109,21 +137,28 @@ fn main() -> eframe::Result {
             cc.egui_ctx
                 .send_viewport_cmd(egui::ViewportCommand::Visible(false));
             let hotkey = HotkeyThread::spawn(cc.egui_ctx.clone());
+            // M3 磁盘桩缓存（读桩不拉起进程 A6；目录 = 数据根目录/cache）
+            let cache = manifest::cache_dir().map(FrozenCache::new);
+            // M3 A2 冷启动计时起点：进程就绪即开始（聚合线程随后启动）
+            let mut cold = ColdStartTimer::new();
+            cold.mark_spawn_start();
             let (agg_tx, agg_rx) = mpsc::channel();
-            spawn_aggregation(agg_tx);
-            Ok(Box::new(PaletteApp::new(hotkey.events, agg_rx)))
+            spawn_aggregation(agg_tx, cache);
+            Ok(Box::new(PaletteApp::new(hotkey.events, agg_rx, cold)))
         }),
     )
 }
 
-/// 后台线程执行首屏聚合（不阻塞 UI，A12）：扫描 → 并行拉取 → 合并 → 回传。
-fn spawn_aggregation(tx: mpsc::Sender<AggregatePayload>) {
+/// 后台线程执行首屏收集（不阻塞 UI，A12）：扫描 → M3 分流（frozen 读桩 / fresh spawn）→ 合并 → 回传。
+fn spawn_aggregation(tx: mpsc::Sender<AggregatePayload>, cache: Option<FrozenCache>) {
     thread::spawn(move || {
+        // A2 拆分计时的"数据平面"：从 scan 起到聚合完成止（不含 GUI/字体加载）
+        let agg_start = Instant::now();
         let (exts, note) = aggregator::load_extension_sources();
-        let result = aggregator::collect_top_level(&exts);
+        let result = aggregator::collect_top_level(&exts, cache.as_ref());
         let (items, sources) = aggregator::flatten(&result.per_ext);
 
-        // 进程与 `ExtItems::Ready` 一一对应（collect 时按序 push），配对回传
+        // 进程与 `ExtItems::Ready` 一一对应（collect 时按序 push）；Stub（读桩）无进程
         let mut procs = result.processes.into_iter();
         let mut processes = Vec::new();
         for ext in &result.per_ext {
@@ -134,47 +169,88 @@ fn spawn_aggregation(tx: mpsc::Sender<AggregatePayload>) {
             }
         }
 
+        let agg_ms = agg_start.elapsed().as_millis() as u64;
+
         let _ = tx.send(AggregatePayload {
             items,
             sources,
             processes,
+            exts,
             note,
+            agg_ms,
         });
     });
 }
 
-/// 加载本地 CJK 字体（设计文档 §4.6 本地优先字体栈的兜底）：
-/// 依次尝试 SimHei / DengXian / Microsoft YaHei，命中即用。
+/// 加载本地字体栈：CJK 主字（msyh / SimHei / Deng）+ Segoe UI Symbol 符号后援。
+///
+/// msyh.ttc 覆盖 CJK 与 ✓/✗（Dingbats 区），但**缺** Geometric Shapes 的 ◌ (U+25CC)
+/// ——M3 桩态页脚会渲染成方框。seguisym.ttf（Win 7+ 必装）补 Geometric Shapes /
+/// Misc Symbols，把 ◌/○/· 等符号路由到它去渲染。
 fn setup_cjk_fonts(ctx: &egui::Context) {
-    let candidates = [
-        // 优先 msyh.ttc（YaHei，Win7+ 必装且完整含 U+2713 ✓ 与 CJK），
-        // 解决页脚 "✓ Sample Ext" 回退为方块的字体覆盖问题。
+    let cjk_candidates = [
+        // 优先 msyh.ttc（YaHei，Win7+ 必装且完整含 U+2713 ✓ 与 CJK）
         r"C:\Windows\Fonts\msyh.ttc",
         r"C:\Windows\Fonts\simhei.ttf",
         r"C:\Windows\Fonts\Deng.ttf",
     ];
-    for path in candidates {
-        if let Ok(bytes) = std::fs::read(path) {
-            let mut fonts = egui::FontDefinitions::default();
-            fonts.font_data.insert(
-                "cjk".to_owned(),
-                std::sync::Arc::new(egui::FontData::from_owned(bytes)),
-            );
-            fonts
-                .families
-                .entry(egui::FontFamily::Proportional)
-                .or_default()
-                .push("cjk".to_owned());
-            fonts
-                .families
-                .entry(egui::FontFamily::Monospace)
-                .or_default()
-                .push("cjk".to_owned());
-            ctx.set_fonts(fonts);
-            return;
+    let sym_candidate = r"C:\Windows\Fonts\seguisym.ttf";
+
+    let mut fonts = egui::FontDefinitions::default();
+    let mut any_loaded = false;
+
+    if let Some(path) = cjk_candidates
+        .into_iter()
+        .find(|p| std::path::Path::new(p).is_file())
+    {
+        match std::fs::read(path) {
+            Ok(bytes) => {
+                fonts.font_data.insert(
+                    "cjk".to_owned(),
+                    std::sync::Arc::new(egui::FontData::from_owned(bytes)),
+                );
+                fonts
+                    .families
+                    .entry(egui::FontFamily::Proportional)
+                    .or_default()
+                    .push("cjk".to_owned());
+                fonts
+                    .families
+                    .entry(egui::FontFamily::Monospace)
+                    .or_default()
+                    .push("cjk".to_owned());
+                any_loaded = true;
+            }
+            Err(e) => eprintln!("[dd-gui] 读 CJK 字体 {path} 失败：{e}"),
         }
     }
-    eprintln!("[dd-gui] 未找到 CJK 字体（已尝试 SimHei/DengXian/YaHei），中文可能显示为方块");
+    if let Ok(bytes) = std::fs::read(sym_candidate) {
+        // 符号后援：append 在 cjk 之后，egui 字形回退按字体族顺序查找，
+        // cjk 缺的 Geometric Shapes/Misc Symbols 落到 seguisym。
+        fonts.font_data.insert(
+            "sym".to_owned(),
+            std::sync::Arc::new(egui::FontData::from_owned(bytes)),
+        );
+        fonts
+            .families
+            .entry(egui::FontFamily::Proportional)
+            .or_default()
+            .push("sym".to_owned());
+        fonts
+            .families
+            .entry(egui::FontFamily::Monospace)
+            .or_default()
+            .push("sym".to_owned());
+        any_loaded = true;
+    } else {
+        eprintln!("[dd-gui] 未找到 {sym_candidate}（符号字体）；M3 桩态 ◌ 等符号可能仍显示为方块");
+    }
+
+    if !any_loaded {
+        eprintln!("[dd-gui] 未找到任何 CJK 字体，中文可能显示为方块");
+        return;
+    }
+    ctx.set_fonts(fonts);
 }
 
 struct PaletteApp {
@@ -201,6 +277,14 @@ struct PaletteApp {
     /// 保活进程：`(扩展 id, 进程)`。发起请求时 take、结果归还，
     /// 保证同一进程同一时刻最多 1 个 in-flight 请求（协议 §4 串行化）。
     processes: Vec<(String, ExtensionProcess)>,
+    /// 已扫描扩展（含 manifest frozen/entry），供桩复热 spawn（M3）。
+    exts: Vec<LoadedExtension>,
+    /// M3 LRU 保活集（容量 [`LRU_WARM_CAPACITY`]）：超容驱逐 → close + 命令回落 stub（A7）。
+    lru: LruWarmSet,
+    /// M3 冷启动计时（A2 实测：`spawn_start` → 首屏数据就绪）。
+    cold: ColdStartTimer,
+    /// 有请求在途（进程被 take / 桩复热线程未回）的扩展 id——防止同扩展二次并发。
+    inflight: HashSet<String>,
     /// 最近一次 `invoke` 的命令 id（`Confirm` 重发时用）。
     last_command_id: Option<String>,
     /// 后台 `invoke` 结果接收端。
@@ -234,7 +318,11 @@ struct PaletteApp {
 }
 
 impl PaletteApp {
-    fn new(events: Receiver<HotkeyEvent>, aggregate_rx: Receiver<AggregatePayload>) -> Self {
+    fn new(
+        events: Receiver<HotkeyEvent>,
+        aggregate_rx: Receiver<AggregatePayload>,
+        cold: ColdStartTimer,
+    ) -> Self {
         Self {
             stack: PageStack::new(PageState::root(Vec::new())),
             events,
@@ -247,6 +335,10 @@ impl PaletteApp {
             sources: Vec::new(),
             note: String::new(),
             processes: Vec::new(),
+            exts: Vec::new(),
+            lru: LruWarmSet::new(LRU_WARM_CAPACITY),
+            cold,
+            inflight: HashSet::new(),
             last_command_id: None,
             invoke_rx: None,
             page_rx: None,
@@ -360,9 +452,47 @@ impl PaletteApp {
                 *self.stack.root_mut() = root;
                 self.sources = payload.sources;
                 self.processes = payload.processes;
+                self.exts = payload.exts;
                 self.note = payload.note;
                 self.aggregating = false;
                 self.aggregate_rx = None;
+                // M3：cold-start 保活进程计入 LRU（超出容量即驱逐，一般场景不会触发）
+                let mut victims = Vec::new();
+                for (id, _) in &self.processes {
+                    if let Some(v) = self.lru.access(id) {
+                        if v != *id {
+                            victims.push(v);
+                        }
+                    }
+                }
+                for v in victims {
+                    self.evict_warm(&v);
+                }
+                // A6/A2 可观察日志：桩/warm 分流 + 冷启动耗时
+                for s in &self.sources {
+                    match &s.status {
+                        SourceStatus::Stub { commands } => {
+                            eprintln!(
+                                "[dd-gui] 冷启动：{} 读桩 {} 命令（frozen，未拉起进程 A6）",
+                                s.name, commands
+                            );
+                        }
+                        SourceStatus::Warm { commands } => {
+                            eprintln!("[dd-gui] 冷启动：{} warm（{} 命令）", s.name, commands);
+                        }
+                        SourceStatus::Failed { .. } => {}
+                    }
+                }
+                self.cold.mark_first_interactive();
+                if let Some(total_ms) = self.cold.duration_ms() {
+                    // A2 拆分日志：total = 进程启动→首屏就绪；agg = 数据平面（scan+collect+flatten）。
+                    // 差额 = GUI 初始化 + wgpu + 字体加载（msyh.ttc 数十 MB），R2 要求记录瓶颈而非调目标。
+                    let gui_init_ms = total_ms.saturating_sub(payload.agg_ms);
+                    eprintln!(
+                        "[dd-gui] 冷启动完成：{total_ms} ms（A2 目标 <200ms：数据就绪 {} ms + GUI 初始化/字体加载 ~{gui_init_ms} ms，记录实测不调目标）",
+                        payload.agg_ms
+                    );
+                }
             }
             Err(TryRecvError::Empty) => {}
             Err(TryRecvError::Disconnected) => {
@@ -372,7 +502,7 @@ impl PaletteApp {
         }
     }
 
-    /// `invoke` 结果：归还进程 → 裁决 8 种 Kind → 应用宿主动作。
+    /// `invoke` 结果：归还/取舍进程（M3 按是否桩复热）→ 裁决 8 种 Kind → 应用动作。
     fn poll_invoke(&mut self, ctx: &egui::Context) {
         let Some(rx) = &self.invoke_rx else {
             return;
@@ -383,16 +513,31 @@ impl PaletteApp {
                     ext_id,
                     proc,
                     result,
+                    stub_reheat,
                 } = outcome;
-                self.processes.push((ext_id.clone(), proc));
+                self.inflight.remove(&ext_id);
                 self.invoke_rx = None;
                 match result {
                     Ok(command_result) => {
+                        if let Some(p) = proc {
+                            self.store_warm_process(ext_id.clone(), p);
+                        }
+                        if stub_reheat {
+                            self.mark_source_warm(&ext_id);
+                            eprintln!("[dd-gui] 桩复热成功：ext={ext_id} 转 warm（LRU 保活）");
+                        }
                         let action = result::resolve(&command_result);
                         eprintln!("[dd-gui] invoke 成功：{command_result:?} → 动作 {action:?}");
                         self.apply_action(ctx, action, &ext_id);
                     }
                     Err(e) => {
+                        if stub_reheat {
+                            // 复热失败：新进程不归还（drop 即强杀），扩展保持 stub（A6 回退）
+                            eprintln!("[dd-gui] 桩复热失败：ext={ext_id}，回退 stub：{e}");
+                        } else if let Some(p) = proc {
+                            // warm 请求失败：进程归还（超时/错误一般可恢复）
+                            self.store_warm_process(ext_id.clone(), p);
+                        }
                         eprintln!("[dd-gui] invoke 失败：{e}");
                         self.show_toast(format!("命令执行失败：{e}"), Some(3_000));
                     }
@@ -403,7 +548,7 @@ impl PaletteApp {
         }
     }
 
-    /// `get_items` 结果：归还进程 → 更新对应页（页已退栈则结果作废）。
+    /// `get_items` 结果：归还/取舍进程（M3 按是否桩复热）→ 更新对应页（页已退栈则作废）。
     fn poll_page(&mut self) {
         let Some(rx) = &self.page_rx else {
             return;
@@ -415,39 +560,63 @@ impl PaletteApp {
                     proc,
                     page_id,
                     result,
+                    stub_reheat,
                 } = outcome;
-                self.processes.push((ext_id.clone(), proc));
+                self.inflight.remove(&ext_id);
                 self.page_rx = None;
-                // 页可能已被用户返回（退栈），此时结果作废
-                let page = self.stack.current_mut();
-                if page.page_id.as_deref() == Some(page_id.as_str()) {
-                    page.is_loading = false;
+
+                if self.stack.current().page_id.as_deref() == Some(page_id.as_str()) {
                     match result {
                         Ok(res) => {
-                            eprintln!(
-                                "[dd-gui] get_items 成功：page={page_id} items={}",
-                                res.items.len()
-                            );
-                            let items: Vec<PanelItem> = res
-                                .items
+                            if let Some(p) = proc {
+                                self.store_warm_process(ext_id.clone(), p);
+                            }
+                            if stub_reheat {
+                                self.mark_source_warm(&ext_id);
+                                eprintln!("[dd-gui] 桩复热成功：ext={ext_id} 转 warm（LRU 保活）");
+                            }
+                            let items_raw = res.items;
+                            let is_loading = res.is_loading;
+                            let items: Vec<PanelItem> = items_raw
                                 .iter()
                                 .map(|cmd| aggregator::to_panel_item(cmd, &ext_id, ""))
                                 .collect();
-                            page.empty = if items.is_empty() && !res.is_loading {
+                            eprintln!(
+                                "[dd-gui] get_items 成功：page={page_id} items={}",
+                                items.len()
+                            );
+                            let page = self.stack.current_mut();
+                            page.is_loading = false;
+                            page.empty = if items.is_empty() && !is_loading {
                                 Some("该页暂无内容".to_string())
                             } else {
                                 None
                             };
-                            page.is_loading = res.is_loading;
+                            page.is_loading = is_loading;
                             page.list = PanelState::new(items);
                         }
                         Err(e) => {
+                            if stub_reheat {
+                                // 复热失败：不保活新进程、扩展保持 stub（A6 回退）
+                                eprintln!("[dd-gui] 桩复热失败：ext={ext_id}，回退 stub：{e}");
+                            } else if let Some(p) = proc {
+                                self.store_warm_process(ext_id.clone(), p);
+                            }
                             eprintln!("[dd-gui] get_items 失败：page={page_id}：{e}");
+                            let page = self.stack.current_mut();
+                            page.is_loading = false;
                             page.empty = Some(format!("拉取失败：{e}"));
                             page.list = PanelState::new(Vec::new());
                         }
                     }
                 } else {
+                    // 用户已离开来源页：成功（或 warm 失败）仍归还进程——它是扩展资产；
+                    // 复热失败则不保活。
+                    if result.is_ok() || !stub_reheat {
+                        if let Some(p) = proc {
+                            self.store_warm_process(ext_id.clone(), p);
+                        }
+                    }
                     eprintln!("[dd-gui] get_items 结果作废：已离开 page={page_id}");
                 }
             }
@@ -517,7 +686,8 @@ impl PaletteApp {
             return;
         }
         let search = (!query.is_empty()).then_some(query);
-        self.fetch_page(&ext_id, &page_id, search);
+        // M3：warm 直发 / 进程被驱逐则走复热；`command_id=None`（刷新非命令点击）
+        self.dispatch_fetch_page(&ext_id, &page_id, search, None);
     }
 
     /// 崩溃检测骨架：已退出的进程，其扩展源状态标记为失败。
@@ -533,18 +703,26 @@ impl PaletteApp {
         if exited.is_empty() {
             return;
         }
-        for s in self.sources.iter_mut() {
-            if exited.contains(&s.id) && !s.status.is_failed() {
-                s.status = SourceStatus::Failed {
-                    error: "扩展进程已退出".to_string(),
-                };
+        for id in &exited {
+            // 已退出进程从保活集移除（下次点击走桩复热、重新 spawn）；
+            // 崩溃恢复（重试/连续崩溃保护）属 M4（A8）。
+            self.processes.retain(|(pid, _)| pid != id);
+            self.lru.remove(id);
+            eprintln!("[dd-gui] 扩展进程已退出：{id}（移除保活，点击命令将重新拉起）");
+            if let Some(s) = self.sources.iter_mut().find(|s| s.id == *id) {
+                if !s.status.is_failed() {
+                    s.status = SourceStatus::Failed {
+                        error: "扩展进程已退出".to_string(),
+                    };
+                }
             }
         }
     }
 
     // ── 命令执行 ─────────────────────────────────────────────
 
-    /// Enter：按 `CommandRef` 分派（执行 / 进入页）。
+    /// Enter/单击：按 `CommandRef` 分派（执行 / 进入页）。
+    /// M3：扩展进程 warm → 直接执行；未 warm（frozen 桩）→ 复热后执行（A6）。
     fn confirm_selected(&mut self) {
         let Some(item) = self.stack.current().list.confirm().cloned() else {
             return;
@@ -553,17 +731,39 @@ impl PaletteApp {
         match &item.command {
             CommandRef::Invoke => {
                 let params = result::invoke_params(&item.id, &query);
-                self.start_invoke(&item.ext_id, params);
+                self.dispatch_invoke(&item.ext_id, params);
             }
             CommandRef::Page { page_id } => {
                 let page_id = page_id.clone();
                 let search = (!query.is_empty()).then_some(query);
-                self.push_page(&item.ext_id, &page_id, search);
+                self.open_page(&item.ext_id, &page_id, search, Some(item.id.clone()));
             }
         }
     }
 
-    /// 后台发起 `invoke`（take 进程 → 线程调用 → 结果经 channel 归还）。
+    /// 按清单 id 找已扫描扩展（复热 spawn 用）。
+    fn find_ext(&self, ext_id: &str) -> Option<&LoadedExtension> {
+        self.exts.iter().find(|e| e.manifest.id == ext_id)
+    }
+
+    /// `invoke` 分派：warm 进程在 → 直接后台执行；不在 → 桩复热（A6）。
+    fn dispatch_invoke(&mut self, ext_id: &str, params: InvokeParams) {
+        if self.invoke_rx.is_some() || self.inflight.contains(ext_id) {
+            eprintln!("[dd-gui] invoke 失败：ext={ext_id} 上一请求仍在处理");
+            self.show_toast("扩展进程不可用（可能正在处理上一个请求）", Some(2_000));
+            return;
+        }
+        if self.processes.iter().any(|(id, _)| id == ext_id) {
+            self.start_invoke(ext_id, params);
+        } else if let Some(ext) = self.find_ext(ext_id).cloned() {
+            self.start_invoke_reheat(&ext, params); // 桩复热
+        } else {
+            eprintln!("[dd-gui] invoke 失败：ext={ext_id} 无扩展信息");
+            self.show_toast("扩展信息缺失，无法执行", Some(2_000));
+        }
+    }
+
+    /// 后台 `invoke`（warm：take 进程 → 线程调用 → 结果经 channel 归还）。
     fn start_invoke(&mut self, ext_id: &str, params: InvokeParams) {
         self.last_command_id = Some(params.id.clone());
         self.last_invoke = Some(params.clone()); // Confirm 重发沿用
@@ -574,42 +774,112 @@ impl PaletteApp {
             return;
         };
         let (_, mut proc) = self.processes.remove(idx);
+        self.inflight.insert(ext_id.to_string());
         let ext_id = ext_id.to_string();
         let (tx, rx) = mpsc::channel();
         thread::spawn(move || {
-            let result = serde_json::to_value(&params)
-                .map_err(|e| format!("参数序列化失败：{e}"))
-                .and_then(|v| {
-                    proc.call("invoke", v, TIMEOUT_INVOKE)
-                        .map_err(|e| e.to_string())
-                })
-                .and_then(|v| {
-                    // §6.5：`call` 已解开 JSON-RPC 信封，返回的内层 `result` 即
-                    // §8.3 `CommandResult` 本体——直接解析。若按 `InvokeResult`
-                    //（要求 `result` 字段）再包一层，任何成功 invoke 都会报
-                    // 「响应解析失败：missing field `result`」。
-                    serde_json::from_value::<CommandResult>(v)
-                        .map_err(|e| format!("响应解析失败：{e}"))
-                });
+            let result = invoke_on(&mut proc, &params);
             let _ = tx.send(InvokeOutcome {
                 ext_id,
-                proc,
+                proc: Some(proc),
                 result,
+                stub_reheat: false,
             });
         });
         self.invoke_rx = Some(rx);
     }
 
-    /// 推入嵌套页并后台拉取其内容。
-    fn push_page(&mut self, ext_id: &str, page_id: &str, search: Option<String>) {
+    /// 桩复热 + `invoke`（A6 / 协议 §6.4）：spawn → initialize → `get_command(id)` → invoke。
+    /// 复热失败（spawn/握手/命令失效/超时）→ 不保活新进程、扩展保持 stub 并报错。
+    fn start_invoke_reheat(&mut self, ext: &LoadedExtension, params: InvokeParams) {
+        self.last_command_id = Some(params.id.clone());
+        self.last_invoke = Some(params.clone());
+        eprintln!(
+            "[dd-gui] 桩复热：ext={} cmd={}（spawn→initialize→get_command→invoke）",
+            ext.manifest.id, params.id
+        );
+        self.inflight.insert(ext.manifest.id.clone());
+        let ext = ext.clone();
+        let ext_id = ext.manifest.id.clone();
+        let (tx, rx) = mpsc::channel();
+        thread::spawn(move || {
+            let mut proc = match aggregator::spawn_and_initialize(&ext) {
+                Ok(p) => p,
+                Err(e) => {
+                    // spawn/握手失败：无进程可归还，直接报错
+                    let _ = tx.send(InvokeOutcome {
+                        ext_id,
+                        proc: None,
+                        result: Err(e),
+                        stub_reheat: true,
+                    });
+                    return;
+                }
+            };
+            let result: Result<CommandResult, String> =
+                match proc.get_command(&params.id).map_err(|e| e.to_string()) {
+                    // §6.4：取回真实命令后再执行
+                    Ok(Some(_)) => invoke_on(&mut proc, &params),
+                    Ok(None) => {
+                        Err("命令已失效：扩展未找到该命令（get_command 返回 null）".to_string())
+                    }
+                    Err(e) => Err(e),
+                };
+            let _ = tx.send(InvokeOutcome {
+                ext_id,
+                proc: Some(proc),
+                result,
+                stub_reheat: true,
+            });
+        });
+        self.invoke_rx = Some(rx);
+    }
+
+    /// 进入嵌套页（页面入栈 + loading），并按 warm/桩选择取数路径。
+    ///
+    /// `command_id` = 被点击的 `Page` 命令 id（桩复热时按协议 §6.4 先 `get_command` 校验）；
+    /// `GoToPage` 动作无对应命令点击，传 `None`。
+    fn open_page(
+        &mut self,
+        ext_id: &str,
+        page_id: &str,
+        search: Option<String>,
+        command_id: Option<String>,
+    ) {
         self.stack
             .push(PageState::nested(page_id, page_id, ext_id, Vec::new()));
         self.stack.current_mut().is_loading = true;
-        self.fetch_page(ext_id, page_id, search);
+        self.dispatch_fetch_page(ext_id, page_id, search, command_id);
     }
 
-    /// 后台 `get_items`（take 进程 → 线程调用 → 结果经 channel 归还）。
-    fn fetch_page(&mut self, ext_id: &str, page_id: &str, search: Option<String>) {
+    /// `get_items` 分派：warm → take 直发；不在 → 桩复热后拉取（A6）。
+    fn dispatch_fetch_page(
+        &mut self,
+        ext_id: &str,
+        page_id: &str,
+        search: Option<String>,
+        command_id: Option<String>,
+    ) {
+        if self.page_rx.is_some() || self.inflight.contains(ext_id) {
+            eprintln!("[dd-gui] get_items 失败：ext={ext_id} 上一请求仍在处理");
+            let page = self.stack.current_mut();
+            page.is_loading = false;
+            page.empty = Some("扩展进程不可用（可能正在处理上一个请求）".to_string());
+            return;
+        }
+        if self.processes.iter().any(|(id, _)| id == ext_id) {
+            self.fetch_page_warm(ext_id, page_id, search);
+        } else if let Some(ext) = self.find_ext(ext_id).cloned() {
+            self.fetch_page_reheat(&ext, page_id, search, command_id);
+        } else {
+            let page = self.stack.current_mut();
+            page.is_loading = false;
+            page.empty = Some("扩展信息缺失，无法打开页面".to_string());
+        }
+    }
+
+    /// 后台 `get_items`（warm：take 进程 → 线程调用 → 结果经 channel 归还）。
+    fn fetch_page_warm(&mut self, ext_id: &str, page_id: &str, search: Option<String>) {
         let Some(idx) = self.processes.iter().position(|(id, _)| id == ext_id) else {
             eprintln!("[dd-gui] get_items 失败：ext={ext_id} 进程不可用（可能 in-flight）");
             let page = self.stack.current_mut();
@@ -618,32 +888,120 @@ impl PaletteApp {
             return;
         };
         let (_, mut proc) = self.processes.remove(idx);
+        self.inflight.insert(ext_id.to_string());
         let ext_id = ext_id.to_string();
         let page_id = page_id.to_string();
         let (tx, rx) = mpsc::channel();
         thread::spawn(move || {
-            let params = GetItemsParams {
-                page_id: page_id.clone(),
-                search_text: search,
-            };
-            let result = serde_json::to_value(&params)
-                .map_err(|e| format!("参数序列化失败：{e}"))
-                .and_then(|v| {
-                    proc.call("get_items", v, TIMEOUT_GET_ITEMS)
-                        .map_err(|e| e.to_string())
-                })
-                .and_then(|v| {
-                    serde_json::from_value::<GetItemsResult>(v)
-                        .map_err(|e| format!("响应解析失败：{e}"))
-                });
+            let result = get_items_on(&mut proc, &page_id, search);
             let _ = tx.send(PageOutcome {
                 ext_id,
-                proc,
+                proc: Some(proc),
                 page_id,
                 result,
+                stub_reheat: false,
             });
         });
         self.page_rx = Some(rx);
+    }
+
+    /// 桩复热 + `get_items`（A6 / 协议 §6.4）：spawn → initialize →（`get_command` 校验）→ get_items。
+    /// 复热失败 → 不保活新进程、扩展保持 stub 并报错。
+    fn fetch_page_reheat(
+        &mut self,
+        ext: &LoadedExtension,
+        page_id: &str,
+        search: Option<String>,
+        command_id: Option<String>,
+    ) {
+        eprintln!(
+            "[dd-gui] 桩复热：ext={} page={page_id}（spawn→initialize→get_command→get_items）",
+            ext.manifest.id
+        );
+        self.inflight.insert(ext.manifest.id.clone());
+        let ext = ext.clone();
+        let ext_id = ext.manifest.id.clone();
+        let page_id = page_id.to_string();
+        let (tx, rx) = mpsc::channel();
+        thread::spawn(move || {
+            let mut proc = match aggregator::spawn_and_initialize(&ext) {
+                Ok(p) => p,
+                Err(e) => {
+                    let _ = tx.send(PageOutcome {
+                        ext_id,
+                        proc: None,
+                        page_id,
+                        result: Err(e),
+                        stub_reheat: true,
+                    });
+                    return;
+                }
+            };
+            // 协议 §6.4：被点击的 Page 命令先 `get_command` 校验桩是否仍有效
+            let result: Result<GetItemsResult, String> = match &command_id {
+                Some(cid) => match proc.get_command(cid).map_err(|e| e.to_string()) {
+                    Ok(Some(_)) => get_items_on(&mut proc, &page_id, search),
+                    Ok(None) => {
+                        Err("命令已失效：扩展未找到该命令（get_command 返回 null）".to_string())
+                    }
+                    Err(e) => Err(e),
+                },
+                None => get_items_on(&mut proc, &page_id, search),
+            };
+            let _ = tx.send(PageOutcome {
+                ext_id,
+                proc: Some(proc),
+                page_id,
+                result,
+                stub_reheat: true,
+            });
+        });
+        self.page_rx = Some(rx);
+    }
+
+    /// 进程归还入口（M3）：写回 warm 集 + LRU 触达；超容驱逐最久未用者（A7）。
+    fn store_warm_process(&mut self, ext_id: String, proc: ExtensionProcess) {
+        self.processes.push((ext_id.clone(), proc));
+        if let Some(victim) = self.lru.access(&ext_id) {
+            if victim != ext_id {
+                self.evict_warm(&victim);
+            }
+        }
+    }
+
+    /// LRU 驱逐（A7）：close + 终止进程、从保活集移除、源状态回落 stub。
+    /// 优雅 close 走后台线程（≤1s+1s 超时），避免卡 UI；失败强杀由 Drop 兜底。
+    fn evict_warm(&mut self, victim: &str) {
+        if let Some(idx) = self.processes.iter().position(|(id, _)| id == victim) {
+            let (_, proc) = self.processes.remove(idx);
+            thread::spawn(move || {
+                let _ = proc.close();
+            });
+            eprintln!("[dd-gui] LRU 驱逐：{victim}（warm 超容量，close+释放，命令回落 stub）");
+        }
+        self.lru.remove(victim);
+        if let Some(s) = self.sources.iter_mut().find(|s| s.id == victim) {
+            if !s.status.is_failed() {
+                let n = match &s.status {
+                    SourceStatus::Warm { commands } | SourceStatus::Stub { commands } => *commands,
+                    SourceStatus::Failed { .. } => 0,
+                };
+                s.status = SourceStatus::Stub { commands: n };
+            }
+        }
+    }
+
+    /// 源状态转 warm（桩复热成功 / cold start warm 时调用；Failed→Warm 同理恢复）。
+    fn mark_source_warm(&mut self, ext_id: &str) {
+        if let Some(s) = self.sources.iter_mut().find(|s| s.id == ext_id) {
+            if s.status.is_stub() || s.status.is_failed() {
+                let n = match &s.status {
+                    SourceStatus::Warm { commands } | SourceStatus::Stub { commands } => *commands,
+                    SourceStatus::Failed { .. } => 0,
+                };
+                s.status = SourceStatus::Warm { commands: n };
+            }
+        }
     }
 
     /// 应用 8 种 Kind 裁决出的宿主动作（A4）。
@@ -658,7 +1016,7 @@ impl PaletteApp {
             HostAction::KeepOpen => {}
             HostAction::GoToPage { page_id } => {
                 let ext_id = ext_id.to_string();
-                self.push_page(&ext_id, &page_id, None);
+                self.open_page(&ext_id, &page_id, None, None);
             }
             HostAction::ShowToast {
                 message,
@@ -719,7 +1077,7 @@ impl PaletteApp {
             } else if enter {
                 let dialog = self.confirm.take().expect("对话框存在");
                 let params = dialog.pending.confirmed_params();
-                self.start_invoke(&dialog.ext_id, params);
+                self.dispatch_invoke(&dialog.ext_id, params);
             }
             return;
         }
@@ -747,6 +1105,16 @@ impl PaletteApp {
     // ── 渲染 ─────────────────────────────────────────────────
 
     fn draw_panel(&mut self, ui: &mut egui::Ui) {
+        // 底部固定栏：源状态 + 键位提示（始终贴窗口底，不受中央列表高度影响；
+        // 解决 M3 实测"列表长时把页脚挤出 460px 窗口"——之前把它们放进
+        // CentralPanel 内的 ScrollArea 之后，长列表时整个 footer 块被推到
+        // 视口下方。Panel::bottom 是 egui 0.36 处理 chrome vs content 的标准做法）。
+        // 这里对 self 做不可变再借用，闭包结束后即可变借用给下面的 CentralPanel。
+        let self_ref: &Self = &*self;
+        egui::containers::Panel::bottom("status_footer").show(ui, |ui| {
+            self_ref.draw_status_footer(ui);
+        });
+
         egui::CentralPanel::default()
             .frame(
                 egui::Frame::default()
@@ -796,68 +1164,79 @@ impl PaletteApp {
 
                 // ── 列表区 ───────────────────────────────────
                 if self.aggregating {
-                    ui.centered_and_justified(|ui| {
+                    // 用 vertical_centered 而非 centered_and_justified：后者会撑满
+                    // 列表区（与 BottomPanel 分离后这里本身已是剩余高度，但
+                    // centered_and_justified 仍会顶到列表区上下沿视觉上难看）。
+                    ui.vertical_centered(|ui| {
                         ui.weak("正在加载扩展…");
                     });
                 } else {
                     self.draw_list(ui);
                 }
-                ui.add_space(4.0);
+            });
+    }
 
-                // ── 扩展源状态（含兜底/异常提示） ────────────
-                if !self.sources.is_empty() || !self.note.is_empty() {
-                    ui.separator();
-                    ui.horizontal_wrapped(|ui| {
-                        for s in &self.sources {
-                            match &s.status {
-                                SourceStatus::Ready { commands } => {
-                                    ui.label(
-                                        egui::RichText::new(format!(
-                                            "✓ {}（{} 命令）",
-                                            s.name, commands
-                                        ))
-                                        .size(11.0)
-                                        .color(weak_text_color(ui)),
-                                    );
-                                }
-                                SourceStatus::Failed { error } => {
-                                    ui.label(
-                                        egui::RichText::new(format!("✗ {}：{error}", s.name))
-                                            .size(11.0)
-                                            .color(ui.visuals().error_fg_color),
-                                    );
-                                }
-                            }
-                            ui.add_space(10.0);
-                        }
-                        if !self.note.is_empty() {
+    /// 底部固定栏内容：扩展源状态（含兜底/异常 note）+ 键位提示。
+    fn draw_status_footer(&self, ui: &mut egui::Ui) {
+        // 源状态 + 兜底/异常 note（横向自动换行，长 note 不会撑爆宽度）
+        if !self.sources.is_empty() || !self.note.is_empty() {
+            ui.horizontal_wrapped(|ui| {
+                for s in &self.sources {
+                    match &s.status {
+                        // M3 三态：Warm（进程活）/ Stub（仅磁盘桩）/ Failed
+                        SourceStatus::Warm { commands } => {
                             ui.label(
-                                egui::RichText::new(&self.note)
+                                egui::RichText::new(format!("✓ {}（{} 命令）", s.name, commands))
                                     .size(11.0)
                                     .color(weak_text_color(ui)),
                             );
                         }
-                    });
-                }
-
-                // ── 页脚键位提示 ─────────────────────────────
-                ui.separator();
-                ui.horizontal(|ui| {
-                    for (key, desc) in [
-                        ("↑↓/Tab", "移动"),
-                        ("Enter", "执行"),
-                        ("Esc", "返回/关闭"),
-                        ("Win+Alt+Space", "唤起/隐藏"),
-                    ] {
-                        ui.label(
-                            egui::RichText::new(format!("[{key}] {desc}"))
+                        SourceStatus::Stub { commands } => {
+                            ui.label(
+                                egui::RichText::new(format!(
+                                    "◌ {}（{} 命令·桩）",
+                                    s.name, commands
+                                ))
                                 .size(11.0)
                                 .color(weak_text_color(ui)),
-                        );
-                        ui.add_space(8.0);
+                            );
+                        }
+                        SourceStatus::Failed { error } => {
+                            ui.label(
+                                egui::RichText::new(format!("✗ {}：{error}", s.name))
+                                    .size(11.0)
+                                    .color(ui.visuals().error_fg_color),
+                            );
+                        }
                     }
-                });
+                    ui.add_space(10.0);
+                }
+                if !self.note.is_empty() {
+                    ui.label(
+                        egui::RichText::new(&self.note)
+                            .size(11.0)
+                            .color(weak_text_color(ui)),
+                    );
+                }
             });
+        }
+        ui.separator();
+        // 键位提示（始终展示）
+        ui.horizontal(|ui| {
+            for (key, desc) in [
+                ("↑↓/Tab", "移动"),
+                ("Enter", "执行"),
+                ("Esc", "返回/关闭"),
+                ("Win+Alt+Space", "唤起/隐藏"),
+            ] {
+                ui.label(
+                    egui::RichText::new(format!("[{key}] {desc}"))
+                        .size(11.0)
+                        .color(weak_text_color(ui)),
+                );
+                ui.add_space(8.0);
+            }
+        });
     }
 
     /// 当前页的列表渲染（Loading / 空态 / 按 `section` 分组）。
@@ -890,19 +1269,20 @@ impl PaletteApp {
         };
 
         if is_loading {
-            ui.centered_and_justified(|ui| {
+            // 紧凑居中：不撑满高度，避免把列表外的 sources/键位挤出窗口
+            ui.vertical_centered(|ui| {
                 ui.weak("正在加载…");
             });
             return;
         }
         if let Some(empty) = empty {
-            ui.centered_and_justified(|ui| {
+            ui.vertical_centered(|ui| {
                 ui.weak(empty);
             });
             return;
         }
         if items.is_empty() {
-            ui.centered_and_justified(|ui| {
+            ui.vertical_centered(|ui| {
                 if query_empty {
                     ui.weak("未发现命令（检查扩展清单或扩展运行状态）");
                 } else {
@@ -1057,11 +1437,49 @@ impl PaletteApp {
             // 取走对话框并真正重发 invoke（带 context.confirmed = true）
             let taken = self.confirm.take().expect("对话框仍应在位");
             let params = taken.pending.confirmed_params();
-            self.start_invoke(&taken.ext_id, params);
+            self.dispatch_invoke(&taken.ext_id, params);
         } else if cancelled {
             self.confirm = None;
         }
     }
+}
+
+/// 在给定进程上执行一次 `invoke`（协议 §6.5），返回 `CommandResult` 本体。
+///
+/// `call` 已解开 JSON-RPC 信封，返回的内层 `result` 即 §8.3 `CommandResult` 本体——
+/// 直接解析；若按 `InvokeResult`（要求 `result` 字段）再包一层，任何成功 invoke
+/// 都会报「响应解析失败：missing field `result`」（M2 修复记录）。
+fn invoke_on(proc: &mut ExtensionProcess, params: &InvokeParams) -> Result<CommandResult, String> {
+    serde_json::to_value(params)
+        .map_err(|e| format!("参数序列化失败：{e}"))
+        .and_then(|v| {
+            proc.call("invoke", v, TIMEOUT_INVOKE)
+                .map_err(|e| e.to_string())
+        })
+        .and_then(|v| {
+            serde_json::from_value::<CommandResult>(v).map_err(|e| format!("响应解析失败：{e}"))
+        })
+}
+
+/// 在给定进程上全量拉取一页（协议 §6.3 `get_items`）。
+fn get_items_on(
+    proc: &mut ExtensionProcess,
+    page_id: &str,
+    search: Option<String>,
+) -> Result<GetItemsResult, String> {
+    let params = GetItemsParams {
+        page_id: page_id.to_string(),
+        search_text: search,
+    };
+    serde_json::to_value(&params)
+        .map_err(|e| format!("参数序列化失败：{e}"))
+        .and_then(|v| {
+            proc.call("get_items", v, TIMEOUT_GET_ITEMS)
+                .map_err(|e| e.to_string())
+        })
+        .and_then(|v| {
+            serde_json::from_value::<GetItemsResult>(v).map_err(|e| format!("响应解析失败：{e}"))
+        })
 }
 
 /// egui 0.36 中 `weak_text_color` 是 `Option<Color32>`，取不到时退回文本色。
@@ -1137,6 +1555,15 @@ impl eframe::App for PaletteApp {
         self.recenter_if_needed(ctx);
         self.poll_hotkey(ctx);
         self.handle_focus_loss(ctx);
+        // A2 计时的正确性：聚合结果**必须**在窗口隐藏时也安装并完成计时。
+        // 此前 poll_aggregate 只在 ui() 里调用，而 ui() 在 !visible 时直接 return
+        // ——面板初始隐藏 ⇒ 冷启动计时会一直等到用户按下热键才触发，
+        // 实测值里混入了"用户何时按 Win+Alt+Space"的人肉延迟（1936–3214 ms 乱跳的真因）。
+        self.poll_aggregate();
+        // 聚合未完成时持续请求重绘以驱动本回调（隐藏窗口下否则可能不产生帧）。
+        if self.aggregate_rx.is_some() {
+            ctx.request_repaint();
+        }
     }
 
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
@@ -1144,7 +1571,6 @@ impl eframe::App for PaletteApp {
             return;
         }
         let ctx = ui.ctx().clone();
-        self.poll_aggregate();
         self.poll_invoke(&ctx);
         self.poll_page();
         self.poll_notifications();

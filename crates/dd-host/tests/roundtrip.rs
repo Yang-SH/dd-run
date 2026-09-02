@@ -407,3 +407,43 @@ fn stdout_eof_is_reported_as_process_exited() {
         "进程退出在 UI 层应呈现为 -32003 provider_unavailable（§11）"
     );
 }
+
+/// M3 桩复热链路 §6.4 运行时验证（支撑 m3-record.md §4）：
+/// `get_command` 取回真实命令；未知 id 回 `command: null`（**正常结果、非错误**）。
+#[test]
+fn roundtrip_m3_get_command_reheat_chain() {
+    let tmp = TempDir::new("m3");
+    let ext = load_sample(&tmp);
+    let mut process = ExtensionProcess::spawn(&ext).expect("spawn 示例扩展");
+    process.initialize("1.0", "0.1.0").expect("握手成功");
+
+    // ① 已知 Invoke 命令 id → Some，且与顶层目录定义一致（复热后可直接 invoke）
+    let cmd = process
+        .get_command("sample.hello")
+        .expect("get_command 成功")
+        .expect("sample.hello 应存在");
+    assert_eq!(cmd.id, "sample.hello");
+    assert_eq!(cmd.command, CommandRef::Invoke);
+    assert!(!cmd.title.is_empty(), "取回的命令应带完整定义");
+
+    // ② Page 命令 id → Some 且仍是 Page 引用（复热后仍可导航嵌套页，A5）
+    let page_cmd = process
+        .get_command("m2.page")
+        .expect("get_command 成功")
+        .expect("m2.page 应存在");
+    assert_eq!(
+        page_cmd.command,
+        CommandRef::Page {
+            page_id: "m2.page".to_string()
+        }
+    );
+
+    // ③ 未知 id → Ok(None)（协议 §6.4：command:null 是正常结果，桩已失效由宿主回退）
+    assert_eq!(
+        process.get_command("no.such.command").expect("应 Ok"),
+        None,
+        "未知命令应回 null 而非错误"
+    );
+
+    process.close().expect("优雅关闭");
+}
