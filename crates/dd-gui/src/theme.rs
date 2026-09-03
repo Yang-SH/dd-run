@@ -33,6 +33,14 @@ pub const KEYCAP_GAP: f32 = 2.0; // 同组键帽之间的间隙（`↑` `↓`）
 pub const DOT_SIZE: f32 = 6.0; // `.dot` 6×6
 pub const DOT_GAP: f32 = 5.0; // `.dot` margin-right 5px
 
+// ── 设置按钮（设计稿 §6.1，批次 4.0）─────────────────────────────────────
+/// 齿轮热区边长：24×24 px（视觉 16px + 8px 可点击扩展）。
+pub const GEAR_SIZE: f32 = 24.0;
+/// 齿轮视觉字号 16px（§6.1 规格）。
+pub const GEAR_FONT: f32 = 16.0;
+/// 齿轮 glyph（Segoe Fluent/MDL2 "Settings" U+E713）。
+pub const GEAR_GLYPH: char = '\u{E713}';
+
 /// 亮/暗语义色板（05 表 + CSS 派生；数值逐一有 parity 单测守卫）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Palette {
@@ -135,8 +143,18 @@ pub fn visuals(dark: bool) -> Visuals {
     v.extreme_bg_color = p.badge_bg; // TextEdit/滚动条底
     v.faint_bg_color = p.row_hover;
     v.code_bg_color = p.badge_bg;
-    v.selection.bg_fill = p.accent;
-    v.selection.stroke = Stroke::new(1.0, p.accent);
+    // 选中态（egui `paint_text_selection`：bg_fill 画选中底，**选中字形会被
+    // 重绘为 stroke.color**——若两者同色文字即不可见。真机 2026-09-03：搜索框
+    // 全选后整段变纯蓝块）。修复 = Fluent/Windows 原生风格：半透明 accent 底
+    // （30%，文本保持可读）+ 主文本色字形；暗色主题下白字 + 半透明蓝底同样可读。
+    v.selection.bg_fill = p.accent.gamma_multiply(0.30);
+    v.selection.stroke = Stroke::new(1.0, p.text);
+    // IME 组合文本用新版渲染（下划线 + 组合内光标），禁用 legacy（=选区式蓝底）。
+    // 根因：egui 0.36 在 Windows 上 legacy_visuals 默认 true（因 winit 韩文光标
+    // bug，见 style.rs `ImeComposition` 注释），组合中文会被涂成整块 selection
+    // 底色（= accent 蓝块）。新 visuals 专为中日韩输入设计；该 winit bug 仅影响
+    // 韩文，中文（Microsoft Pinyin）正常。真机 2026-09-03 反馈：输入中文变蓝块。
+    v.ime_composition.legacy_visuals = false;
     v.hyperlink_color = p.accent;
     v.override_text_color = Some(p.text);
     v.weak_text_alpha = 1.0; // weak 色由 weak_text_color 显式接管，不叠加透明
@@ -147,12 +165,22 @@ pub fn visuals(dark: bool) -> Visuals {
     v
 }
 
-/// 注册双主题 + 跟随系统。程序启动时调用一次；系统亮暗切换由 egui 自动换用
-/// 对应 `Style`（本函数注册的 visuals 各属其主题，无需逐帧干预）。
-pub fn apply(ctx: &Context) {
+/// 注册双主题 + 按用户偏好设定主题（M5 批次 4.0 起偏好来自持久化设置，
+/// 不再写死跟随系统）。程序启动时调用一次；此后用户在设置页改选时由
+/// `Context::set_theme` 运行时切换（无需重启）。
+pub fn apply(ctx: &Context, pref: ThemePreference) {
     ctx.set_visuals_of(Theme::Dark, visuals(true));
     ctx.set_visuals_of(Theme::Light, visuals(false));
-    ctx.set_theme(ThemePreference::System);
+    ctx.set_theme(pref);
+}
+
+/// [`settings::ThemePref`] → egui [`ThemePreference`]（设置页选择立即生效用）。
+pub fn theme_preference(pref: crate::settings::ThemePref) -> ThemePreference {
+    match pref {
+        crate::settings::ThemePref::System => ThemePreference::System,
+        crate::settings::ThemePref::Light => ThemePreference::Light,
+        crate::settings::ThemePref::Dark => ThemePreference::Dark,
+    }
 }
 
 fn rgb(v: u32) -> Color32 {
@@ -252,5 +280,14 @@ mod tests {
     fn light_and_dark_palettes_differ_in_accent() {
         // 两主题 accent 不同（Fluent 品牌色阶）；同值说明写错表了
         assert_ne!(Palette::dark().accent, Palette::light().accent);
+    }
+
+    #[test]
+    fn theme_preference_maps_all_three_choices() {
+        use crate::settings::ThemePref;
+        // 批次 4.0：设置页三选 → egui 偏好一一对应
+        assert_eq!(theme_preference(ThemePref::System), ThemePreference::System);
+        assert_eq!(theme_preference(ThemePref::Light), ThemePreference::Light);
+        assert_eq!(theme_preference(ThemePref::Dark), ThemePreference::Dark);
     }
 }

@@ -27,5 +27,6 @@ pub mod hotkey;
 pub mod navigation;
 pub mod result;
 pub mod robustness;
+pub mod settings;
 pub mod state;
 pub mod theme;

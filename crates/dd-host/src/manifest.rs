@@ -231,6 +231,12 @@ pub fn cache_dir() -> Option<PathBuf> {
     dd_run_dir().map(|d| d.join("cache"))
 }
 
+/// M5 批次 4.0：宿主本地配置文件 = 数据根目录下 `config.json`
+/// （GUI 主题偏好等用户设置，见 `dd-gui::settings`）。
+pub fn config_file() -> Option<PathBuf> {
+    dd_run_dir().map(|d| d.join("config.json"))
+}
+
 /// §4 路径展开：`${EXT_DIR}` → 清单目录，`~` → home，相对路径 → 相对清单目录，
 /// 绝对路径与 Windows 盘符路径原样返回。
 pub fn expand_path(raw: &str, ext_dir: &Path, home: &Path) -> PathBuf {

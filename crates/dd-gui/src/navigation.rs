@@ -27,6 +27,10 @@ pub struct PageState {
     pub is_loading: bool,
     /// 空态提示文案（`list` 为空且 `is_loading == false` 时展示，界面 10）。
     pub empty: Option<String>,
+    /// M5 批次 4.0：是否为**宿主设置页**（GUI 本地页，非扩展嵌套页）。
+    /// 渲染层据此切换到设置视图（不走 searchbar/列表/兜底链路），
+    /// 数据仍由 `list`（空列表）承载以复用键盘状态机。
+    pub is_settings: bool,
 }
 
 impl PageState {
@@ -39,6 +43,7 @@ impl PageState {
             list: PanelState::new(items),
             is_loading: false,
             empty: None,
+            is_settings: false,
         }
     }
 
@@ -56,6 +61,21 @@ impl PageState {
             list: PanelState::new(items),
             is_loading: false,
             empty: None,
+            is_settings: false,
+        }
+    }
+
+    /// M5 批次 4.0：宿主设置页（`page_id` 用 GUI 保留标记
+    /// [`crate::settings::SETTINGS_PAGE_ID`]，列表恒为空）。
+    pub fn settings() -> Self {
+        Self {
+            page_id: Some(crate::settings::SETTINGS_PAGE_ID.to_string()),
+            ext_id: String::new(),
+            title: "设置".to_string(),
+            list: PanelState::new(Vec::new()),
+            is_loading: false,
+            empty: None,
+            is_settings: true,
         }
     }
 }
@@ -183,5 +203,36 @@ mod tests {
         root.list = PanelState::new(vec![item("new")]);
         assert_eq!(stack.depth(), 2, "替换 Root 列表不影响嵌套页");
         assert_eq!(stack.root_mut().list.visible_count(), 1);
+    }
+
+    #[test]
+    fn settings_page_pushes_and_pops_like_nested_page() {
+        // M5 批次 4.0：设置页复用页面栈——Esc（go_back）返回原页面
+        let mut stack = root();
+        stack.push(PageState::nested("p1", "One", "ext.a", vec![item("x")]));
+        stack.push(PageState::settings());
+        assert_eq!(stack.depth(), 3);
+        assert!(stack.current().is_settings, "栈顶为设置页");
+        assert_eq!(stack.current().page_id.as_deref(), Some("__settings__"));
+        assert_eq!(stack.current().list.visible_count(), 0, "设置页列表恒为空");
+
+        let popped = stack.go_back().expect("设置页可返回");
+        assert!(popped.is_settings);
+        assert!(!stack.current().is_settings);
+        assert_eq!(
+            stack.current().page_id.as_deref(),
+            Some("p1"),
+            "回到原嵌套页"
+        );
+    }
+
+    #[test]
+    fn settings_page_never_confused_with_nested_page() {
+        // 设置页不是扩展嵌套页：is_settings 标记与 page_id 双重区分
+        let nested = PageState::nested("p1", "One", "ext.a", vec![]);
+        assert!(!nested.is_settings);
+        let settings = PageState::settings();
+        assert!(settings.is_settings);
+        assert_ne!(settings, nested);
     }
 }

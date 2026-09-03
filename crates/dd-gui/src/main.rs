@@ -174,9 +174,11 @@ fn main() -> eframe::Result {
         options,
         Box::new(|cc| {
             setup_cjk_fonts(&cc.egui_ctx);
-            // M5 批次 3：注册亮/暗双视觉 + 跟随系统（须在任何绘制前应用，
-            // egui 会按系统亮暗自动在两套 Style 间 re-resolve）。
-            theme::apply(&cc.egui_ctx);
+            // M5 批次 3：注册亮/暗双视觉 + 主题偏好（批次 4.0 起偏好来自
+            // 持久化配置，缺省跟随系统；须在任何绘制前应用，egui 会按
+            // 系统亮暗自动在两套 Style 间 re-resolve）。
+            let settings = dd_gui::settings::Settings::load();
+            theme::apply(&cc.egui_ctx, theme::theme_preference(settings.theme));
             // 初始隐藏双保险：`with_visible(false)` 之外显式发 `Visible(false)`，
             // 规避 eframe/egui 0.36 在 Windows 上 `with_visible` 偶发不生效的情况。
             cc.egui_ctx
@@ -189,7 +191,12 @@ fn main() -> eframe::Result {
             cold.mark_spawn_start();
             let (agg_tx, agg_rx) = mpsc::channel();
             spawn_aggregation(agg_tx, cache);
-            Ok(Box::new(PaletteApp::new(hotkey.events, agg_rx, cold)))
+            Ok(Box::new(PaletteApp::new(
+                hotkey.events,
+                agg_rx,
+                cold,
+                settings,
+            )))
         }),
     )
 }
@@ -437,6 +444,8 @@ struct PaletteApp {
     /// path 图标纹理缓存：路径 → TextureHandle（每路径只读盘+解码一次，
     /// 避免列表每次重绘都重复 I/O 与解码——设计稿 04"按路径缓存 textureId"）。
     icon_cache: HashMap<String, egui::TextureHandle>,
+    /// M5 批次 4.0：宿主本地设置（当前仅主题偏好；启动加载、设置页改选即存）。
+    settings: dd_gui::settings::Settings,
 }
 
 impl PaletteApp {
@@ -444,6 +453,7 @@ impl PaletteApp {
         events: Receiver<HotkeyEvent>,
         aggregate_rx: Receiver<AggregatePayload>,
         cold: ColdStartTimer,
+        settings: dd_gui::settings::Settings,
     ) -> Self {
         Self {
             stack: PageStack::new(PageState::root(Vec::new())),
@@ -475,6 +485,7 @@ impl PaletteApp {
             fallback_store: dd_gui::fallback::FallbackStore::new(),
             fallback_rx: None,
             icon_cache: HashMap::new(),
+            settings,
         }
     }
 
@@ -1573,6 +1584,10 @@ impl PaletteApp {
                 i.consume_key(egui::Modifiers::SHIFT, egui::Key::Tab),
             )
         });
+        // 批次 4.0：Ctrl+, 打开设置（§6.1 快捷键；设置入口的键盘可达手段
+        // ——Tab 保持列表导航语义不变，见 implementation.md 批次 4.0 决策）。
+        // 在确认对话框分支之后处理：对话框活跃时该键被吞掉不穿透。
+        let ctrl_comma = ctx.input_mut(|i| i.consume_key(egui::Modifiers::CTRL, egui::Key::Comma));
 
         // 确认对话框活跃时：Enter=确认、Esc=取消，其余键不穿透到列表
         if self.confirm.is_some() {
@@ -1604,6 +1619,30 @@ impl PaletteApp {
         if enter {
             self.confirm_selected();
         }
+        if ctrl_comma {
+            self.open_settings();
+        }
+    }
+
+    /// 打开设置页（批次 4.0）：推入页面栈（复用嵌套页语义，Esc 返回）。
+    /// 已在设置页时幂等（不重复推栈）。
+    fn open_settings(&mut self) {
+        if self.stack.current().is_settings {
+            return;
+        }
+        eprintln!("[dd-gui] 打开设置页（PageStack 推页）");
+        self.stack.push(PageState::settings());
+    }
+
+    /// 设置页改选主题（批次 4.0）：立即生效 + 持久化（best-effort）。
+    fn apply_theme_pref(&mut self, ctx: &egui::Context, pref: dd_gui::settings::ThemePref) {
+        if self.settings.theme == pref {
+            return;
+        }
+        eprintln!("[dd-gui] 主题偏好变更：{} → 立即生效并保存", pref.label());
+        self.settings.theme = pref;
+        ctx.set_theme(theme::theme_preference(pref));
+        self.settings.save();
     }
 
     // ── 渲染 ─────────────────────────────────────────────────
@@ -1614,10 +1653,14 @@ impl PaletteApp {
         // CentralPanel 内的 ScrollArea 之后，长列表时整个 footer 块被推到
         // 视口下方。Panel::bottom 是 egui 0.36 处理 chrome vs content 的标准做法）。
         // 这里对 self 做不可变再借用，闭包结束后即可变借用给下面的 CentralPanel。
-        let self_ref: &Self = &*self;
-        let p = theme::Palette::of(ui.visuals().dark_mode);
-        let footer =
-            egui::containers::Panel::bottom("status_footer")
+        // 批次 4.0 真机反馈（2026-09-03）：设置页不显示页脚（用户：设置视图
+        // 更干净，且页脚键位图例/诊断与设置内容无关）。
+        let mut open_settings = false;
+        if !self.stack.current().is_settings {
+            let self_ref: &Self = &*self;
+            let p = theme::Palette::of(ui.visuals().dark_mode);
+            // 批次 4.0：页脚最左齿轮按钮的点击旗标（闭包内置位，面板结束后消费）。
+            let footer = egui::containers::Panel::bottom("status_footer")
                 // 关掉内建分隔线：它用 `widgets.noninteractive.bg_stroke`（默认灰），
                 // 颜色与 `--border` 不一致，下面按设计稿手绘 1px `--border` 顶边。
                 .show_separator_line(false)
@@ -1628,23 +1671,39 @@ impl PaletteApp {
                     egui::Margin::symmetric(theme::FOOTER_PAD_X as i8, theme::FOOTER_PAD_Y as i8),
                 ))
                 .show(ui, |ui| {
-                    self_ref.draw_status_footer(ui);
+                    open_settings = self_ref.draw_status_footer(ui);
                 });
-        // 顶部 1px `--border`（CSS `.panel-footer` border-top）；贴面板外框上沿，
-        // 因此用返回的 response.rect（= 面板外矩形），而非闭包内被 margin 收缩过的 max_rect。
-        ui.painter().hline(
-            footer.response.rect.x_range(),
-            footer.response.rect.top(),
-            egui::Stroke::new(1.0, p.border),
-        );
+            // 顶部 1px `--border`（CSS `.panel-footer` border-top）；贴面板外框上沿，
+            // 因此用返回的 response.rect（= 面板外矩形），而非闭包内被 margin 收缩过的 max_rect。
+            ui.painter().hline(
+                footer.response.rect.x_range(),
+                footer.response.rect.top(),
+                egui::Stroke::new(1.0, p.border),
+            );
+        }
+        if open_settings {
+            self.open_settings();
+        }
 
         egui::CentralPanel::default()
             .frame(
                 egui::Frame::default()
                     .fill(ui.style().visuals.panel_fill)
-                    .inner_margin(egui::Margin::symmetric(12, 10)),
+                    // 设计稿 `.searchbar` margin: 12px 12px 6px —— 顶部 12（对齐
+                    // 05 note 面板几何），底部 10 由 `.results` padding-bottom 承担。
+                    .inner_margin(egui::Margin {
+                        left: 12,
+                        right: 12,
+                        top: 12,
+                        bottom: 10,
+                    }),
             )
             .show(ui, |ui| {
+                // ── 设置页（批次 4.0）：独立视图，不走 searchbar/列表链路 ──
+                if self.stack.current().is_settings {
+                    self.draw_settings(ui);
+                    return;
+                }
                 // ── 嵌套页标题栏（含返回提示） ───────────────
                 let (page_id, page_title) = {
                     let page = self.stack.current();
@@ -1699,51 +1758,42 @@ impl PaletteApp {
             });
     }
 
-    /// 底部固定栏内容：扩展源状态（含兜底/异常 note）+ 键位提示。
+    /// 底部固定栏内容：**设置按钮**（最左常驻，§6.1）+ **上下文动作提示**
+    /// （批次 4.1，§6.3）+ 异常源诊断（仅异常时）+ 键位提示。
     ///
-    /// M5 批次 3.8 收口（设计稿 01 `.panel-footer`）：
-    /// - **单行优先**：源组靠左、键位靠右（`margin-left:auto` 语义）。源区放不下时
-    ///   （本机 5 个源 ≈ 600px > 560 宽）退化为「源区整宽自动换行 + 键位另起一行靠右」——
-    ///   与设计稿 `flex-wrap: wrap` 行为一致。
-    /// - 键位为**键帽**形态（`.keys b`：chip 底 + 1px 描边 + **下边 2px** + 圆角 4 +
-    ///   monospace 10.5px），不再是纯文本。
-    /// - 底色/顶边/内边距由 `draw_panel` 的 `Panel::bottom` frame 承担。
-    ///
-    /// 单行分支不用 `horizontal` + `add_space` 推右（源区会吃掉整行把键位挤出可视区），
-    /// 改为 `allocate_exact_size` 切左右两块 + `new_child(UiBuilder)` 各自排版——
-    /// 与 `draw_searchbar` 同一套「先锁矩形再开子 Ui」手法。
-    fn draw_status_footer(&self, ui: &mut egui::Ui) {
+    /// 布局（§6.3 + C6）：
+    /// - **严格单行 35px**（`FOOTER_PAD_Y 9 + KEYCAP_H 17 + FOOTER_PAD_Y 9`）：
+    ///   `allocate_exact_size` 锁一行 + 左右两块 `new_child` 精确排版，
+    ///   **禁止 `horizontal_wrapped`**（异常源多时会把页脚撑回 72px）；左块
+    ///   超宽时内容被 max_rect 裁剪，键位区始终完整靠右。
+    /// - **有选中项**：左侧 = 选中项默认动作文本（[`footer_action_text`] 实时
+    ///   推导，C7），右侧 = `↵ Enter` 单键帽；**无选中 / 空态**：左侧仅齿轮
+    ///   （+ 异常源诊断），右侧回退全局键位图例（↑↓/Enter/Esc，C8）。
+    /// - **源健康诊断仅异常时显示**（C8）：存在 stub/failed 源或 note 时追加
+    ///   状态点条目；全 ok 常态不占位。
+    /// - 批次 4.0：齿轮在最左（所有状态一致，§6.1"页脚最左侧常驻"）；
+    ///   返回值 = 本帧齿轮是否被点击（调用方在面板闭包结束后 `open_settings`）。
+    fn draw_status_footer(&self, ui: &mut egui::Ui) -> bool {
         let p = theme::Palette::of(ui.visuals().dark_mode);
+        // C7：动作文本随选中项实时变化（含 fallback 模式——filtered() 覆盖兜底集）
+        let action = self
+            .stack
+            .current()
+            .list
+            .selected_item()
+            .map(footer_action_text);
+        // C8：仅异常时显示（全 ok → 空 Vec，不占位）
         let entries = self.footer_entries(&p);
-        let keys_w = keys_width(ui);
+        // 右块宽度随上下文切换：动作键帽 vs 全局键位图例
+        let keys_w = match &action {
+            Some(_) => keycap_width(ui, ENTER_KEYCAP),
+            None => keys_width(ui),
+        };
         let total_w = ui.available_width();
 
-        if entries.is_empty() {
-            // 无源可显示：键位独占一行、靠右
-            ui.horizontal(|ui| {
-                ui.add_space((ui.available_width() - keys_w).max(0.0));
-                draw_footer_keys(ui, &p);
-            });
-            return;
-        }
-
-        let sources_w = entries_width(ui, &entries, theme::FOOTER_GAP);
-        if sources_w + theme::FOOTER_GAP + keys_w > total_w {
-            // 源区放不下：整宽换行 + 键位另起一行靠右
-            ui.horizontal_wrapped(|ui| {
-                draw_footer_entries(ui, &entries, theme::FOOTER_GAP, &p);
-            });
-            ui.add_space(4.0);
-            ui.horizontal(|ui| {
-                ui.add_space((ui.available_width() - keys_w).max(0.0));
-                draw_footer_keys(ui, &p);
-            });
-            return;
-        }
-
-        // 单行：左右两块精确分配
-        let row_h = theme::KEYCAP_H;
-        let (row, _) = ui.allocate_exact_size(egui::vec2(total_w, row_h), egui::Sense::hover());
+        // 严格单行：一行 KEYCAP_H + 左右两块（左块被 split 截断，不换行）
+        let (row, _) =
+            ui.allocate_exact_size(egui::vec2(total_w, theme::KEYCAP_H), egui::Sense::hover());
         let split_x = row.right() - keys_w;
         let mut left = ui.new_child(
             egui::UiBuilder::new()
@@ -1753,7 +1803,26 @@ impl PaletteApp {
                 ))
                 .layout(egui::Layout::left_to_right(egui::Align::Center)),
         );
-        draw_footer_entries(&mut left, &entries, theme::FOOTER_GAP, &p);
+        let clicked = draw_settings_gear(&mut left, &p);
+        if let Some(text) = &action {
+            // 动作文本用 text2（较键位图例的 text3 略强调一级）；`Label::truncate`
+            // 让超宽文本在左块边界处省略号截断（egui label 默认不裁剪、会溢出盖到
+            // 右侧键位区——真机 2026-09-03 实测重叠，此为修复）。
+            left.add(
+                egui::Label::new(
+                    egui::RichText::new(text)
+                        .size(theme::FOOTER_FONT)
+                        .color(p.text2),
+                )
+                .truncate(),
+            );
+            if !entries.is_empty() {
+                left.add_space(theme::FOOTER_GAP);
+                draw_footer_entries(&mut left, &entries, theme::FOOTER_GAP, &p);
+            }
+        } else if !entries.is_empty() {
+            draw_footer_entries(&mut left, &entries, theme::FOOTER_GAP, &p);
+        }
         let mut right = ui.new_child(
             egui::UiBuilder::new()
                 .max_rect(egui::Rect::from_min_max(
@@ -1762,23 +1831,93 @@ impl PaletteApp {
                 ))
                 .layout(egui::Layout::left_to_right(egui::Align::Center)),
         );
-        draw_footer_keys(&mut right, &p);
+        match &action {
+            Some(_) => draw_keycap(&mut right, ENTER_KEYCAP, &p),
+            None => draw_footer_keys(&mut right, &p),
+        }
+        clicked
     }
 
-    /// 页脚左半区条目：`(状态点颜色, 文本)`；`None` 点色 = 无点（note 文本）。
+    /// 设置页（批次 4.0，§6.1 用户决策：内容仅主题偏好）。
+    ///
+    /// - 三选（跟随系统/亮色/暗色）：点击即 `set_theme` 生效 + 持久化；
+    /// - Esc 返回由 `handle_keys` 的页面栈语义承担（推了设置页，go_back 弹出）；
+    /// - 键盘可达经 `Ctrl+,`（Tab 保持列表导航语义，见批次 4.0 决策记录）。
+    fn draw_settings(&mut self, ui: &mut egui::Ui) {
+        let p = theme::Palette::of(ui.visuals().dark_mode);
+        ui.add_space(6.0);
+        ui.label(
+            egui::RichText::new("设置")
+                .size(18.0)
+                .strong()
+                .color(p.text),
+        );
+        ui.add_space(12.0);
+        // section 标签对齐设计稿 §05 全局规格：11px / 600 / text-3
+        ui.label(
+            egui::RichText::new("主题外观")
+                .size(11.0)
+                .strong()
+                .color(p.text3),
+        );
+        ui.add_space(4.0);
+
+        let mut pick: Option<dd_gui::settings::ThemePref> = None;
+        for pref in [
+            dd_gui::settings::ThemePref::System,
+            dd_gui::settings::ThemePref::Light,
+            dd_gui::settings::ThemePref::Dark,
+        ] {
+            let selected = self.settings.theme == pref;
+            // 选中态：accent 底 + 面板底文字（egui selection 语义色已在 theme.rs 接管）
+            let resp = ui.selectable_label(
+                selected,
+                egui::RichText::new(pref.label()).size(14.0).color(p.text),
+            );
+            if resp.clicked() {
+                pick = Some(pref);
+            }
+        }
+        if let Some(pref) = pick {
+            self.apply_theme_pref(ui.ctx(), pref);
+        }
+
+        ui.add_space(16.0);
+        // 提示行对齐设计稿键帽语言（§6.3 `.panel-footer b`：chip 底 + 1px 描边 +
+        // 下边 2px + 圆角 4 + monospace；desc 用 FOOTER_FONT/text3）——不再是纯文本。
+        ui.horizontal(|ui| {
+            draw_keycap(ui, "Esc", &p);
+            ui.label(
+                egui::RichText::new("返回")
+                    .size(theme::FOOTER_FONT)
+                    .color(p.text3),
+            );
+            ui.add_space(theme::FOOTER_GAP);
+            draw_keycap(ui, "Ctrl+,", &p);
+            ui.label(
+                egui::RichText::new("打开设置")
+                    .size(theme::FOOTER_FONT)
+                    .color(p.text3),
+            );
+        });
+    }
+
+    /// 页脚异常源诊断条目（批次 4.1，C8）：`(状态点颜色, 文本)`；`None` 点色 =
+    /// 无点（note 文本）。**仅异常时输出**——Warm 源跳过；全 ok 且无 note 时
+    /// 返回空 Vec（常态不占位，见 `draw_status_footer`）。
     fn footer_entries(&self, p: &theme::Palette) -> Vec<(Option<egui::Color32>, String)> {
         let mut out = Vec::new();
         for s in &self.sources {
-            let (dot, text) = match &s.status {
-                SourceStatus::Warm { commands } => {
-                    (p.dot_ok, format!("{}（{} 命令）", s.name, commands))
-                }
+            match &s.status {
+                // 正常态不显示（C8：避免常态撑高页脚）
+                SourceStatus::Warm { .. } => {}
                 SourceStatus::Stub { commands } => {
-                    (p.text3, format!("{}（{} 命令·桩）", s.name, commands))
+                    out.push((Some(p.text3), format!("{}（{} 命令·桩）", s.name, commands)))
                 }
-                SourceStatus::Failed { error } => (p.dot_err, format!("{}：{error}", s.name)),
-            };
-            out.push((Some(dot), text));
+                SourceStatus::Failed { error } => {
+                    out.push((Some(p.dot_err), format!("{}：{error}", s.name)))
+                }
+            }
         }
         if !self.note.is_empty() {
             out.push((None, self.note.clone()));
@@ -1882,19 +2021,16 @@ impl PaletteApp {
             return;
         }
         if let Some(empty) = empty {
-            ui.vertical_centered(|ui| {
-                ui.weak(empty);
-            });
+            draw_empty_state(ui, &p, &empty, None);
             return;
         }
         if items.is_empty() {
-            ui.vertical_centered(|ui| {
-                if query_empty {
-                    ui.weak("未发现命令（检查扩展清单或扩展运行状态）");
-                } else {
-                    ui.weak("没有匹配项");
-                }
-            });
+            if query_empty {
+                // 设计稿 02 屏纯空态：图标 + 标题 + 描述
+                draw_empty_state(ui, &p, "未发现命令", Some("检查扩展清单或扩展运行状态"));
+            } else {
+                draw_empty_state(ui, &p, "未找到匹配的命令", Some("试试其他关键词。"));
+            }
             return;
         }
 
@@ -1914,33 +2050,55 @@ impl PaletteApp {
         let mut clicked: Option<usize> = None;
         let scroll_follow = self.scroll_follow;
         egui::ScrollArea::vertical().show(ui, |ui| {
-            for (section, group_items) in &groups {
-                ui.add_space(4.0);
-                if !section.is_empty() {
-                    // 分组标题（CSS `.section-label`：11px/600、text-3）
-                    ui.label(
-                        egui::RichText::new(section)
-                            .size(11.0)
-                            .strong()
-                            .color(p.text3),
-                    );
-                    ui.add_space(2.0);
-                }
-                for (idx, item) in group_items {
-                    let resp = draw_item_row(ui, item, Some(*idx) == selected, icon_views.get(idx));
-                    if Some(*idx) == selected && scroll_follow {
-                        // 选中项滚入可视区（仅键盘选中时跟随；鼠标选中不滚动，
-                        // 避免内容在静止指针下移动造成高亮与光标错位）
-                        resp.scroll_to_me(None);
+            // `.results` 容器：padding 6px 6px 8px（行相对搜索栏再内收 6px、
+            // 列表底部留 8px；egui Frame inner_margin 承担）。
+            egui::Frame::default()
+                .inner_margin(egui::Margin {
+                    left: 6,
+                    right: 6,
+                    top: 0,
+                    bottom: 8,
+                })
+                .show(ui, |ui| {
+                    for (section, group_items) in &groups {
+                        if !section.is_empty() {
+                            // 分组标题（CSS `.section-label`：11px/600、text-3、
+                            // padding 10px 10px 4px）
+                            ui.add_space(10.0);
+                            ui.horizontal(|ui| {
+                                ui.add_space(10.0);
+                                ui.label(
+                                    egui::RichText::new(section)
+                                        .size(11.0)
+                                        .strong()
+                                        .color(p.text3),
+                                );
+                            });
+                            ui.add_space(4.0);
+                        } else {
+                            ui.add_space(4.0);
+                        }
+                        for (idx, item) in group_items {
+                            let resp = draw_item_row(
+                                ui,
+                                item,
+                                Some(*idx) == selected,
+                                icon_views.get(idx),
+                            );
+                            if Some(*idx) == selected && scroll_follow {
+                                // 选中项滚入可视区（仅键盘选中时跟随；鼠标选中不滚动，
+                                // 避免内容在静止指针下移动造成高亮与光标错位）
+                                resp.scroll_to_me(None);
+                            }
+                            if resp.hovered() {
+                                hovered = Some(*idx);
+                            }
+                            if resp.clicked() {
+                                clicked = Some(*idx);
+                            }
+                        }
                     }
-                    if resp.hovered() {
-                        hovered = Some(*idx);
-                    }
-                    if resp.clicked() {
-                        clicked = Some(*idx);
-                    }
-                }
-            }
+                });
         });
 
         // 回写鼠标结果：
@@ -2121,6 +2279,25 @@ fn weak_text_color(ui: &egui::Ui) -> egui::Color32 {
 /// 行背景在 Frame 之前按**预算行矩形**判定 hover（`ui.rect_contains_pointer`），
 /// 避免依赖交互响应回读的帧延迟；预算矩形与实际分配矩形一致的前提是行前无
 /// 其它布局消耗（ScrollArea 内逐行调用，成立）。
+/// 纯空态（设计稿 02 屏 `.empty`）：搜索图标 glyph 30px/text-3 + 标题
+/// 15px/600/text + 可选描述 12.5px/text-3，居中、间距 10px。
+fn draw_empty_state(ui: &mut egui::Ui, p: &theme::Palette, title: &str, desc: Option<&str>) {
+    ui.vertical_centered(|ui| {
+        ui.add_space(34.0);
+        ui.label(
+            egui::RichText::new(SEARCH_GLYPH.to_string())
+                .size(30.0)
+                .color(p.text3),
+        );
+        ui.add_space(10.0);
+        ui.label(egui::RichText::new(title).size(15.0).color(p.text));
+        if let Some(desc) = desc {
+            ui.add_space(2.0);
+            ui.label(egui::RichText::new(desc).size(12.5).color(p.text3));
+        }
+    });
+}
+
 fn draw_item_row(
     ui: &mut egui::Ui,
     item: &PanelItem,
@@ -2161,7 +2338,8 @@ fn draw_item_row(
                 // 图标列（20px；无图标/url 也占位，各行对齐——设计稿 04）
                 draw_icon_cell(ui, icon);
                 ui.add_space(12.0); // CSS `.row` gap 12px
-                                    // 名称：14px 常规（设计稿 `.name` 500；选中态不加粗——设计稿不区分）
+                                    // 名称：14px（设计稿 `.name` font-weight 500——egui FontId 不携带
+                                    // 字重、`.strong()` 只变色不改字重，平台限制无法等价实现，留档）
                 ui.label(egui::RichText::new(&item.title).size(14.0));
                 // 描述徽标：subtitle 上移为名称右侧 badge（设计稿 01），
                 // 限宽 220 截断（`.desc-badge` max-width）；tags 无预留时的窄余量
@@ -2449,6 +2627,34 @@ const KEY_GROUPS: [KeyGroup; 3] = [
     },
 ];
 
+/// 批次 4.1：有选中项时页脚右侧的单键帽（§6.3 示例：`↵ Enter`）。
+const ENTER_KEYCAP: &str = "↵ Enter";
+
+/// 页脚上下文动作文本（设计稿 §6.3，批次 4.1）。
+///
+/// 动词由 `CommandRef` 决定：`Page` → 进入类；`Invoke` → 执行类。
+/// 宾语由 `ext_id` 决定——GUI 层硬编码映射表（去 `com.ddrun.` 前缀后匹配，
+/// 与 [`aggregator`] 的类别映射同口径）；第三方/未知扩展回退「执行」。
+/// 协议层零改动（C9/C13：`CommandItem` 无 kind，映射仅在本层）。
+fn footer_action_text(item: &PanelItem) -> String {
+    if matches!(item.command, CommandRef::Page { .. }) {
+        return "进入".to_string();
+    }
+    let short = item
+        .ext_id
+        .strip_prefix("com.ddrun.")
+        .unwrap_or(&item.ext_id);
+    match short {
+        "apps" => "打开应用",
+        "system" => "打开设置",
+        "shell" => "运行命令",
+        "websearch" => "打开网页",
+        "calc" => "计算",
+        _ => "执行",
+    }
+    .to_string()
+}
+
 /// 文本单行宽度（不改布局，只量尺寸）。
 fn text_width(ui: &egui::Ui, text: &str, font_id: egui::FontId) -> f32 {
     ui.painter()
@@ -2483,23 +2689,7 @@ fn keys_width(ui: &egui::Ui) -> f32 {
     sum + theme::FOOTER_GAP * (KEY_GROUPS.len() - 1) as f32
 }
 
-/// 源/ note 条目总宽（点 6px + 5px 右间距 + 文本；组间 `gap`）。
-fn entries_width(ui: &egui::Ui, entries: &[(Option<egui::Color32>, String)], gap: f32) -> f32 {
-    let sum: f32 = entries
-        .iter()
-        .map(|(dot, text)| {
-            let dot_w = if dot.is_some() {
-                theme::DOT_SIZE + theme::DOT_GAP
-            } else {
-                0.0
-            };
-            dot_w + text_width(ui, text, egui::FontId::proportional(theme::FOOTER_FONT))
-        })
-        .sum();
-    sum + gap * entries.len().saturating_sub(1) as f32
-}
-
-/// 画源条目（不换行；调用方保证宽度够）。
+/// 画源条目（不换行；超宽在左块剩余宽度内省略号截断，不溢出到键位区）。
 fn draw_footer_entries(
     ui: &mut egui::Ui,
     entries: &[(Option<egui::Color32>, String)],
@@ -2513,12 +2703,38 @@ fn draw_footer_entries(
         if let Some(color) = dot {
             draw_status_dot(ui, *color);
         }
-        ui.label(
-            egui::RichText::new(text)
-                .size(theme::FOOTER_FONT)
-                .color(p.text3),
+        // `Label::truncate`：诊断文本（note/失败原因可含长路径）超宽时省略号
+        // 截断——egui label 默认不裁剪，真机实测溢出盖到右侧键位图例。
+        ui.add(
+            egui::Label::new(
+                egui::RichText::new(text)
+                    .size(theme::FOOTER_FONT)
+                    .color(p.text3),
+            )
+            .truncate(),
         );
     }
+}
+
+/// 页脚最左**设置按钮**（设计稿 §6.1）：齿轮 `\u{E713}`、16px、颜色 `--text-3`、
+/// hover 变 `--text-2`（无背景变化）、24×24 热区。返回是否被点击。
+///
+/// glyph 经图标字体渲染（`SegoeIcons.ttf` → `segmdl2.ttf` 已在字体回退链，
+/// 与列表行图标同链路）；键盘可达经 `Ctrl+,` 快捷键（批次 4.0 决策）。
+fn draw_settings_gear(ui: &mut egui::Ui, p: &theme::Palette) -> bool {
+    let (rect, resp) = ui.allocate_exact_size(
+        egui::vec2(theme::GEAR_SIZE, theme::GEAR_SIZE),
+        egui::Sense::click(),
+    );
+    let color = if resp.hovered() { p.text2 } else { p.text3 };
+    ui.painter().text(
+        rect.center(),
+        egui::Align2::CENTER_CENTER,
+        theme::GEAR_GLYPH,
+        egui::FontId::proportional(theme::GEAR_FONT),
+        color,
+    );
+    resp.clicked()
 }
 
 /// 画键位区（左→右；调用方负责把它推到右侧）。
@@ -2585,6 +2801,60 @@ mod tests {
     use dd_host::manifest::{Entry, Manifest};
     use std::path::PathBuf;
 
+    // ── 批次 4.1：页脚上下文动作映射（C7，§6.3 映射表） ────────────
+
+    /// 构造指定 ext_id + 命令的列表项。
+    fn item_with(ext_id: &str, command: CommandRef) -> PanelItem {
+        PanelItem {
+            ext_id: ext_id.to_string(),
+            command,
+            ..PanelItem::new("x")
+        }
+    }
+
+    #[test]
+    fn footer_action_maps_five_builtin_extensions() {
+        let cases = [
+            ("com.ddrun.apps", "打开应用"),
+            ("com.ddrun.calc", "计算"),
+            ("com.ddrun.system", "打开设置"),
+            ("com.ddrun.websearch", "打开网页"),
+            ("com.ddrun.shell", "运行命令"),
+        ];
+        for (ext, expected) in cases {
+            let item = item_with(ext, CommandRef::Invoke);
+            assert_eq!(footer_action_text(&item), expected, "{ext} 动作映射");
+        }
+    }
+
+    #[test]
+    fn footer_action_falls_back_for_third_party_and_empty() {
+        // 第三方未命中 → 执行；无 ext_id（如宿主兜底项之外的场合）→ 执行
+        let third = item_with("com.acme.thing", CommandRef::Invoke);
+        assert_eq!(footer_action_text(&third), "执行");
+        let empty = item_with("", CommandRef::Invoke);
+        assert_eq!(footer_action_text(&empty), "执行");
+    }
+
+    #[test]
+    fn footer_action_page_commands_become_enter_verb() {
+        // CommandRef::Page 优先于 ext_id 映射：任何来源的页命令都是「进入」
+        let page = item_with(
+            "com.ddrun.apps",
+            CommandRef::Page {
+                page_id: "sub".to_string(),
+            },
+        );
+        assert_eq!(footer_action_text(&page), "进入");
+        let page_unknown = item_with(
+            "com.acme.thing",
+            CommandRef::Page {
+                page_id: "p".to_string(),
+            },
+        );
+        assert_eq!(footer_action_text(&page_unknown), "进入");
+    }
+
     // ── 夹具 ───────────────────────────────────────────────
 
     /// 构造「立即退出（exit 1）」的扩展进程夹具（A8 崩溃 / A10 拉取失败回路）。
@@ -2647,7 +2917,12 @@ mod tests {
     fn make_app() -> PaletteApp {
         let (_etx, events_rx) = mpsc::channel::<HotkeyEvent>();
         let (_atx, agg_rx) = mpsc::channel::<AggregatePayload>();
-        PaletteApp::new(events_rx, agg_rx, ColdStartTimer::new())
+        PaletteApp::new(
+            events_rx,
+            agg_rx,
+            ColdStartTimer::new(),
+            dd_gui::settings::Settings::default(),
+        )
     }
 
     /// headless egui Context（无窗口/渲染后端，仅供 request_repaint 等无副作用调用）。
