@@ -3,7 +3,9 @@
 > **状态**：🟨 进行中（2026-09-02 启动）。**P1–P3 健壮性基础层代码完成（79/79 测试全绿），
 > 待用户真机复验 §4 清单**；**P4 扩展侧 + 宿主 fallback 轮均完成**（dd-ext 共享运行时 +
 > 5 内置扩展 + 宿主内存自注册 + 协议方法封装 + `FallbackStore` 无匹配渲染，153/153 全
-> workspace 测试全绿）；P5（A3 nucleo 过滤）为后续轮次。
+> workspace 测试全绿）；**P5 完成**（2026-09-03：A3 nucleo 模糊过滤 + 按分数重排 +
+> A3 实测 3.7ms/2000 项，162/162 全绿）；真机复验项（A8 #1–#5 / host/* #6–#8 /
+> A10 #9–#13 / A3 日志复核）留用户。
 > **目标**（implementation.md §M4）：MVP 内置 5 个扩展（Apps / Calc / System / WebSearch / Shell），
 > 扩展崩溃不影响宿主；连续崩溃受保护；能力注入（`host/*`）接 UI；过滤性能达标。
 > **验收映射**：A8（扩展崩溃后宿主不退出、可恢复）、A10（内置扩展功能清单核对）、
@@ -54,6 +56,14 @@
 | D9 | fallback 触发时机 | A) 全局无匹配才触发（协议字面）｜B) 单扩展各自判定 | **A 全局无匹配**：仅当 Root 页过滤结果为空且查询非空时拉取/展示兜底（`has_regular_match()` 判定） |
 | D10 | 模板拉取策略 | A) 每扩展只拉一次并缓存（本地 {query} 替换）｜B) 每次输入重拉 | **A 拉一次缓存**：FallbackStore 状态机 Unknown→Fetching→Ready/Exhausted，`wants()` 去重；渲染时 `render(query)` 本地替换 `{query}` |
 
+### 0.3 P5 轮补充决策（2026-09-03 用户一问一答确认）
+
+| # | 决策点 | 选项 | 结论 |
+|---|---|---|---|
+| D11 | 排序语义 | A) 按分数重排（启动器标准行为）｜B) 只过滤不重排（改动最小） | **A 按分数重排**：`PanelState` 增可见索引表 `visible`（查询变化时一次重算，得分降序稳定排序、同分保原序）；选中/导航/confirm 本就以可见位置为语义（SSOT），无选中层重构 |
+| D12 | 拼音匹配 | A) 本轮纳入（需 pinyin 转换 crate）｜B) 本轮不做、留独立后续项 | **B 本轮不做**：nucleo 原生不支持拼音，额外转换引入新依赖且干扰 A3 性能预算；D3 决策理由中的"拼音支持"顺延为独立后续项 |
+| D13 | 匹配字段语义 | A) 沿用拼接 haystack｜B) 每字段独立打分取最高 | **B 每字段独立**：避免跨字段拼接产生的"查询横跨 title 尾 + subtitle 头"伪命中；大小写不敏感（`CaseMatching::Ignore`）与空白查询=全显语义保持 P5 前不变 |
+
 > **决策依据**：
 > - D8-A：P4 扩展侧把 Calc/WebSearch/Shell 标 `frozen=true` 与设计文档 §6.3 冲突——含兜底能力者
 >   若落桩（冷启动读桩、无进程）则永远拉不到 `fallback_commands`，A10 批次 2 无法核对。拆两概念：
@@ -77,7 +87,7 @@
 | P2 `host/*` 执行端 | dd-gui 消费 `host_requests`：`host/show_status` → 既有 Toast；`host/set_clipboard` → 剪贴板（arboard）；`host/open_url` → 默认浏览器（webbrowser）；空闲 rx 轮询同样应答 HostRequest（此前静默丢弃） | ✅ 代码完成（2026-09-02） | roundtrip 新增 1 测（3 个 host 请求被应答+记录，参数完整）；真机 §4 #6–#8 | ✅ roundtrip 8/8 |
 | P3 连续崩溃保护 | 协议 §11 规则 2：连续崩溃 N 次（`CrashGuard`，默认 3）→ 熔断"暂时不可用"；dispatch 拦截不再 spawn；warm 恢复清零 | ✅ 代码完成（2026-09-02） | `robustness.rs` 5 个状态机单测（计数/熔断/复位/恢复不误熔）；真机 §4 #4–#5 | ✅ dd-gui 29/29 |
 | P4 共享扩展运行时 + 5 内置扩展 | `dd-ext` lib（D1-A）+ Apps/Calc/System/WebSearch/Shell 命令实现；frozen 标记 + 自动安装/发现 | ✅ 扩展侧（2026-09-02）+ 宿主 fallback 轮（2026-09-03）完成 | 扩展侧：`roundtrip_builtins` 6 项 + 全 workspace 132/132；宿主 fallback 轮：FallbackStore 纯逻辑 7 单测 + PanelState 分流 6 单测 + cache remove 1 + main.rs 接线（A8/A10 自动覆盖 7 测，本轮 T2 补齐全）；**153/153 全 workspace 全绿**；A10 拆两批真机核对 | ✅ 153/153 全绿 |
-| P5 A3 模糊过滤 | `state.rs` 过滤换 nucleo（打分排序替代 contains）；帧耗时采样埋点 | ⬜ 后续 | 实测过滤 < 16ms/帧（不达标记录实测与瓶颈、不调目标） | ⬜ |
+| P5 A3 模糊过滤 | `state.rs` 过滤换 nucleo（打分排序替代 contains）；帧耗时采样埋点 | ✅ 代码完成（2026-09-03，TDD 红绿循环） | 模糊子序列/排序/导航 9 新测（fuzzy.rs 4 + state.rs 5）+ 存量回归全绿；`visible` 可见索引表 + 查询未变早退；**2000 项实测 3.7ms < 16ms/帧**（不达标则记录实测与瓶颈） | ✅ 162/162 全绿 |
 
 ---
 
@@ -89,7 +99,7 @@
 | 协议 §11：连续崩溃 N 次后"暂时不可用"，重启/手动重试才恢复 | ✅ 代码完成，真机待验 | `robustness.rs` 5 单测（计数/熔断/复位/恢复不误熔）+ dispatch 熔断拦截；真机 §4 #4–#5 待用户复验 |
 | `host/*`：show_status / set_clipboard / open_url 真实副作用 | ✅ 代码完成，真机待验 | roundtrip `roundtrip_m4_host_requests_are_answered_and_recorded`（3 个请求应答+记录、参数完整）；dd-gui 执行端（Toast/arboard 剪贴板/webbrowser）；真机 §4 #6–#8 待用户复验 |
 | A10：5 个内置扩展功能清单核对通过 | 🟨 代码完成，真机待验 | `dd-ext` 5 bin + `roundtrip_builtins` 6 项全链路往返；宿主 fallback 轮完成（无匹配渲染 + `{query}` 替换 + `context.query` 透传）；A10 清单核对拆两批：Apps/System 与 Shell 顶层本轮可真机验（枚举真实应用/锁屏/开终端），Calc/WebSearch/Shell 的 fallback 交互（输入 `1+1`→`= 2` 等）也需真机核对（§4 #9–#13） |
-| A3：输入过滤 < 16ms/帧（实测记录，不调目标） | ⬜ P5 后 | P5 帧耗时采样日志 + 记录实测值 |
+| A3：输入过滤 < 16ms/帧（实测记录，不调目标） | ✅ 代码完成（P5），真机待复验 | **2000 项 ×6 字段一次重算实测 3.7ms**（debug 构建，为真实规模 MAX_APPS=400 的 5 倍裕量）——远低于 16ms/帧；`recompute_visible` 每次重算 eprintln 实测耗时（真机日志可复核）；真机复验见 §4 |
 
 ---
 
@@ -213,6 +223,38 @@
   本轮较 146 新增 7：main.rs 接线 A8 崩溃恢复 + A10 fallback 渲染/拉取自动覆盖 7 测；roundtrip 与 roundtrip_builtins 并行跑两次均无竞态失败）。
 - `cargo clippy --workspace --all-targets`：零警告；`cargo fmt --check`：干净。
 - 产物重编：`dd-gui.exe` + 5 个 `dd-ext-*.exe`（宿主 fallback 轮版，2026-09-03）。
+
+## 3.7 P5 模糊过滤轮实施记录（2026-09-03，TDD 红绿循环）
+
+### 文件改动
+
+| 文件 | 改动 |
+|---|---|
+| `crates/dd-gui/Cargo.toml` | 新增 `nucleo = "0.5.0"`（D3-A，纯 Rust、无 C 依赖） |
+| `crates/dd-gui/src/fuzzy.rs`（新建） | `FuzzyMatcher`：`Pattern::parse`（空白拆 atom、AND）+ `CaseMatching::Ignore`（保持 P5 前 contains 大小写语义）+ `Normalization::Smart`；`score()` 每字段（title/subtitle/section/tags）独立打分取最高（D13-B，杜绝跨字段伪命中）；`Utf32Str` 复用缓冲；空白查询 = 全显/`Some(0)`。4 单测 |
+| `crates/dd-gui/src/state.rs` | `PanelState` 增 `visible: Vec<usize>` 可见索引表——`set_query`/`new`/`reset` 时 `recompute_visible()` 一次重算（nucleo 打分 + **`sort_by_key(Reverse)` 稳定排序**、同分保原序 D11-A）；`filtered()`/`is_fallback_mode()`/`has_regular_match()` 全部改走索引表（SSOT 不变，每帧多次调用零匹配成本）；`set_query` 增**查询未变早退**（`draw_panel` 每帧调用）；`recompute_visible` A3 计时 eprintln 埋点；删除旧 `is_visible` contains 实现。5 新测（模糊子序列 / 分数排序 / 同分保序 / 重排后导航 / A3 基准）；2 存量测试期望计数随模糊语义有意更新（`"open"` 2→3 项：`Copy Path` 的 subtitle "Copy current path" 构成子序列，附注释） |
+| `crates/dd-gui/src/lib.rs` | 注册 `fuzzy` 模块 |
+
+### 设计要点
+
+- **切片推进**（TDD 垂直切片）：① 模糊子序列匹配（RED：`"opst"`/`"cpy"` 非子串用例）→ ② 按分数重排
+  （RED：弱匹配在前强匹配在后倒转用例 + 同分保序守卫 + 重排后导航语义）→ ③ 未变早退 + A3 埋点 + 基准测试。
+  每切片先 RED（实跑确认行为失败非编译错）再 GREEN，存量 42 测全程回归。
+- **性能结构**：匹配/排序只发生在 `recompute_visible`（每次按键一次），`filtered()` 每帧多次调用只走
+  索引表 + 早退守卫——A3 "每帧"成本的实质是"每键一次重算"。
+- **行为语义变化（有意，用户确认）**：contains → 子序列；原序 → 分数降序；常规匹配更易命中 →
+  fallback 触发相应减少（`has_regular_match` 同口径）。
+
+### 验证结果
+
+- `cargo test --workspace`：**162/162 全绿**（较 153 新增 9：fuzzy.rs 4 + state.rs 5；dd-ext 43 /
+  dd-gui 58 / dd-host 50 / dd-protocol 11）。
+- `cargo clippy --workspace --all-targets`：**零警告**（初版 2 条已修：死代码 `matches` 删除、
+  `sort_by`→`sort_by_key(Reverse)`）；`cargo fmt --check`：干净。
+- **A3 实测（debug 构建，不调目标）**：2000 项 ×6 字段一次重算 **3.7ms**（3.55ms~3.71ms 两次采样）
+  ——为真实规模（MAX_APPS=400）5 倍裕量下仍 < 16ms/帧，**达标**；基准测试
+  `filter_latency_on_large_list_is_recorded` 持续守卫（100ms 病态上限断言 + 实测值打印）。
+- 真机 A3 复核：终端启动 `dd-gui.exe` 输入查询，观察 `[dd-gui] A3 过滤：N 项 → M 命中，耗时 X µs` 日志。
 
 ---
 

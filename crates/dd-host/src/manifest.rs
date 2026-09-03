@@ -148,6 +148,10 @@ pub struct ScanOutcome {
     pub loaded: Vec<LoadedExtension>,
     pub skipped: Vec<SkippedExtension>,
     /// 扫描目录本身不可读。**非致命**——等同"该目录下没有扩展"。
+    ///
+    /// 契约：`io::ErrorKind::NotFound` **不写**——目录不存在（首跑场景）
+    /// 视作空目录；其余错误（权限拒绝、损坏链接、磁盘 I/O 等）才写。
+    /// 调用方据此把"目录不存在"与"目录出错"在 UI 上区分开。
     pub dir_error: Option<String>,
 }
 
@@ -479,11 +483,19 @@ fn from_command(
 
 /// §2 扫描一个扩展目录：`*.json`、**不递归子目录**、按文件名字典序；
 /// 逐条套用 §7 九条规则，失败的跳过。
+///
+/// 目录不存在（`io::ErrorKind::NotFound`，首跑场景）视作空目录——
+/// 等同"该目录里没有扩展"，**不写** [`ScanOutcome::dir_error`]。
 pub fn scan_dir(dir: &Path, opts: &ScanOptions) -> ScanOutcome {
     let mut outcome = ScanOutcome::default();
 
     let entries = match fs::read_dir(dir) {
         Ok(entries) => entries,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            // 首跑场景：扩展目录尚未创建，等同"该目录下没有扩展"，
+            // 不污染 dir_error，让宿主 UI 无需为"不存在"显示异常 note。
+            return outcome;
+        }
         Err(e) => {
             outcome.dir_error = Some(format!("{}: {e}", dir.display()));
             return outcome;
@@ -812,12 +824,46 @@ mod tests {
     }
 
     #[test]
-    fn scan_reports_missing_dir_without_panicking() {
+    fn scan_treats_missing_dir_as_empty() {
+        // 首跑契约：扩展目录尚未创建 = "该目录下没有扩展"，不写 dir_error。
+        // 旧断言曾是 `dir_error.is_some()`，与新契约冲突（仅非 NotFound 才写）。
         let tmp = TempDir::new("missing");
         let missing = tmp.path().join("nope");
 
         let outcome = scan_dir(&missing, &ScanOptions::default());
+        assert!(
+            outcome.loaded.is_empty(),
+            "目录不存在应视作空（无人可加载）"
+        );
+        assert!(outcome.skipped.is_empty(), "目录不存在不应触发任何 skip");
+        assert!(
+            outcome.dir_error.is_none(),
+            "目录不存在（NotFound）≠错误；权限拒绝等其它错误才写 dir_error"
+        );
+    }
+
+    #[test]
+    fn scan_reports_non_not_found_dir_error() {
+        // 锁住契约"仅非 NotFound 写 dir_error"——这里我们制造一个**路径合法但
+        // 不可读**的场景（链向一个文件而非目录），让 Windows/Linux 都返回
+        // `ErrorKind::Other` 而非 `NotFound`。
+        let tmp = TempDir::new("nonread");
+        let file_path = tmp.path().join("not-a-dir.json");
+        std::fs::write(&file_path, "{}").expect("写一个真文件");
+
+        let outcome = scan_dir(&file_path, &ScanOptions::default());
         assert!(outcome.loaded.is_empty());
-        assert!(outcome.dir_error.is_some(), "目录不可读应记录而非崩溃");
+        assert!(
+            outcome.dir_error.is_some(),
+            "非 NotFound 错误（如把文件当目录读）必须写 dir_error"
+        );
+        assert!(
+            outcome
+                .dir_error
+                .as_deref()
+                .unwrap()
+                .contains("not-a-dir.json"),
+            "dir_error 应包含具体路径以便诊断"
+        );
     }
 }

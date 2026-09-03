@@ -3,775 +3,625 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>CmdPal UI — 暗色交互设计稿</title>
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<title>dd-run CmdPal UI 设计稿 v2 — ueli 风格（亮暗双主题）</title>
 <style>
-  :root {
+  /* ============================================================
+     主题 token：参考 ueli（Fluent UI 9 设计语言）
+     默认跟随系统亮暗，可用右上角按钮手动切换
+     ============================================================ */
+  :root[data-theme="dark"] {
+    color-scheme: dark;
     /* surfaces */
-    --bg: #0a0a0e;
-    --panel: #131319;
-    --panel-2: #1a1a23;
-    --panel-3: #20202b;
-    --border: #262631;
-    --border-strong: #3a3a49;
+    --page: #1b1b1b;
+    --panel: #292929;
+    --panel-2: #232323;
+    --panel-3: #333333;
+    --border: #3d3d3d;
+    --border-strong: #4d4d4d;
     /* text */
-    --text: #ececf4;
-    --text-2: #a2a2b5;
-    --text-3: #666679;
-    /* accent + semantics */
-    --accent: #ff6b2c;
-    --accent-soft: rgba(255, 107, 44, 0.13);
-    --accent-line: rgba(255, 107, 44, 0.45);
-    --green: #3ecf8e;
-    --red: #f2555a;
-    --blue: #4c8dff;
-    --teal: #2dd4bf;
-    --gold: #e8b341;
-    --violet: #a78bfa;
-    /* type — local-first layered stack; Archivo/JetBrains Mono load via CDN when reachable,
-       otherwise degrade to Windows-bundled personalities (Segoe UI Variable / Cascadia Code) so the look is always verifiable */
-    --sans: "Archivo", "Segoe UI Variable Display", "Segoe UI Semibold", "Inter", "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
-    --mono: "JetBrains Mono", "Cascadia Code", "Cascadia Mono", Consolas, "PingFang SC", monospace;
+    --text: #ffffff;
+    --text-2: #d1d1d1;
+    --text-3: #8d8d8d;
+    /* accent（参考 Fluent 9 暗色品牌色阶） */
+    --accent: #479ef5;
+    --accent-hover: #6cb2f6;
+    --accent-soft: rgba(71, 158, 245, 0.14);
+    --accent-line: rgba(71, 158, 245, 0.55);
+    /* 交互态 */
+    --row-hover: rgba(255, 255, 255, 0.0605);
+    --row-selected: rgba(255, 255, 255, 0.0837);
+    --input-fill: #1f1f1f;
+    --chip-bg: #333333;
+    --badge-bg: #3d3d3d;
+    --shadow: 0 10px 32px rgba(0, 0, 0, 0.55), 0 2px 8px rgba(0, 0, 0, 0.4);
+    --glow-opacity: 1;
   }
+  :root[data-theme="light"] {
+    color-scheme: light;
+    /* surfaces */
+    --page: #f4f4f4;
+    --panel: #ffffff;
+    --panel-2: #fafafa;
+    --panel-3: #f0f0f0;
+    --border: #e0e0e0;
+    --border-strong: #d1d1d1;
+    /* text */
+    --text: #242424;
+    --text-2: #616161;
+    --text-3: #979797;
+    /* accent（参考 Fluent 9 亮色品牌色阶） */
+    --accent: #0f6cbd;
+    --accent-hover: #115ea3;
+    --accent-soft: rgba(15, 108, 189, 0.08);
+    --accent-line: rgba(15, 108, 189, 0.45);
+    /* 交互态 */
+    --row-hover: #f5f5f5;
+    --row-selected: #f0f0f0;
+    --input-fill: #ffffff;
+    --chip-bg: #f0f0f0;
+    --badge-bg: #f0f0f0;
+    --shadow: 0 10px 32px rgba(0, 0, 0, 0.14), 0 2px 8px rgba(0, 0, 0, 0.08);
+    --glow-opacity: 0.35;
+  }
+
   * { box-sizing: border-box; }
   html { scroll-behavior: smooth; }
   body {
     margin: 0;
-    background: var(--bg);
+    background: var(--page);
     color: var(--text);
-    font-family: var(--sans);
+    font-family: "Segoe UI Variable Text", "Segoe UI", system-ui, "PingFang SC", "Microsoft YaHei", sans-serif;
     line-height: 1.6;
     -webkit-font-smoothing: antialiased;
     overflow-x: hidden;
+    transition: background 0.25s ease, color 0.25s ease;
   }
-  /* ambient atmosphere: two fixed glows + grain */
   body::before {
-    content: ""; position: fixed; inset: 0; z-index: -2; pointer-events: none;
+    content: ""; position: fixed; inset: 0; z-index: -2; pointer-events: none; opacity: var(--glow-opacity);
     background:
-      radial-gradient(700px 420px at 12% -4%, rgba(255, 107, 44, 0.09), transparent 62%),
-      radial-gradient(820px 520px at 92% 8%, rgba(76, 141, 255, 0.07), transparent 60%),
-      radial-gradient(900px 700px at 50% 115%, rgba(61, 207, 142, 0.05), transparent 60%);
+      radial-gradient(760px 460px at 14% -6%, rgba(71, 158, 245, 0.10), transparent 62%),
+      radial-gradient(860px 540px at 90% 6%, rgba(15, 108, 189, 0.08), transparent 60%);
   }
-  body::after {
-    content: ""; position: fixed; inset: 0; z-index: -1; pointer-events: none; opacity: 0.5;
-    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='140' height='140'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2'/%3E%3CfeColorMatrix values='0 0 0 0 1 0 0 0 0 1 0 0 0 0 1 0 0 0 0.03 0'/%3E%3C/filter%3E%3Crect width='140' height='140' filter='url(%23n)'/%3E%3C/svg%3E");
+  /* 图标字体（Windows 自带，亮暗主题均可用） */
+  .glyph {
+    font-family: "Segoe Fluent Icons", "Segoe MDL2 Assets";
+    font-size: 16px;
+    line-height: 1;
+    speak: none;
   }
 
-  header { max-width: 820px; margin: 0 auto; padding: 72px 28px 20px; }
+  /* ============ 文档骨架 ============ */
+  header { max-width: 840px; margin: 0 auto; padding: 64px 28px 12px; position: relative; }
+  .theme-switch {
+    position: absolute; top: 64px; right: 28px; display: flex; gap: 0;
+    border: 1px solid var(--border-strong); border-radius: 8px; overflow: hidden;
+  }
+  .theme-switch button {
+    border: none; background: var(--panel-2); color: var(--text-2);
+    font: 500 12px/1 "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif;
+    padding: 8px 14px; cursor: pointer;
+  }
+  .theme-switch button + button { border-left: 1px solid var(--border); }
+  .theme-switch button.active { background: var(--accent-soft); color: var(--accent); font-weight: 600; }
   .eyebrow {
-    font-family: var(--mono); font-size: 11px; font-weight: 500;
-    letter-spacing: 0.22em; text-transform: uppercase; color: var(--accent);
-    display: flex; align-items: center; gap: 12px; margin: 0 0 18px;
+    font-size: 11px; font-weight: 600; letter-spacing: 0.2em; text-transform: uppercase;
+    color: var(--accent); display: flex; align-items: center; gap: 12px; margin: 0 0 18px;
   }
   .eyebrow::after { content: ""; flex: 1; height: 1px; background: linear-gradient(90deg, var(--accent-line), transparent); }
-  header h1 { font-size: 34px; font-weight: 700; letter-spacing: -0.02em; margin: 0 0 12px; }
+  header h1 { font-size: 32px; font-weight: 650; letter-spacing: -0.02em; margin: 0 0 12px; }
   header h1 em { font-style: normal; color: var(--accent); }
-  header p.sub { color: var(--text-2); font-size: 15px; max-width: 660px; margin: 0; }
-  header p.sub code { font-family: var(--mono); font-size: 12.5px; color: var(--text); background: var(--panel-2); border: 1px solid var(--border); border-radius: 5px; padding: 1px 6px; }
-
-  /* design tokens strip */
-  .tokens {
-    max-width: 820px; margin: 26px auto 0; padding: 0 28px;
-    display: flex; flex-wrap: wrap; gap: 10px;
+  header p.sub { color: var(--text-2); font-size: 14.5px; max-width: 680px; margin: 0; }
+  header p.sub code, td code, .s-desc code {
+    font-family: "Cascadia Code", Consolas, monospace; font-size: 12px;
+    background: var(--panel-3); border: 1px solid var(--border); border-radius: 4px; padding: 1px 6px;
   }
-  .tok {
-    display: flex; align-items: center; gap: 8px;
-    font-family: var(--mono); font-size: 11px; color: var(--text-2);
-    background: var(--panel); border: 1px solid var(--border); border-radius: 8px;
-    padding: 7px 12px 7px 8px;
-  }
-  .tok i { width: 14px; height: 14px; border-radius: 4px; display: inline-block; border: 1px solid rgba(255,255,255,0.14); }
-  .tok b { color: var(--text); font-weight: 500; }
 
-  main { max-width: 820px; margin: 0 auto; padding: 8px 28px 96px; display: flex; flex-direction: column; gap: 56px; }
+  main { max-width: 840px; margin: 0 auto; padding: 8px 28px 96px; display: flex; flex-direction: column; gap: 52px; }
 
-  /* section scaffolding */
-  .screen { animation: rise 0.65s cubic-bezier(0.2, 0.7, 0.2, 1) both; }
-  .screen.reveal { animation: none; opacity: 0; transform: translateY(26px); transition: opacity 0.6s ease, transform 0.6s cubic-bezier(0.2, 0.7, 0.2, 1); }
-  .screen.reveal.in { opacity: 1; transform: none; }
-  @keyframes rise { from { opacity: 0; transform: translateY(26px); } to { opacity: 1; transform: none; } }
-  @media (prefers-reduced-motion: reduce) {
-    *, *::before, *::after { animation: none !important; transition: none !important; }
-    .screen.reveal { opacity: 1; transform: none; }
-  }
-  .s-head { display: flex; align-items: baseline; gap: 14px; margin-bottom: 6px; }
-  .s-num { font-family: var(--mono); font-size: 13px; font-weight: 600; color: var(--accent); }
+  .s-head { display: flex; align-items: baseline; gap: 14px; margin-bottom: 6px; flex-wrap: wrap; }
+  .s-num { font-size: 13px; font-weight: 700; color: var(--accent); letter-spacing: 0.04em; }
   .s-head h2 { font-size: 19px; font-weight: 600; letter-spacing: -0.01em; margin: 0; }
   .chip {
-    font-family: var(--mono); font-size: 10.5px; color: var(--text-2);
-    border: 1px solid var(--border-strong); border-radius: 999px; padding: 2px 10px; white-space: nowrap;
+    font-size: 10.5px; color: var(--text-2); border: 1px solid var(--border-strong);
+    border-radius: 999px; padding: 2px 10px; white-space: nowrap;
   }
-  .s-desc { color: var(--text-2); font-size: 13.5px; margin: 0 0 18px; max-width: 660px; }
+  .s-desc { color: var(--text-2); font-size: 13.5px; margin: 0 0 18px; max-width: 700px; }
 
-  /* stage: dotted canvas the panel floats on */
   .stage {
-    background: radial-gradient(rgba(255,255,255,0.035) 1px, transparent 1px);
+    background:
+      radial-gradient(rgba(127, 127, 127, 0.10) 1px, transparent 1px);
     background-size: 18px 18px;
     border: 1px solid var(--border); border-radius: 16px;
-    padding: 40px 20px; display: flex; justify-content: center;
+    padding: 44px 20px; display: flex; justify-content: center;
   }
 
-  /* ============ the command palette panel ============ */
+  /* ============ token 展示条 ============ */
+  .tokens { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 16px; }
+  .tok {
+    display: flex; align-items: center; gap: 8px; font-family: "Cascadia Code", Consolas, monospace;
+    font-size: 11px; color: var(--text-2); background: var(--panel);
+    border: 1px solid var(--border); border-radius: 8px; padding: 7px 12px 7px 8px;
+  }
+  .tok i { width: 14px; height: 14px; border-radius: 4px; display: inline-block; border: 1px solid rgba(127,127,127,0.35); }
+  .tok b { color: var(--text); font-weight: 500; }
+
+  /* ============ 命令面板（核心设计对象） ============ */
   .panel {
     width: 560px; max-width: 100%;
-    background: linear-gradient(180deg, #16161d 0%, var(--panel) 100%);
-    border: 1px solid var(--border-strong); border-radius: 14px;
-    box-shadow: 0 30px 70px rgba(0,0,0,0.55), 0 2px 8px rgba(0,0,0,0.4), inset 0 1px 0 rgba(255,255,255,0.06);
-    overflow: hidden; position: relative;
+    background: var(--panel);
+    border: 1px solid var(--border-strong); border-radius: 8px;
+    box-shadow: var(--shadow);
+    overflow: hidden;
+    display: flex; flex-direction: column;
   }
-  .search {
+  /* —— 搜索栏（ueli 默认：large / 显示搜索图标 / auto 外观） —— */
+  .searchbar {
     display: flex; align-items: center; gap: 12px;
-    margin: 14px; padding: 0 14px; height: 46px;
-    background: var(--panel-2); border: 1px solid var(--border); border-radius: 10px;
+    margin: 12px 12px 6px; padding: 0 14px;
+    height: 46px; border-radius: 6px;
+    background: var(--input-fill);
+    border: 1px solid var(--border-strong);
+    border-bottom: 2px solid var(--border-strong);
+    transition: border-color 0.15s ease;
   }
-  .search svg { flex: none; }
-  .search .ph { color: var(--text-3); font-size: 14px; }
-  .search input.q { flex: 1; min-width: 0; background: transparent; border: 0; outline: 0; color: var(--text); font-size: 14px; font-weight: 500; font-family: var(--sans); }
-  .search .q { color: var(--text); font-size: 14px; font-weight: 500; }
-  .caret { width: 2px; height: 18px; background: var(--accent); border-radius: 1px; animation: blink 1.05s steps(2, start) infinite; }
-  @keyframes blink { to { visibility: hidden; } }
-  .search .hint-k { margin-left: auto; font-family: var(--mono); font-size: 10.5px; color: var(--text-3); border: 1px solid var(--border-strong); border-radius: 5px; padding: 1px 6px; }
+  .searchbar.focus { border-bottom-color: var(--accent); }
+  .searchbar .glyph { color: var(--text-2); font-size: 15px; }
+  .searchbar input {
+    flex: 1; border: none; outline: none; background: transparent;
+    color: var(--text); font: 400 16px "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif;
+  }
+  .searchbar input::placeholder { color: var(--text-3); }
 
-  .group-label {
-    font-family: var(--mono); font-size: 10px; font-weight: 600; letter-spacing: 0.14em;
-    text-transform: uppercase; color: var(--text-3);
-    padding: 10px 22px 6px;
+  /* —— 结果列表 —— */
+  .results { padding: 6px 6px 8px; }
+  .section-label {
+    font-size: 11px; font-weight: 600; color: var(--text-3);
+    padding: 10px 10px 4px; letter-spacing: 0.03em;
   }
-  .divider { height: 1px; background: var(--border); margin: 12px 22px; }
-
-  .item {
-    display: flex; align-items: center; gap: 14px;
-    margin: 0 10px; padding: 9px 12px; border-radius: 10px;
-    border-left: 2px solid transparent; position: relative;
-    transition: background 0.15s ease, border-color 0.15s ease;
-    cursor: pointer;
+  .row {
+    display: flex; align-items: center; gap: 12px;
+    padding: 9px 10px 9px 8px; border-radius: 6px; position: relative;
+    min-height: 44px; cursor: default;
   }
-  .item:hover { background: rgba(255,255,255,0.04); }
-  .item .ic {
-    flex: none; width: 34px; height: 34px; border-radius: 9px;
+  .row:hover { background: var(--row-hover); }
+  .row.selected { background: var(--row-selected); }
+  /* 选中指示条（ueli SearchResultListItemSelectedIndicator） */
+  .row.selected::before {
+    content: ""; position: absolute; left: 0; top: 8px; bottom: 8px; width: 3px;
+    border-radius: 2px; background: var(--accent);
+  }
+  .row .icon {
+    width: 20px; height: 20px; flex: 0 0 20px;
     display: flex; align-items: center; justify-content: center;
-    font-size: 14px; font-weight: 700; color: #0b0b10;
+    color: var(--text-2); font-size: 16px;
   }
-  .item .tx { min-width: 0; }
-  .item .t { font-size: 14px; font-weight: 600; color: var(--text); line-height: 1.35; }
-  .item .t .hl { color: var(--accent); }
-  .item .d { font-size: 12px; color: var(--text-2); line-height: 1.4; }
-  .item .tags-inline { display: flex; gap: 6px; margin-top: 5px; flex-wrap: wrap; }
-  .item .tag-pill.sm { font-size: 10px; padding: 2px 9px; }
-  .item .go { margin-left: auto; font-family: var(--mono); font-size: 11px; color: var(--text-3); opacity: 0; transition: opacity 0.15s ease; }
-  .item:hover .go, .item.sel .go { opacity: 1; }
-  .item.sel {
-    background: linear-gradient(90deg, var(--accent-soft), rgba(255,107,44,0.04));
-    border-left-color: var(--accent);
+  .row .icon img { width: 20px; height: 20px; display: block; }
+  .row .name { font-size: 14px; font-weight: 500; color: var(--text); white-space: nowrap; }
+  .row .desc-badge {
+    font-size: 11px; color: var(--text-2); background: var(--badge-bg);
+    border-radius: 4px; padding: 2px 8px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 220px;
   }
-  .item.sel::after {
-    content: ""; position: absolute; inset: 0; border-radius: 10px; pointer-events: none;
-    box-shadow: 0 0 0 1px var(--accent-line), 0 0 22px rgba(255,107,44,0.12);
-  }
-  .item:focus-visible, .g-item:focus-visible, .mi:focus-visible, .btn:focus-visible, input.q:focus-visible { outline: 2px solid var(--accent-line); outline-offset: 1px; }
-
-  .foot {
-    display: flex; gap: 22px; align-items: center;
-    border-top: 1px solid var(--border); background: rgba(0,0,0,0.22);
-    padding: 11px 22px; margin-top: 12px;
-  }
-  .foot .sp { flex: 1; }
-  .kh { display: flex; align-items: center; gap: 6px; font-size: 11.5px; color: var(--text-2); }
-  kbd {
-    font-family: var(--mono); font-size: 10.5px; font-weight: 500; color: var(--text);
-    background: var(--panel-3); border: 1px solid var(--border-strong); border-bottom-width: 2px;
-    border-radius: 5px; padding: 1px 6px; line-height: 1.5;
+  .row .spacer { flex: 1; }
+  .row .tag {
+    font-size: 10.5px; color: var(--text-3); background: var(--chip-bg);
+    border-radius: 999px; padding: 2px 9px; white-space: nowrap;
   }
 
-  /* back header inside nested pages */
-  .nav {
-    display: flex; align-items: center; gap: 10px;
-    padding: 14px 20px; border-bottom: 1px solid var(--border);
+  /* —— 页脚：来源状态区（现行 draw_status_footer 保留）+ 键位提示 —— */
+  .panel-footer {
+    display: flex; align-items: center; gap: 14px; flex-wrap: wrap;
+    padding: 9px 16px; border-top: 1px solid var(--border);
+    background: var(--panel-2); font-size: 11.5px; color: var(--text-3);
   }
-  .nav .back {
-    width: 26px; height: 26px; border-radius: 7px; border: 1px solid var(--border);
-    background: var(--panel-2); display: flex; align-items: center; justify-content: center;
-    color: var(--text-2); transition: color 0.15s, border-color 0.15s;
+  .panel-footer .dot { width: 6px; height: 6px; border-radius: 50%; display: inline-block; margin-right: 5px; }
+  .panel-footer .dot.ok { background: #3ecf8e; }
+  .panel-footer .dot.stub { background: var(--text-3); }
+  .panel-footer .dot.err { background: #f2555a; }
+  :root[data-theme="light"] .panel-footer .dot.ok { background: #107c41; }
+  :root[data-theme="light"] .panel-footer .dot.err { background: #c50f1f; }
+  .panel-footer .keys { display: flex; gap: 14px; margin-left: auto; }
+  .panel-footer b {
+    font-weight: 500; color: var(--text-2); background: var(--chip-bg);
+    border: 1px solid var(--border); border-bottom-width: 2px;
+    border-radius: 4px; padding: 0 6px; font-family: "Cascadia Code", Consolas, monospace; font-size: 10.5px;
   }
-  .nav .back:hover { color: var(--text); border-color: var(--border-strong); }
-  .nav .title { font-size: 14px; font-weight: 600; }
-  .nav .crumb { margin-left: auto; font-family: var(--mono); font-size: 10.5px; color: var(--text-3); }
 
-  /* two-column list + preview */
-  .split { display: flex; min-height: 300px; }
-  .split .col-list { flex: 1.25; padding: 8px 0 0; }
-  .split .col-detail {
-    flex: 1; border-left: 1px solid var(--border); background: rgba(0,0,0,0.18);
-    padding: 16px; display: flex; flex-direction: column;
-  }
-  .mini-label { font-family: var(--mono); font-size: 10px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--text-3); margin-bottom: 10px; }
-  .skel { height: 7px; border-radius: 4px; background: var(--panel-3); }
-  .skel + .skel { margin-top: 9px; }
-  .btn {
-    display: inline-flex; align-items: center; justify-content: center; gap: 8px;
-    font-size: 13px; font-weight: 600; border-radius: 9px; padding: 9px 16px;
-    border: 1px solid transparent; cursor: pointer; font-family: var(--sans);
-    transition: transform 0.12s ease, filter 0.15s ease, background 0.15s ease, border-color 0.15s;
-  }
-  .btn:active { transform: translateY(1px); }
-  .btn-accent { background: var(--accent); color: #16100b; box-shadow: 0 4px 18px rgba(255,107,44,0.28); }
-  .btn-accent:hover { filter: brightness(1.08); }
-  .btn-ghost { background: transparent; color: var(--text-2); border-color: var(--border-strong); }
-  .btn-ghost:hover { color: var(--text); background: rgba(255,255,255,0.04); }
-  .btn-danger { background: var(--red); color: #1c0d0e; box-shadow: 0 4px 18px rgba(242,85,90,0.25); }
-  .btn-danger:hover { filter: brightness(1.08); }
+  /* ============ 表格（行为规格 / 实现映射） ============ */
+  table { border-collapse: collapse; width: 100%; font-size: 13px; }
+  th, td { text-align: left; padding: 9px 12px; border: 1px solid var(--border); vertical-align: top; }
+  th { background: var(--panel-2); font-weight: 600; color: var(--text); white-space: nowrap; }
+  td { color: var(--text-2); }
+  td b { color: var(--text); font-weight: 600; }
 
-  /* detail page */
-  .detail-body { padding: 22px 24px 8px; }
-  .metric { font-size: 44px; font-weight: 700; letter-spacing: -0.03em; line-height: 1; }
-  .metric small { font-size: 22px; color: var(--text-2); font-weight: 500; }
-  .detail-body .sub { color: var(--text-2); font-size: 13.5px; margin: 8px 0 18px; }
-  .tags { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 18px; }
-  .tag-pill {
-    font-family: var(--mono); font-size: 11px; border-radius: 999px; padding: 4px 12px;
-    border: 1px solid var(--border-strong); color: var(--text-2); background: var(--panel-2);
-  }
-  .tag-pill.g { color: var(--green); border-color: rgba(61,207,142,0.35); }
-  .tag-pill.b { color: var(--blue); border-color: rgba(76,141,255,0.35); }
-  .tag-pill.o { color: var(--accent); border-color: var(--accent-line); }
-  .linkish { color: var(--blue); font-size: 13px; text-decoration: none; border-bottom: 1px dashed rgba(76,141,255,0.5); }
-  .linkish:hover { border-bottom-style: solid; }
-  .detail-actions { display: flex; gap: 10px; margin-top: 20px; }
+  /* ============ 空态 ============ */
+  .empty { display: flex; flex-direction: column; align-items: center; gap: 10px; padding: 34px 20px 30px; text-align: center; }
+  .empty .glyph { font-size: 30px; color: var(--text-3); }
+  .empty h3 { margin: 2px 0 0; font-size: 15px; font-weight: 600; color: var(--text); }
+  .empty p { margin: 0; font-size: 12.5px; color: var(--text-3); max-width: 380px; }
 
-  /* form page */
-  .form-body { padding: 18px 24px 4px; }
-  .f-label { display: block; font-family: var(--mono); font-size: 10.5px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--text-3); margin: 14px 0 7px; }
-  .f-input {
-    height: 42px; border-radius: 9px; background: var(--panel-2);
-    border: 1px solid var(--border); padding: 0 14px;
-    display: flex; align-items: center; font-size: 13.5px; color: var(--text);
-    transition: border-color 0.15s, box-shadow 0.15s;
-  }
-  .f-input .mut { color: var(--text-3); }
-  .f-input.focus { border-color: var(--accent-line); box-shadow: 0 0 0 3px rgba(255,107,44,0.12); }
-  .f-area { height: 84px; align-items: flex-start; padding-top: 11px; }
-  .form-actions { display: flex; gap: 10px; padding: 18px 24px 6px; }
+  .stage.split { gap: 28px; flex-wrap: wrap; }
+  .stage.split > .panel { flex: 0 1 300px; width: 300px; }
+  .stage.split .caption { width: 100%; text-align: center; font-size: 12px; color: var(--text-3); }
 
-  /* markdown page */
-  .md-body { padding: 20px 26px 8px; }
-  .md-body h3 { font-size: 16px; margin: 0 0 12px; }
-  .md-body p { margin: 0 0 6px; }
-  .md-body ul { margin: 12px 0; padding: 0; list-style: none; }
-  .md-body li { display: flex; gap: 10px; font-size: 13px; color: var(--text-2); padding: 4px 0; }
-  .md-body li::before { content: "▸"; color: var(--accent); font-size: 12px; line-height: 1.7; }
-  .codeblock {
-    font-family: var(--mono); font-size: 12.5px; color: var(--text);
-    background: #0d0d12; border: 1px solid var(--border); border-radius: 10px;
-    padding: 14px 16px; margin: 14px 0;
+  .note {
+    border-left: 3px solid var(--accent); background: var(--accent-soft);
+    border-radius: 0 8px 8px 0; padding: 10px 16px; font-size: 13px; color: var(--text-2); margin-top: 14px;
   }
-  .codeblock .p { color: var(--green); }
-
-  /* grid page */
-  .grid-body { padding: 22px 28px 8px; display: grid; grid-template-columns: repeat(3, 1fr); gap: 18px 14px; }
-  .g-item { display: flex; flex-direction: column; align-items: center; gap: 9px; cursor: pointer; }
-  .g-tile {
-    width: 62px; height: 62px; border-radius: 16px;
-    display: flex; align-items: center; justify-content: center;
-    font-size: 22px; font-weight: 700; color: #0b0b10;
-    border: 1px solid transparent; transition: transform 0.15s ease, box-shadow 0.15s ease, border-color 0.15s;
-  }
-  .g-item:hover .g-tile { transform: translateY(-3px); box-shadow: 0 10px 24px rgba(0,0,0,0.4); }
-  .g-item.sel .g-tile { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(255,107,44,0.18), 0 10px 24px rgba(0,0,0,0.4); }
-  .g-item .gl { font-size: 12.5px; color: var(--text-2); }
-  .g-item.sel .gl { color: var(--text); }
-
-  /* context menu */
-  .ctx-wrap { position: relative; padding: 26px 0 30px; }
-  .flyout {
-    position: absolute; left: 56%; top: 84px; width: 226px; z-index: 3;
-    background: var(--panel-2); border: 1px solid var(--border-strong); border-radius: 11px;
-    box-shadow: 0 24px 50px rgba(0,0,0,0.6), inset 0 1px 0 rgba(255,255,255,0.05);
-    padding: 6px; animation: pop 0.28s cubic-bezier(0.2, 0.9, 0.3, 1.4) both; transform-origin: top left;
-  }
-  @keyframes pop { from { opacity: 0; transform: scale(0.92) translateY(-4px); } to { opacity: 1; transform: none; } }
-  .flyout .mi {
-    display: flex; align-items: center; font-size: 13px; color: var(--text);
-    padding: 8px 12px; border-radius: 7px; cursor: pointer;
-  }
-  .flyout .mi:hover { background: rgba(255,255,255,0.05); }
-  .flyout .mi.on { background: var(--accent-soft); color: var(--accent); }
-  .flyout .mi .arrow { margin-left: auto; color: var(--text-3); }
-  .flyout .mi.danger { color: var(--red); }
-  .flyout .mi.danger:hover { background: rgba(242,85,90,0.12); }
-  .flyout hr { border: 0; border-top: 1px solid var(--border); margin: 6px 8px; }
-
-  /* confirm + toast */
-  .feed { position: relative; height: 372px; overflow: hidden; }
-  .toast {
-    position: absolute; top: 18px; right: 18px; z-index: 2;
-    display: flex; align-items: center; gap: 10px;
-    background: var(--panel-2); border: 1px solid var(--border-strong); border-radius: 10px;
-    padding: 11px 16px 11px 12px; font-size: 13px;
-    box-shadow: 0 16px 40px rgba(0,0,0,0.5);
-    animation: slidein 0.45s cubic-bezier(0.2, 0.9, 0.25, 1.2) both;
-  }
-  @keyframes slidein { from { opacity: 0; transform: translateX(26px); } to { opacity: 1; transform: none; } }
-  .toast .bar { width: 3px; height: 22px; border-radius: 2px; background: var(--green); }
-  .toast .tick { color: var(--green); }
-  .dim { position: absolute; inset: 0; background: rgba(5,5,8,0.45); backdrop-filter: blur(1.5px); }
-  .dialog {
-    position: absolute; left: 50%; top: 45%; transform: translate(-50%, -50%); z-index: 3;
-    width: 330px; background: var(--panel-2); border: 1px solid var(--border-strong); border-radius: 14px;
-    box-shadow: 0 30px 70px rgba(0,0,0,0.65), inset 0 1px 0 rgba(255,255,255,0.06);
-    padding: 22px; text-align: center;
-    animation: pop 0.3s cubic-bezier(0.2, 0.9, 0.3, 1.35) both;
-  }
-  .dialog h4 { margin: 0 0 6px; font-size: 15.5px; }
-  .dialog p { margin: 0 0 18px; font-size: 12.5px; color: var(--text-2); }
-  .dialog .row { display: flex; gap: 10px; justify-content: center; }
-
-  /* empty + loading states */
-  .state {
-    display: flex; flex-direction: column; align-items: center; justify-content: center;
-    text-align: center; gap: 14px; padding: 56px 24px; color: var(--text-3);
-  }
-  .state .big { color: var(--text-2); font-size: 14px; }
-  .state .small { font-size: 12.5px; }
-  .spinner { width: 26px; height: 26px; border-radius: 50%; border: 3px solid var(--border-strong); border-top-color: var(--accent); animation: spin 0.8s linear infinite; }
-  @keyframes spin { to { transform: rotate(360deg); } }
-  @media (prefers-reduced-motion: reduce) { .spinner { animation: none; } }
-
-  footer.note { max-width: 820px; margin: 0 auto; padding: 0 28px 72px; }
-  footer.note .card {
-    border: 1px dashed var(--border-strong); border-radius: 14px; padding: 18px 22px;
-    color: var(--text-2); font-size: 13px;
-  }
-  footer.note code { font-family: var(--mono); font-size: 12px; color: var(--text); }
+  .note b { color: var(--text); }
 </style>
 </head>
 <body>
 
 <header>
-  <p class="eyebrow">CmdPal · Design Spec · Rev 3</p>
-  <h1>命令面板 UI 设计稿 <em>/ 暗色交互版</em></h1>
-  <p class="sub">依据 <code>cmdpal-platform-agnostic-design.md</code> §4（UI / 页面设计）重绘的 11 个界面（含 Empty / Loading 两态）。全部为真实 DOM + CSS 组件，可直接感知布局、状态与微交互；支持键盘走查（↑↓/Tab 在列表项间移动、Enter 选中、Esc 返回）；Rev 2 起采用暗色极客效率风（Raycast / Linear 路线）。</p>
-  <div class="tokens">
-    <span class="tok"><i style="background:#ff6b2c"></i><b>accent</b>&nbsp;#FF6B2C</span>
-    <span class="tok"><i style="background:#131319"></i><b>panel</b>&nbsp;#131319</span>
-    <span class="tok"><i style="background:#3ecf8e"></i><b>ok</b>&nbsp;#3ECF8E</span>
-    <span class="tok"><i style="background:#f2555a"></i><b>danger</b>&nbsp;#F2555A</span>
-    <span class="tok"><i style="background:#4c8dff"></i><b>info</b>&nbsp;#4C8DFF</span>
-    <span class="tok"><b>UI</b>&nbsp;Archivo→Segoe</span>
-    <span class="tok"><b>Mono</b>&nbsp;JetBrains→Cascadia</span>
+  <div class="theme-switch" id="themeSwitch">
+    <button data-mode="system" class="active">跟随系统</button>
+    <button data-mode="light">亮色</button>
+    <button data-mode="dark">暗色</button>
   </div>
+  <p class="eyebrow">dd-run · CmdPal UI Mockups v2</p>
+  <h1>ueli 风格重构 <em>·</em> 亮暗双主题</h1>
+  <p class="sub">
+    参考 <a href="https://github.com/oliverschwendener/ueli" style="color:var(--accent);text-decoration:none">ueli 9.x</a> 的视觉语言重构主面板。
+    已从 ueli 源码核实的设计基准：Fluent UI 9 组件体系；搜索栏默认 <code>large</code> 尺寸、
+    <code>auto</code> 外观、默认显示搜索图标；结果行 = 图标 + 名称 + 描述徽标 + 选中指示条；
+    主题亮暗双套、跟随系统。
+  </p>
 </header>
 
 <main>
 
-  <!-- ═══════════ 01 Root View ═══════════ -->
+  <!-- ================= 01 主面板 ================= -->
   <section class="screen">
-    <div class="s-head"><span class="s-num">01</span><h2>唤出首页 · Root View</h2><span class="chip">§4.2 根视图</span></div>
-    <p class="s-desc">面板首次打开时聚合所有扩展的顶层命令，按分组渲染；首项默认高亮选中并带 accent 描边光晕，底部为按键提示条。键盘 hint 显示唤起热键（默认 <code>Win+Alt+Space</code>，其他平台自选，见 §4.3 / §8.1）。</p>
-    <div class="stage">
-      <div class="panel">
-        <div class="search">
-          <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><circle cx="7" cy="7" r="5" stroke="#666679" stroke-width="1.6"/><path d="M11 11L14 14" stroke="#666679" stroke-width="1.6" stroke-linecap="round"/></svg>
-          <input class="q" type="text" placeholder="Type to search anything…" aria-label="Search" />
-          <span class="hint-k">Win·Alt·Space</span>
-        </div>
-        <div class="group-label">Apps</div>
-        <div class="item sel">
-          <span class="ic" style="background:var(--blue)">=</span>
-          <span class="tx"><span class="t">Calculator</span><br><span class="d">Evaluate math expressions</span><div class="tags-inline"><span class="tag-pill sm o">常用</span><span class="tag-pill sm">Apps</span></div></span>
-          <span class="go">↵</span>
-        </div>
-        <div class="item">
-          <span class="ic" style="background:var(--teal)">N</span>
-          <span class="tx"><span class="t">Notepad</span><br><span class="d">Create a quick note</span></span>
-          <span class="go">↵</span>
-        </div>
-        <div class="group-label">System</div>
-        <div class="item">
-          <span class="ic" style="background:var(--gold)">S</span>
-          <span class="tx"><span class="t">Shut down</span><br><span class="d">Power off this device</span><div class="tags-inline"><span class="tag-pill sm">系统</span></div></span>
-          <span class="go">↵</span>
-        </div>
-        <div class="group-label">Web search</div>
-        <div class="item">
-          <span class="ic" style="background:var(--violet)">W</span>
-          <span class="tx"><span class="t">Search the web</span><br><span class="d">Open default browser with query</span></span>
-          <span class="go">↵</span>
-        </div>
-        <div class="foot">
-          <span class="kh"><kbd>↑</kbd><kbd>↓</kbd><kbd>Tab</kbd> 选择</span>
-          <span class="kh"><kbd>↵</kbd> 执行</span>
-          <span class="sp"></span>
-          <span class="kh"><kbd>Esc</kbd> 关闭</span>
-        </div>
-      </div>
+    <div class="s-head">
+      <span class="s-num">01</span>
+      <h2>主面板 — Root View（ueli 风格）</h2>
+      <span class="chip">搜索栏 large + auto</span>
+      <span class="chip">图标 + 名称 + 描述徽标</span>
+      <span class="chip">选中指示条</span>
     </div>
-  </section>
-
-  <!-- ═══════════ 02 Filtered ═══════════ -->
-  <section class="screen">
-    <div class="s-head"><span class="s-num">02</span><h2>搜索过滤态</h2><span class="chip">§4.3 步骤 2</span></div>
-    <p class="s-desc">FilterBox 输入后列表实时过滤，只剩匹配项（匹配子串 <code>shut</code> 以 accent 高亮，见首项）；无直接匹配时展示扩展的 Fallback 兜底命令。Esc 关闭面板（与 §4.3 一致，无"清空搜索"语义）。</p>
+    <p class="s-desc">
+      与现行实现的差异：<b>列表行新增图标列</b>（第 1 项「Say Hello」演示 glyph 图标，第 4 项「项目文件夹」演示 path 本地文件图标）；
+      subtitle 改为 ueli 式<b>描述徽标</b>（名称右侧）；选中行 = 浅色填充 + 左侧 3px <b>accent 指示条</b>；
+      tags chips 靠右保留。搜索栏大号、带搜索图标、聚焦时底部 accent 下划线；<b>无 ✕ 清空按钮</b>（清空语义由现行「唤起复位 + Esc」承担）。
+    </p>
     <div class="stage">
       <div class="panel">
-        <div class="search">
-          <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><circle cx="7" cy="7" r="5" stroke="#ff6b2c" stroke-width="1.6"/><path d="M11 11L14 14" stroke="#ff6b2c" stroke-width="1.6" stroke-linecap="round"/></svg>
-          <input class="q" type="text" value="shut" aria-label="Search" /><span class="caret"></span>
+        <div class="searchbar focus">
+          <span class="glyph">&#xE721;</span>
+          <input value="" placeholder="搜索命令…">
         </div>
-        <div class="group-label">System · 1 match</div>
-        <div class="item sel">
-          <span class="ic" style="background:var(--gold)">S</span>
-          <span class="tx"><span class="t"><span class="hl">Shut</span> down</span><br><span class="d">Power off this device</span></span>
-          <span class="go">↵</span>
-        </div>
-        <div class="divider"></div>
-        <div class="group-label">Fallback</div>
-        <div class="item">
-          <span class="ic" style="background:var(--violet)">W</span>
-          <span class="tx"><span class="t">Search the web for <span class="hl">“shut”</span></span><br><span class="d">No direct match — fallback command</span></span>
-          <span class="go">↵</span>
-        </div>
-        <div class="foot">
-          <span class="kh"><kbd>↑</kbd><kbd>↓</kbd><kbd>Tab</kbd> 选择</span>
-          <span class="kh"><kbd>↵</kbd> 执行</span>
-          <span class="sp"></span>
-          <span class="kh"><kbd>Esc</kbd> 关闭</span>
-        </div>
-      </div>
-    </div>
-  </section>
+        <div class="results">
+          <div class="section-label">Sample</div>
 
-  <!-- ═══════════ 03 ListPage + ShowDetails ═══════════ -->
-  <section class="screen">
-    <div class="s-head"><span class="s-num">03</span><h2>嵌套列表页 · ListPage + ShowDetails</h2><span class="chip">§4.5 / §5.1</span></div>
-    <p class="s-desc">命令执行后进入子页：顶部返回按钮 + 页面标题；左列可搜索列表，右侧 ShowDetails 展示选中项预览与快捷操作。列表项按 §4.4 带 Tags chip。（Filters / LoadMore 等 IListPage 可选成员、TextToSuggest 等 IListItem 成员，本稿从略）</p>
-    <div class="stage">
-      <div class="panel">
-        <div class="nav">
-          <span class="back"><svg width="10" height="10" viewBox="0 0 10 10" fill="none"><path d="M7 1L3 5l4 4" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg></span>
-          <span class="title">Clipboard history</span>
-          <span class="crumb">list / clip</span>
-        </div>
-        <div class="split">
-          <div class="col-list">
-            <div class="item sel">
-              <span class="ic" style="background:var(--blue);width:30px;height:30px;border-radius:8px;font-size:12px">C</span>
-              <span class="tx"><span class="t" style="font-size:13px">https://example.com</span><br><span class="d">Copied 2 min ago</span><div class="tags-inline"><span class="tag-pill sm b">链接</span></div></span>
-            </div>
-            <div class="item">
-              <span class="ic" style="background:var(--teal);width:30px;height:30px;border-radius:8px;font-size:12px">S</span>
-              <span class="tx"><span class="t" style="font-size:13px">ln -s /usr/local/bin</span><br><span class="d">Copied 10 min ago</span></span>
-            </div>
-            <div class="item">
-              <span class="ic" style="background:var(--gold);width:30px;height:30px;border-radius:8px;font-size:12px">H</span>
-              <span class="tx"><span class="t" style="font-size:13px">Hello world</span><br><span class="d">Copied 1 h ago</span></span>
-            </div>
+          <div class="row selected">
+            <span class="icon glyph">&#xE8C8;</span>
+            <span class="name">Say Hello</span>
+            <span class="desc-badge">M0 smoke test command</span>
+            <span class="spacer"></span>
+            <span class="tag">demo</span>
+            <span class="tag">m0</span>
           </div>
-          <div class="col-detail">
-            <div class="mini-label">Preview</div>
-            <div style="font-family:var(--mono);font-size:11.5px;color:var(--text-2);background:#0d0d12;border:1px solid var(--border);border-radius:8px;padding:10px 12px;word-break:break-all;margin-bottom:14px">https://example.com</div>
-            <div class="skel" style="width:88%"></div>
-            <div class="skel" style="width:70%"></div>
-            <div class="skel" style="width:79%"></div>
-            <div style="margin-top:auto;padding-top:16px">
-              <span class="btn btn-accent" style="width:100%">Copy again</span>
-            </div>
+
+          <div class="row">
+            <span class="icon glyph">&#xE713;</span>
+            <span class="name">Open Settings</span>
+            <span class="desc-badge">打开 Windows 设置</span>
+            <span class="spacer"></span>
+          </div>
+
+          <div class="row">
+            <span class="icon glyph">&#xE8EF;</span>
+            <span class="name">计算器</span>
+            <span class="desc-badge">Calculator</span>
+            <span class="spacer"></span>
+          </div>
+
+          <div class="row">
+            <span class="icon"><img alt="" src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20'%3E%3Cpath fill='%230f6cbd' d='M2 4.5A1.5 1.5 0 0 1 3.5 3h4.086a1.5 1.5 0 0 1 1.06.44L10.112 4.9a.5.5 0 0 0 .354.146H16.5A1.5 1.5 0 0 1 18 6.55v9A1.5 1.5 0 0 1 16.5 17h-13A1.5 1.5 0 0 1 2 15.5v-11Z'/%3E%3C/svg%3E"></span>
+            <span class="name">项目文件夹</span>
+            <span class="desc-badge">path 图标示例（本地 PNG/ICO）</span>
+            <span class="spacer"></span>
+          </div>
+
+          <div class="section-label">Windows</div>
+
+          <div class="row">
+            <span class="icon glyph">&#xE756;</span>
+            <span class="name">命令提示符</span>
+            <span class="desc-badge">Command Prompt</span>
+            <span class="spacer"></span>
+          </div>
+
+          <div class="row">
+            <span class="icon glyph">&#xE774;</span>
+            <span class="name">网页搜索</span>
+            <span class="desc-badge">在浏览器中搜索</span>
+            <span class="spacer"></span>
+            <span class="tag">web</span>
           </div>
         </div>
-        <div class="foot">
-          <span class="kh"><kbd>↑</kbd><kbd>↓</kbd><kbd>Tab</kbd> 选择</span>
-          <span class="kh"><kbd>↵</kbd> 执行</span>
-          <span class="sp"></span>
-          <span class="kh"><kbd>Esc</kbd> 返回</span>
+        <div class="panel-footer">
+          <span><i class="dot ok"></i>sample · 2 项</span>
+          <span><i class="dot stub"></i>calc · 桩</span>
+          <span><i class="dot err"></i>web · 异常</span>
+          <span class="keys">
+            <span><b>↑</b> <b>↓</b> 选择</span>
+            <span><b>Enter</b> 执行</span>
+            <span><b>Esc</b> 返回 / 隐藏</span>
+          </span>
         </div>
       </div>
     </div>
   </section>
 
-  <!-- ═══════════ 04 DetailPage ═══════════ -->
+  <!-- ================= 02 空态 ================= -->
   <section class="screen">
-    <div class="s-head"><span class="s-num">04</span><h2>详情页 · DetailPage</h2><span class="chip">§4.5 / §5.1</span></div>
-    <p class="s-desc">IContentPage + IDetails 渲染富内容：主数值、描述、标签 chips、链接与操作命令按钮（主按钮 = accent 实底）。</p>
-    <div class="stage">
+    <div class="s-head">
+      <span class="s-num">02</span>
+      <h2>无匹配 — 自动兜底列表 / 纯空态</h2>
+      <span class="chip">兜底自动展示（M4 D9 行为不变）</span>
+    </div>
+    <p class="s-desc">
+      左：查询无匹配时，列表区<b>自动</b>呈现宿主兜底命令行（协议 §6.2 + M4 决策 D9，无需任何按钮触发），
+      兜底项暂无图标 → 保留 20px 空图标列对齐网格。右：仅当兜底列表也不可用时，显示纯空态（图标 + 文案，无行动按钮）。
+    </p>
+    <div class="stage split">
       <div class="panel">
-        <div class="nav">
-          <span class="back"><svg width="10" height="10" viewBox="0 0 10 10" fill="none"><path d="M7 1L3 5l4 4" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg></span>
-          <span class="title">Weather</span>
-          <span class="crumb">detail</span>
+        <div class="searchbar focus">
+          <span class="glyph">&#xE721;</span>
+          <input value="xyzzy" placeholder="搜索命令…">
         </div>
-        <div class="detail-body">
-          <div class="metric">18<small>°C</small></div>
-          <div class="sub">San Francisco — partly cloudy</div>
-          <div class="skel" style="width:82%"></div>
-          <div class="skel" style="width:64%;margin-top:9px"></div>
-          <div class="tags" style="margin-top:18px">
-            <span class="tag-pill">Wind 12 km/h</span>
-            <span class="tag-pill g">Humidity 60%</span>
-            <span class="tag-pill b">UV low</span>
-            <span class="tag-pill o">AQI 42</span>
+        <div class="results">
+          <div class="section-label">兜底命令</div>
+          <div class="row">
+            <span class="icon"></span>
+            <span class="name">搜索「xyzzy」</span>
+            <span class="desc-badge">在浏览器中搜索</span>
+            <span class="spacer"></span>
           </div>
-          <a class="linkish" href="#">Open full forecast ↗</a>
-          <div class="detail-actions">
-            <span class="btn btn-accent">Open in browser</span>
-            <span class="btn btn-ghost">Pin to home</span>
-          </div>
-        </div>
-        <div class="foot">
-          <span class="kh"><kbd>↵</kbd> 执行</span>
-          <span class="sp"></span>
-          <span class="kh"><kbd>Esc</kbd> 返回</span>
-        </div>
-      </div>
-    </div>
-  </section>
-
-  <!-- ═══════════ 05 FormPage ═══════════ -->
-  <section class="screen">
-    <div class="s-head"><span class="s-num">05</span><h2>表单页 · FormPage</h2><span class="chip">§4.5 / §5.1</span></div>
-    <p class="s-desc">IFormContent（TemplateJson / DataJson / StateJson）+ SubmitForm；聚焦字段以 accent 描边 + 外圈光标提示当前焦点。</p>
-    <div class="stage">
-      <div class="panel">
-        <div class="nav">
-          <span class="back"><svg width="10" height="10" viewBox="0 0 10 10" fill="none"><path d="M7 1L3 5l4 4" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg></span>
-          <span class="title">Create reminder</span>
-          <span class="crumb">form</span>
-        </div>
-        <div class="form-body">
-          <label class="f-label">Title</label>
-          <div class="f-input focus">Call the team<span class="caret" style="margin-left:2px"></span></div>
-          <label class="f-label">Time</label>
-          <div class="f-input"><span class="mut">Today, 15:00</span></div>
-          <label class="f-label">Notes</label>
-          <div class="f-input f-area"><span class="mut">Weekly sync agenda</span></div>
-        </div>
-        <div class="form-actions">
-          <span class="btn btn-ghost" style="width:110px">Cancel</span>
-          <span class="btn btn-accent" style="width:110px">Save</span>
-        </div>
-        <div class="foot">
-          <span class="kh"><kbd>↵</kbd> 保存</span>
-          <span class="sp"></span>
-          <span class="kh"><kbd>Esc</kbd> 返回</span>
-        </div>
-      </div>
-    </div>
-  </section>
-
-  <!-- ═══════════ 06 MarkdownPage ═══════════ -->
-  <section class="screen">
-    <div class="s-head"><span class="s-num">06</span><h2>Markdown 页</h2><span class="chip">§4.5 / §5.1</span></div>
-    <p class="s-desc">IMarkdownContent.Body 渲染文档：标题、正文、列表（accent 项目符）与代码块（等宽字体 + 亮色提示符）。</p>
-    <div class="stage">
-      <div class="panel">
-        <div class="nav">
-          <span class="back"><svg width="10" height="10" viewBox="0 0 10 10" fill="none"><path d="M7 1L3 5l4 4" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg></span>
-          <span class="title">Package readme</span>
-          <span class="crumb">markdown</span>
-        </div>
-        <div class="md-body">
-          <h3>My extension</h3>
-          <div class="skel" style="width:94%"></div>
-          <div class="skel" style="width:78%"></div>
-          <ul>
-            <li>Launch commands from the search box</li>
-            <li>Fuzzy match by title and subtitle</li>
-          </ul>
-          <div class="codeblock">
-            <span class="p">$</span> cargo install my-ext<br>
-            <span class="p">$</span> my-ext --register
-          </div>
-          <div class="skel" style="width:86%"></div>
-          <div class="skel" style="width:60%;margin-top:9px"></div>
-        </div>
-        <div class="foot">
-          <span class="kh"><kbd>↑</kbd><kbd>↓</kbd> 滚动</span>
-          <span class="sp"></span>
-          <span class="kh"><kbd>Esc</kbd> 返回</span>
-        </div>
-      </div>
-    </div>
-  </section>
-
-  <!-- ═══════════ 07 GridPage ═══════════ -->
-  <section class="screen">
-    <div class="s-head"><span class="s-num">07</span><h2>网格页 · Grid 渲染模式</h2><span class="chip">§4.5 渲染模式</span></div>
-    <p class="s-desc">ListPage.GridProperties 控制画廊/网格布局（Grid 是 ListPage 的渲染模式，非独立页面类型，见 §4.5）；选中项带 accent 光环，hover 时上浮。键盘用 ←↑↓→ 在宫格间移动。</p>
-    <div class="stage">
-      <div class="panel">
-        <div class="nav">
-          <span class="back"><svg width="10" height="10" viewBox="0 0 10 10" fill="none"><path d="M7 1L3 5l4 4" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg></span>
-          <span class="title">Icons</span>
-          <span class="crumb">list · grid mode</span>
-        </div>
-        <div class="grid-body">
-          <div class="g-item"><span class="g-tile" style="background:var(--blue)">P</span><span class="gl">Photos</span></div>
-          <div class="g-item sel"><span class="g-tile" style="background:var(--teal)">M</span><span class="gl">Mail</span></div>
-          <div class="g-item"><span class="g-tile" style="background:var(--violet)">♪</span><span class="gl">Music</span></div>
-          <div class="g-item"><span class="g-tile" style="background:var(--gold)">F</span><span class="gl">Files</span></div>
-          <div class="g-item"><span class="g-tile" style="background:var(--accent)">N</span><span class="gl">Notes</span></div>
-          <div class="g-item"><span class="g-tile" style="background:var(--green)">C</span><span class="gl">Chat</span></div>
-        </div>
-        <div class="foot">
-          <span class="kh"><kbd>↑</kbd><kbd>↓</kbd><kbd>←</kbd><kbd>→</kbd> 移动</span>
-          <span class="kh"><kbd>↵</kbd> 打开</span>
-          <span class="sp"></span>
-          <span class="kh"><kbd>Esc</kbd> 返回</span>
-        </div>
-      </div>
-    </div>
-  </section>
-
-  <!-- ═══════════ 08 MoreCommands ═══════════ -->
-  <section class="screen">
-    <div class="s-head"><span class="s-num">08</span><h2>上下文菜单 · MoreCommands</h2><span class="chip">§5.6</span></div>
-    <p class="s-desc">右键 / 快捷键在列表项上唤出飞出菜单（pop 入场），可嵌套子菜单（›）；IsCritical 关键操作（Delete）以 danger 红标记。</p>
-    <div class="stage">
-      <div class="panel">
-        <div class="ctx-wrap">
-          <div class="item sel" style="margin:0 18px">
-            <span class="ic" style="background:var(--blue)">F</span>
-            <span class="tx"><span class="t">Open folder</span><br><span class="d">D:\Projects</span></span>
-          </div>
-          <div class="flyout">
-            <div class="mi on">Open</div>
-            <div class="mi">Open with… <span class="arrow">›</span></div>
-            <div class="mi">Copy path</div>
-            <hr>
-            <div class="mi danger">Delete</div>
+          <div class="row">
+            <span class="icon"></span>
+            <span class="name">复制「xyzzy」</span>
+            <span class="desc-badge">复制到剪贴板</span>
+            <span class="spacer"></span>
           </div>
         </div>
-        <div class="foot">
-          <span class="kh"><kbd>Right-click</kbd> 菜单</span>
-          <span class="kh"><kbd>↑</kbd><kbd>↓</kbd> 选择</span>
-          <span class="sp"></span>
-          <span class="kh"><kbd>Esc</kbd> 关闭</span>
+        <div class="panel-footer">
+          <span class="keys"><span><b>Esc</b> 隐藏</span></span>
         </div>
       </div>
+      <div class="panel">
+        <div class="searchbar focus">
+          <span class="glyph">&#xE721;</span>
+          <input value="xyzzy" placeholder="搜索命令…">
+        </div>
+        <div class="empty">
+          <span class="glyph">&#xE721;</span>
+          <h3>未找到匹配的命令</h3>
+          <p>当前没有可用的兜底命令，试试其他关键词。</p>
+        </div>
+        <div class="panel-footer">
+          <span class="keys"><span><b>Esc</b> 隐藏</span></span>
+        </div>
+      </div>
+      <div class="caption">左：自动兜底列表（常态） ｜ 右：纯空态（无兜底可用时）</div>
     </div>
   </section>
 
-  <!-- ═══════════ 09 Confirm + Toast ═══════════ -->
+  <!-- ================= 03 窗口行为规格 ================= -->
   <section class="screen">
-    <div class="s-head"><span class="s-num">09</span><h2>命令结果反馈 · Confirm + Toast</h2><span class="chip">§5.2</span></div>
-    <p class="s-desc">CommandResultKind.ShowToast 在右上角滑入提示（绿色成功条）；Confirm 弹出确认对话框（配 IConfirmationArgs），危险操作以 danger 按钮收尾。下图为两态并置演示（实际二者不会同时出现）。</p>
-    <div class="stage">
-      <div class="panel">
-        <div class="feed">
-          <div class="toast"><span class="bar"></span><span class="tick">✓</span> Copied to clipboard</div>
-          <div class="dim"></div>
-          <div class="dialog">
-            <h4>Shut down now?</h4>
-            <p>Unsaved work will be lost.</p>
-            <div class="row">
-              <span class="btn btn-ghost" style="flex:1">Cancel</span>
-              <span class="btn btn-danger" style="flex:1">Shut down</span>
-            </div>
-          </div>
-        </div>
-        <div class="foot">
-          <span class="kh"><kbd>↵</kbd> 确认</span>
-          <span class="sp"></span>
-          <span class="kh"><kbd>Esc</kbd> 取消</span>
-        </div>
-      </div>
+    <div class="s-head">
+      <span class="s-num">03</span>
+      <h2>窗口行为与启动修复规格</h2>
+      <span class="chip">已确认决策</span>
+    </div>
+    <p class="s-desc">
+      启动黑框的根因已定位（eframe 0.36 <code>post_rendering</code> 首帧后强制 <code>set_visible(true)</code>
+      → 与我们的 <code>Visible(false)</code> 及启动期 <code>center_on_screen</code> 竞争，形成「左上角黑框 → 跳到中间 → 闪现 → 隐藏」）。
+      修复采用「初始定位屏幕外 + 唤起时才居中显示」方案（PowerToys Run 同款做法），以下为验收规格：
+    </p>
+    <table>
+      <tr><th>场景</th><th>行为</th><th>验收标准</th></tr>
+      <tr>
+        <td><b>进程启动</b></td>
+        <td>完全静默：窗口物理上不可见（初始位置在屏幕外），无黑框、无跳动</td>
+        <td>启动全程肉眼不可见任何窗口/闪现；热键唤起前 <code>Visible</code> 从未对用户可见</td>
+      </tr>
+      <tr>
+        <td><b>启动期焦点</b></td>
+        <td>窗口创建 <code>with_active(false)</code>：首帧被 eframe 强制可见时也不夺取焦点</td>
+        <td>启动全程 dd-run 从不成为前台焦点窗口（不打断用户正在进行的输入）</td>
+      </tr>
+      <tr>
+        <td><b>热键唤起</b></td>
+        <td>窗口在<b>光标所在屏</b>居中出现并获取焦点（PowerToys Run 行为）</td>
+        <td>多显示器下每次唤起均居中于 <code>GetCursorPos</code> 所在 monitor；无位置跳动</td>
+      </tr>
+      <tr>
+        <td><b>失焦</b></td>
+        <td>自动隐藏（现行逻辑保留，<code>handle_focus_loss</code> 不变）</td>
+        <td>点击面板外任意处即隐藏</td>
+      </tr>
+      <tr>
+        <td><b>启动期居中</b></td>
+        <td>删除现有 <code>recenter_if_needed</code> 启动期逐帧轮询；居中并入 <code>show()</code>，
+            按 Win32 <code>GetCursorPos</code> + <code>MonitorFromPoint</code> 自算位置——
+            egui <code>center_on_screen</code> 按窗口当前所在屏取 monitor，屏幕外窗口会取错屏，不可复用</td>
+        <td>窗口隐藏期间不再发送任何位置命令；居中仅在 show() 内执行</td>
+      </tr>
+    </table>
+  </section>
+
+  <!-- ================= 04 图标规范 ================= -->
+  <section class="screen">
+    <div class="s-head">
+      <span class="s-num">04</span>
+      <h2>图标规范（协议 §8.6 三态 → 本次实现两态）</h2>
+      <span class="chip">glyph + path</span>
+      <span class="chip">url 留接口</span>
+    </div>
+    <p class="s-desc">
+      协议已定义三态图标，<code>PanelItem</code> 现将其丢弃（转换处 <code>icon: None</code>）。本次打通
+      <b>glyph</b> 与 <b>path</b> 两态，url 预留枚举分支但不实现下载/缓存。
+    </p>
+    <table>
+      <tr><th>形态</th><th>数据来源</th><th>渲染方式</th><th>落点</th></tr>
+      <tr>
+        <td><b>glyph</b></td>
+        <td><code>Icon{type:"glyph", value:"\u{E8C8}"}</code></td>
+        <td>图标字体渲染 16–20px 码位；加载顺序 <code>SegoeIcons.ttf</code>（Win11 Fluent Icons）→ <code>segmdl2.ttf</code>（Win10 MDL2 回退，码位兼容）</td>
+        <td>宿主启动时加载进 egui 字体库（现有 <code>setup_cjk_fonts</code> 扩展）</td>
+      </tr>
+      <tr>
+        <td><b>path</b></td>
+        <td><code>Icon{type:"path", value:"C:\\...\\icon.png"}</code></td>
+        <td>解码 PNG/ICO → egui 纹理；按路径缓存 textureId，避免每帧重解码；加载失败显示占位 glyph</td>
+        <td>新增图片解码依赖（<code>image</code> crate，仅启用 png/ico 所需 feature）；验收演示 = <code>dd-ext-sample</code> 增一枚 path 图标项（exe 同目录 demo.png，build.rs 拷贝）</td>
+      </tr>
+      <tr>
+        <td><b>url</b></td>
+        <td><code>Icon{type:"url", ...}</code></td>
+        <td>本次不实现；渲染层 enum 分支保留，命中时回落占位 glyph</td>
+        <td>—</td>
+      </tr>
+    </table>
+    <div class="note">
+      <b>数据链路：</b><code>CommandItem.icon</code>（协议已有）→ <code>PanelItem.icon</code>（新增字段）→
+      聚合器 <code>flatten</code> 透传 → 渲染层统一 <code>IconView</code> 组件（20px 列）。三种来源都经同一缓存键（glyph 码位 / path 字符串）。
+      <b>无图标项</b>（<code>icon: None</code>，如兜底项）保留 20px 空列对齐网格，与 ueli 恒定图标列一致。
     </div>
   </section>
 
-  <!-- ═══════════ 10 EmptyContent ═══════════ -->
+  <!-- ================= 05 设计 token → egui 映射 ================= -->
   <section class="screen">
-    <div class="s-head"><span class="s-num">10</span><h2>空状态 · EmptyContent</h2><span class="chip">§5.1 IListPage</span></div>
-    <p class="s-desc">列表为空或搜索无结果时，由 IListPage.EmptyContent 渲染空态：图标 + 提示文案 + 可选操作命令（如「清除搜索」）。属于 §5.1 的正式成员，覆盖 §4.4 的边界情形。</p>
-    <div class="stage">
-      <div class="panel">
-        <div class="nav">
-          <span class="back"><svg width="10" height="10" viewBox="0 0 10 10" fill="none"><path d="M7 1L3 5l4 4" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg></span>
-          <span class="title">Search results</span>
-          <span class="crumb">list / empty</span>
-        </div>
-        <div class="state">
-          <svg width="40" height="40" viewBox="0 0 24 24" fill="none"><circle cx="11" cy="11" r="7" stroke="#666679" stroke-width="1.6"/><path d="M16 16L21 21" stroke="#666679" stroke-width="1.6" stroke-linecap="round"/></svg>
-          <div class="big">No results for “zzzz”</div>
-          <div class="small">Try a different keyword, or clear the search</div>
-          <span class="btn btn-ghost" style="margin-top:6px">Clear search</span>
-        </div>
-        <div class="foot">
-          <span class="kh"><kbd>↑</kbd><kbd>↓</kbd><kbd>Tab</kbd> 选择</span>
-          <span class="sp"></span>
-          <span class="kh"><kbd>Esc</kbd> 返回</span>
-        </div>
-      </div>
+    <div class="s-head">
+      <span class="s-num">05</span>
+      <h2>设计 token → egui 映射</h2>
+      <span class="chip">实施参照</span>
+    </div>
+    <p class="s-desc">
+      代码实施时按本表把 token 落到 egui <code>Visuals</code> / 绘制参数。随系统主题切换取
+      eframe 提供的系统主题探测，无系统主题信息时默认暗色。
+    </p>
+    <table>
+      <tr><th>token</th><th>暗色值</th><th>亮色值</th><th>egui 落点</th></tr>
+      <tr><td><code>--panel</code></td><td>#292929</td><td>#ffffff</td><td>面板背景 <code>Frame.fill</code></td></tr>
+      <tr><td><code>--border-strong</code></td><td>#4d4d4d</td><td>#d1d1d1</td><td>面板边框 / 搜索框描边</td></tr>
+      <tr><td><code>--text</code></td><td>#ffffff</td><td>#242424</td><td>标题 <code>Visuals.text_color</code></td></tr>
+      <tr><td><code>--text-2</code></td><td>#d1d1d1</td><td>#616161</td><td>描述徽标 / 页脚次级文本</td></tr>
+      <tr><td><code>--text-3</code></td><td>#8d8d8d</td><td>#979797</td><td>分组标题 / placeholder</td></tr>
+      <tr><td><code>--accent</code></td><td>#479ef5</td><td>#0f6cbd</td><td>选中指示条 / 搜索框聚焦下划线 / 空态按钮</td></tr>
+      <tr><td><code>--row-hover</code></td><td>rgba(255,255,255,.06)</td><td>#f5f5f5</td><td>行 hover 填充</td></tr>
+      <tr><td><code>--row-selected</code></td><td>rgba(255,255,255,.084)</td><td>#f0f0f0</td><td>选中行填充（+ 左侧 3px accent 条）</td></tr>
+    </table>
+    <div class="note">
+      <b>几何规格：</b>面板宽 560px（现行不变）、圆角 8px、行高 44px、图标列 20px、搜索栏高 46px（large）、
+      行内边距 9×10px、分组标题 11px/600。交互逻辑（键盘导航、页面栈、fallback、Toast、确认框）本次不改。
     </div>
   </section>
 
-  <!-- ═══════════ 11 Loading (IsLoading) ═══════════ -->
+  <!-- ================= 06 优化项：设置入口 / 结果类型标签 / 上下文页脚 ================= -->
   <section class="screen">
-    <div class="s-head"><span class="s-num">11</span><h2>加载态 · IsLoading</h2><span class="chip">§5.1 IPage</span></div>
-    <p class="s-desc">列表拉取中由 IPage.IsLoading 控制：骨架占位 / 转圈，期间保留页眉与返回键，加载完成自动替换为真实项。属于 §5.1 的正式成员。</p>
-    <div class="stage">
-      <div class="panel">
-        <div class="nav">
-          <span class="back"><svg width="10" height="10" viewBox="0 0 10 10" fill="none"><path d="M7 1L3 5l4 4" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg></span>
-          <span class="title">Clipboard history</span>
-          <span class="crumb">list / loading</span>
-        </div>
-        <div class="state">
-          <span class="spinner"></span>
-          <div class="big">Loading items…</div>
-          <div class="small">Fetching from extension (GetItems)</div>
-        </div>
-        <div class="foot">
-          <span class="kh"><kbd>Esc</kbd> 取消</span>
-        </div>
-      </div>
+    <div class="s-head">
+      <span class="s-num">06</span>
+      <h2>优化项：设置入口 / 结果类型标签 / 上下文页脚</h2>
+      <span class="chip">新增</span>
+      <span class="chip">参考 ueli 9.x</span>
+    </div>
+    <p class="s-desc">
+      依据真机反馈与 <a href="https://github.com/oliverschwendener/ueli">ueli 9.x</a> 实际界面追加以下三项：
+      ① 面板左下角常驻设置按钮；② 搜索结果右侧显示类型标签；③ 页脚由「全局源摘要 + 键位图例」改为「上下文动作提示」。
+      本章节给出 UI 规格、数据流、token 与严格的核对校验表，供后续批次实施参照。
+    </p>
+
+    <h3>6.1 设置按钮</h3>
+    <table>
+      <tr><th>项</th><th>规格</th></tr>
+      <tr><td>位置</td><td>页脚最左侧，与页脚同高垂直居中；左边缘与页脚左内边距 <code>16px</code> 对齐。</td></tr>
+      <tr><td>图标</td><td>Segoe Fluent Icons 齿轮 <code>\u{E713}</code>，字号 <b>16px</b>，颜色 <code>--text-3</code>（#8d8d8d / #979797）。</td></tr>
+      <tr><td>热区</td><td>24×24 px（视觉 16px + 8px 可点击扩展），hover 时颜色变为 <code>--text-2</code>，无背景变化。</td></tr>
+      <tr><td>交互</td><td>左键点击在<b>同一 eframe 上下文内</b>以子视图/弹出层打开设置（复用现有 <code>PageStack</code> 推入 <code>SettingsPage</code>，或弹 <code>egui::Window</code>）；不新起进程/线程、不引入第二个 wgpu 上下文。设置视图不占用全局热键。</td></tr>
+      <tr><td>作用域</td><td>页脚位于应用级 <code>Panel::bottom</code>（<code>draw_panel</code> 内），已覆盖所有页面栈层级（Root View 与嵌套 ListPage），无需额外处理。</td></tr>
+      <tr><td>键盘可达</td><td>焦点可 Tab 到按钮，Enter/Space 触发；支持快捷键（待定，建议 <code>Ctrl+,</code>）。</td></tr>
+    </table>
+
+    <h3>6.2 搜索结果类型标签</h3>
+    <table>
+      <tr><th>项</th><th>规格</th></tr>
+      <tr><td>位置</td><td>每行<b>最右侧</b>，与行同高垂直居中；右边缘距行右内边距 <code>10px</code>。<b>共存次序</b>：类型标签最靠右，<code>.tag</code> chips 紧邻其左（类型比用户自定义 tag 更具结构性）。</td></tr>
+      <tr><td>内容</td><td>按<b>通用内容类别</b>显示（应用 / 网页 / 命令 / 设置 / 文件 / 文本 / 音频 / 视频 / 图片 …）；内置扩展按 provider ID（全限定 <code>com.ddrun.*</code>，去 <code>com.ddrun.</code> 前缀后匹配）硬编码映射到类别；第三方扩展未命中时回退「命令」或显示扩展 ID 原文。协议层不改。</td></tr>
+      <tr><td>映射表（去 <code>com.ddrun.</code> 前缀后）</td><td>
+        <code>apps</code> → <b>应用</b>；<code>calc</code> → <b>命令</b>；<code>system</code> → <b>设置</b>；
+        <code>websearch</code> → <b>网页</b>；<code>shell</code> → <b>命令</b>。
+        第三方扩展未命中 → 回退「命令」或显示扩展 ID 原文。
+        <br><span style="color:var(--text-3)">注：「文本 / 音频 / 视频 / 图片 / 文件」为<b>类别枚举预留项</b>，供第三方扩展声明；当前 5 个内置扩展仅覆盖 应用 / 设置 / 网页 / 命令 四类。</span>
+      </td></tr>
+      <tr><td>样式</td><td>纯文本，字号 <b>12px</b>，颜色 <code>--text-3</code>，右对齐；不占 chip 背景，与 ueli 截图一致。</td></tr>
+      <tr><td>截断</td><td>最大宽度 <b>90px</b>；超长时末尾截断并加 <code>…</code>。</td></tr>
+      <tr><td>数据流</td><td>
+        <code>CommandItem</code>（协议）无 kind 字段，<code>dd-protocol</code> 冻结 v1.0 不新增。<b>3.9 计划新增</b> <code>PanelItem.result_category: Option&lt;String&gt;</code>（存类别显示标签）；GUI 聚合器按 <code>PanelItem.ext_id</code> 去前缀推导后填充 → 渲染层右对齐显示（类型最右、tags 其左）。
+      </td></tr>
+    </table>
+
+    <h3>6.3 页脚：上下文动作提示（ueli 式）</h3>
+    <table>
+      <tr><th>项</th><th>规格</th></tr>
+      <tr><td>常态</td><td>列表有选中项时，页脚左侧显示当前选中项的默认动作文本，右侧显示该动作的快捷键提示。</td></tr>
+      <tr><td>示例</td><td>apps 项 → 左侧 <b>打开应用</b>，右侧键帽 <b>↵ Enter</b>；websearch 项 → <b>打开网页</b> / <b>↵ Enter</b>；calc 项 → <b>计算</b> / <b>↵ Enter</b>；<code>CommandRef::Page</code> 项 → <b>进入</b> / <b>↵ Enter</b>。</td></tr>
+      <tr><td>无选中 / 空态</td><td>显示全局键位图例（↑↓ 选择 / Enter 执行 / Esc 返回/隐藏）。<b>源健康诊断保留但仅异常时显示</b>：当聚合结果中存在 <code>stub</code>/<code>err</code> 源时，在页脚追加 ok/stub/err 状态点（沿用 3.8 的三态点）；常态全 ok 时不显示，避免撑高。</td></tr>
+      <tr><td>动作来源</td><td>动词由 <code>CommandRef</code> 决定（<code>Invoke</code>→执行类、<code>Page</code>→进入类），宾语由 <code>ext_id</code> 决定，<b>GUI 层硬编码映射表</b>：<code>apps</code>→打开应用、<code>system</code>→打开设置、<code>shell</code>→运行命令、<code>websearch</code>→打开网页、<code>calc</code>→计算；第三方未命中→执行。映射表需单测覆盖（C7）。</td></tr>
+      <tr><td>高度</td><td>严格 <b>35px</b>，padding <b>9px 16px</b>。<b>绘制约束</b>：必须用 <code>ui.horizontal</code> 强制单行 + <code>ui.set_min_height(35)</code>，<b>禁止</b> <code>horizontal_wrapped</code>（否则 5 源会撑回 72px）。无选中时仅显示键位图例，高度不变。</td></tr>
+      <tr><td>底 / 边</td><td>背景 <code>--panel-2</code>，顶部 1px <code>--border</code>；已落地。</td></tr>
+    </table>
+
+    <h3>6.4 核对校验表</h3>
+    <table>
+      <tr><th>#</th><th>验收项</th><th>判定方法</th><th>通过标准</th></tr>
+      <tr><td>C1</td><td>设置按钮存在且可点</td><td>真机截图 + 点击</td><td>页脚最左侧可见齿轮图标；点击后在<b>同窗口</b>弹出设置子视图（PageStack / egui::Window），不新起 eframe 实例。</td></tr>
+      <tr><td>C2</td><td>设置按钮键盘可达</td><td>Tab 焦点测试</td><td>按 Tab 能聚焦到齿轮；Enter/Space 触发。</td></tr>
+      <tr><td>C3</td><td>类型标签右对齐</td><td>真机截图像素测量</td><td>每行最右侧有 12px text-3 文本；最长 90px，超长截断。</td></tr>
+      <tr><td>C4</td><td>类型标签映射正确</td><td>逐项检查 5 个内置扩展（按 <code>com.ddrun.*</code> 去前缀）</td><td>apps→应用 / calc→命令 / system→设置 / websearch→网页 / shell→命令；第三方回退「命令」。</td></tr>
+      <tr><td>C5</td><td>类型标签不撑破行高</td><td>真机截图</td><td>行高保持 44px；标签垂直居中。</td></tr>
+      <tr><td>C6</td><td>页脚高度 35px</td><td>像素测量</td><td>有选中项时页脚占 35px，不随源数量换行。</td></tr>
+      <tr><td>C7</td><td>页脚显示上下文动作</td><td>键盘移动选中项观察 + 单测映射表</td><td>切换不同项时，页脚动作文本随 ext_id 变化（apps→打开应用 / websearch→打开网页 / calc→计算 / Page→进入），映射表有单测覆盖。</td></tr>
+      <tr><td>C8</td><td>空态 / 无选中回退 + 异常状态点</td><td>清空调或 Esc 回首页；注入 stub/err 源</td><td>无选中时显示 ↑↓/Enter/Esc 键帽图例；存在 stub/err 源时追加状态点，全 ok 时不显示。</td></tr>
+      <tr><td>C9</td><td>不修改协议</td><td>代码审查</td><td><code>dd-protocol/src/model.rs</code> 中 <code>CommandItem</code> 不新增 kind 字段；映射在 GUI 层完成。</td></tr>
+      <tr><td>C10</td><td>回归测试</td><td><code>cargo test --workspace</code></td><td>全量测试通过；新增 GUI 层单测覆盖类别映射与动作映射。</td></tr>
+      <tr><td>C11</td><td>类型与 tags 共存次序</td><td>真机截图</td><td>类型标签最靠右、<code>.tag</code> chips 紧邻其左；行高保持 44px。</td></tr>
+      <tr><td>C12</td><td>设置面板为同窗口子视图</td><td>代码审查 + 真机</td><td>设置视图在现有 eframe 上下文内（PageStack/egui::Window），无第二个 run_native / 无新线程。</td></tr>
+      <tr><td>C13</td><td>字段口径一致</td><td>代码审查</td><td><code>PanelItem.result_category</code> 为 3.9 计划新增，<code>cmdpal-ui-mockups.html</code> 与 <code>implementation.md</code> 口径一致；协议层零改动。</td></tr>
+    </table>
+
+    <div class="note">
+      <b>实施顺序建议：</b>先 6.2 类型标签（纯渲染层、风险最低）→ 再 6.1 设置按钮（同窗口 Settings 子视图，复用 PageStack/egui::Window，无独立窗口）→ 最后 6.3 上下文页脚（涉及选中项状态与动作推导 + 异常状态点）。每批独立跑 fmt/clippy/test + 真机截图。
     </div>
   </section>
 
 </main>
 
-<footer class="note">
-  <div class="card">
-    <strong style="color:var(--text)">Rev 2→3 变更</strong> — 由米白线框稿（Rev 1）升级为暗色交互组件稿（Rev 2），本轮（Rev 3）进一步：修正与 <code>cmdpal-platform-agnostic-design.md</code> 的冲突（热键提示、Tab 按键语义、Esc 行为、匹配高亮），补 Empty / Loading 两态与列表项 Tags，并把字体改为<strong>本地优先分层栈</strong>（Archivo / JetBrains Mono 经 CDN 加载，离线自动降级到 Segoe UI Variable / Cascadia Code 等本地字体，效果始终可验证）。全部面板支持键盘走查：↑↓/Tab 在列表项间移动、Enter 选中、Esc 返回/关闭。依据文档：<code>cmdpal-platform-agnostic-design.md</code> §4–§5。
-  </div>
-</footer>
-
 <script>
-  // scroll-triggered staggered reveal (first two sections animate on load)
-  const screens = document.querySelectorAll(".screen");
-  screens.forEach((el, i) => { if (i > 1) el.classList.add("reveal"); });
-  const io = new IntersectionObserver((entries) => {
-    entries.forEach(e => { if (e.isIntersecting) { e.target.classList.add("in"); io.unobserve(e.target); } });
-  }, { threshold: 0.12 });
-  document.querySelectorAll(".screen.reveal").forEach(el => io.observe(el));
-
-  // keyboard accessibility: roving focus among list items / grid tiles per panel
-  document.querySelectorAll(".panel").forEach(panel => {
-    const navs = panel.querySelectorAll(".item, .g-item");
-    if (!navs.length) return;
-    navs.forEach((el, i) => {
-      el.setAttribute("tabindex", i === 0 ? "0" : "-1");
-      el.setAttribute("role", el.classList.contains("g-item") ? "gridcell" : "option");
+  (function () {
+    var root = document.documentElement;
+    var buttons = document.querySelectorAll("#themeSwitch button");
+    var mql = window.matchMedia("(prefers-color-scheme: light)");
+    var mode = "system";
+    function apply() {
+      var t = mode === "system" ? (mql.matches ? "light" : "dark") : mode;
+      root.setAttribute("data-theme", t);
+      buttons.forEach(function (b) {
+        b.classList.toggle("active", b.dataset.mode === mode);
+      });
+    }
+    buttons.forEach(function (b) {
+      b.addEventListener("click", function () {
+        mode = b.dataset.mode;
+        apply();
+      });
     });
-    const list = Array.from(navs);
-    const move = (cur, next) => {
-      list[cur].setAttribute("tabindex", "-1");
-      list[cur].classList.remove("sel");
-      list[next].setAttribute("tabindex", "0");
-      list[next].classList.add("sel");
-      list[next].focus();
-    };
-    panel.addEventListener("keydown", (e) => {
-      const cur = list.findIndex(el => el.getAttribute("tabindex") === "0");
-      const fwd = e.key === "ArrowDown" || e.key === "ArrowRight" || (e.key === "Tab" && !e.shiftKey);
-      const back = e.key === "ArrowUp" || e.key === "ArrowLeft" || (e.key === "Tab" && e.shiftKey);
-      if (fwd) { e.preventDefault(); move(cur, (cur + 1) % list.length); }
-      else if (back) { e.preventDefault(); move(cur, (cur - 1 + list.length) % list.length); }
-      else if (e.key === "Enter") { e.preventDefault(); list.forEach(el => el.classList.remove("sel")); list[cur].classList.add("sel"); }
-    });
-  });
-  // make action buttons + context-menu items focusable (Tab order)
-  document.querySelectorAll(".btn").forEach(b => { b.setAttribute("tabindex", "0"); b.setAttribute("role", "button"); });
-  document.querySelectorAll(".mi").forEach(m => { m.setAttribute("tabindex", "0"); m.setAttribute("role", "menuitem"); });
+    mql.addEventListener("change", function () { if (mode === "system") apply(); });
+    apply();
+  })();
 </script>
+
 </body>
 </html>

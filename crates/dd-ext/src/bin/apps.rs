@@ -174,6 +174,198 @@ mod sys {
             .unwrap_or_default()
     }
 
+    /// 图标缓存基目录：`%APPDATA%\dd-run\cache\apps-icons\`（与 `dd-host::manifest::cache_dir()` 同源）。
+    fn icon_cache_dir() -> Option<std::path::PathBuf> {
+        std::env::var_os("APPDATA").map(|p| {
+            std::path::PathBuf::from(p)
+                .join("dd-run")
+                .join("cache")
+                .join("apps-icons")
+        })
+    }
+
+    /// 稳定哈希 .lnk/.exe 绝对路径 → 16-hex 文件名（同一文件重抽可命中缓存）。
+    fn icon_cache_key(path: &Path) -> String {
+        use std::collections::hash_map::DefaultHasher;
+        use std::hash::{Hash, Hasher};
+        let mut h = DefaultHasher::new();
+        path.hash(&mut h);
+        format!("{:016x}", h.finish())
+    }
+
+    /// 若 cache 已有该 .lnk/.exe 的 32×32 PNG（且**内容合法**），返回该路径（不重抽）。
+    ///
+    /// 自愈：若落盘文件不是合法 PNG（魔数 `89 50 4E 47 0D 0A 1A 0A` 缺失，如上次写入
+    /// 因 IO/中断失败），返回 None，让上层重抽覆盖——避免"程序 bug 写出坏 PNG 后永远卡住"。
+    fn cached_icon_path(dir: &Path, path: &Path, size: u32) -> Option<std::path::PathBuf> {
+        let key = icon_cache_key(path);
+        let p = dir.join(format!("apps-{}-{}.png", key, size));
+        if !p.is_file() {
+            return None;
+        }
+        if let Ok(head) = std::fs::read(&p) {
+            if head.len() >= 8 && head[..8] == [0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A] {
+                return Some(p);
+            }
+        }
+        None
+    }
+
+    /// 抽 .lnk / .exe 的真实系统图标，写为 32×32 PNG 到 cache 目录，返回 PNG 路径。
+    ///
+    /// 流程（Windows）：
+    /// 1. `SHGetFileInfoW` 取系统缓存的 `.lnk` 解析后图标 / `.exe` 嵌入图标
+    ///    （`SHGFI_ICON|SHGFI_LARGEICON` → 32×32 HICON）；
+    /// 2. `GetIconInfo` 拆 `hbmColor` → `GetDIBits` → raw BGRA buffer；
+    /// 3. `image::PngEncoder` 写 PNG bytes 落盘；
+    /// 4. 缓存命中则跳过 SHGetFileInfoW。失败回退 None（调用方回落占位 glyph）。
+    fn extract_to_png(path: &Path) -> Option<std::path::PathBuf> {
+        unsafe {
+            use std::os::windows::ffi::OsStrExt;
+            use windows_sys::Win32::UI::Shell::{
+                SHGetFileInfoW, SHFILEINFOW, SHGFI_ICON, SHGFI_LARGEICON,
+            };
+            use windows_sys::Win32::UI::WindowsAndMessaging::DestroyIcon;
+
+            const ICON_SIZE: u32 = 32;
+            const SHFILEINFOW_SIZE: u32 = std::mem::size_of::<SHFILEINFOW>() as u32;
+
+            let out_dir = icon_cache_dir()?;
+            if let Some(p) = cached_icon_path(&out_dir, path, ICON_SIZE) {
+                return Some(p);
+            }
+            std::fs::create_dir_all(&out_dir).ok()?;
+
+            // SHGetFileInfoW：返回 HICON 在 fi.hIcon（无效时为 null）
+            let path_wide: Vec<u16> = path
+                .as_os_str()
+                .encode_wide()
+                .chain(std::iter::once(0))
+                .collect();
+            let mut fi: SHFILEINFOW = std::mem::zeroed();
+            let hr = SHGetFileInfoW(
+                path_wide.as_ptr(),
+                0,
+                &mut fi,
+                SHFILEINFOW_SIZE,
+                SHGFI_ICON | SHGFI_LARGEICON,
+            );
+            if hr == 0 || fi.hIcon.is_null() {
+                return None;
+            }
+
+            // HICON → PNG bytes（BGRA→RGBA + 强制 alpha=255）
+            let png_bytes = hicon_to_png(fi.hIcon, ICON_SIZE)?;
+            // 释放 HICON（不论写文件成功与否：避免泄漏）
+            DestroyIcon(fi.hIcon);
+
+            let key = icon_cache_key(path);
+            let out_path = out_dir.join(format!("apps-{}-{}.png", key, ICON_SIZE));
+            if !out_path.exists() {
+                std::fs::write(&out_path, &png_bytes).ok()?;
+            }
+            Some(out_path)
+        }
+    }
+
+    /// HICON → 32×32 RGBA → PNG bytes。失败 None（**不** DestroyIcon：调用方负责）。
+    ///
+    /// image 0.25 `ImageEncoder::write_image(self, ...)` 接收 self（值），所以下面
+    /// `encoder.write_image(...)` 会移走 encoder；这之后 `out` 已写完可丢弃。
+    unsafe fn hicon_to_png(hicon: *mut std::ffi::c_void, size: u32) -> Option<Vec<u8>> {
+        use image::ImageEncoder;
+        use windows_sys::Win32::Graphics::Gdi::{
+            CreateCompatibleDC, DeleteDC, DeleteObject, GetDIBits, BITMAPINFO, BITMAPINFOHEADER,
+            DIB_RGB_COLORS,
+        };
+        use windows_sys::Win32::UI::WindowsAndMessaging::{GetIconInfo, ICONINFO};
+
+        let mut ii: ICONINFO = std::mem::zeroed();
+        if GetIconInfo(hicon, &mut ii) == 0 {
+            return None;
+        }
+        let hbm_color = ii.hbmColor;
+        let hbm_mask = ii.hbmMask;
+        if hbm_color.is_null() {
+            if !hbm_mask.is_null() {
+                DeleteObject(hbm_mask);
+            }
+            return None;
+        }
+
+        let mut bmi: BITMAPINFO = std::mem::zeroed();
+        bmi.bmiHeader.biSize = std::mem::size_of::<BITMAPINFOHEADER>() as u32;
+        bmi.bmiHeader.biWidth = size as i32;
+        bmi.bmiHeader.biHeight = -(size as i32); // 负高=top-down
+        bmi.bmiHeader.biPlanes = 1;
+        bmi.bmiHeader.biBitCount = 32;
+        bmi.bmiHeader.biCompression = 0; // BI_RGB
+
+        let stride = (size as usize) * 4;
+        let mut buf: Vec<u8> = vec![0; stride * size as usize];
+        // GetDIBits 的 hdc 参数**必须是有效 DC**（传 NULL 直接返回 0 失败——
+        // 实测：hbmColor 32×32@32bpp 都正确，仅因 hdc=NULL 拿不到 bits）。
+        // 取屏幕兼容的内存 DC 即可，用完 DeleteDC。
+        let hdc = CreateCompatibleDC(std::ptr::null_mut());
+        if hdc.is_null() {
+            DeleteObject(hbm_color);
+            if !hbm_mask.is_null() {
+                DeleteObject(hbm_mask);
+            }
+            return None;
+        }
+        let n = GetDIBits(
+            hdc,
+            hbm_color,
+            0,
+            size,
+            buf.as_mut_ptr() as *mut _,
+            &mut bmi,
+            DIB_RGB_COLORS,
+        );
+        DeleteDC(hdc);
+        // 释放位图资源（不论 GetDIBits 成功与否）
+        DeleteObject(hbm_color);
+        if !hbm_mask.is_null() {
+            DeleteObject(hbm_mask);
+        }
+        if n == 0 {
+            return None;
+        }
+
+        // GetDIBits 32bpp 给的是 BGRA，但 alpha 字段在 Windows GDI 下含义不一。
+        // 强制 alpha=255 让图标不透，BGRA→RGBA 后交给 dd-gui 的 image::load_from_memory 渲染。
+        for px in buf.chunks_exact_mut(4) {
+            px.swap(0, 2); // B↔R
+            px[3] = 0xff;
+        }
+
+        let img = image::RgbaImage::from_raw(size, size, buf)?;
+        let mut out = Vec::with_capacity(8 * 1024);
+        let encoder = image::codecs::png::PngEncoder::new(&mut out);
+        encoder
+            .write_image(img.as_raw(), size, size, image::ExtendedColorType::Rgba8)
+            .ok()?;
+        Some(out)
+    }
+
+    /// 单条 app 的 Icon：优先 .lnk/.exe 真实图标（PNG 落 cache）；失败回落到原
+    /// Segoe MDL2 `U+E7C4` (Apps) 占位 glyph。
+    fn item_icon(app: &App) -> Icon {
+        if let Some(png) = extract_to_png(&app.path) {
+            if let Some(p) = png.to_str() {
+                return Icon {
+                    kind: IconKind::Path,
+                    value: p.to_string(),
+                };
+            }
+        }
+        Icon {
+            kind: IconKind::Glyph,
+            value: "\u{E7C4}".to_string(),
+        }
+    }
+
     pub fn top_level_commands() -> Vec<CommandItem> {
         app_list()
             .iter()
@@ -186,10 +378,7 @@ mod sys {
                 } else {
                     app.path.display().to_string()
                 }),
-                icon: Some(Icon {
-                    kind: IconKind::Glyph,
-                    value: "\u{E7C4}".to_string(), // Apps
-                }),
+                icon: Some(item_icon(app)),
                 section: Some("应用".to_string()),
                 tags: None,
                 details: None,
@@ -287,6 +476,99 @@ mod sys {
                     "got {}",
                     r.display()
                 );
+            }
+        }
+
+        /// 真机覆盖率守卫：绝大多数 app 应拿到 Path 真实图标（而非回落 apps 占位 glyph）。
+        ///
+        /// 阈值取 90%（实测 400/400 = 100%）：个别 app 因目标被卸载/路径失效等拿不到
+        /// 图标属正常，回落 `U+E7C4` 不影响可用性；但整体大面积回落说明抽取链路坏了。
+        #[test]
+        fn real_icon_covers_most_apps() {
+            let apps = app_list();
+            assert!(!apps.is_empty(), "Windows 上应至少枚举到一个应用");
+            let path_n = apps
+                .iter()
+                .filter(|a| matches!(super::item_icon(a).kind, IconKind::Path))
+                .count();
+            let ratio = path_n as f64 / apps.len() as f64;
+            assert!(
+                ratio >= 0.9,
+                "真实图标覆盖率过低：{path_n}/{} = {:.1}%（阈值 90%）",
+                apps.len(),
+                ratio * 100.0
+            );
+        }
+
+        /// Path 图标必须指向**真实存在**的 PNG 文件（host 端 decode 依赖落盘文件，
+        /// 悬空路径会在 dd-gui 表现为"解码失败 → 占位 glyph"）。
+        #[test]
+        fn path_icons_point_to_existing_png_files() {
+            for app in app_list().iter().take(20) {
+                let icon = super::item_icon(app);
+                if icon.kind == IconKind::Path {
+                    let p = std::path::Path::new(&icon.value);
+                    assert!(
+                        p.is_file(),
+                        "Path 图标应已落盘：{}（app={}）",
+                        icon.value,
+                        app.title
+                    );
+                    let head = std::fs::read(p).unwrap();
+                    assert_eq!(
+                        &head[..8],
+                        &[0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A],
+                        "落盘文件应为 PNG：{}",
+                        icon.value
+                    );
+                }
+            }
+        }
+
+        #[test]
+        fn extract_to_png_succeeds_for_real_exe() {
+            // 抽取 system32 里随便一个 .exe（SHGetFileInfoW + GetDIBits 全链路）
+            // 验证：①返回 Some(path)；②路径在 cache 目录里；③文件存在非空
+            let exe = std::env::var("ComSpec")
+                .unwrap_or_else(|_| r"C:\Windows\System32\cmd.exe".to_string());
+            let path = std::path::PathBuf::from(&exe);
+            if !path.is_file() {
+                eprintln!("[extract_to_png_succeeds_for_real_exe] skip: {exe:?} 不存在");
+                return;
+            }
+            let out = super::extract_to_png(&path)
+                .unwrap_or_else(|| panic!("SHGetFileInfoW 抽 {exe:?} 应成功"));
+            assert!(out.is_file(), "落盘 PNG 应存在：{}", out.display());
+            let meta = std::fs::metadata(&out).unwrap();
+            assert!(meta.len() > 0, "PNG 文件应非空");
+            // PNG magic = 89 50 4E 47 0D 0A 1A 0A
+            let head = std::fs::read(&out).unwrap();
+            assert_eq!(
+                &head[..8],
+                &[0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A]
+            );
+        }
+
+        #[test]
+        fn item_icon_prefers_real_path_for_existing_apps() {
+            // 列表里第一条应用：真实图标应优先 Path 类型
+            let apps = app_list();
+            if let Some(app) = apps.first() {
+                let icon = super::item_icon(app);
+                match icon.kind {
+                    IconKind::Glyph => {
+                        // 真实不可用时回落到原 glyph（U+E7C4）—— 也算正常路径
+                        assert_eq!(icon.value, "\u{E7C4}");
+                    }
+                    IconKind::Path => {
+                        assert!(
+                            std::path::Path::new(&icon.value).is_file(),
+                            "Path 图标应指向落盘 PNG：{}",
+                            icon.value
+                        );
+                    }
+                    IconKind::Url => panic!("apps 不能用 Url icon"),
+                }
             }
         }
 

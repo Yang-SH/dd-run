@@ -10,7 +10,7 @@
 //! 本节是 M1–M2 的"逻辑自动化"部分：所有过滤/选中/循环语义
 //! 都在这里单测覆盖，egui 层只做渲染与按键转发。
 
-use dd_protocol::model::CommandRef;
+use dd_protocol::model::{CommandRef, Icon};
 
 /// 一个可展示的列表项（对应设计文档 §4.4 `IListItem` 的核心字段）。
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -23,8 +23,15 @@ pub struct PanelItem {
     pub subtitle: String,
     /// 所属分组名（§4.4 `Section`）。
     pub section: String,
+    /// 图标（§8.6 三态 glyph/path/url；`None` = 无图标，渲染空列对齐）。
+    /// M5 UI 批次 2：`aggregator::to_panel_item` 从 `CommandItem.icon` 透传，
+    /// 渲染层统一解析为 20px 图标列。
+    pub icon: Option<Icon>,
     /// 标签（§4.4 `Tags`，渲染为 chip）。
     pub tags: Vec<String>,
+    /// 结果类别显示标签（设计文档 §6.2：按 `ext_id` 推导，如「应用/命令/设置/网页」）。
+    /// 协议层无此字段（`CommandItem` 无 kind），由 GUI 聚合器本地填充。
+    pub result_category: Option<String>,
     /// 选中这一项会发生什么（§8.2：直接执行 / 进入嵌套页）。
     pub command: CommandRef,
 }
@@ -39,7 +46,9 @@ impl PanelItem {
             title,
             subtitle: String::new(),
             section: String::new(),
+            icon: None,
             tags: Vec::new(),
+            result_category: None,
             command: CommandRef::Invoke,
         }
     }
@@ -56,8 +65,11 @@ pub enum Selected {
 
 /// Root View 面板状态机。
 ///
-/// 不持有过滤后的缓存列表，而是实时按 `query` 从 `items` 过滤，
-/// 保证"查询字符串 ↔ 可见列表 ↔ 选中索引"三者永远一致（SSOT）。
+/// M4 P5（A3/D3-A）：`visible` 是**查询变化时一次性计算**的可见索引表
+/// （`items` 下标，按 nucleo 得分降序、同分保原序——稳定排序）。
+/// `filtered()` 等全部可见性查询都走这张表：既保证"查询字符串 ↔ 可见列表
+/// ↔ 选中索引"三者一致（SSOT：查询变则重算），又避免每帧多次重跑匹配
+/// （`draw_panel` 每帧调 `set_query`，`filtered()` 每帧被多次消费）。
 ///
 /// M4 宿主 fallback 轮：`fallback` 是"当前查询无匹配时的兜底展示集"
 /// （宿主按 §6.2 从扩展 `fallback_commands` 模板渲染得到，见 [`crate::fallback`]）。
@@ -68,6 +80,8 @@ pub enum Selected {
 pub struct PanelState {
     items: Vec<PanelItem>,
     query: String,
+    /// 可见索引表（items 下标；按得分降序、同分保原序）。查询变化时重算。
+    visible: Vec<usize>,
     /// 当前查询无匹配时的兜底展示集（空 = 无兜底项可用）。
     fallback: Vec<PanelItem>,
     selected: Selected,
@@ -78,9 +92,11 @@ impl PanelState {
         let mut s = Self {
             items,
             query: String::new(),
+            visible: Vec::new(),
             fallback: Vec::new(),
             selected: Selected::None,
         };
+        s.recompute_visible();
         s.reset_selection();
         s
     }
@@ -108,9 +124,18 @@ impl PanelState {
         self.clamp_selection();
     }
 
-    /// 设置查询文本；查询变化时选中索引自动夹紧（可能变成 None）。
+    /// 设置查询文本；查询变化时重算可见索引表（模糊打分 + 排序），
+    /// 选中索引自动夹紧（可能变成 None）。
+    ///
+    /// 性能（A3）：`draw_panel` **每帧**以当前输入框文本调用本方法，
+    /// 查询未变化时直接早退——匹配/排序成本只发生在真正按键的帧。
     pub fn set_query(&mut self, q: impl Into<String>) {
-        self.query = q.into();
+        let q = q.into();
+        if q == self.query {
+            return;
+        }
+        self.query = q;
+        self.recompute_visible();
         self.clamp_selection();
     }
 
@@ -121,37 +146,30 @@ impl PanelState {
 
     /// 可见项迭代器（**fallback 模式下不二次过滤**——项已按查询渲染好）：
     /// `(可见下标, 原始项)`，供渲染与选中高亮使用。
+    ///
+    /// M4 P5（A3/D3-A）：可见序 = nucleo 得分降序（同分保原序，稳定排序），
+    /// 由 [`Self::recompute_visible`] 在查询变化时一次性算好。
     pub fn filtered(&self) -> Box<dyn Iterator<Item = (usize, &PanelItem)> + '_> {
         if self.is_fallback_mode() {
             return Box::new(self.fallback.iter().enumerate());
         }
         Box::new(
-            self.items
+            self.visible
                 .iter()
-                .filter(|it| Self::is_visible(it, &self.query))
-                .enumerate(),
+                .enumerate()
+                .map(move |(i, &idx)| (i, &self.items[idx])),
         )
     }
 
     /// 是否处于 fallback 展示模式：查询非空、常规项全部不匹配、且有兜底项。
     pub fn is_fallback_mode(&self) -> bool {
-        if self.query.is_empty() || self.fallback.is_empty() {
-            return false;
-        }
-        !self
-            .items
-            .iter()
-            .any(|it| Self::is_visible(it, &self.query))
+        !self.query.is_empty() && !self.fallback.is_empty() && self.visible.is_empty()
     }
 
     /// 常规过滤（不含 fallback）是否有匹配项——宿主据此决定是否触发
     /// `fallback_commands` 拉取（有匹配则不拉，§6.2"搜索无匹配时"）。
     pub fn has_regular_match(&self) -> bool {
-        self.query.is_empty()
-            || self
-                .items
-                .iter()
-                .any(|it| Self::is_visible(it, &self.query))
+        self.query.is_empty() || !self.visible.is_empty()
     }
 
     pub fn selected(&self) -> Selected {
@@ -222,7 +240,40 @@ impl PanelState {
     pub fn reset(&mut self) {
         self.query.clear();
         self.fallback.clear();
+        self.recompute_visible();
         self.reset_selection();
+    }
+
+    /// 重算可见索引表（M4 P5/A3-D3-A）：
+    /// - 空白查询 → 全部项、原顺序（等价 P5 前的"空查询显示全部"）；
+    /// - 非空查询 → nucleo 逐项打分（[`crate::fuzzy`]：多字段取最高），
+    ///   未命中剔除，按得分**降序稳定排序**（同分保原序）。
+    ///
+    /// 性能要点：仅在本方法内跑匹配（查询变化时 / `reset` 时各一次），
+    /// `filtered()` 等每帧多次的只读路径只走索引表（A3 埋点见计时日志）。
+    fn recompute_visible(&mut self) {
+        let start = std::time::Instant::now(); // A3 埋点：一次重算 = 一次按键的过滤成本
+        let n = self.items.len();
+        if self.query.trim().is_empty() {
+            self.visible = (0..n).collect();
+            return;
+        }
+        let mut fm = crate::fuzzy::FuzzyMatcher::new(&self.query);
+        let mut scored: Vec<(usize, u32)> = self
+            .items
+            .iter()
+            .enumerate()
+            .filter_map(|(i, it)| fm.score(it).map(|s| (i, s)))
+            .collect();
+        // `sort_by_key` 为稳定排序：同分项保持原始顺序（切片 2 行为测试守卫）
+        scored.sort_by_key(|&(_, s)| std::cmp::Reverse(s));
+        self.visible = scored.into_iter().map(|(i, _)| i).collect();
+        eprintln!(
+            "[dd-gui] A3 过滤：{n} 项 → {} 命中，query {} 字符，耗时 {} µs",
+            self.visible.len(),
+            self.query.chars().count(),
+            start.elapsed().as_micros()
+        );
     }
 
     fn reset_selection(&mut self) {
@@ -243,23 +294,6 @@ impl PanelState {
             other => other,
         };
     }
-
-    /// 过滤：大小写不敏感的子串匹配（title + subtitle + tags + section 任一命中）。
-    fn is_visible(item: &PanelItem, q: &str) -> bool {
-        if q.is_empty() {
-            return true;
-        }
-        let q = q.to_lowercase();
-        let hay = format!(
-            "{} {} {} {}",
-            item.title,
-            item.subtitle,
-            item.section,
-            item.tags.join(" ")
-        )
-        .to_lowercase();
-        hay.contains(&q)
-    }
 }
 
 #[cfg(test)]
@@ -274,7 +308,9 @@ mod tests {
                 title: "Open Settings".into(),
                 subtitle: "Open the settings page".into(),
                 section: "System".into(),
+                icon: None,
                 tags: vec!["config".into()],
+                result_category: None,
                 command: CommandRef::Invoke,
             },
             PanelItem {
@@ -283,7 +319,9 @@ mod tests {
                 title: "Open File".into(),
                 subtitle: "Browse files".into(),
                 section: "Files".into(),
+                icon: None,
                 tags: vec!["browse".into()],
+                result_category: None,
                 command: CommandRef::Invoke,
             },
             PanelItem {
@@ -292,7 +330,9 @@ mod tests {
                 title: "Copy Path".into(),
                 subtitle: "Copy current path".into(),
                 section: "Files".into(),
+                icon: None,
                 tags: vec!["clipboard".into()],
+                result_category: None,
                 command: CommandRef::Invoke,
             },
         ]
@@ -312,10 +352,12 @@ mod tests {
     #[test]
     fn query_filters_case_insensitively() {
         let mut s = PanelState::new(sample_items());
+        // P5 模糊语义："open" 对 "Copy Path" 的 subtitle「Copy current path」
+        // 构成子序列（o…p…e…n）→ 3 项命中（旧 contains 为 2 项）。
         s.set_query("open");
-        assert_eq!(s.visible_count(), 2); // Open Settings / Open File
+        assert_eq!(s.visible_count(), 3);
         s.set_query("OPEN");
-        assert_eq!(s.visible_count(), 2);
+        assert_eq!(s.visible_count(), 3);
         s.set_query("copy");
         assert_eq!(s.visible_count(), 1);
         assert_eq!(
@@ -333,6 +375,106 @@ mod tests {
         assert_eq!(s.visible_count(), 1);
         s.set_query("files"); // section（且大小写不敏感：Files → files）
         assert_eq!(s.visible_count(), 2);
+    }
+
+    /// M4 P5（切片 2）：按分数重排——弱匹配（中间命中）在前、强匹配（前缀
+    /// 命中）在后时，排序后强匹配应排到前面。
+    #[test]
+    fn query_orders_matches_by_score() {
+        let items = vec![
+            PanelItem::new("Reopen File"),   // 原序 0：中间命中（弱）
+            PanelItem::new("Open Settings"), // 原序 1：前缀命中（强）
+        ];
+        let mut s = PanelState::new(items);
+        s.set_query("open");
+        let titles: Vec<&str> = s.filtered().map(|(_, it)| it.title.as_str()).collect();
+        assert_eq!(
+            titles,
+            vec!["Open Settings", "Reopen File"],
+            "前缀命中应排在中间命中之前"
+        );
+        assert_eq!(
+            s.selected_item().map(|i| i.title.as_str()),
+            Some("Open Settings"),
+            "选中应跟随重排落在最强匹配上"
+        );
+    }
+
+    /// M4 P5（切片 2）：同分保持原始顺序（稳定排序）。
+    #[test]
+    fn query_keeps_original_order_on_tie() {
+        let items = vec![PanelItem::new("Open A"), PanelItem::new("Open B")];
+        let mut s = PanelState::new(items);
+        s.set_query("open"); // 两项同为前缀命中 → 同分
+        let titles: Vec<&str> = s.filtered().map(|(_, it)| it.title.as_str()).collect();
+        assert_eq!(titles, vec!["Open A", "Open B"], "同分应保持原始顺序");
+    }
+
+    /// M4 P5（切片 2）：重排后 ↑↓ 导航仍按**可见列表位置**工作（环绕/confirm）。
+    #[test]
+    fn navigation_follows_score_order() {
+        let items = vec![
+            PanelItem::new("Reopen File"),   // 排序后可见位置 1
+            PanelItem::new("Open Settings"), // 排序后可见位置 0
+        ];
+        let mut s = PanelState::new(items);
+        s.set_query("open");
+        assert_eq!(s.selected_index(), Some(0), "重排后选中第 0 项 = 最强匹配");
+        s.move_down();
+        assert_eq!(
+            s.confirm().map(|i| i.title.as_str()),
+            Some("Reopen File"),
+            "可见位置 1 = Reopen File"
+        );
+    }
+
+    /// M4 P5（A3 实测，**不调目标**）：大列表一次重算（打分+排序）的耗时记录。
+    /// 规模取真实上限的裕量（MAX_APPS=400 → 2000 项）；断言为宽松病态上限
+    /// （debug 构建），实测值打印供 m4-record.md 记录；未达标则记录实测与瓶颈。
+    #[test]
+    fn filter_latency_on_large_list_is_recorded() {
+        let items: Vec<PanelItem> = (0..2_000)
+            .map(|i| PanelItem::new(format!("Command {i:04} settings page browse")))
+            .collect();
+        let mut s = PanelState::new(items);
+        let start = std::time::Instant::now();
+        s.set_query("sett");
+        let elapsed = start.elapsed();
+        println!(
+            "[A3] 2000 项模糊过滤一次重算实测：{} µs（{} ms）",
+            elapsed.as_micros(),
+            elapsed.as_millis()
+        );
+        assert!(
+            elapsed.as_millis() < 100,
+            "病态回归：一次重算 {} ms（应远低于 16ms/帧 目标量级）",
+            elapsed.as_millis()
+        );
+        assert_eq!(
+            s.visible_count(),
+            2_000,
+            "构造的项全部应命中（含 sett 子序列）"
+        );
+    }
+
+    /// M4 P5（A3/D3-A）：模糊子序列匹配——query 字符按顺序命中即可，
+    /// 无需连续子串（`"opst"` ⊂ "Open **S**ettings" 的 o…p…s…t）。
+    /// 两个用例都刻意选「子序列但**非**子串」，旧 contains 实现下必然失败。
+    #[test]
+    fn query_matches_fuzzy_subsequence() {
+        let mut s = PanelState::new(sample_items());
+        s.set_query("opst"); // o-p-s…t ∈ "Open Settings"
+        assert_eq!(s.visible_count(), 1, "仅 Open Settings 子序列命中");
+        assert_eq!(
+            s.selected_item().map(|i| i.title.as_str()),
+            Some("Open Settings")
+        );
+        s.set_query("cpy"); // c-p-y ∈ "Copy Path"（非子串）
+        assert_eq!(s.visible_count(), 1);
+        assert_eq!(
+            s.selected_item().map(|i| i.title.as_str()),
+            Some("Copy Path")
+        );
     }
 
     #[test]
@@ -420,7 +562,9 @@ mod tests {
             title: title.to_string(),
             subtitle: String::new(),
             section: "计算".to_string(),
+            icon: None,
             tags: Vec::new(),
+            result_category: Some("命令".to_string()),
             command: CommandRef::Invoke,
         }
     }
@@ -436,10 +580,11 @@ mod tests {
         assert_eq!(s.visible_count(), 3);
 
         // 查询命中常规项：fallback 不参与（即使注入了 fallback 集）
+        // P5 模糊语义："open" 命中 3 项（含 Copy Path 的 subtitle 子序列）
         s.set_query("open");
         s.set_fallback(vec![fallback_item("calc.eval.query", "= open")]);
         assert!(!s.is_fallback_mode(), "常规有匹配时不进入 fallback");
-        assert_eq!(s.visible_count(), 2);
+        assert_eq!(s.visible_count(), 3);
 
         // 查询无匹配：注入渲染好的兜底项 → 进入 fallback 模式
         s.set_query("zzz-no-match");

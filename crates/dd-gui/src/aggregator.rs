@@ -372,6 +372,11 @@ pub fn flatten(per_ext: &[ExtItems]) -> (Vec<PanelItem>, Vec<SourceSummary>) {
 /// [`CommandItem`] → [`PanelItem`]；`section` 缺省时用扩展名兜底分组。
 ///
 /// `ext_id` 记录命令来源扩展（`invoke` / `get_items` 时定位子进程）。
+/// `icon` 从 `CommandItem.icon`（§8.6 三态）**透传**——渲染层决定如何显示；
+/// 列表/嵌套页/fallback 模板均经此函数，保证全链路图标一致（M5 UI 批次 2）。
+///
+/// M5 批次 3.9：按 `ext_id` 去 `com.ddrun.` 前缀推导通用类别标签（设计文档 §6.2），
+/// 内置扩展映射为「应用/命令/设置/网页」，第三方回退「命令」。
 pub fn to_panel_item(cmd: &CommandItem, ext_id: &str, fallback_section: &str) -> PanelItem {
     PanelItem {
         id: cmd.id.clone(),
@@ -382,15 +387,31 @@ pub fn to_panel_item(cmd: &CommandItem, ext_id: &str, fallback_section: &str) ->
             .section
             .clone()
             .unwrap_or_else(|| fallback_section.to_string()),
+        icon: cmd.icon.clone(),
         tags: cmd.tags.clone().unwrap_or_default(),
+        result_category: Some(category_label_for(ext_id).to_string()),
         command: cmd.command.clone(),
+    }
+}
+
+/// 按扩展清单 id 推导结果类别显示标签（设计文档 §6.2 映射表）。
+///
+/// 内置扩展使用全限定 id，去 `com.ddrun.` 前缀后匹配；未知第三方统一回退「命令」。
+fn category_label_for(ext_id: &str) -> &'static str {
+    let short = ext_id.strip_prefix("com.ddrun.").unwrap_or(ext_id);
+    match short {
+        "apps" => "应用",
+        "system" => "设置",
+        "websearch" => "网页",
+        // calc / shell / 第三方统一归为「命令」
+        _ => "命令",
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use dd_protocol::model::CommandRef;
+    use dd_protocol::model::{CommandRef, Icon, IconKind};
 
     fn cmd(id: &str, title: &str, section: Option<&str>) -> CommandItem {
         CommandItem {
@@ -428,6 +449,51 @@ mod tests {
         let with_section = cmd("a.2", "Bye", Some("系统"));
         let panel = to_panel_item(&with_section, "com.example.a", "ExtA");
         assert_eq!(panel.section, "系统", "扩展返回的 section 优先");
+    }
+
+    #[test]
+    fn category_label_is_derived_from_ext_id() {
+        // M5 批次 3.9：内置扩展按去前缀映射，第三方回退「命令」。
+        let cases = [
+            ("com.ddrun.apps", "应用"),
+            ("com.ddrun.calc", "命令"),
+            ("com.ddrun.system", "设置"),
+            ("com.ddrun.websearch", "网页"),
+            ("com.ddrun.shell", "命令"),
+            ("com.example.unknown", "命令"),
+        ];
+        for (ext_id, expected) in cases {
+            let panel = to_panel_item(&cmd("x", "X", None), ext_id, "Sec");
+            assert_eq!(
+                panel.result_category.as_deref(),
+                Some(expected),
+                "{ext_id} 应映射为 {expected}"
+            );
+        }
+    }
+
+    #[test]
+    fn icon_is_passed_through_from_command_item() {
+        // M5 UI 批次 2：§8.6 icon 三态（glyph/path/url）都应透传到 PanelItem，
+        // 由渲染层按态渲染——此断言锁住"宿主不再丢弃 icon"这一修复。
+        let kinds = [IconKind::Glyph, IconKind::Path, IconKind::Url];
+        for kind in kinds {
+            let icon = Icon {
+                kind,
+                value: match kind {
+                    IconKind::Glyph => "\u{E8C8}".to_string(),
+                    IconKind::Path => r"C:\demo\icon.png".to_string(),
+                    IconKind::Url => "https://example.com/icon.png".to_string(),
+                },
+            };
+            let mut item = cmd("a.icon", "Iconed", None);
+            item.icon = Some(icon.clone());
+            let panel = to_panel_item(&item, "com.example.a", "ExtA");
+            assert_eq!(panel.icon, Some(icon), "{kind:?} 应透传");
+        }
+        // 无 icon → None（渲染空列，不 panic）
+        let plain = to_panel_item(&cmd("b", "NoIcon", None), "com.example.a", "ExtA");
+        assert_eq!(plain.icon, None);
     }
 
     #[test]

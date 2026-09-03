@@ -35,6 +35,7 @@ use dd_gui::navigation::{PageStack, PageState};
 use dd_gui::result::{self, HostAction, PendingConfirm};
 use dd_gui::robustness::{CrashGuard, MAX_CONSECUTIVE_CRASHES};
 use dd_gui::state::{PanelItem, PanelState};
+use dd_gui::theme;
 use dd_host::cache::{ColdStartTimer, FrozenCache, LruWarmSet};
 use dd_host::manifest::{self, LoadedExtension};
 use dd_host::process::{ExtensionProcess, TIMEOUT_GET_ITEMS};
@@ -42,7 +43,27 @@ use dd_protocol::messages::{
     GetItemsParams, GetItemsResult, InvokeParams, OpenUrlParams, RawMessage, SetClipboardParams,
     ShowStatusParams,
 };
-use dd_protocol::model::{CommandItem, CommandRef, CommandResult};
+use dd_protocol::model::{CommandItem, CommandRef, CommandResult, IconKind};
+
+/// 面板逻辑尺寸（设计稿 v2：宽 560；高沿用现行 460）。`show()` 居中定位用。
+const APP_W: f32 = 560.0;
+const APP_H: f32 = 460.0;
+/// 启动期窗口的屏幕外坐标（远离所有显示器的负象限）——实现"物理不可见"：
+/// eframe 0.36 首帧渲染后**无条件** `set_visible(true)`（egui PR #2279"画完才
+/// 显示"），`with_visible(false)` 拦不住；把窗口放屏幕外，即使被强制显示也
+/// 不可能被用户看到，彻底消除启动黑框/跳动毛刺（设计稿 03 验收）。
+const OFFSCREEN_X: f32 = -20_000.0;
+const OFFSCREEN_Y: f32 = -20_000.0;
+
+/// 列表行图标列边长（设计稿 v2：`.row .icon` 20×20）。
+const ICON_CELL: f32 = 20.0;
+/// glyph 图标字号（设计稿 v2：`.row .icon` font-size 16px）。
+const ICON_GLYPH_PT: f32 = 16.0;
+/// path 图标解码失败时的占位 glyph（Segoe MDL2 "Page" U+E7C3；
+/// 设计稿 04：加载失败回落占位 glyph）。
+const PLACEHOLDER_GLYPH: char = '\u{E7C3}';
+/// 搜索栏前缀搜索图标（Segoe MDL2 "Search" U+E721；设计稿 01 searchbar glyph）。
+const SEARCH_GLYPH: char = '\u{E721}';
 
 /// §6.3 + A9：`items_changed` 通知的合并窗口（窗口内多次通知只重拉一次）。
 const REFRESH_WINDOW: Duration = Duration::from_millis(100);
@@ -132,7 +153,13 @@ fn main() -> eframe::Result {
     let mut cold = ColdStartTimer::new();
     cold.mark_spawn_start();
     let viewport = egui::ViewportBuilder::default()
-        .with_inner_size([560.0, 460.0])
+        .with_inner_size([APP_W, APP_H])
+        // 启动静默双保险之二（其一为 with_visible(false)）：初始位置屏幕外 +
+        // 初始不活跃。屏幕外位置保证 eframe 首帧强制 set_visible(true) 时
+        // 用户看不到任何窗口；with_active(false) 防止强制显示瞬间夺取焦点
+        // （焦点要等用户热键唤起时才给，设计稿 03 验收行）。
+        .with_position([OFFSCREEN_X, OFFSCREEN_Y])
+        .with_active(false)
         .with_decorations(false)
         .with_always_on_top()
         .with_taskbar(false)
@@ -147,6 +174,9 @@ fn main() -> eframe::Result {
         options,
         Box::new(|cc| {
             setup_cjk_fonts(&cc.egui_ctx);
+            // M5 批次 3：注册亮/暗双视觉 + 跟随系统（须在任何绘制前应用，
+            // egui 会按系统亮暗自动在两套 Style 间 re-resolve）。
+            theme::apply(&cc.egui_ctx);
             // 初始隐藏双保险：`with_visible(false)` 之外显式发 `Visible(false)`，
             // 规避 eframe/egui 0.36 在 Windows 上 `with_visible` 偶发不生效的情况。
             cc.egui_ctx
@@ -197,11 +227,18 @@ fn spawn_aggregation(tx: mpsc::Sender<AggregatePayload>, cache: Option<FrozenCac
     });
 }
 
-/// 加载本地字体栈：CJK 主字（msyh / SimHei / Deng）+ Segoe UI Symbol 符号后援。
+/// 加载本地字体栈：CJK 主字（msyh / SimHei / Deng）+ Segoe UI Symbol 符号后援
+/// + Segoe Fluent/MDL2 图标字体（§8.6 glyph 图标，M5 UI 批次 2）。
 ///
 /// msyh.ttc 覆盖 CJK 与 ✓/✗（Dingbats 区），但**缺** Geometric Shapes 的 ◌ (U+25CC)
 /// ——M3 桩态页脚会渲染成方框。seguisym.ttf（Win 7+ 必装）补 Geometric Shapes /
 /// Misc Symbols，把 ◌/○/· 等符号路由到它去渲染。
+///
+/// 图标字体按两代兼容顺序加载：Win11 的 `SegoeIcons.ttf`（Segoe Fluent Icons）优先，
+/// Win10 无此文件时回落 `segmdl2.ttf`（Segoe MDL2 Assets）——码位（U+E700–U+E8FF
+/// 一带）两代基本兼容；两个都不存在时 glyph 图标显示为方块（记录日志，不致命）。
+/// 追加在字体族**末尾**：egui 字形回退按族内顺序查，CJK/符号字体缺的 PUA 码位
+/// 自然落到图标字体（PUA 区 U+E000+ 两字体均无覆盖，无抢字形问题）。
 fn setup_cjk_fonts(ctx: &egui::Context) {
     let cjk_candidates = [
         // 优先 msyh.ttc（YaHei，Win7+ 必装且完整含 U+2713 ✓ 与 CJK）
@@ -210,6 +247,11 @@ fn setup_cjk_fonts(ctx: &egui::Context) {
         r"C:\Windows\Fonts\Deng.ttf",
     ];
     let sym_candidate = r"C:\Windows\Fonts\seguisym.ttf";
+    // M5 批次 2：glyph 图标字体（按 Win11→Win10 顺序尝试，两代码位兼容）
+    let icon_candidates = [
+        r"C:\Windows\Fonts\SegoeIcons.ttf", // Win11（Segoe Fluent Icons）
+        r"C:\Windows\Fonts\segmdl2.ttf",    // Win10 回退（Segoe MDL2 Assets）
+    ];
 
     let mut fonts = egui::FontDefinitions::default();
     let mut any_loaded = false;
@@ -260,12 +302,70 @@ fn setup_cjk_fonts(ctx: &egui::Context) {
     } else {
         eprintln!("[dd-gui] 未找到 {sym_candidate}（符号字体）；M3 桩态 ◌ 等符号可能仍显示为方块");
     }
+    if let Some(path) = icon_candidates
+        .into_iter()
+        .find(|p| std::path::Path::new(p).is_file())
+    {
+        match std::fs::read(path) {
+            Ok(bytes) => {
+                fonts.font_data.insert(
+                    "icons".to_owned(),
+                    std::sync::Arc::new(egui::FontData::from_owned(bytes)),
+                );
+                // 追加在族末（cjk/sym 之后）：PUA 码位（§8.6 glyph 值）落到图标字体。
+                // 加入 Proportional + Monospace 两个族（列表副标题/键位提示同源显示）。
+                fonts
+                    .families
+                    .entry(egui::FontFamily::Proportional)
+                    .or_default()
+                    .push("icons".to_owned());
+                fonts
+                    .families
+                    .entry(egui::FontFamily::Monospace)
+                    .or_default()
+                    .push("icons".to_owned());
+                any_loaded = true;
+                eprintln!("[dd-gui] 已加载图标字体：{path}");
+            }
+            Err(e) => eprintln!("[dd-gui] 读图标字体 {path} 失败：{e}"),
+        }
+    } else {
+        eprintln!("[dd-gui] 未找到图标字体（SegoeIcons/segmdl2）；glyph 图标将显示为方块");
+    }
 
     if !any_loaded {
         eprintln!("[dd-gui] 未找到任何 CJK 字体，中文可能显示为方块");
         return;
     }
     ctx.set_fonts(fonts);
+}
+
+/// 列表行图标的**已解析**渲染形态（M5 批次 2）。
+///
+/// 在 `ScrollArea` 闭包之外统一解析（需要 `&mut self` 写纹理缓存与 `ctx`），
+/// 闭包内只读借用本表渲染，避免借用冲突。
+enum IconView {
+    /// 无图标 / url（本态暂缓）：占 20px 空列，保持各行图标列对齐。
+    Empty,
+    /// glyph 码位文本（§8.6 glyph 值本身；path 解码失败回落占位 glyph 也走此态）。
+    Glyph { text: String },
+    /// path 本地文件解码成功后的纹理。
+    Texture(egui::TextureHandle),
+}
+
+/// 解码 PNG/ICO 字节 → egui 颜色纹理数据（§8.6 path 图标）。
+/// 独立函数便于无窗口单测（不依赖 egui Context）。
+/// 失败返回 `None`——调用方回落占位 glyph（设计稿 04）。
+fn decode_icon_image(bytes: &[u8]) -> Option<egui::ColorImage> {
+    let img = image::load_from_memory(bytes).ok()?.to_rgba8();
+    let (w, h) = img.dimensions();
+    if w == 0 || h == 0 {
+        return None;
+    }
+    Some(egui::ColorImage::from_rgba_unmultiplied(
+        [w as usize, h as usize],
+        img.as_raw(),
+    ))
 }
 
 struct PaletteApp {
@@ -279,8 +379,6 @@ struct PaletteApp {
     want_focus: bool,
     /// 是否已经取得过窗口焦点（用于失焦隐藏的防误触）。
     ever_focused: bool,
-    /// 启动后是否已完成窗口居中（`monitor_size` 首次可读时执行一次）。
-    recentered: bool,
     /// 首屏聚合结果接收端（聚合完成前为 `Some`）。
     aggregate_rx: Option<Receiver<AggregatePayload>>,
     /// 聚合是否仍在进行（列表区显示加载态）。
@@ -336,6 +434,9 @@ struct PaletteApp {
     fallback_store: dd_gui::fallback::FallbackStore,
     /// 后台 `fallback_commands` 拉取结果接收端（`Some` = 有拉取在途）。
     fallback_rx: Option<Receiver<FallbackFetchOutcome>>,
+    /// path 图标纹理缓存：路径 → TextureHandle（每路径只读盘+解码一次，
+    /// 避免列表每次重绘都重复 I/O 与解码——设计稿 04"按路径缓存 textureId"）。
+    icon_cache: HashMap<String, egui::TextureHandle>,
 }
 
 impl PaletteApp {
@@ -350,7 +451,6 @@ impl PaletteApp {
             visible: false,
             want_focus: true,
             ever_focused: false,
-            recentered: false,
             aggregate_rx: Some(aggregate_rx),
             aggregating: true,
             sources: Vec::new(),
@@ -374,6 +474,7 @@ impl PaletteApp {
             crash_guards: HashMap::new(),
             fallback_store: dd_gui::fallback::FallbackStore::new(),
             fallback_rx: None,
+            icon_cache: HashMap::new(),
         }
     }
 
@@ -390,6 +491,11 @@ impl PaletteApp {
         if self.reset_on_show {
             self.stack.current_mut().list.reset();
         }
+        // 每次唤起都在**光标所在屏居中**（grill 决策 A1；PowerToys Run 行为）。
+        // 不能复用 egui `center_on_screen`：它按窗口**当前所在 monitor** 居中，
+        // 而启动期窗口被放到屏幕外（OFFSCREEN）→ 会取错屏居中到负象限。
+        // 这里用 Win32 `GetCursorPos + MonitorFromPoint` 自算目标屏工作区。
+        self.send_center_on_cursor(ctx);
         ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
         ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
     }
@@ -432,17 +538,68 @@ impl PaletteApp {
         }
     }
 
-    /// 启动后首次把窗口居中（仅执行一次）。
-    /// egui 0.36 的 `ViewportCommand::center_on_screen` 会在 viewport 信息
-    /// 尚未就绪时返回 `None`，因此每帧轮询直到 Some 即可（无需手算
-    /// `monitor_size` / 窗口尺寸 / DPI 换算——由 `center_on_screen` 内部处理）。
-    fn recenter_if_needed(&mut self, ctx: &egui::Context) {
-        if self.recentered {
+    /// 计算"光标所在显示器工作区"内使面板居中的 `OuterPosition` 并发送。
+    ///
+    /// 坐标换算：显示器（`rcWork`）与 winit 窗口位置都是**物理像素**，
+    /// 而 egui `OuterPosition` 期望**逻辑点**（egui-winit 内部按窗口 scale
+    /// factor 再换算回物理）。这里用 `ctx.pixels_per_point()` 作换算率
+    /// （即当前窗口缩放）。多 DPI 混合屏上目标屏缩放与窗口当前缩放不同时
+    /// 会有几像素偏差——验收标准（grills A1："每次唤起居中、无位置跳动"）
+    /// 不要求像素级精确，单屏/同 DPI 场景完全居中。
+    ///
+    /// 失败时静默返回（指针/显示器信息取不到）：窗口仍会正常显示在
+    /// 上一次的位置，仅不居中——不让定位失败阻断唤起。
+    #[cfg(windows)]
+    fn send_center_on_cursor(&self, ctx: &egui::Context) {
+        use windows_sys::Win32::Foundation::POINT;
+        use windows_sys::Win32::Graphics::Gdi::{
+            GetMonitorInfoW, MonitorFromPoint, MONITORINFO, MONITOR_DEFAULTTONEAREST,
+        };
+        use windows_sys::Win32::UI::WindowsAndMessaging::GetCursorPos;
+
+        let mut pt = POINT { x: 0, y: 0 };
+        if unsafe { GetCursorPos(&mut pt) } == 0 {
+            eprintln!("[dd-gui] 居中：GetCursorPos 失败，保持原位显示");
             return;
         }
+        let monitor = unsafe { MonitorFromPoint(pt, MONITOR_DEFAULTTONEAREST) };
+        if monitor.is_null() {
+            eprintln!("[dd-gui] 居中：MonitorFromPoint 无结果，保持原位显示");
+            return;
+        }
+        let mut info: MONITORINFO = unsafe { std::mem::zeroed() };
+        info.cbSize = std::mem::size_of::<MONITORINFO>() as u32;
+        if unsafe { GetMonitorInfoW(monitor, &mut info) } == 0 {
+            eprintln!("[dd-gui] 居中：GetMonitorInfoW 失败，保持原位显示");
+            return;
+        }
+        let work = info.rcWork; // 工作区（物理像素，不含任务栏）
+        let ppp = ctx.pixels_per_point().max(0.5);
+        let win_w = APP_W * ppp;
+        let win_h = APP_H * ppp;
+        let cx = work.left as f32 + ((work.right - work.left) as f32 - win_w) * 0.5;
+        let cy = work.top as f32 + ((work.bottom - work.top) as f32 - win_h) * 0.5;
+        eprintln!(
+            "[dd-gui] 唤起居中：光标屏工作区=({},{} {}x{}) → ({}, {})",
+            work.left,
+            work.top,
+            work.right - work.left,
+            work.bottom - work.top,
+            cx,
+            cy
+        );
+        ctx.send_viewport_cmd(egui::ViewportCommand::OuterPosition(egui::pos2(
+            cx / ppp,
+            cy / ppp,
+        )));
+    }
+
+    /// 非 Windows 占位：退化为 egui 自带"按窗口当前所在屏居中"（dd-run 当前
+    /// Windows 宿主不走此分支；多屏语义在此平台未定义）。
+    #[cfg(not(windows))]
+    fn send_center_on_cursor(&self, ctx: &egui::Context) {
         if let Some(cmd) = egui::ViewportCommand::center_on_screen(ctx) {
             ctx.send_viewport_cmd(cmd);
-            self.recentered = true;
         }
     }
 
@@ -1458,9 +1615,28 @@ impl PaletteApp {
         // 视口下方。Panel::bottom 是 egui 0.36 处理 chrome vs content 的标准做法）。
         // 这里对 self 做不可变再借用，闭包结束后即可变借用给下面的 CentralPanel。
         let self_ref: &Self = &*self;
-        egui::containers::Panel::bottom("status_footer").show(ui, |ui| {
-            self_ref.draw_status_footer(ui);
-        });
+        let p = theme::Palette::of(ui.visuals().dark_mode);
+        let footer =
+            egui::containers::Panel::bottom("status_footer")
+                // 关掉内建分隔线：它用 `widgets.noninteractive.bg_stroke`（默认灰），
+                // 颜色与 `--border` 不一致，下面按设计稿手绘 1px `--border` 顶边。
+                .show_separator_line(false)
+                // CSS `.panel-footer`：background `--panel-2` + padding 9px 16px。
+                // `Panel` 默认 frame 是 `Frame::side_top_panel`：fill 取 `--panel`
+                // （页脚与列表区同色，失去区隔）且 margin 仅 (8,2)。
+                .frame(egui::Frame::default().fill(p.panel_2).inner_margin(
+                    egui::Margin::symmetric(theme::FOOTER_PAD_X as i8, theme::FOOTER_PAD_Y as i8),
+                ))
+                .show(ui, |ui| {
+                    self_ref.draw_status_footer(ui);
+                });
+        // 顶部 1px `--border`（CSS `.panel-footer` border-top）；贴面板外框上沿，
+        // 因此用返回的 response.rect（= 面板外矩形），而非闭包内被 margin 收缩过的 max_rect。
+        ui.painter().hline(
+            footer.response.rect.x_range(),
+            footer.response.rect.top(),
+            egui::Stroke::new(1.0, p.border),
+        );
 
         egui::CentralPanel::default()
             .frame(
@@ -1494,13 +1670,9 @@ impl PaletteApp {
                     ui.add_space(4.0);
                 }
 
-                // ── FilterBox ────────────────────────────────
+                // ── FilterBox（ueli 式搜索栏：glyph 前缀 + 46px 高 + 聚焦底边） ──
                 let mut query = self.stack.current().list.query().to_owned();
-                let filter = egui::TextEdit::singleline(&mut query)
-                    .hint_text("搜索命令…")
-                    .desired_width(f32::INFINITY)
-                    .font(egui::TextStyle::Body);
-                let resp = ui.add(filter);
+                let resp = draw_searchbar(ui, &mut query);
                 {
                     let page = self.stack.current_mut();
                     page.list.set_query(query);
@@ -1528,66 +1700,147 @@ impl PaletteApp {
     }
 
     /// 底部固定栏内容：扩展源状态（含兜底/异常 note）+ 键位提示。
+    ///
+    /// M5 批次 3.8 收口（设计稿 01 `.panel-footer`）：
+    /// - **单行优先**：源组靠左、键位靠右（`margin-left:auto` 语义）。源区放不下时
+    ///   （本机 5 个源 ≈ 600px > 560 宽）退化为「源区整宽自动换行 + 键位另起一行靠右」——
+    ///   与设计稿 `flex-wrap: wrap` 行为一致。
+    /// - 键位为**键帽**形态（`.keys b`：chip 底 + 1px 描边 + **下边 2px** + 圆角 4 +
+    ///   monospace 10.5px），不再是纯文本。
+    /// - 底色/顶边/内边距由 `draw_panel` 的 `Panel::bottom` frame 承担。
+    ///
+    /// 单行分支不用 `horizontal` + `add_space` 推右（源区会吃掉整行把键位挤出可视区），
+    /// 改为 `allocate_exact_size` 切左右两块 + `new_child(UiBuilder)` 各自排版——
+    /// 与 `draw_searchbar` 同一套「先锁矩形再开子 Ui」手法。
     fn draw_status_footer(&self, ui: &mut egui::Ui) {
-        // 源状态 + 兜底/异常 note（横向自动换行，长 note 不会撑爆宽度）
-        if !self.sources.is_empty() || !self.note.is_empty() {
+        let p = theme::Palette::of(ui.visuals().dark_mode);
+        let entries = self.footer_entries(&p);
+        let keys_w = keys_width(ui);
+        let total_w = ui.available_width();
+
+        if entries.is_empty() {
+            // 无源可显示：键位独占一行、靠右
+            ui.horizontal(|ui| {
+                ui.add_space((ui.available_width() - keys_w).max(0.0));
+                draw_footer_keys(ui, &p);
+            });
+            return;
+        }
+
+        let sources_w = entries_width(ui, &entries, theme::FOOTER_GAP);
+        if sources_w + theme::FOOTER_GAP + keys_w > total_w {
+            // 源区放不下：整宽换行 + 键位另起一行靠右
             ui.horizontal_wrapped(|ui| {
-                for s in &self.sources {
-                    match &s.status {
-                        // M3 三态：Warm（进程活）/ Stub（仅磁盘桩）/ Failed
-                        SourceStatus::Warm { commands } => {
-                            ui.label(
-                                egui::RichText::new(format!("✓ {}（{} 命令）", s.name, commands))
-                                    .size(11.0)
-                                    .color(weak_text_color(ui)),
-                            );
-                        }
-                        SourceStatus::Stub { commands } => {
-                            ui.label(
-                                egui::RichText::new(format!(
-                                    "◌ {}（{} 命令·桩）",
-                                    s.name, commands
-                                ))
-                                .size(11.0)
-                                .color(weak_text_color(ui)),
-                            );
-                        }
-                        SourceStatus::Failed { error } => {
-                            ui.label(
-                                egui::RichText::new(format!("✗ {}：{error}", s.name))
-                                    .size(11.0)
-                                    .color(ui.visuals().error_fg_color),
-                            );
+                draw_footer_entries(ui, &entries, theme::FOOTER_GAP, &p);
+            });
+            ui.add_space(4.0);
+            ui.horizontal(|ui| {
+                ui.add_space((ui.available_width() - keys_w).max(0.0));
+                draw_footer_keys(ui, &p);
+            });
+            return;
+        }
+
+        // 单行：左右两块精确分配
+        let row_h = theme::KEYCAP_H;
+        let (row, _) = ui.allocate_exact_size(egui::vec2(total_w, row_h), egui::Sense::hover());
+        let split_x = row.right() - keys_w;
+        let mut left = ui.new_child(
+            egui::UiBuilder::new()
+                .max_rect(egui::Rect::from_min_max(
+                    row.min,
+                    egui::pos2(split_x - theme::FOOTER_GAP, row.bottom()),
+                ))
+                .layout(egui::Layout::left_to_right(egui::Align::Center)),
+        );
+        draw_footer_entries(&mut left, &entries, theme::FOOTER_GAP, &p);
+        let mut right = ui.new_child(
+            egui::UiBuilder::new()
+                .max_rect(egui::Rect::from_min_max(
+                    egui::pos2(split_x, row.top()),
+                    row.max,
+                ))
+                .layout(egui::Layout::left_to_right(egui::Align::Center)),
+        );
+        draw_footer_keys(&mut right, &p);
+    }
+
+    /// 页脚左半区条目：`(状态点颜色, 文本)`；`None` 点色 = 无点（note 文本）。
+    fn footer_entries(&self, p: &theme::Palette) -> Vec<(Option<egui::Color32>, String)> {
+        let mut out = Vec::new();
+        for s in &self.sources {
+            let (dot, text) = match &s.status {
+                SourceStatus::Warm { commands } => {
+                    (p.dot_ok, format!("{}（{} 命令）", s.name, commands))
+                }
+                SourceStatus::Stub { commands } => {
+                    (p.text3, format!("{}（{} 命令·桩）", s.name, commands))
+                }
+                SourceStatus::Failed { error } => (p.dot_err, format!("{}：{error}", s.name)),
+            };
+            out.push((Some(dot), text));
+        }
+        if !self.note.is_empty() {
+            out.push((None, self.note.clone()));
+        }
+        out
+    }
+
+    /// 预解析一批可见项的图标为渲染形态（M5 批次 2）。
+    ///
+    /// 在 `ScrollArea` 闭包**外**调用（可 `&mut self` 写纹理缓存）：
+    /// - `glyph` → 原文直接渲染（图标字体已在 `setup_cjk_fonts` 装入字形回退链）；
+    /// - `path` → 查 [`Self::icon_cache`]；未命中则读盘 + [`decode_icon_image`] +
+    ///   `ctx.load_texture` 入缓存；读盘/解码失败 → 占位 glyph（[`PLACEHOLDER_GLYPH`]）；
+    /// - `url` → 留接口暂缓（M5 决策：不做网络下载），空列；
+    /// - 无 icon → 空列（设计稿 04：无图标项保留 20px 空列对齐）。
+    fn resolve_icons(
+        &mut self,
+        ctx: &egui::Context,
+        items: &[(usize, PanelItem)],
+    ) -> HashMap<usize, IconView> {
+        let mut views = HashMap::new();
+        for (idx, item) in items {
+            let Some(icon) = &item.icon else {
+                continue;
+            };
+            let view = match icon.kind {
+                IconKind::Glyph => IconView::Glyph {
+                    text: icon.value.clone(),
+                },
+                IconKind::Path => {
+                    if let Some(tex) = self.icon_cache.get(&icon.value) {
+                        IconView::Texture(tex.clone())
+                    } else {
+                        match std::fs::read(&icon.value)
+                            .ok()
+                            .and_then(|bytes| decode_icon_image(&bytes))
+                        {
+                            Some(img) => {
+                                let name = format!("dd-path-icon://{}", icon.value);
+                                let tex = ctx.load_texture(name, img, egui::TextureOptions::LINEAR);
+                                let view = IconView::Texture(tex.clone());
+                                self.icon_cache.insert(icon.value.clone(), tex);
+                                view
+                            }
+                            None => {
+                                eprintln!(
+                                    "[dd-gui] path 图标读盘/解码失败：{}（回落占位 glyph）",
+                                    icon.value
+                                );
+                                IconView::Glyph {
+                                    text: PLACEHOLDER_GLYPH.to_string(),
+                                }
+                            }
                         }
                     }
-                    ui.add_space(10.0);
                 }
-                if !self.note.is_empty() {
-                    ui.label(
-                        egui::RichText::new(&self.note)
-                            .size(11.0)
-                            .color(weak_text_color(ui)),
-                    );
-                }
-            });
+                // url：M5 决策"留接口暂缓"——不做网络下载/缓存，本态渲染空列
+                IconKind::Url => IconView::Empty,
+            };
+            views.insert(*idx, view);
         }
-        ui.separator();
-        // 键位提示（始终展示）
-        ui.horizontal(|ui| {
-            for (key, desc) in [
-                ("↑↓/Tab", "移动"),
-                ("Enter", "执行"),
-                ("Esc", "返回/关闭"),
-                ("Win+Alt+Space", "唤起/隐藏"),
-            ] {
-                ui.label(
-                    egui::RichText::new(format!("[{key}] {desc}"))
-                        .size(11.0)
-                        .color(weak_text_color(ui)),
-                );
-                ui.add_space(8.0);
-            }
-        });
+        views
     }
 
     /// 当前页的列表渲染（Loading / 空态 / 按 `section` 分组）。
@@ -1600,6 +1853,8 @@ impl PaletteApp {
     ///   与基准不同才接管选中——静止不动的鼠标不抢占键盘（Tab/↓/↑）选中，修复
     ///   「一直按 ↑ 滚到顶部时，内容从静止鼠标下方滑过把选中抢回鼠标所在行」。
     fn draw_list(&mut self, ui: &mut egui::Ui) {
+        // M5 批次 3：本帧主题色板（组件色统一经 Palette，不写裸色值）
+        let p = theme::Palette::of(ui.visuals().dark_mode);
         // 本帧鼠标指针屏幕坐标（用于区分「鼠标真的动了」vs「内容在静止鼠标下滚动」）。
         let current_hover_pos = ui.input(|i| i.pointer.hover_pos());
 
@@ -1652,6 +1907,9 @@ impl PaletteApp {
             }
         }
 
+        // M5 批次 2：ScrollArea 闭包外预解析图标（闭包内只读借用，避免借用冲突）
+        let icon_views = self.resolve_icons(ui.ctx(), &items);
+
         let mut hovered: Option<usize> = None;
         let mut clicked: Option<usize> = None;
         let scroll_follow = self.scroll_follow;
@@ -1659,15 +1917,17 @@ impl PaletteApp {
             for (section, group_items) in &groups {
                 ui.add_space(4.0);
                 if !section.is_empty() {
+                    // 分组标题（CSS `.section-label`：11px/600、text-3）
                     ui.label(
                         egui::RichText::new(section)
-                            .size(12.0)
-                            .color(weak_text_color(ui)),
+                            .size(11.0)
+                            .strong()
+                            .color(p.text3),
                     );
                     ui.add_space(2.0);
                 }
                 for (idx, item) in group_items {
-                    let resp = draw_item_row(ui, item, Some(*idx) == selected);
+                    let resp = draw_item_row(ui, item, Some(*idx) == selected, icon_views.get(idx));
                     if Some(*idx) == selected && scroll_follow {
                         // 选中项滚入可视区（仅键盘选中时跟随；鼠标选中不滚动，
                         // 避免内容在静止指针下移动造成高亮与光标错位）
@@ -1724,8 +1984,10 @@ impl PaletteApp {
             .order(egui::Order::Foreground)
             .anchor(egui::Align2::CENTER_BOTTOM, [0.0, -48.0])
             .show(ctx, |ui| {
+                // 底色显式取 Palette（设计稿未定义 Toast 组件，复用徽标底语义）
+                let p = theme::Palette::of(ui.visuals().dark_mode);
                 egui::Frame::default()
-                    .fill(ui.visuals().extreme_bg_color)
+                    .fill(p.badge_bg)
                     .corner_radius(4.0)
                     .inner_margin(egui::Margin::symmetric(10, 6))
                     .show(ui, |ui| {
@@ -1795,6 +2057,16 @@ impl PaletteApp {
     }
 }
 
+/// 6px 状态圆点（CSS `.panel-footer .dot`：6px 圆、margin-right 5px）。
+/// 色：ok=dot_ok / stub=text3 / err=dot_err——语义色统一经 [`theme::Palette`]。
+fn draw_status_dot(ui: &mut egui::Ui, color: egui::Color32) {
+    // CSS `.dot`：6×6 圆点 + margin-right 5px（原 10px 宽 + 3px 间距，比设计稿宽 2px）
+    let (rect, _) = ui.allocate_exact_size(egui::vec2(theme::DOT_SIZE, 12.0), egui::Sense::hover());
+    ui.painter()
+        .circle_filled(rect.center(), theme::DOT_SIZE / 2.0, color);
+    ui.add_space(theme::DOT_GAP);
+}
+
 /// 在给定进程上执行一次 `invoke`（协议 §6.5），返回 `CommandResult` 本体。
 ///
 /// 委托 [`ExtensionProcess::invoke`]（M4 P4：协议方法封装上提至 dd-host，
@@ -1832,58 +2104,137 @@ fn weak_text_color(ui: &egui::Ui) -> egui::Color32 {
         .unwrap_or_else(|| ui.visuals().text_color())
 }
 
-/// 单个列表项行：标题 + 副标题 + tags chip；选中态高亮背景。
+/// 单个列表项行（设计稿 01 ueli 式布局）：**图标 20px 列 + 名称 + 描述徽标
+/// （名称右侧）+ tags chips（贴右）**；44px 高（[`theme::ROW_H`]）。
+///
+/// 行态（设计稿 CSS `.row`）：
+/// - hover → [`theme::Palette::row_hover`] 填充；
+/// - 选中 → [`theme::Palette::row_selected`] 填充 + 左侧 3px accent 指示条
+///   （top/bottom 8px、圆角 2）；
+/// - subtitle 从第二行改为**描述徽标**（badge 底、圆角 4、text-2 11px、限宽 220）；
+/// - tags 为 pill chip（chip 底、text-3 10.5px）。
+///
 /// 返回整行可交互响应（hover + click 感知），供 `draw_list` 做
 /// 「悬停高亮 / 单击执行」与「选中项滚入可视区」。
-fn draw_item_row(ui: &mut egui::Ui, item: &PanelItem, selected: bool) -> egui::Response {
-    let accent = ui.visuals().selection.bg_fill;
+/// `icon` = [`PaletteApp::resolve_icons`] 预解析结果（`None` 项 = 空列占位对齐）。
+///
+/// 行背景在 Frame 之前按**预算行矩形**判定 hover（`ui.rect_contains_pointer`），
+/// 避免依赖交互响应回读的帧延迟；预算矩形与实际分配矩形一致的前提是行前无
+/// 其它布局消耗（ScrollArea 内逐行调用，成立）。
+fn draw_item_row(
+    ui: &mut egui::Ui,
+    item: &PanelItem,
+    selected: bool,
+    icon: Option<&IconView>,
+) -> egui::Response {
+    let p = theme::Palette::of(ui.visuals().dark_mode);
+
+    // 预算行矩形（本帧指针测试 → 同帧 hover 填充，无帧延迟）
+    let row_rect = egui::Rect::from_min_size(
+        ui.cursor().min,
+        egui::vec2(ui.available_width(), theme::ROW_H),
+    );
+    let hovered_now = ui.rect_contains_pointer(row_rect);
     let fill = if selected {
-        accent
+        p.row_selected
+    } else if hovered_now {
+        p.row_hover
     } else {
         egui::Color32::TRANSPARENT
     };
 
-    // Frame 仅带 hover 感知；显式用 `ui.interact` 注册 click，使整行可点击
     let frame_resp = egui::Frame::default()
         .fill(fill)
-        .corner_radius(4.0)
-        .inner_margin(egui::Margin::symmetric(8, 6))
+        .corner_radius(theme::ROW_RADIUS)
+        // CSS `.row` padding：9px 10px 9px 8px（左右紧凑、上下撑出 44px 行高）。
+        // 注意 egui 0.36 `Margin` 字段为 i8。
+        .inner_margin(egui::Margin {
+            left: 8,
+            right: 10,
+            top: 9,
+            bottom: 9,
+        })
         .show(ui, |ui| {
+            // 内容区固定 44 - 18 = 26px 高（垂直居中图标与文字）
+            ui.set_min_height(theme::ROW_H - 18.0);
             ui.horizontal(|ui| {
-                ui.vertical(|ui| {
-                    let title = if selected {
-                        egui::RichText::new(&item.title).strong()
-                    } else {
-                        egui::RichText::new(&item.title)
-                    };
-                    ui.label(title);
-                    if !item.subtitle.is_empty() {
-                        ui.label(
-                            egui::RichText::new(&item.subtitle)
-                                .size(12.0)
-                                .color(weak_text_color(ui)),
-                        );
-                    }
-                });
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    for tag in item.tags.iter().rev() {
+                // 图标列（20px；无图标/url 也占位，各行对齐——设计稿 04）
+                draw_icon_cell(ui, icon);
+                ui.add_space(12.0); // CSS `.row` gap 12px
+                                    // 名称：14px 常规（设计稿 `.name` 500；选中态不加粗——设计稿不区分）
+                ui.label(egui::RichText::new(&item.title).size(14.0));
+                // 描述徽标：subtitle 上移为名称右侧 badge（设计稿 01），
+                // 限宽 220 截断（`.desc-badge` max-width）；tags 无预留时的窄余量
+                // 由 badge 上限兜底，极端长标题场景让位给右侧 tags。
+                if !item.subtitle.is_empty() {
+                    ui.add_space(12.0);
+                    let avail = ui.available_width();
+                    let w = avail.min(220.0);
+                    if w > 48.0 {
                         egui::Frame::default()
-                            .fill(ui.visuals().extreme_bg_color)
-                            .corner_radius(8.0)
-                            .inner_margin(egui::Margin::symmetric(6, 2))
+                            .fill(p.badge_bg)
+                            .corner_radius(4.0)
+                            .inner_margin(egui::Margin::symmetric(8, 2))
                             .show(ui, |ui| {
-                                ui.label(
-                                    egui::RichText::new(tag)
-                                        .size(11.0)
-                                        .color(weak_text_color(ui)),
+                                ui.add_sized(
+                                    egui::vec2((w - 16.0).max(24.0), 16.0),
+                                    egui::Label::new(
+                                        egui::RichText::new(&item.subtitle)
+                                            .size(11.0)
+                                            .color(p.text2),
+                                    )
+                                    .truncate(),
                                 );
                             });
-                        ui.add_space(4.0);
+                    }
+                }
+                // 类型标签 + tags chips：均贴右；类型最右，tags 其左（设计文档 §6.2）。
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    // 类型标签：最右，12px text-3，最长 90px 截断。
+                    if let Some(cat) = &item.result_category {
+                        let cat_w = text_width(ui, cat, egui::FontId::proportional(12.0)).min(90.0);
+                        if cat_w > 0.0 {
+                            ui.add_sized(
+                                egui::vec2(cat_w, 16.0),
+                                egui::Label::new(
+                                    egui::RichText::new(cat).size(12.0).color(p.text3),
+                                )
+                                .truncate(),
+                            );
+                            ui.add_space(8.0);
+                        }
+                    }
+                    // tags chips（顺序反转保证视觉从左到右）
+                    for tag in item.tags.iter().rev() {
+                        egui::Frame::default()
+                            .fill(p.chip_bg)
+                            .corner_radius(9.0)
+                            .inner_margin(egui::Margin::symmetric(9, 2))
+                            .show(ui, |ui| {
+                                ui.label(egui::RichText::new(tag).size(10.5).color(p.text3));
+                            });
+                        ui.add_space(8.0);
                     }
                 });
             });
         })
         .response;
+
+    // 选中指示条：行左缘 3px accent（`.row.selected::before`：left 0 / top-bottom 8 / 圆角 2）。
+    // 画在 Frame 背景之后（x 0..3 区域无内容，不与文字重叠）。
+    if selected {
+        ui.painter().rect_filled(
+            egui::Rect::from_min_max(
+                egui::pos2(frame_resp.rect.left(), frame_resp.rect.top() + 8.0),
+                egui::pos2(
+                    frame_resp.rect.left() + theme::ACCENT_BAR_W,
+                    frame_resp.rect.bottom() - 8.0,
+                ),
+            ),
+            egui::CornerRadius::same(2),
+            p.accent,
+        );
+    }
 
     ui.interact(
         frame_resp.rect,
@@ -1892,10 +2243,145 @@ fn draw_item_row(ui: &mut egui::Ui, item: &PanelItem, selected: bool) -> egui::R
     )
 }
 
+/// 渲染 20×20 图标单元格（行首固定列，垂直居中）。
+/// - `None` / [`IconView::Empty`]：透明占位（保持图标列对齐）；
+/// - [`IconView::Glyph`]：码位文本（图标字体渲染，失败占位同此）；
+/// - [`IconView::Texture`]：纹理贴满 20×20（UV 缩放，不裁剪、不变形）。
+fn draw_icon_cell(ui: &mut egui::Ui, icon: Option<&IconView>) {
+    let (rect, _) = ui.allocate_exact_size(egui::vec2(ICON_CELL, ICON_CELL), egui::Sense::hover());
+    let Some(icon) = icon else {
+        return;
+    };
+    match icon {
+        IconView::Empty => {}
+        IconView::Glyph { text } => {
+            ui.painter().text(
+                rect.center(),
+                egui::Align2::CENTER_CENTER,
+                text,
+                egui::FontId::proportional(ICON_GLYPH_PT),
+                weak_text_color(ui),
+            );
+        }
+        IconView::Texture(tex) => {
+            // uv = 全图 [0,1]×[0,1]；超出 20px 的原图由渲染缩放，不做预缩放
+            let uv = egui::Rect::from_min_max(egui::Pos2::ZERO, egui::pos2(1.0, 1.0));
+            ui.painter().image(tex.id(), rect, uv, egui::Color32::WHITE);
+        }
+    }
+}
+
+/// ueli 式搜索栏（设计稿 01 界面 + 05 note）：46px 高、圆角 6、`input` 底色、
+/// 1px `border-strong` 描边 + 底部 2px（聚焦时换 `accent` 下划线）、左侧 search
+/// glyph 前缀（text-2 15px）、placeholder 用 `text-3`、输入 16px。
+///
+/// **实现要点**：先 `allocate_exact_size` 锁 46px 高度（`Frame::show` + `set_min_height`
+/// 在 egui 0.36 + `TextEdit::desired_width(INFINITY)` 组合下会把 searchbar 撑成
+/// 「列表剩余高度」——实拍 350px+、list 区被压成空。改成手工绘 fill/stroke/accent，
+/// child Ui 用 `Layout::left_to_right(Align::Center)` 强制 46px 内容区）。
+///
+/// 返回 TextEdit 的 [`egui::Response`]（焦点请求/输入事件由调用方处理——
+/// `want_focus` 唤起聚焦机制不变）。组件色一律经 [`theme::Palette`] 取，不写裸色值。
+fn draw_searchbar(ui: &mut egui::Ui, query: &mut String) -> egui::Response {
+    let p = theme::Palette::of(ui.visuals().dark_mode);
+
+    // 1) 在父 Ui 里**先**预留 46px 高的精确矩形（这一步决定了 searchbar 真实占位高度，
+    //    后面 child Ui 只能在这 46px 里横排，不会再把父 Ui 撑高）。
+    let (rect, _) = ui.allocate_exact_size(
+        egui::vec2(ui.available_width(), theme::SEARCHBAR_H),
+        egui::Sense::hover(),
+    );
+
+    // 2) 手工画 Frame 的 fill + stroke（不再用 `Frame::show` —— 它的 inner Ui 会被
+    //    child 撑高，破坏上方精确矩形）。
+    let fill_rect = rect.shrink(0.5); // 给 1px stroke 留位置（不缩 round corner 视觉）
+    ui.painter()
+        .rect_filled(fill_rect, egui::CornerRadius::same(6), p.input_fill);
+    ui.painter().rect_stroke(
+        fill_rect,
+        egui::CornerRadius::same(6),
+        egui::Stroke::new(1.0, p.border_strong),
+        egui::StrokeKind::Inside,
+    );
+
+    // 3) 在 46px 矩形内开 child Ui：左右各留 14px padding（设计稿 searchbar 边距），
+    //    内容用 left_to_right + Align::Center 垂直居中。
+    let content_rect = egui::Rect::from_min_max(
+        egui::pos2(rect.left() + 14.0, rect.top()),
+        egui::pos2(rect.right() - 14.0, rect.bottom()),
+    );
+    let mut content_ui = ui.new_child(
+        egui::UiBuilder::new()
+            .max_rect(content_rect)
+            .layout(egui::Layout::left_to_right(egui::Align::Center)),
+    );
+
+    // 4) glyph 前缀（设计稿 05：text-2 15px）
+    content_ui.label(
+        egui::RichText::new(SEARCH_GLYPH.to_string())
+            .size(15.0)
+            .color(p.text2),
+    );
+    content_ui.add_space(12.0);
+
+    // 5) TextEdit：在 child_ui（限定 46px 高度）里扩展 INFINITY 宽度撑满，
+    //    高度由 font(16px) 自定 ~22px，居中显示。
+    let resp = content_ui.add(
+        egui::TextEdit::singleline(query)
+            .frame(egui::Frame::new()) // 空 Frame：无底无边框，外观由外层 Frame 承担
+            .hint_text(egui::RichText::new("搜索命令…").color(p.text3))
+            .desired_width(f32::INFINITY)
+            .font(egui::FontId::proportional(16.0)),
+    );
+
+    // 5.5) 中文输入法候选框位置修正：手动报告 IME 光标区域。
+    // egui TextEdit 内部也会设置 ime，但实测 Microsoft Pinyin 候选窗会漂到屏幕左上角；
+    // 在聚焦时显式覆盖为搜索框响应矩形，强制 winit 更新 set_ime_cursor_area。
+    if resp.has_focus() {
+        let text_w = text_width(
+            &content_ui,
+            query.as_str(),
+            egui::FontId::proportional(16.0),
+        );
+        let cursor_x = (resp.rect.min.x + text_w).min(resp.rect.right() - 2.0);
+        let cursor_y = resp.rect.center().y;
+        let cursor_rect =
+            egui::Rect::from_min_size(egui::pos2(cursor_x, cursor_y - 8.0), egui::vec2(1.0, 16.0));
+        ui.ctx().output_mut(|o| {
+            o.ime = Some(egui::output::IMEOutput {
+                purpose: egui::IMEPurpose::Normal,
+                rect: resp.rect,
+                cursor_rect,
+                should_interrupt_composition: false,
+            });
+        });
+    }
+
+    // 6) 底部 2px 边：聚焦 → accent 下划线；否则 border-strong（CSS border-bottom 2px）
+    let bottom_bar = egui::Rect::from_min_max(
+        egui::pos2(rect.left(), rect.bottom() - 2.0),
+        egui::pos2(rect.right(), rect.bottom()),
+    );
+    ui.painter().rect_filled(
+        bottom_bar,
+        egui::CornerRadius::same(2),
+        if resp.has_focus() {
+            p.accent
+        } else {
+            p.border_strong
+        },
+    );
+
+    resp
+}
+
 impl eframe::App for PaletteApp {
     /// 窗口隐藏时也会被调用（热键线程 `request_repaint` 唤醒）。
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        self.recenter_if_needed(ctx);
+        // 注意：启动期不再有 recenter 逐帧轮询（旧 `recenter_if_needed` 已删）。
+        // 窗口初始在屏幕外物理不可见（OFFSCREEN_*），首次及每次唤起由
+        // `show() → send_center_on_cursor` 一次性定位到光标屏——隐藏期间
+        // 不发任何位置命令（设计稿 03 验收：窗口隐藏期间不发送位置命令）。
         self.poll_hotkey(ctx);
         self.handle_focus_loss(ctx);
         // A8：每帧健康检查——面板可见期间扩展崩溃也能及时移除（此前仅 show() 时查一次，
@@ -1941,6 +2427,157 @@ impl eframe::App for PaletteApp {
     }
 }
 
+/// 页脚键位组：若干**键帽** + 说明文本（设计稿 01 `.panel-footer .keys`）。
+struct KeyGroup {
+    caps: &'static [&'static str],
+    desc: &'static str,
+}
+
+/// `<b>↑</b> <b>↓</b> 选择` ｜ `<b>Enter</b> 执行` ｜ `<b>Esc</b> 返回 / 隐藏`
+const KEY_GROUPS: [KeyGroup; 3] = [
+    KeyGroup {
+        caps: &["↑", "↓"],
+        desc: "选择",
+    },
+    KeyGroup {
+        caps: &["Enter"],
+        desc: "执行",
+    },
+    KeyGroup {
+        caps: &["Esc"],
+        desc: "返回 / 隐藏",
+    },
+];
+
+/// 文本单行宽度（不改布局，只量尺寸）。
+fn text_width(ui: &egui::Ui, text: &str, font_id: egui::FontId) -> f32 {
+    ui.painter()
+        .layout_no_wrap(text.to_owned(), font_id, egui::Color32::TRANSPARENT)
+        .size()
+        .x
+}
+
+/// 单个键帽宽度 = 文本宽 + 左右各 6px padding + 左右各 1px 描边。
+fn keycap_width(ui: &egui::Ui, cap: &str) -> f32 {
+    text_width(ui, cap, egui::FontId::monospace(theme::KEYCAP_FONT))
+        + 2.0 * theme::KEYCAP_PAD_X
+        + 2.0
+}
+
+/// 键位组宽度 = 各键帽 + 帽间 2px 间隙 + 4px + 说明文本宽。
+fn key_group_width(ui: &egui::Ui, group: &KeyGroup) -> f32 {
+    let caps: f32 = group.caps.iter().map(|c| keycap_width(ui, c)).sum();
+    let gaps = theme::KEYCAP_GAP * group.caps.len().saturating_sub(1) as f32;
+    caps + gaps
+        + 4.0
+        + text_width(
+            ui,
+            group.desc,
+            egui::FontId::proportional(theme::FOOTER_FONT),
+        )
+}
+
+/// 键位区总宽（组间 `FOOTER_GAP` 14px）。
+fn keys_width(ui: &egui::Ui) -> f32 {
+    let sum: f32 = KEY_GROUPS.iter().map(|g| key_group_width(ui, g)).sum();
+    sum + theme::FOOTER_GAP * (KEY_GROUPS.len() - 1) as f32
+}
+
+/// 源/ note 条目总宽（点 6px + 5px 右间距 + 文本；组间 `gap`）。
+fn entries_width(ui: &egui::Ui, entries: &[(Option<egui::Color32>, String)], gap: f32) -> f32 {
+    let sum: f32 = entries
+        .iter()
+        .map(|(dot, text)| {
+            let dot_w = if dot.is_some() {
+                theme::DOT_SIZE + theme::DOT_GAP
+            } else {
+                0.0
+            };
+            dot_w + text_width(ui, text, egui::FontId::proportional(theme::FOOTER_FONT))
+        })
+        .sum();
+    sum + gap * entries.len().saturating_sub(1) as f32
+}
+
+/// 画源条目（不换行；调用方保证宽度够）。
+fn draw_footer_entries(
+    ui: &mut egui::Ui,
+    entries: &[(Option<egui::Color32>, String)],
+    gap: f32,
+    p: &theme::Palette,
+) {
+    for (i, (dot, text)) in entries.iter().enumerate() {
+        if i > 0 {
+            ui.add_space(gap);
+        }
+        if let Some(color) = dot {
+            draw_status_dot(ui, *color);
+        }
+        ui.label(
+            egui::RichText::new(text)
+                .size(theme::FOOTER_FONT)
+                .color(p.text3),
+        );
+    }
+}
+
+/// 画键位区（左→右；调用方负责把它推到右侧）。
+fn draw_footer_keys(ui: &mut egui::Ui, p: &theme::Palette) {
+    for (i, group) in KEY_GROUPS.iter().enumerate() {
+        if i > 0 {
+            ui.add_space(theme::FOOTER_GAP);
+        }
+        for (j, cap) in group.caps.iter().enumerate() {
+            if j > 0 {
+                ui.add_space(theme::KEYCAP_GAP);
+            }
+            draw_keycap(ui, cap, p);
+        }
+        ui.add_space(4.0);
+        ui.label(
+            egui::RichText::new(group.desc)
+                .size(theme::FOOTER_FONT)
+                .color(p.text3),
+        );
+    }
+}
+
+/// 单个键帽（设计稿 `.panel-footer b`）：chip 底 + 1px 描边 + **下边 2px** +
+/// 圆角 4 + monospace 10.5px + 左右 6px padding。
+///
+/// 与 `draw_searchbar` 同理用 `allocate_exact_size` + `painter` 手绘：
+/// egui `Frame` 不支持按边设不同描边宽度，`border-bottom-width: 2px` 只能手画。
+fn draw_keycap(ui: &mut egui::Ui, cap: &str, p: &theme::Palette) {
+    let (rect, _) = ui.allocate_exact_size(
+        egui::vec2(keycap_width(ui, cap), theme::KEYCAP_H),
+        egui::Sense::hover(),
+    );
+    let r = rect.shrink(0.5); // 给 1px 描边留位置
+    ui.painter()
+        .rect_filled(r, egui::CornerRadius::same(4), p.chip_bg);
+    ui.painter().rect_stroke(
+        r,
+        egui::CornerRadius::same(4),
+        egui::Stroke::new(1.0, p.border),
+        egui::StrokeKind::Inside,
+    );
+    // 下边 2px
+    ui.painter().rect_filled(
+        egui::Rect::from_min_max(
+            egui::pos2(rect.left(), rect.bottom() - 2.0),
+            rect.right_bottom(),
+        ),
+        egui::CornerRadius::same(2),
+        p.border,
+    );
+    ui.painter().text(
+        rect.center(),
+        egui::Align2::CENTER_CENTER,
+        cap,
+        egui::FontId::monospace(theme::KEYCAP_FONT),
+        p.text2,
+    );
+}
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2032,6 +2669,32 @@ mod tests {
             more_commands: None,
             command: CommandRef::Invoke,
         }
+    }
+
+    // ── M5 UI 批次 2：path 图标解码（§8.6，纯字节层，无窗口依赖） ─────────
+
+    /// 1×1 最小合法 PNG（RGBA 黑色不透明），python zlib/struct 生成。
+    /// 注意：IDAT 解压后必须含完整扫描线（1 filter 字节 + 4 RGBA 字节 = 5 字节），
+    /// 早期版本只写了 2 字节导致 png crate 报 `NoMoreImageData`。
+    const PNG_1PX: &[u8] = &[
+        0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44,
+        0x52, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x06, 0x00, 0x00, 0x00, 0x1f,
+        0x15, 0xc4, 0x89, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x44, 0x41, 0x54, 0x78, 0x9c, 0x63, 0x60,
+        0x60, 0x60, 0xf8, 0x0f, 0x00, 0x01, 0x04, 0x01, 0x00, 0x5f, 0xe5, 0xc3, 0x4b, 0x00, 0x00,
+        0x00, 0x00, 0x49, 0x45, 0x4e, 0x44, 0xae, 0x42, 0x60, 0x82,
+    ];
+
+    #[test]
+    fn decode_icon_image_parses_minimal_png() {
+        let img = decode_icon_image(PNG_1PX).expect("1×1 合法 PNG 应解码成功");
+        assert_eq!(img.size, [1, 1]);
+        assert_eq!(img.pixels.len(), 1);
+    }
+
+    #[test]
+    fn decode_icon_image_rejects_garbage() {
+        assert!(decode_icon_image(b"this is definitely not a png").is_none());
+        assert!(decode_icon_image(&[]).is_none());
     }
 
     // ── A10 宿主 fallback 渲染接线（纯逻辑，无进程） ──────────

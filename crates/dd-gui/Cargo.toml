@@ -17,7 +17,13 @@ windows-sys = { version = "0.61", features = [
     "Win32_Foundation",
     "Win32_UI_Input_KeyboardAndMouse",
     "Win32_UI_WindowsAndMessaging",
+    # 唤起居中（grills A1）：MonitorFromPoint / GetMonitorInfoW / MONITORINFO
+    "Win32_Graphics_Gdi",
 ] }
 # M4 P2（host/* 执行端）：写剪贴板（host/set_clipboard）+ 打开系统浏览器（host/open_url）
 arboard = "3"
 webbrowser = "1"
+nucleo = "0.5.0"
+# M5 UI 批次 2（§8.6 path 图标）：本地 PNG/ICO 解码 → egui 纹理。仅启用两种
+# 常见应用图标格式；默认格式全家桶（gif/webp/avif 等）不开，控制编译与体积。
+image = { version = "0.25", default-features = false, features = ["png", "ico"] }

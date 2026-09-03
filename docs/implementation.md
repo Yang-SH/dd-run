@@ -136,7 +136,9 @@
 - 故障注入（kill 子进程）后宿主不退出、可恢复（A8）——P1 代码完成，待真机复验（m4-record §4 #1–#3）；
 - 5 个内置扩展功能清单核对通过（A10）——P4 扩展侧 + 宿主 fallback 轮代码完成（153/153 全绿，
   含无匹配渲染 + `{query}` 替换 + `context.query` 透传），真机清单见 m4-record §4 #9–#13；
-- 实测结果列表过滤帧耗时，记录是否达成 A3 的 16ms/帧目标（**未达成则记录实测值**）——P5。
+- 实测结果列表过滤帧耗时，记录是否达成 A3 的 16ms/帧目标（**未达成则记录实测值**）——**P5 完成
+  （2026-09-03）**：nucleo 模糊过滤 + 按分数重排（D11）+ 可见索引表/未变早退，
+  **2000 项 ×6 字段一次重算实测 3.7ms（debug）< 16ms/帧，达标**；真机日志复核见 m4-record §3.7。
 
 **验收映射**：A8、A10、A3（实测）。
 
@@ -148,7 +150,7 @@
 |---|---|---|
 | A1 | 全局热键可唤起/隐藏 | M1 |
 | A2 | 冷启动首屏 < 200ms（**目标值，需实测**） | M3 实测 |
-| A3 | 输入过滤 < 16ms/帧（**目标值，需实测**） | M4 实测 |
+| A3 | 输入过滤 < 16ms/帧（**目标值，需实测**） | M4 实测 ✅（2000 项 3.7ms，debug；见 m4-record §3.7） |
 | A4 | 单测覆盖 8 种 `CommandResultKind` | M2 |
 | A5 | 页面栈 `GoBack` / `GoHome` | M2 |
 | A6 | frozen 冷启动不拉起，点击桩项复热成功 | M3 |
@@ -223,6 +225,7 @@
 | M2 命令执行与状态机 | ✅ 已关闭 | 逻辑层（页面栈 `navigation.rs` A5 + 8 种 Kind 裁决 `result.rs` A4 + Confirm 挂起重发 + invoke 参数 + `PanelItem` 透传 id/ext_id/command）+ UI 接线（`main.rs`：Enter 分派 `Invoke`→后台 `invoke` 并裁决 / `Page`→推页+`get_items`；Esc 非 Root 先返回、Root 隐藏；Toast（独立 Area）；Confirm 对话框；嵌套页；`items_changed` 100ms 合并全量重拉 A9）；**24/24 单测** + 工程验收全绿 + 全 workspace 构建无回归。十项真机复验全部通过（2026-09-02，见 [`./m2-record.md`](./m2-record.md) §4.5），完成判据 A4/A5/A9 全部达成。下一项进入 M3 UI 接线 |
 | M3 缓存与懒加载 | ✅ 已关闭 | 逻辑层 `cache.rs`（FrozenCache/LruWarmSet/ColdStartTimer，对齐 A6/A7/A2，8 单测）+ 协议 `get_command` 接线（process 封装 / 示例扩展 handler / roundtrip 7 测）+ UI 接线（冷启动 frozen 读桩**不拉起进程** / 点击桩项复热 spawn→initialize→get_command→执行 / LRU 保活 8 个超容驱逐回落 stub / A2 计时日志 / 页脚三态 ◌✓✗）；**真机反馈 5 处修复**（见 [`./m3-record.md`](./m3-record.md) §3.4）：① 补 seguisym.ttf 解决 ◌ tofu；② 空态改 vertical_centered 不撑满页脚；③ #5 步骤改写为"启动后改名/杀进程"才能复现复热失败；④ A2 拆 agg_ms 分项日志定位 GUI/字体瓶颈；⑤ 列表长时页脚被挤出窗口 → 把 sources+键位提示移到 `egui::containers::Panel::bottom` 独立底栏。全 workspace **73/73 测试** + clippy/fmt 0 告警；`dd-gui.exe` 重编（16:05）。**A6/A2 真机复验已通过（2026-09-02）** |
 | M4 内置扩展与健壮性 | 🟨 进行中（P1–P3 完成，待真机） | 实施决策已定（2026-09-02，见 [`./m4-record.md`](./m4-record.md) §0）：D1 共享扩展运行时 / D2 本轮只做健壮性基础层 / D3 过滤用 nucleo。**P1–P3 代码完成**：崩溃恢复链 A8（`refresh_health` 每帧检测 + poll 死进程丢弃回落 stub）/ `host/*` 执行端接 UI（Toast + arboard 剪贴板 + webbrowser，空闲轮询也应答 HostRequest）/ 连续崩溃保护 §11（`robustness.rs` CrashGuard 熔断 + dispatch 拦截）。全 workspace **79/79 测试** + clippy/fmt 0 告警。P4（5 内置扩展 A10）/ P5（A3 nucleo 过滤）后续轮次 |
+| ueli 风格 UI 重构（M5 设计轮，插队于 M4 后） | 🟨 批次 1–3.5 代码完成，待真机视觉验收 | 基于设计稿 v2 [`cmdpal-ui-mockups.html`](../cmdpal-ui-mockups.html)。**批次 1 启动黑框**（2026-09-03）：屏幕外初始定位 + `with_active(false)` + 居中并入 `show()`（GetCursorPos/MonitorFromPoint 自算）；**批次 2 图标链路**：`CommandItem.icon` 三态（glyph/path/url）→ `PanelItem` 透传 → `IconView` 渲染 + 路径纹理缓存 + SegoeIcons/MDL2 字体回退链 + `system` 内置扩展 Path 图标验收项；**批次 3 整体换肤**：新建 `theme.rs`（05 表 token 唯一源：`Palette` 亮暗双套 + 几何常量 + `visuals()`/`apply()`，5 parity 单测）+ 绘制层落地（searchbar 46px glyph+focus 下划线 / 行 44px badge 化 + 选中 3px accent 条 / section 11px-600 / footer 状态点）。**批次 3.5 apps 真实图标抽取**（2026-09-03）：用户真机截图反馈 apps 全是占位 glyph（apps.rs:191 写死 U+E7C4），新增 `mod sys::icon`：SHGetFileInfoW → HICON → GetIconInfo + CreateCompatibleDC + GetDIBits → RGBA → PngEncoder → `%APPDATA%\dd-run\cache\apps-icons\apps-<hash>-32.png` 落盘；`top_level_commands` 改用 `item_icon(app)`；cache 含 PNG magic 校验自愈；新增 `image[png]` + `windows-sys 0.61`（5 features）依赖。**真机探针 stdout：total=400 path=400 glyph=0 = 100% 真实图标**（含 .lnk/.exe 全覆盖）。**176/176 全绿**（172 + apps 4 新测试）+ clippy/fmt 0；GUI 启动冒烟进程稳定。视觉真机验收清单见批次 3/3.5 报告 |
 
 **已就绪的前置资产**：
 
@@ -256,4 +259,22 @@
 
 **M3 已关闭（2026-09-02 真机复验 A6/A2 通过）**（逻辑层 `cache.rs` + `get_command` 协议接线 + UI 接线 + 5 处真机反馈修复——◌ 字体、空态撑满、#5 步骤、A2 拆计时、列表长时页脚被挤出窗口（移至 `Panel::bottom` 独立底栏）；73/73 测试全绿，见 [`./m3-record.md`](./m3-record.md) §3.4 / §4）：用 16:05 版 `./target/x86_64-pc-windows-gnu/debug/dd-gui.exe`（终端启动）按 §4 清单复验——首启落盘 → 重启读桩不拉起（A6，日志+页脚 ◌ 正常渲染，**页脚现在独立底栏**始终可见）→ 点击桩项复热成功（Invoke/Page 两条路径）→ 复热失败回退 stub（**先启动再改名 exe / 杀进程**）→ 记录 A2 冷启动分项耗时（`total = data_ready + gui_init`，15:53 实测 `2 ms + ~2861 ms`——瓶颈在 wgpu+msyh 22MB 字体加载）。**已进入 M4 内置扩展与健壮性**。
 
-**当前状态（2026-09-03 09:5x）**：M1 已关闭；M2 已关闭；M3 已关闭（已提交推送，commit `0c42465`）。**M4 进行中**（见 [`./m4-record.md`](./m4-record.md)）：实施决策 D1–D3 已确认；P1–P3 健壮性基础层代码完成（崩溃恢复链 A8 / `host/*` 执行端接 UI / 连续崩溃保护 §11，79/79 全绿）；**P4 扩展侧完成**（补充决策 D4–D7：扩展侧先行 / 宿主内存自注册 / Windows 优先 / 内置取代 sample）——`dd-ext` 共享运行时 + 5 内置扩展（Apps/Calc/System/WebSearch/Shell）+ `dd-host/builtin.rs` 注册表 + `fallback_commands()`/`invoke()` 方法封装 + `roundtrip_builtins` 6 项全链路往返；**宿主 fallback 轮完成**（补充决策 D8–D10：§6.3 含兜底者视为 fresh / 全局无匹配触发 / 模板拉一次缓存）——`BuiltinSpec` 拆 `frozen`(自述) 与 `host_frozen`(策略)、`FrozenCache::remove`、`load_one` 按 `provider.has_fallback` 跳过落桩、`FallbackStore` 模板缓存与 `{query}` 渲染、`PanelState` 无匹配分流、main.rs 拉取/轮询接线。**全 workspace 153/153 测试全绿**（A10 清单真机核对见 m4-record §4 #9–#13，不再拆批）；P5 nucleo 过滤后续轮次。
+**当前状态（2026-09-03 17:40）**：M1 已关闭；M2 已关闭；M3 已关闭（已提交推送，commit `0c42465`）。**M4 代码全部完成**（见 [`./m4-record.md`](./m4-record.md)）。**M5 插队批次 3.9 已完成**——搜索结果右侧类型标签（apps→应用 / calc→命令 / system→设置 / websearch→网页 / shell→命令，第三方回退「命令」），协议层零改动；`cargo fmt/clippy/test` 全绿，真机截图验证标签居右显示。**中文输入法候选框位置修复**——`draw_searchbar` 在搜索框聚焦时显式覆盖 `PlatformOutput::ime`，以搜索框矩形/光标矩形强制 egui-winit 更新 `set_ime_cursor_area`，解决 Microsoft Pinyin 候选窗漂到屏幕左上角的问题（IME 交互需在中文输入环境人工复验）。
+
+**ueli 风格 UI 重构（2026-09-03，插队批次，未 commit）**：基于设计稿 v2（`cmdpal-ui-mockups.html`，ueli/Fluent 9 视觉语言 + 亮暗双 token）分三批推进并各自验收。**批次 1 启动黑框修复**——根因是 eframe 0.36.1 `post_rendering` 首帧后无条件 `set_visible(true)`（egui PR #2279），修复取「初始定位屏幕外（`OFFSCREEN_*`）+ `with_active(false)` + 居中并入 `show()`（Win32 GetCursorPos→MonitorFromPoint 自算，屏外时 `center_on_screen` 会取错屏故不可复用）」；删除启动期逐帧 `recenter_if_needed`。**批次 2 图标链路**——`CommandItem.icon` 三态透传（state.rs 增字段 + aggregator 透传 + 单测）→ `IconView`（Empty/Glyph/Texture）+ `resolve_icons`（ScrollArea 闭包外预解析）+ 路径纹理缓存；字体链追加 `SegoeIcons.ttf`→`segmdl2.ttf` 回退（码位兼容）；`image` crate（png/ico feature）解码；`dd-ext-system` 内置「UI 验收：PNG 图标」Path 演示项（`CARGO_MANIFEST_DIR` 编译期锚定资产）；wire 层 E2E 探针确认 serde 将 `IconKind` 重命名为 `type`。**批次 3 整体换肤**——新建 `theme.rs` 为 token 唯一源：`Palette` 13 字段亮/暗双套（暗 panel `#292929`/accent `#479ef5`，亮 `#ffffff`/`#0f6cbd`，row 态暗色半透明白 alpha 15/21）+ 几何常量（行 44/圆角 6/指示条 3/搜索栏 46）+ `visuals()`→`Visuals` 覆盖 + `apply()` 注册双主题跟随系统；绘制层全部改经 `Palette` 取色：searchbar（glyph U+E721 前缀 + 底部 2px 聚焦 accent 下划线）、行重绘（subtitle 上移为名称右侧 desc-badge 限宽 220、tags 药丸 chip、hover/selected 预算行矩形同帧判定、选中 3px accent 条）、section 标题 11px/600/text-3、页脚状态点化、toast 底显式 token。egui 0.36 API 踩坑留档：`Margin` 字段为 i8、`TextEdit::frame` 收 `Frame`、`Color32` 预乘存储（断言须 `r()==a()`）。**批次 3.5 apps 真实图标抽取**（本轮续）——用户真机截图反馈 apps 全部占位 glyph（apps.rs:189-191 写死 `Icon { kind: Glyph, value: U+E7C4 }`），新增 `mod sys::icon`：shell 抽取链路 `SHGetFileInfoW(SHGFI_ICON|SHGFI_LARGEICON)` → HICON → `GetIconInfo` 拆 hbmColor → `CreateCompatibleDC` + `GetDIBits(BGRA)` → `RgbaImage` → `PngEncoder`（BGRA→RGBA + alpha=255）→ 落 `%APPDATA%\dd-run\cache\apps-icons\apps-<16hex>-32.png`，重抽命中按 `DefaultHasher` cache key；cache 含 PNG magic 校验自愈（坏文件重抽覆盖）；失效回退原 `U+E7C4` glyph。`top_level_commands` 改用 `item_icon(app)`；新增依赖 `image[png]` + `windows-sys 0.61`（`Win32_Foundation/Storage_FileSystem/UI_Shell/UI_WindowsAndMessaging/Graphics_Gdi`）。**Windows API 踩坑（注释留档）**：`SHGetFileInfoW` cfg 是 `Win32_Storage_FileSystem+Win32_UI_WindowsAndMessaging` 复合；**`GetDIBits` 的 hdc 必须有效 DC**（`null_mut()` → 返回 0）必须 `CreateCompatibleDC(NULL)`；`SHGFI_LARGEICON = 0x0` 是 Win32 原义；`image::ImageEncoder::write_image` 收 `self`（值）不是 `&self`——需 `encoder.write_image(...)` 移走；HICON 已是 `*mut c_void`，不要多余 `as HICON`。**全 workspace 176/176 测试全绿**（上批 172 + apps 4 新测试：单 exe 抽 PNG、`item_icon` 倾向 Path、覆盖率 ≥90%、落盘 PNG magic 校验）、clippy/fmt 0、GUI 启动冒烟进程稳定。**用户真机复验结果**：apps 全覆盖 100% 真实图标（probe stdout `total=400 path=400 glyph=0`），含 .lnk（SHGetFileInfoW 自动跳目标）/ .exe / Windows 系统图标。设计偏差留档（批次 3）：页脚未用 panel-2 底、keys 未 chip 化、desc-badge 截断为 Label.truncate 近似。**未 commit**（与 M5 批次叠加统一由用户审核提交）。
+
+### M5 后续批次：设置入口 / 类型标签 / 上下文页脚
+
+依据用户真机截图与 [ueli](https://github.com/oliverschwendener/ueli) 实际界面，在 [`cmdpal-ui-mockups.html`](../cmdpal-ui-mockups.html) 中追加 §6「优化项」规格，并在此记录实施任务与验收。
+
+| 批次 | 任务 | 说明 | 验收标准 |
+|---|---|---|---|
+| 3.9 ✅ | 搜索结果类型标签 | `PanelItem` 新增 `result_category: Option<String>`（协议层不改）；`aggregator::category_label_for` 按 `ext_id` 去 `com.ddrun.` 前缀映射（apps→应用 / calc→命令 / system→设置 / websearch→网页 / shell→命令），第三方回退「命令」；`draw_item_row` 在 `right_to_left` 布局中先画类型标签（最右）、再画 tags（其左），12px/text-3，最长 90px 截断。 | C3–C5、C9、C11、C13 通过；行高保持 44px；`cargo fmt/clippy/test` 全绿；真机截图验证类型标签居右显示。 |
+| 4.0 | 左下角设置按钮 | 页脚最左侧常驻齿轮图标（U+E713，16px）；点击在**同窗口**以子视图/弹出层打开设置（复用 `PageStack` 推 `SettingsPage` 或 `egui::Window`），不新起 eframe 实例；键盘 Tab/Enter 可达；所有页面栈层级显示（页脚位于应用级 `Panel::bottom`，已覆盖）。 | C1–C2、C12 通过；设置视图能正常弹出并关闭；不占用全局热键。 |
+| 4.1 | 页脚上下文动作提示 | 有选中项时页脚显示当前项默认动作 + 快捷键（动作由 GUI 硬编码 `ext_id→动作` 映射：apps→打开应用 / websearch→打开网页 / calc→计算 / system→打开设置 / shell→运行命令 / Page→进入）；无选中时回退全局键位图例；**源健康诊断保留但仅异常时显示**（存在 stub/err 源时追加状态点）；高度严格 35px（绘制层 `ui.horizontal` 强制单行 + `set_min_height(35)`，禁止 `horizontal_wrapped`）。 | C6–C8、C13 通过；切换选中项时动作文本实时更新；全 ok 时不显示状态点。 |
+
+**前置依赖**：批次 3.8 已落地页脚 `panel-2` 底 + 顶部 1px `border` + 键帽样式（见 `.workbuddy/memory/2026-09-03.md` §批次 3.8）。类型标签与设置按钮批次不依赖页脚改造，可并行。
+
+**数据模型变更**：仅 GUI 状态层。`dd-protocol` 冻结 v1.0，不新增字段。
+
+**验收映射**：新增 C1–C13 校验表（见 `cmdpal-ui-mockups.html` §6.4；含 C11 类型与 tags 次序、C12 同窗口设置视图、C13 字段口径一致）。

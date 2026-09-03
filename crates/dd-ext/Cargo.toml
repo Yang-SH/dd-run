@@ -10,6 +10,30 @@ publish = false
 dd-protocol = { path = "../dd-protocol" }
 serde_json = "1"
 
+# M5 批次 3.5（apps.rs 真实图标抽取）：
+# - image[png]：把 SHGetFileInfoW 抽出的 HICON 经 GetDIBits 转 BGRA → RgbaImage →
+#   PngEncoder 写 PNG（bytes），复用 dd-gui 的 PNG 解码链路（resolve_icons）。
+#   仅启用 png，不开默认 features 全家桶。
+# - windows-sys 0.61 features：
+#   - `Win32_UI_Shell`：SHGetFileInfoW / SHFILEINFOW / SHGFI_*（.lnk 解析 +
+#     .exe 系统缓存图标）；
+#   - `Win32_UI_WindowsAndMessaging`：GetIconInfo / ICONINFO / DestroyIcon（HICON
+#     拆位图与释放）；
+#   - `Win32_Graphics_Gdi`：GetDIBits / BITMAPINFO / DeleteObject（位图→bytes）；
+#   - `Win32_Foundation`：HWND 占位（SHGetFileInfoW 签名需要）。
+image = { version = "0.25", default-features = false, features = ["png"] }
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = [
+    "Win32_Foundation",
+    # SHGetFileInfoW 的入参 FILE_FLAGS_AND_ATTRIBUTES 在此 module；
+    # 不开则 SHGetFileInfoW 链接报 unresolved import
+    "Win32_Storage_FileSystem",
+    "Win32_UI_Shell",
+    "Win32_UI_WindowsAndMessaging",
+    "Win32_Graphics_Gdi",
+] }
+
 [[bin]]
 name = "dd-ext-apps"
 path = "src/bin/apps.rs"
