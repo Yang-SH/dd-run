@@ -134,7 +134,7 @@
 
 **完成判据**：
 - 故障注入（kill 子进程）后宿主不退出、可恢复（A8）——P1 代码完成，待真机复验（m4-record §4 #1–#3）；
-- 5 个内置扩展功能清单核对通过（A10）——P4 扩展侧 + 宿主 fallback 轮代码完成（146/146 全绿，
+- 5 个内置扩展功能清单核对通过（A10）——P4 扩展侧 + 宿主 fallback 轮代码完成（153/153 全绿，
   含无匹配渲染 + `{query}` 替换 + `context.query` 透传），真机清单见 m4-record §4 #9–#13；
 - 实测结果列表过滤帧耗时，记录是否达成 A3 的 16ms/帧目标（**未达成则记录实测值**）——P5。
 
@@ -256,4 +256,4 @@
 
 **M3 已关闭（2026-09-02 真机复验 A6/A2 通过）**（逻辑层 `cache.rs` + `get_command` 协议接线 + UI 接线 + 5 处真机反馈修复——◌ 字体、空态撑满、#5 步骤、A2 拆计时、列表长时页脚被挤出窗口（移至 `Panel::bottom` 独立底栏）；73/73 测试全绿，见 [`./m3-record.md`](./m3-record.md) §3.4 / §4）：用 16:05 版 `./target/x86_64-pc-windows-gnu/debug/dd-gui.exe`（终端启动）按 §4 清单复验——首启落盘 → 重启读桩不拉起（A6，日志+页脚 ◌ 正常渲染，**页脚现在独立底栏**始终可见）→ 点击桩项复热成功（Invoke/Page 两条路径）→ 复热失败回退 stub（**先启动再改名 exe / 杀进程**）→ 记录 A2 冷启动分项耗时（`total = data_ready + gui_init`，15:53 实测 `2 ms + ~2861 ms`——瓶颈在 wgpu+msyh 22MB 字体加载）。**已进入 M4 内置扩展与健壮性**。
 
-**当前状态（2026-09-03 09:5x）**：M1 已关闭；M2 已关闭；M3 已关闭（已提交推送，commit `0c42465`）。**M4 进行中**（见 [`./m4-record.md`](./m4-record.md)）：实施决策 D1–D3 已确认；P1–P3 健壮性基础层代码完成（崩溃恢复链 A8 / `host/*` 执行端接 UI / 连续崩溃保护 §11，79/79 全绿）；**P4 扩展侧完成**（补充决策 D4–D7：扩展侧先行 / 宿主内存自注册 / Windows 优先 / 内置取代 sample）——`dd-ext` 共享运行时 + 5 内置扩展（Apps/Calc/System/WebSearch/Shell）+ `dd-host/builtin.rs` 注册表 + `fallback_commands()`/`invoke()` 方法封装 + `roundtrip_builtins` 6 项全链路往返；**宿主 fallback 轮完成**（补充决策 D8–D10：§6.3 含兜底者视为 fresh / 全局无匹配触发 / 模板拉一次缓存）——`BuiltinSpec` 拆 `frozen`(自述) 与 `host_frozen`(策略)、`FrozenCache::remove`、`load_one` 按 `provider.has_fallback` 跳过落桩、`FallbackStore` 模板缓存与 `{query}` 渲染、`PanelState` 无匹配分流、main.rs 拉取/轮询接线。**全 workspace 146/146 测试全绿**（A10 清单真机核对见 m4-record §4 #9–#13，不再拆批）；P5 nucleo 过滤后续轮次。
+**当前状态（2026-09-03 09:5x）**：M1 已关闭；M2 已关闭；M3 已关闭（已提交推送，commit `0c42465`）。**M4 进行中**（见 [`./m4-record.md`](./m4-record.md)）：实施决策 D1–D3 已确认；P1–P3 健壮性基础层代码完成（崩溃恢复链 A8 / `host/*` 执行端接 UI / 连续崩溃保护 §11，79/79 全绿）；**P4 扩展侧完成**（补充决策 D4–D7：扩展侧先行 / 宿主内存自注册 / Windows 优先 / 内置取代 sample）——`dd-ext` 共享运行时 + 5 内置扩展（Apps/Calc/System/WebSearch/Shell）+ `dd-host/builtin.rs` 注册表 + `fallback_commands()`/`invoke()` 方法封装 + `roundtrip_builtins` 6 项全链路往返；**宿主 fallback 轮完成**（补充决策 D8–D10：§6.3 含兜底者视为 fresh / 全局无匹配触发 / 模板拉一次缓存）——`BuiltinSpec` 拆 `frozen`(自述) 与 `host_frozen`(策略)、`FrozenCache::remove`、`load_one` 按 `provider.has_fallback` 跳过落桩、`FallbackStore` 模板缓存与 `{query}` 渲染、`PanelState` 无匹配分流、main.rs 拉取/轮询接线。**全 workspace 153/153 测试全绿**（A10 清单真机核对见 m4-record §4 #9–#13，不再拆批）；P5 nucleo 过滤后续轮次。

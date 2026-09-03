@@ -5,7 +5,8 @@
 //! 所有消息都由 `dd-host` 与 `dd-ext-sample` 在运行时按
 //! [`docs/protocol.md`](../../docs/protocol.md) 产生——协议一改，测试立即按新行为跑。
 //!
-//! 示例扩展可执行文件由 cargo 注入：`env!("CARGO_BIN_EXE_dd-ext-sample")`。
+//! 示例扩展可执行文件由 `cargo build` 生成，按测试二进制所在目录反查定位
+//! （`CARGO_BIN_EXE_*` 仅对自身 package 的 bin 生效，跨 package 不可用）。
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -17,11 +18,13 @@ use dd_protocol::messages::{
 };
 use dd_protocol::model::{CommandRef, CommandResult, Sender};
 
-/// 示例扩展可执行文件由 cargo 与测试二进制放在同一目录（测试二进制在 `deps/`
-/// 子目录），按此定位——`CARGO_BIN_EXE_*` 只对**自身 package** 的 bin 生效，
-/// 而 `dd-ext-sample` 是另一个 package，故不能用。
-/// 定位示例扩展可执行文件（需先 `cargo build`，workspace 级别的 `cargo test` 会自动构建）。
-fn sample_exe() -> PathBuf {
+/// 定位示例扩展可执行文件（与 `roundtrip_builtins.rs::builtin_exe_dir` 同款逻辑：
+/// 集成测试二进制在 `target/debug/deps/`，产物在上一级 `target/debug/`）。
+///
+/// 返回 `None` 表示产物未构建——调用方据此**跳过**测试（而非 assert 失败），
+/// 避免干净 target / 单独 `cargo test -p dd-host` 时的"神秘失败"。
+/// 正常 `cargo test --workspace` 会先构建 dd-ext，故该前置总是满足。
+fn sample_exe() -> Option<PathBuf> {
     let mut dir = std::env::current_exe().expect("当前测试二进制路径");
     dir.pop(); // 去掉测试二进制文件名
     if dir.file_name().and_then(|s| s.to_str()) == Some("deps") {
@@ -33,12 +36,7 @@ fn sample_exe() -> PathBuf {
         "dd-ext-sample"
     };
     let path = dir.join(name);
-    assert!(
-        path.is_file(),
-        "找不到示例扩展可执行文件：{}（请先执行 `cargo build`）",
-        path.display()
-    );
-    path
+    path.is_file().then_some(path)
 }
 
 /// 测试用临时目录（避免引入 tempfile 依赖）。
@@ -76,23 +74,26 @@ fn scan_options() -> ScanOptions {
 }
 
 /// 在临时目录里写一份指向示例扩展的清单（命令用绝对路径，跨平台均可直接 spawn）。
-fn write_sample_manifest(dir: &Path, id: &str) -> PathBuf {
+/// 示例扩展 exe 缺失时返回 `None`（调用方跳过测试）。
+fn write_sample_manifest(dir: &Path, id: &str) -> Option<PathBuf> {
+    let exe = sample_exe()?;
     let manifest = serde_json::json!({
         "schema_version": "1.0",
         "id": id,
         "name": "Sample",
         "version": "1.0.0",
-        "entry": { "command": sample_exe().to_string_lossy() },
+        "entry": { "command": exe.to_string_lossy() },
         "frozen": true,
         "capabilities": [],
     });
     let path = dir.join(format!("{id}.json"));
     fs::write(&path, manifest.to_string()).expect("写入清单");
-    path
+    Some(path)
 }
 
-fn load_sample(tmp: &TempDir) -> LoadedExtension {
-    write_sample_manifest(tmp.path(), "com.example.sample");
+/// 加载示例扩展；exe 缺失（未构建）时返回 `None`，由测试主体据此跳过。
+fn load_sample(tmp: &TempDir) -> Option<LoadedExtension> {
+    let _manifest = write_sample_manifest(tmp.path(), "com.example.sample")?;
     let outcome = dd_host::manifest::scan_dir(tmp.path(), &scan_options());
     assert!(
         outcome.skipped.is_empty(),
@@ -100,13 +101,18 @@ fn load_sample(tmp: &TempDir) -> LoadedExtension {
         outcome.skipped
     );
     assert_eq!(outcome.loaded.len(), 1);
-    outcome.loaded.into_iter().next().expect("恰好一个扩展")
+    Some(outcome.loaded.into_iter().next().expect("恰好一个扩展"))
 }
 
 #[test]
 fn scan_finds_sample_extension_and_resolves_entry() {
     let tmp = TempDir::new("scan");
-    let ext = load_sample(&tmp);
+    let Some(ext) = load_sample(&tmp) else {
+        eprintln!(
+            "SKIP: dd-ext-sample 未构建，先 `cargo build`（cargo test --workspace 会自动构建）"
+        );
+        return;
+    };
 
     assert_eq!(ext.manifest.id, "com.example.sample");
     assert!(
@@ -120,7 +126,12 @@ fn scan_finds_sample_extension_and_resolves_entry() {
 #[test]
 fn roundtrip_initialize_top_level_commands_close() {
     let tmp = TempDir::new("roundtrip");
-    let ext = load_sample(&tmp);
+    let Some(ext) = load_sample(&tmp) else {
+        eprintln!(
+            "SKIP: dd-ext-sample 未构建，先 `cargo build`（cargo test --workspace 会自动构建）"
+        );
+        return;
+    };
 
     // ① spawn（§4：discovered → spawned）
     let mut process = ExtensionProcess::spawn(&ext).expect("spawn 示例扩展");
@@ -210,7 +221,12 @@ fn roundtrip_initialize_top_level_commands_close() {
 #[test]
 fn roundtrip_m2_invoke_get_items_items_changed() {
     let tmp = TempDir::new("m2");
-    let ext = load_sample(&tmp);
+    let Some(ext) = load_sample(&tmp) else {
+        eprintln!(
+            "SKIP: dd-ext-sample 未构建，先 `cargo build`（cargo test --workspace 会自动构建）"
+        );
+        return;
+    };
     let mut process = ExtensionProcess::spawn(&ext).expect("spawn 示例扩展");
     process.initialize("1.0", "0.1.0").expect("握手成功");
 
@@ -326,7 +342,12 @@ fn roundtrip_m2_invoke_get_items_items_changed() {
 #[test]
 fn unknown_method_returns_method_not_found() {
     let tmp = TempDir::new("unknown");
-    let ext = load_sample(&tmp);
+    let Some(ext) = load_sample(&tmp) else {
+        eprintln!(
+            "SKIP: dd-ext-sample 未构建，先 `cargo build`（cargo test --workspace 会自动构建）"
+        );
+        return;
+    };
     let mut process = ExtensionProcess::spawn(&ext).expect("spawn");
     process.initialize("1.0", "0.1.0").expect("握手");
 
@@ -348,7 +369,12 @@ fn unknown_method_returns_method_not_found() {
 #[test]
 fn version_negotiation_rejects_version_higher_than_offered() {
     let tmp = TempDir::new("version");
-    let ext = load_sample(&tmp);
+    let Some(ext) = load_sample(&tmp) else {
+        eprintln!(
+            "SKIP: dd-ext-sample 未构建，先 `cargo build`（cargo test --workspace 会自动构建）"
+        );
+        return;
+    };
     let mut process = ExtensionProcess::spawn(&ext).expect("spawn");
 
     // §5.3 规则 4：扩展回的版本高于宿主所发（0.9）时，宿主必须拒绝
@@ -422,7 +448,12 @@ fn stdout_eof_is_reported_as_process_exited() {
 #[test]
 fn roundtrip_m3_get_command_reheat_chain() {
     let tmp = TempDir::new("m3");
-    let ext = load_sample(&tmp);
+    let Some(ext) = load_sample(&tmp) else {
+        eprintln!(
+            "SKIP: dd-ext-sample 未构建，先 `cargo build`（cargo test --workspace 会自动构建）"
+        );
+        return;
+    };
     let mut process = ExtensionProcess::spawn(&ext).expect("spawn 示例扩展");
     process.initialize("1.0", "0.1.0").expect("握手成功");
 
@@ -464,7 +495,12 @@ fn roundtrip_m3_get_command_reheat_chain() {
 #[test]
 fn roundtrip_m4_host_requests_are_answered_and_recorded() {
     let tmp = TempDir::new("m4-host");
-    let ext = load_sample(&tmp);
+    let Some(ext) = load_sample(&tmp) else {
+        eprintln!(
+            "SKIP: dd-ext-sample 未构建，先 `cargo build`（cargo test --workspace 会自动构建）"
+        );
+        return;
+    };
     let mut process = ExtensionProcess::spawn(&ext).expect("spawn 示例扩展");
     let init = process.initialize("1.0", "0.1.0").expect("握手成功");
     // M4：示例扩展声明了 3 个 host/* 能力（§7.4 能力前置的"白名单"）

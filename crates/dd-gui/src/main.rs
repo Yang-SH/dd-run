@@ -1940,3 +1940,299 @@ impl eframe::App for PaletteApp {
         self.draw_confirm(&ctx);
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use dd_gui::aggregator::SourceSummary;
+    use dd_host::manifest::{Entry, Manifest};
+    use std::path::PathBuf;
+
+    // ── 夹具 ───────────────────────────────────────────────
+
+    /// 构造「立即退出（exit 1）」的扩展进程夹具（A8 崩溃 / A10 拉取失败回路）。
+    /// 与 `dd-host/tests/roundtrip.rs::stdout_eof_is_reported_as_process_exited` 同款约定。
+    fn dying_ext(id: &str) -> LoadedExtension {
+        let (command, args): (String, Vec<String>) = if cfg!(windows) {
+            (
+                "cmd.exe".to_string(),
+                vec!["/c".to_string(), "exit 1".to_string()],
+            )
+        } else {
+            (
+                "/bin/sh".to_string(),
+                vec!["-c".to_string(), "exit 1".to_string()],
+            )
+        };
+        LoadedExtension {
+            manifest: Manifest {
+                schema_version: "1.0".to_string(),
+                id: id.to_string(),
+                name: "Dying".to_string(),
+                version: "1.0.0".to_string(),
+                description: String::new(),
+                author: String::new(),
+                license: String::new(),
+                homepage: String::new(),
+                icon: None,
+                entry: Entry {
+                    command: command.clone(),
+                    args,
+                    env: Default::default(),
+                    cwd: None,
+                },
+                frozen: true,
+                capabilities: vec![],
+                platforms: None,
+                min_host_version: None,
+            },
+            path: PathBuf::from("dying.json"),
+            dir: PathBuf::from("."),
+            command: PathBuf::from(command),
+            cwd: PathBuf::from("."),
+        }
+    }
+
+    /// spawn 一个已退出的进程（返回前等待其确实退出，确保 refresh_health / poll 稳定检测）。
+    fn dying_process(id: &str) -> ExtensionProcess {
+        let mut proc = ExtensionProcess::spawn(&dying_ext(id)).expect("spawn 立即退出的进程");
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        while !proc.has_exited() {
+            if std::time::Instant::now() >= deadline {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        proc
+    }
+
+    /// 不依赖真实扩展 / 聚合的 PaletteApp（空 channel 注入）。
+    fn make_app() -> PaletteApp {
+        let (_etx, events_rx) = mpsc::channel::<HotkeyEvent>();
+        let (_atx, agg_rx) = mpsc::channel::<AggregatePayload>();
+        PaletteApp::new(events_rx, agg_rx, ColdStartTimer::new())
+    }
+
+    /// headless egui Context（无窗口/渲染后端，仅供 request_repaint 等无副作用调用）。
+    fn ctx() -> egui::Context {
+        egui::Context::default()
+    }
+
+    /// calc 兜底模板（title 含 `{query}`，render 时替换）。
+    fn calc_template() -> CommandItem {
+        CommandItem {
+            id: "calc.eval.query".to_string(),
+            title: "= {query}".to_string(),
+            subtitle: Some("计算表达式".to_string()),
+            icon: None,
+            section: Some("计算".to_string()),
+            tags: None,
+            details: None,
+            text_to_suggest: None,
+            more_commands: None,
+            command: CommandRef::Invoke,
+        }
+    }
+
+    // ── A10 宿主 fallback 渲染接线（纯逻辑，无进程） ──────────
+
+    #[test]
+    fn sync_fallback_injects_rendered_templates_when_no_regular_match() {
+        let mut app = make_app();
+        app.aggregating = false; // 聚合已完成
+        app.stack.root_mut().list = PanelState::new(vec![PanelItem::new("Open Settings")]);
+        app.stack.root_mut().list.set_query("zzz-no-match");
+        // 预置 calc 兜底模板（已 Ready）
+        app.fallback_store
+            .store("com.ddrun.calc", "Calculator", vec![calc_template()]);
+
+        app.sync_fallback();
+
+        let page = app.stack.current();
+        assert!(page.list.is_fallback_mode(), "无常规匹配时应进入兜底模式");
+        assert_eq!(page.list.visible_count(), 1);
+        assert_eq!(
+            page.list.selected_item().map(|i| i.title.as_str()),
+            Some("= zzz-no-match"),
+            "模板 {{query}} 应被当前查询替换"
+        );
+    }
+
+    #[test]
+    fn sync_fallback_clears_fallback_when_regular_match() {
+        let mut app = make_app();
+        app.aggregating = false;
+        app.stack.root_mut().list = PanelState::new(vec![PanelItem::new("Open Settings")]);
+        app.stack.root_mut().list.set_query("open"); // 命中常规项
+        app.fallback_store
+            .store("com.ddrun.calc", "Calculator", vec![calc_template()]);
+
+        app.sync_fallback();
+
+        let page = app.stack.current();
+        assert!(!page.list.is_fallback_mode(), "常规有匹配时不进入兜底");
+        assert_eq!(page.list.visible_count(), 1, "应展示常规匹配项而非兜底");
+    }
+
+    #[test]
+    fn rerender_fallback_updates_templates_on_query_change() {
+        let mut app = make_app();
+        app.aggregating = false;
+        app.stack.root_mut().list = PanelState::new(vec![PanelItem::new("Open Settings")]);
+        app.stack.root_mut().list.set_query("zzz");
+        app.fallback_store
+            .store("com.ddrun.calc", "Calculator", vec![calc_template()]);
+        app.sync_fallback();
+        assert!(app.stack.current().list.is_fallback_mode());
+
+        // 查询变化（仍无常规匹配）→ 重渲染应反映新查询
+        app.stack.current_mut().list.set_query("abc");
+        app.rerender_fallback();
+        assert_eq!(
+            app.stack
+                .current()
+                .list
+                .selected_item()
+                .map(|i| i.title.as_str()),
+            Some("= abc")
+        );
+    }
+
+    // ── A10 拉取链路（死进程 → Exhausted） ──────────────────
+
+    #[test]
+    fn fallback_fetch_chain_marks_exhausted_on_dead_process() {
+        let mut app = make_app();
+        app.aggregating = false;
+        let ext_id = "com.ddrun.calc";
+        assert!(app.fallback_store.wants(ext_id), "初始应需要拉取模板");
+
+        // 注入一个死进程（start_fallback_fetch_chain 会 take 它去后台拉取）
+        app.processes
+            .push((ext_id.to_string(), dying_process(ext_id)));
+
+        app.start_fallback_fetch_chain();
+        assert!(app.fallback_rx.is_some(), "应已发起后台拉取");
+
+        // 驱动 poll_fallback 直到链结束（死进程 fetch 快速失败）
+        let c = ctx();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while app.fallback_rx.is_some() {
+            if std::time::Instant::now() >= deadline {
+                break;
+            }
+            app.poll_fallback(&c);
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+
+        // 死进程 → fetch 失败 → store_failure → Exhausted（本会话不再拉取）
+        assert!(
+            !app.fallback_store.wants(ext_id),
+            "失败后该扩展应被标记 Exhausted"
+        );
+        assert!(app.fallback_store.is_empty());
+        assert_eq!(app.fallback_store.template_count(ext_id), 0);
+    }
+
+    // ── A8 崩溃恢复接线（进程退出 → 回落 stub + 记崩溃 + 熔断） ──
+
+    #[test]
+    fn refresh_health_drops_to_stub_and_records_crash() {
+        let mut app = make_app();
+        let ext_id = "com.example.dying";
+        app.sources.push(SourceSummary {
+            id: ext_id.to_string(),
+            name: "Dying".to_string(),
+            status: SourceStatus::Warm { commands: 5 },
+        });
+        app.processes
+            .push((ext_id.to_string(), dying_process(ext_id)));
+
+        app.refresh_health();
+
+        assert!(
+            app.processes.iter().all(|(id, _)| id != ext_id),
+            "崩溃进程应从保活集移除（回落 stub）"
+        );
+        assert!(
+            app.crash_guards
+                .get(ext_id)
+                .map(|g| g.consecutive())
+                .unwrap_or(0)
+                >= 1,
+            "应记录一次崩溃"
+        );
+        let s = app.sources.iter().find(|s| s.id == ext_id).unwrap();
+        assert!(s.status.is_stub(), "源状态应回落 Stub，实际 {:?}", s.status);
+    }
+
+    #[test]
+    fn consecutive_crashes_trip_circuit_breaker() {
+        let mut app = make_app();
+        let ext_id = "com.example.dying";
+        app.sources.push(SourceSummary {
+            id: ext_id.to_string(),
+            name: "Dying".to_string(),
+            status: SourceStatus::Warm { commands: 3 },
+        });
+
+        // 前 N-1 次不熔断
+        for _ in 0..(MAX_CONSECUTIVE_CRASHES - 1) {
+            app.processes
+                .push((ext_id.to_string(), dying_process(ext_id)));
+            app.refresh_health();
+            assert!(!app.is_crash_tripped(ext_id), "未达阈值不应熔断");
+        }
+        // 第 N 次触发熔断
+        app.processes
+            .push((ext_id.to_string(), dying_process(ext_id)));
+        app.refresh_health();
+        assert!(
+            app.is_crash_tripped(ext_id),
+            "连续 N 次崩溃应熔断（暂时不可用）"
+        );
+        let s = app.sources.iter().find(|s| s.id == ext_id).unwrap();
+        assert!(s.status.is_failed(), "熔断后源状态应为 Failed");
+    }
+
+    #[test]
+    fn poll_invoke_on_dead_process_drops_to_stub_and_records_crash() {
+        let mut app = make_app();
+        let c = ctx();
+        let ext_id = "com.example.dying";
+        app.sources.push(SourceSummary {
+            id: ext_id.to_string(),
+            name: "Dying".to_string(),
+            status: SourceStatus::Warm { commands: 3 },
+        });
+        // 保活集放一个死进程（供 drop_source_to_stub 移除断言）
+        app.processes
+            .push((ext_id.to_string(), dying_process(ext_id)));
+
+        // 构造「调用期间进程崩溃」的 InvokeOutcome（proc 为另一个死进程）
+        let (tx, rx) = mpsc::channel();
+        let _ = tx.send(InvokeOutcome {
+            ext_id: ext_id.to_string(),
+            proc: Some(dying_process(ext_id)),
+            result: Err("进程在调用期间崩溃".to_string()),
+            stub_reheat: false,
+        });
+        app.invoke_rx = Some(rx);
+        app.inflight.insert(ext_id.to_string());
+
+        app.poll_invoke(&c);
+
+        assert!(
+            app.processes.iter().all(|(id, _)| id != ext_id),
+            "死进程应从保活集移除（回落 stub）"
+        );
+        assert!(
+            app.crash_guards
+                .get(ext_id)
+                .map(|g| g.consecutive())
+                .unwrap_or(0)
+                >= 1,
+            "应记录一次崩溃"
+        );
+    }
+}

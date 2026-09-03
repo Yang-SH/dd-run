@@ -2,7 +2,7 @@
 
 > **状态**：🟨 进行中（2026-09-02 启动）。**P1–P3 健壮性基础层代码完成（79/79 测试全绿），
 > 待用户真机复验 §4 清单**；**P4 扩展侧 + 宿主 fallback 轮均完成**（dd-ext 共享运行时 +
-> 5 内置扩展 + 宿主内存自注册 + 协议方法封装 + `FallbackStore` 无匹配渲染，146/146 全
+> 5 内置扩展 + 宿主内存自注册 + 协议方法封装 + `FallbackStore` 无匹配渲染，153/153 全
 > workspace 测试全绿）；P5（A3 nucleo 过滤）为后续轮次。
 > **目标**（implementation.md §M4）：MVP 内置 5 个扩展（Apps / Calc / System / WebSearch / Shell），
 > 扩展崩溃不影响宿主；连续崩溃受保护；能力注入（`host/*`）接 UI；过滤性能达标。
@@ -76,7 +76,7 @@
 | P1 崩溃恢复链（A8） | 进程退出（stdout EOF / 非 0 退出码）→ in-flight 请求立即失败 → 命令回落 stub → 宿主继续运行；`refresh_health` 改为**每帧**检测（logic() 入口，此前仅 show() 时查一次） | ✅ 代码完成（2026-09-02） | 编译 + 全 workspace 测试全绿；死进程不再被归还保活集（poll 错误分支按 `exit_status` 判别）；真机 §4 #1–#3 | ✅ 79/79 全绿 |
 | P2 `host/*` 执行端 | dd-gui 消费 `host_requests`：`host/show_status` → 既有 Toast；`host/set_clipboard` → 剪贴板（arboard）；`host/open_url` → 默认浏览器（webbrowser）；空闲 rx 轮询同样应答 HostRequest（此前静默丢弃） | ✅ 代码完成（2026-09-02） | roundtrip 新增 1 测（3 个 host 请求被应答+记录，参数完整）；真机 §4 #6–#8 | ✅ roundtrip 8/8 |
 | P3 连续崩溃保护 | 协议 §11 规则 2：连续崩溃 N 次（`CrashGuard`，默认 3）→ 熔断"暂时不可用"；dispatch 拦截不再 spawn；warm 恢复清零 | ✅ 代码完成（2026-09-02） | `robustness.rs` 5 个状态机单测（计数/熔断/复位/恢复不误熔）；真机 §4 #4–#5 | ✅ dd-gui 29/29 |
-| P4 共享扩展运行时 + 5 内置扩展 | `dd-ext` lib（D1-A）+ Apps/Calc/System/WebSearch/Shell 命令实现；frozen 标记 + 自动安装/发现 | ✅ 扩展侧（2026-09-02）+ 宿主 fallback 轮（2026-09-03）完成 | 扩展侧：`roundtrip_builtins` 6 项 + 全 workspace 132/132；宿主 fallback 轮：FallbackStore 纯逻辑 7 单测 + PanelState 分流 6 单测 + cache remove 1 + main.rs 接线；**146/146 全 workspace 全绿**；A10 拆两批真机核对 | ✅ 146/146 全绿 |
+| P4 共享扩展运行时 + 5 内置扩展 | `dd-ext` lib（D1-A）+ Apps/Calc/System/WebSearch/Shell 命令实现；frozen 标记 + 自动安装/发现 | ✅ 扩展侧（2026-09-02）+ 宿主 fallback 轮（2026-09-03）完成 | 扩展侧：`roundtrip_builtins` 6 项 + 全 workspace 132/132；宿主 fallback 轮：FallbackStore 纯逻辑 7 单测 + PanelState 分流 6 单测 + cache remove 1 + main.rs 接线（A8/A10 自动覆盖 7 测，本轮 T2 补齐全）；**153/153 全 workspace 全绿**；A10 拆两批真机核对 | ✅ 153/153 全绿 |
 | P5 A3 模糊过滤 | `state.rs` 过滤换 nucleo（打分排序替代 contains）；帧耗时采样埋点 | ⬜ 后续 | 实测过滤 < 16ms/帧（不达标记录实测与瓶颈、不调目标） | ⬜ |
 
 ---
@@ -209,8 +209,8 @@
 
 ### 验证结果
 
-- `cargo test --workspace`：**146/146 全绿**（较 132 新增 14：fallback.rs 7 + state.rs 6 + cache remove 1；
-  roundtrip 与 roundtrip_builtins 并行跑两次均无竞态失败）。
+- `cargo test --workspace`：**153/153 全绿**（累计：较 132 新增 14：fallback.rs 7 + state.rs 6 + cache remove 1；
+  本轮较 146 新增 7：main.rs 接线 A8 崩溃恢复 + A10 fallback 渲染/拉取自动覆盖 7 测；roundtrip 与 roundtrip_builtins 并行跑两次均无竞态失败）。
 - `cargo clippy --workspace --all-targets`：零警告；`cargo fmt --check`：干净。
 - 产物重编：`dd-gui.exe` + 5 个 `dd-ext-*.exe`（宿主 fallback 轮版，2026-09-03）。
 
