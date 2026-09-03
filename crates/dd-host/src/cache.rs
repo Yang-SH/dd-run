@@ -88,6 +88,29 @@ impl FrozenCache {
         }
         removed
     }
+
+    /// 删除该扩展的**全部版本**桩（返回是否删除过）。
+    ///
+    /// 用途（M4 P4 宿主 fallback 轮）：设计文档 §6.3 规定"含兜底能力者一律视为
+    /// fresh"——这类扩展必须保持活进程才能响应 `fallback_commands`，因此发现其
+    /// 具备兜底能力后要把历史桩清掉，避免下次冷启动又读桩（无进程 → 兜底拉不到）。
+    pub fn remove(&self, ext_id: &str) -> bool {
+        let Ok(entries) = std::fs::read_dir(&self.dir) else {
+            return false;
+        };
+        let prefix = format!("{}.", sanitize(ext_id));
+        let mut removed = false;
+        for entry in entries.flatten() {
+            let name = entry.file_name().to_string_lossy().to_string();
+            if name.starts_with(&prefix)
+                && name.ends_with(".json")
+                && std::fs::remove_file(entry.path()).is_ok()
+            {
+                removed = true;
+            }
+        }
+        removed
+    }
 }
 
 /// 文件名安全化：非字母数字统一替换为 `_`。
@@ -265,6 +288,25 @@ mod tests {
             !cache.invalidate_if_version_changed("ext.a", "2.0"),
             "同版本不应删除"
         );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn frozen_remove_deletes_all_versions() {
+        // M4：含兜底能力者清除全部历史桩（设计文档 §6.3 → fresh）
+        let dir = std::env::temp_dir().join("dd-run-cache-test4");
+        let _ = std::fs::remove_dir_all(&dir);
+        let cache = FrozenCache::new(&dir);
+        cache.save(&snap("ext.a", "1.0", 1)).unwrap();
+        cache.save(&snap("ext.a", "2.0", 1)).unwrap();
+        cache.save(&snap("other", "1.0", 1)).unwrap();
+
+        assert!(cache.remove("ext.a"), "应删除 ext.a 的历史桩");
+        assert_eq!(cache.load("ext.a", "1.0"), None);
+        assert_eq!(cache.load("ext.a", "2.0"), None);
+        // 其他扩展不受影响；再次 remove 无可删 → false
+        assert!(cache.load("other", "1.0").is_some(), "无关扩展桩保留");
+        assert!(!cache.remove("ext.a"), "无桩可删时返回 false");
         let _ = std::fs::remove_dir_all(&dir);
     }
 

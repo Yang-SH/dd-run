@@ -18,3 +18,6 @@ windows-sys = { version = "0.61", features = [
     "Win32_UI_Input_KeyboardAndMouse",
     "Win32_UI_WindowsAndMessaging",
 ] }
+# M4 P2（host/* 执行端）：写剪贴板（host/set_clipboard）+ 打开系统浏览器（host/open_url）
+arboard = "3"
+webbrowser = "1"

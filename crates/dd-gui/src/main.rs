@@ -22,7 +22,7 @@
 //! - `logic`：窗口**隐藏时也会被调用**（经 `request_repaint` 唤醒）→ 热键与失焦；
 //! - `ui`：窗口可见/需重绘时调用 → 后台结果轮询、键盘导航与绘制。
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::sync::mpsc::{self, Receiver, TryRecvError};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -33,12 +33,16 @@ use dd_gui::aggregator::{self, SourceStatus};
 use dd_gui::hotkey::{HotkeyEvent, HotkeyThread};
 use dd_gui::navigation::{PageStack, PageState};
 use dd_gui::result::{self, HostAction, PendingConfirm};
+use dd_gui::robustness::{CrashGuard, MAX_CONSECUTIVE_CRASHES};
 use dd_gui::state::{PanelItem, PanelState};
 use dd_host::cache::{ColdStartTimer, FrozenCache, LruWarmSet};
 use dd_host::manifest::{self, LoadedExtension};
-use dd_host::process::{ExtensionProcess, TIMEOUT_GET_ITEMS, TIMEOUT_INVOKE};
-use dd_protocol::messages::{GetItemsParams, GetItemsResult, InvokeParams};
-use dd_protocol::model::{CommandRef, CommandResult};
+use dd_host::process::{ExtensionProcess, TIMEOUT_GET_ITEMS};
+use dd_protocol::messages::{
+    GetItemsParams, GetItemsResult, InvokeParams, OpenUrlParams, RawMessage, SetClipboardParams,
+    ShowStatusParams,
+};
+use dd_protocol::model::{CommandItem, CommandRef, CommandResult};
 
 /// §6.3 + A9：`items_changed` 通知的合并窗口（窗口内多次通知只重拉一次）。
 const REFRESH_WINDOW: Duration = Duration::from_millis(100);
@@ -83,6 +87,17 @@ struct PageOutcome {
     result: Result<GetItemsResult, String>,
     /// 本次是否由**桩复热**发起：失败时不归还进程、回退 stub。
     stub_reheat: bool,
+}
+
+/// 后台 `fallback_commands` 拉取的结果（M4 宿主 fallback 轮）。
+struct FallbackFetchOutcome {
+    ext_id: String,
+    /// `Some` = warm 进程取走后归还；`None` = 桩复热 spawn 场景（拉完即 close，
+    /// 不保活——兜底模板与进程生命周期解耦，见 [`PaletteApp::start_fallback_fetch`]）。
+    proc: Option<ExtensionProcess>,
+    /// 扩展显示名（渲染 section 兜底用；与模板一起存入 store）。
+    name: String,
+    result: Result<Vec<CommandItem>, String>,
 }
 
 /// Toast 提示条（过期即清除）。
@@ -315,6 +330,12 @@ struct PaletteApp {
     /// （M1 清单第 10 项）；扩展 `Hide`（保留状态，协议 §8.3）置 false；
     /// 扩展 `Dismiss`（关闭）已清空状态，保持 true 无碍。
     reset_on_show: bool,
+    /// M4：连续崩溃保护状态机（协议 §11）——键 = 扩展清单 id。
+    crash_guards: HashMap<String, CrashGuard>,
+    /// M4 宿主 fallback 轮：兜底模板缓存与渲染状态（协议 §6.2）。
+    fallback_store: dd_gui::fallback::FallbackStore,
+    /// 后台 `fallback_commands` 拉取结果接收端（`Some` = 有拉取在途）。
+    fallback_rx: Option<Receiver<FallbackFetchOutcome>>,
 }
 
 impl PaletteApp {
@@ -350,6 +371,9 @@ impl PaletteApp {
             last_pointer_pos: None,
             scroll_follow: true, // 键盘是主输入：初始允许滚动跟随
             reset_on_show: true,
+            crash_guards: HashMap::new(),
+            fallback_store: dd_gui::fallback::FallbackStore::new(),
+            fallback_rx: None,
         }
     }
 
@@ -366,7 +390,6 @@ impl PaletteApp {
         if self.reset_on_show {
             self.stack.current_mut().list.reset();
         }
-        self.refresh_health();
         ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
         ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
     }
@@ -534,9 +557,19 @@ impl PaletteApp {
                         if stub_reheat {
                             // 复热失败：新进程不归还（drop 即强杀），扩展保持 stub（A6 回退）
                             eprintln!("[dd-gui] 桩复热失败：ext={ext_id}，回退 stub：{e}");
-                        } else if let Some(p) = proc {
-                            // warm 请求失败：进程归还（超时/错误一般可恢复）
-                            self.store_warm_process(ext_id.clone(), p);
+                        } else if let Some(mut p) = proc {
+                            if p.has_exited() {
+                                // A8：进程在调用期间崩溃——丢弃死进程，命令回落 stub
+                                // （下次点击走复热 spawn），宿主继续运行；连续计数进熔断（§11）。
+                                eprintln!(
+                                    "[dd-gui] invoke 失败：ext={ext_id} 进程已退出（A8 崩溃恢复），丢弃死进程回落 stub：{e}"
+                                );
+                                self.drop_source_to_stub(&ext_id);
+                                self.record_crash(&ext_id);
+                            } else {
+                                // warm 请求失败但进程还活着：进程归还（超时/错误一般可恢复）
+                                self.store_warm_process(ext_id.clone(), p);
+                            }
                         }
                         eprintln!("[dd-gui] invoke 失败：{e}");
                         self.show_toast(format!("命令执行失败：{e}"), Some(3_000));
@@ -557,7 +590,7 @@ impl PaletteApp {
             Ok(outcome) => {
                 let PageOutcome {
                     ext_id,
-                    proc,
+                    mut proc,
                     page_id,
                     result,
                     stub_reheat,
@@ -599,8 +632,17 @@ impl PaletteApp {
                             if stub_reheat {
                                 // 复热失败：不保活新进程、扩展保持 stub（A6 回退）
                                 eprintln!("[dd-gui] 桩复热失败：ext={ext_id}，回退 stub：{e}");
-                            } else if let Some(p) = proc {
-                                self.store_warm_process(ext_id.clone(), p);
+                            } else if let Some(mut p) = proc {
+                                if p.has_exited() {
+                                    // A8：进程在 get_items 期间崩溃——丢弃死进程，回落 stub
+                                    eprintln!(
+                                        "[dd-gui] get_items 失败：ext={ext_id} 进程已退出（A8 崩溃恢复），丢弃死进程回落 stub：{e}"
+                                    );
+                                    self.drop_source_to_stub(&ext_id);
+                                    self.record_crash(&ext_id);
+                                } else {
+                                    self.store_warm_process(ext_id.clone(), p);
+                                }
                             }
                             eprintln!("[dd-gui] get_items 失败：page={page_id}：{e}");
                             let page = self.stack.current_mut();
@@ -610,12 +652,16 @@ impl PaletteApp {
                         }
                     }
                 } else {
-                    // 用户已离开来源页：成功（或 warm 失败）仍归还进程——它是扩展资产；
-                    // 复热失败则不保活。
-                    if result.is_ok() || !stub_reheat {
+                    // 用户已离开来源页：成功（或 warm 失败但进程存活）仍归还进程——
+                    // 它是扩展资产；复热失败或进程已死则不保活（A8：回落 stub）。
+                    let proc_alive = proc.as_mut().map(|p| !p.has_exited()).unwrap_or(false);
+                    if result.is_ok() || (proc_alive && !stub_reheat) {
                         if let Some(p) = proc {
                             self.store_warm_process(ext_id.clone(), p);
                         }
+                    } else if proc.is_some() {
+                        // 进程已死或复热失败：丢弃（drop 即强杀/清理），回落 stub
+                        self.drop_source_to_stub(&ext_id);
                     }
                     eprintln!("[dd-gui] get_items 结果作废：已离开 page={page_id}");
                 }
@@ -626,6 +672,7 @@ impl PaletteApp {
     }
 
     /// `items_changed` 通知轮询：命中当前页则进入 100ms 合并窗口。
+    /// 同时收集扩展发来的 `host/*` 请求（M4 P2）——执行端见 [`Self::poll_host_requests`]。
     fn poll_notifications(&mut self) {
         if self.processes.is_empty() {
             return;
@@ -663,6 +710,84 @@ impl PaletteApp {
         }
     }
 
+    /// M4 P2：消费扩展的 `host/*` 请求并执行真实副作用（协议 §7.2–§7.4）。
+    /// `host/show_status` → Toast；`host/set_clipboard` → 剪贴板；`host/open_url` → 浏览器。
+    /// 应答由 dd-host 完成（§7.4 能力前置：未声明回 `-32601`），此处只做执行端。
+    fn poll_host_requests(&mut self) {
+        if self.processes.is_empty() {
+            return;
+        }
+        // 收集期间只借用 `self.processes`；执行副作用需要 `&mut self`，故先取走再统一处理。
+        let requests: Vec<(String, RawMessage)> = self
+            .processes
+            .iter_mut()
+            .flat_map(|(ext_id, proc)| {
+                proc.drain_host_requests()
+                    .into_iter()
+                    .map(move |msg| (ext_id.clone(), msg))
+            })
+            .collect();
+        for (ext_id, msg) in requests {
+            self.execute_host_request(&ext_id, &msg);
+        }
+    }
+
+    /// 单个 `host/*` 请求的执行端（M4 P2）。未知方法记日志不报错（dd-host 已应答）。
+    fn execute_host_request(&mut self, ext_id: &str, msg: &RawMessage) {
+        let Some(method) = msg.method.as_deref() else {
+            return;
+        };
+        match method {
+            "host/show_status" => {
+                let Ok(params) = serde_json::from_value::<ShowStatusParams>(
+                    msg.params.clone().unwrap_or(serde_json::Value::Null),
+                ) else {
+                    eprintln!("[dd-gui] host/show_status 参数解析失败（ext={ext_id}）");
+                    return;
+                };
+                eprintln!(
+                    "[dd-gui] host/show_status（ext={ext_id}）：{} state={:?}",
+                    params.message, params.state
+                );
+                self.show_toast(params.message, params.duration_ms);
+            }
+            "host/set_clipboard" => {
+                let Ok(params) = serde_json::from_value::<SetClipboardParams>(
+                    msg.params.clone().unwrap_or(serde_json::Value::Null),
+                ) else {
+                    eprintln!("[dd-gui] host/set_clipboard 参数解析失败（ext={ext_id}）");
+                    return;
+                };
+                let result = std::thread::spawn(move || {
+                    let mut cb = arboard::Clipboard::new()?;
+                    cb.set_text(params.text)?;
+                    Ok::<(), Box<dyn std::error::Error + Send + Sync>>(())
+                })
+                .join();
+                match result {
+                    Ok(Ok(())) => eprintln!("[dd-gui] host/set_clipboard（ext={ext_id}）成功"),
+                    Ok(Err(e)) => {
+                        eprintln!("[dd-gui] host/set_clipboard（ext={ext_id}）失败：{e}")
+                    }
+                    Err(_) => eprintln!("[dd-gui] host/set_clipboard 线程异常（ext={ext_id}）"),
+                }
+            }
+            "host/open_url" => {
+                let Ok(params) = serde_json::from_value::<OpenUrlParams>(
+                    msg.params.clone().unwrap_or(serde_json::Value::Null),
+                ) else {
+                    eprintln!("[dd-gui] host/open_url 参数解析失败（ext={ext_id}）");
+                    return;
+                };
+                eprintln!("[dd-gui] host/open_url（ext={ext_id}）：{}", params.url);
+                if let Err(e) = webbrowser::open(&params.url) {
+                    eprintln!("[dd-gui] host/open_url（ext={ext_id}）失败：{e}");
+                }
+            }
+            other => eprintln!("[dd-gui] 未知 host/* 请求：{other}（ext={ext_id}，已应答忽略）"),
+        }
+    }
+
     /// 合并窗口到期：重拉当前页（**全量**，协议层无增量推送）。
     fn tick_refresh(&mut self) {
         let Some(refresh) = &self.refresh else {
@@ -690,33 +815,87 @@ impl PaletteApp {
         self.dispatch_fetch_page(&ext_id, &page_id, search, None);
     }
 
-    /// 崩溃检测骨架：已退出的进程，其扩展源状态标记为失败。
+    /// 崩溃检测 + 连续崩溃保护（M4/协议 §11，A8）：
+    /// 每帧检查保活集，已退出进程按退出码区分——**非 0 退出码 = 崩溃**，
+    /// 记录到 [`Self::crash_guards`]（连续 N 次 → 熔断"暂时不可用"）；
+    /// **0 退出码 = 正常退出**（如扩展自行 close），仅回落 stub 不计数。
+    /// 两种情形都：从保活集移除、LRU 清出、源状态回落（下次点击复热 spawn）。
     fn refresh_health(&mut self) {
         if self.processes.is_empty() {
             return;
         }
-        let exited: Vec<String> = self
+        let exited: Vec<(String, bool)> = self
             .processes
             .iter_mut()
-            .filter_map(|(id, p)| p.has_exited().then(|| id.clone()))
+            .filter_map(|(id, p)| {
+                // §11：非 0 退出码 = 崩溃；0 = 正常退出
+                p.exit_status().map(|st| (id.clone(), !st.success()))
+            })
             .collect();
         if exited.is_empty() {
             return;
         }
-        for id in &exited {
-            // 已退出进程从保活集移除（下次点击走桩复热、重新 spawn）；
-            // 崩溃恢复（重试/连续崩溃保护）属 M4（A8）。
-            self.processes.retain(|(pid, _)| pid != id);
-            self.lru.remove(id);
-            eprintln!("[dd-gui] 扩展进程已退出：{id}（移除保活，点击命令将重新拉起）");
-            if let Some(s) = self.sources.iter_mut().find(|s| s.id == *id) {
-                if !s.status.is_failed() {
-                    s.status = SourceStatus::Failed {
-                        error: "扩展进程已退出".to_string(),
-                    };
+        for (id, crashed) in exited {
+            eprintln!(
+                "[dd-gui] 扩展进程已退出：{id}（{}，移除保活，点击命令将重新拉起）",
+                if crashed {
+                    "崩溃/非 0 退出码"
+                } else {
+                    "正常退出"
                 }
+            );
+            self.drop_source_to_stub(&id);
+            if crashed {
+                self.record_crash(&id);
             }
         }
+    }
+
+    /// M4/§11：记录一次崩溃，连续 [`MAX_CONSECUTIVE_CRASHES`] 次 → 熔断（暂时不可用）。
+    fn record_crash(&mut self, ext_id: &str) {
+        let guard = self
+            .crash_guards
+            .entry(ext_id.to_string())
+            .or_insert_with(|| CrashGuard::new(ext_id));
+        if guard.is_tripped() {
+            return;
+        }
+        let just_tripped = guard.record_crash();
+        let n = guard.consecutive();
+        if just_tripped {
+            eprintln!(
+                "[dd-gui] 扩展 {ext_id} 连续崩溃 {n} 次 ≥ {MAX_CONSECUTIVE_CRASHES}，标记暂时不可用（重启宿主或手动重试后恢复）"
+            );
+            self.show_toast(
+                format!("扩展 {ext_id} 暂时不可用（连续崩溃 {n} 次），重启后恢复"),
+                Some(4_000),
+            );
+            if let Some(s) = self.sources.iter_mut().find(|s| s.id == ext_id) {
+                s.status = SourceStatus::Failed {
+                    error: format!("暂时不可用（连续崩溃 {n} 次，重启宿主恢复）"),
+                };
+            }
+        } else {
+            eprintln!("[dd-gui] 扩展 {ext_id} 连续崩溃 {n}/{MAX_CONSECUTIVE_CRASHES} 次");
+        }
+    }
+
+    /// M4/§11：扩展成功恢复（warm/复热成功）→ 清零连续崩溃计数、解除熔断。
+    fn reset_crash(&mut self, ext_id: &str) {
+        if let Some(g) = self.crash_guards.get_mut(ext_id) {
+            if g.is_tripped() || g.consecutive() > 0 {
+                eprintln!("[dd-gui] 扩展 {ext_id} 恢复成功，清零连续崩溃计数");
+            }
+            g.reset();
+        }
+    }
+
+    /// M4/§11：该扩展是否处于熔断（暂时不可用）态。
+    fn is_crash_tripped(&self, ext_id: &str) -> bool {
+        self.crash_guards
+            .get(ext_id)
+            .map(|g| g.is_tripped())
+            .unwrap_or(false)
     }
 
     // ── 命令执行 ─────────────────────────────────────────────
@@ -746,11 +925,153 @@ impl PaletteApp {
         self.exts.iter().find(|e| e.manifest.id == ext_id)
     }
 
+    // ── M4 宿主 fallback（协议 §6.2：搜索无匹配时展示兜底命令） ──────────
+
+    /// 查询同步点：Root 页且查询非空且**常规无匹配**时，用缓存的兜底模板
+    /// 渲染出展示项并注入列表；有匹配/空查询/嵌套页则清空展示（模板缓存保留）。
+    /// 每帧由 `draw_panel` 调用（模板渲染开销极小，且 `store` 内做过去重）。
+    fn sync_fallback(&mut self) {
+        let page = self.stack.current();
+        if page.page_id.is_some() || self.aggregating || page.is_loading {
+            return; // 嵌套页有自己的过滤（get_items search）；加载中不打扰
+        }
+        let query = page.list.query().to_string();
+        if query.is_empty() || page.list.has_regular_match() {
+            self.stack.current_mut().list.clear_fallback();
+            return;
+        }
+        // 无匹配：渲染缓存模板（缓存空 → 空集，列表区回落"没有匹配项"）
+        let rendered = self.fallback_store.render(&query);
+        self.stack.current_mut().list.set_fallback(rendered);
+        // 若还有扩展未拉取模板且当前无在途请求 → 链式发起（每轮 1 个）
+        self.start_fallback_fetch_chain();
+    }
+
+    /// 链式拉取：找第一个「需要模板 且 有 warm 进程」的扩展，take 进程后在
+    /// 后台线程调 `fallback_commands`；完成后 [`Self::poll_fallback`] 存模板并
+    /// 继续下一个（每次 1 个在途，遵守协议 §4 同进程串行化）。
+    fn start_fallback_fetch_chain(&mut self) {
+        if self.fallback_rx.is_some() {
+            return; // 已有在途
+        }
+        let target = self
+            .processes
+            .iter()
+            .find(|(id, _)| self.fallback_store.wants(id))
+            .map(|(id, _)| id.clone());
+        let Some(ext_id) = target else {
+            return;
+        };
+        let name = self
+            .exts
+            .iter()
+            .find(|e| e.manifest.id == ext_id)
+            .map(|e| e.manifest.name.clone())
+            .unwrap_or_default();
+        self.fallback_store.begin_fetch(&ext_id);
+        let idx = self
+            .processes
+            .iter()
+            .position(|(id, _)| *id == ext_id)
+            .expect("target 来自 processes，必在");
+        let (_, mut proc) = self.processes.remove(idx);
+        self.inflight.insert(ext_id.clone());
+        eprintln!("[dd-gui] 拉取兜底模板：ext={ext_id}");
+        let (tx, rx) = mpsc::channel();
+        thread::spawn(move || {
+            let result = dd_gui::fallback::fetch_fallback_commands(&mut proc);
+            let _ = tx.send(FallbackFetchOutcome {
+                ext_id,
+                proc: Some(proc),
+                name,
+                result,
+            });
+        });
+        self.fallback_rx = Some(rx);
+    }
+
+    /// 后台 `fallback_commands` 结果：存模板（非空 → Ready；空/失败 → Exhausted
+    /// 不再重拉）→ 归还/丢弃进程 → 链式拉下一个 → 重渲染当前查询的兜底项。
+    fn poll_fallback(&mut self, ctx: &egui::Context) {
+        let (outcome, disconnected) = match &self.fallback_rx {
+            Some(rx) => match rx.try_recv() {
+                Ok(o) => (Some(o), false),
+                Err(TryRecvError::Empty) => (None, false),
+                Err(TryRecvError::Disconnected) => (None, true),
+            },
+            None => (None, false),
+        };
+        if disconnected {
+            self.fallback_rx = None;
+        }
+        let Some(outcome) = outcome else {
+            return;
+        };
+        let FallbackFetchOutcome {
+            ext_id,
+            proc,
+            name,
+            result,
+        } = outcome;
+        self.inflight.remove(&ext_id);
+        self.fallback_rx = None;
+        match result {
+            Ok(templates) => {
+                self.fallback_store.store(&ext_id, &name, templates);
+                eprintln!(
+                    "[dd-gui] 兜底模板就绪：ext={ext_id}（{} 条）",
+                    self.fallback_store.template_count(&ext_id)
+                );
+                ctx.request_repaint(); // 模板到达 → 立即重绘展示兜底项
+            }
+            Err(e) => {
+                eprintln!("[dd-gui] fallback_commands 失败：ext={ext_id}：{e}（本会话不再重试）");
+                self.fallback_store.store_failure(&ext_id);
+            }
+        }
+        if let Some(mut p) = proc {
+            if p.has_exited() {
+                // A8：拉取期间进程崩溃 → 丢弃死进程、回落 stub（不误判为正常）
+                self.drop_source_to_stub(&ext_id);
+            } else {
+                self.store_warm_process(ext_id.clone(), p);
+            }
+        }
+        // 链式拉下一个未取模板的扩展
+        self.start_fallback_fetch_chain();
+        // 当前查询可能已匹配到新模板 → 重渲染
+        self.rerender_fallback();
+        ctx.request_repaint();
+    }
+
+    /// 无匹配时用 store 最新状态重渲染兜底项（拉取完成后调用）。
+    fn rerender_fallback(&mut self) {
+        let page = self.stack.current();
+        if page.page_id.is_some() || page.is_loading || page.list.has_regular_match() {
+            return;
+        }
+        let query = page.list.query().to_string();
+        if query.is_empty() {
+            return;
+        }
+        let rendered = self.fallback_store.render(&query);
+        self.stack.current_mut().list.set_fallback(rendered);
+    }
+
     /// `invoke` 分派：warm 进程在 → 直接后台执行；不在 → 桩复热（A6）。
+    /// M4：熔断（连续崩溃，§11）的扩展**不再尝试 spawn**，等重启/手动重试。
     fn dispatch_invoke(&mut self, ext_id: &str, params: InvokeParams) {
         if self.invoke_rx.is_some() || self.inflight.contains(ext_id) {
             eprintln!("[dd-gui] invoke 失败：ext={ext_id} 上一请求仍在处理");
             self.show_toast("扩展进程不可用（可能正在处理上一个请求）", Some(2_000));
+            return;
+        }
+        if self.is_crash_tripped(ext_id) {
+            eprintln!("[dd-gui] invoke 拒绝：ext={ext_id} 暂时不可用（连续崩溃熔断）");
+            self.show_toast(
+                format!("扩展 {ext_id} 暂时不可用，重启宿主后恢复"),
+                Some(2_500),
+            );
             return;
         }
         if self.processes.iter().any(|(id, _)| id == ext_id) {
@@ -853,6 +1174,7 @@ impl PaletteApp {
     }
 
     /// `get_items` 分派：warm → take 直发；不在 → 桩复热后拉取（A6）。
+    /// M4：熔断（连续崩溃，§11）的扩展**不再尝试 spawn**，等重启/手动重试。
     fn dispatch_fetch_page(
         &mut self,
         ext_id: &str,
@@ -865,6 +1187,13 @@ impl PaletteApp {
             let page = self.stack.current_mut();
             page.is_loading = false;
             page.empty = Some("扩展进程不可用（可能正在处理上一个请求）".to_string());
+            return;
+        }
+        if self.is_crash_tripped(ext_id) {
+            eprintln!("[dd-gui] get_items 拒绝：ext={ext_id} 暂时不可用（连续崩溃熔断）");
+            let page = self.stack.current_mut();
+            page.is_loading = false;
+            page.empty = Some(format!("扩展 {ext_id} 暂时不可用，重启宿主后恢复"));
             return;
         }
         if self.processes.iter().any(|(id, _)| id == ext_id) {
@@ -991,6 +1320,22 @@ impl PaletteApp {
         }
     }
 
+    /// A8：进程已退出（崩溃或正常退出）时把该扩展从保活集移除、LRU 清出、源状态回落 stub。
+    /// 进程对象本身由调用方 drop（此处仅清理宿主侧簿记，供下次点击走复热 spawn）。
+    fn drop_source_to_stub(&mut self, ext_id: &str) {
+        self.processes.retain(|(pid, _)| pid != ext_id);
+        self.lru.remove(ext_id);
+        if let Some(s) = self.sources.iter_mut().find(|s| s.id == ext_id) {
+            if !s.status.is_failed() {
+                let n = match &s.status {
+                    SourceStatus::Warm { commands } | SourceStatus::Stub { commands } => *commands,
+                    SourceStatus::Failed { .. } => 0,
+                };
+                s.status = SourceStatus::Stub { commands: n };
+            }
+        }
+    }
+
     /// 源状态转 warm（桩复热成功 / cold start warm 时调用；Failed→Warm 同理恢复）。
     fn mark_source_warm(&mut self, ext_id: &str) {
         if let Some(s) = self.sources.iter_mut().find(|s| s.id == ext_id) {
@@ -1002,6 +1347,8 @@ impl PaletteApp {
                 s.status = SourceStatus::Warm { commands: n };
             }
         }
+        // M4/§11：warm = 成功恢复 → 清零连续崩溃计数（解除熔断）
+        self.reset_crash(ext_id);
     }
 
     /// 应用 8 种 Kind 裁决出的宿主动作（A4）。
@@ -1154,12 +1501,16 @@ impl PaletteApp {
                     .desired_width(f32::INFINITY)
                     .font(egui::TextStyle::Body);
                 let resp = ui.add(filter);
-                let page = self.stack.current_mut();
-                page.list.set_query(query);
-                if self.want_focus {
-                    resp.request_focus();
-                    self.want_focus = false;
+                {
+                    let page = self.stack.current_mut();
+                    page.list.set_query(query);
+                    if self.want_focus {
+                        resp.request_focus();
+                        self.want_focus = false;
+                    }
                 }
+                // M4 宿主 fallback：查询变化后同步兜底展示/拉取（页面借用已释放）
+                self.sync_fallback();
                 ui.add_space(6.0);
 
                 // ── 列表区 ───────────────────────────────────
@@ -1446,19 +1797,11 @@ impl PaletteApp {
 
 /// 在给定进程上执行一次 `invoke`（协议 §6.5），返回 `CommandResult` 本体。
 ///
-/// `call` 已解开 JSON-RPC 信封，返回的内层 `result` 即 §8.3 `CommandResult` 本体——
-/// 直接解析；若按 `InvokeResult`（要求 `result` 字段）再包一层，任何成功 invoke
-/// 都会报「响应解析失败：missing field `result`」（M2 修复记录）。
+/// 委托 [`ExtensionProcess::invoke`]（M4 P4：协议方法封装上提至 dd-host，
+/// 序列化/信封解析只写一份）。`call` 已解开 JSON-RPC 信封，内层 `result`
+/// 即 §8.3 `CommandResult` 本体——不能按 `InvokeResult` 再包一层（M2 修复记录）。
 fn invoke_on(proc: &mut ExtensionProcess, params: &InvokeParams) -> Result<CommandResult, String> {
-    serde_json::to_value(params)
-        .map_err(|e| format!("参数序列化失败：{e}"))
-        .and_then(|v| {
-            proc.call("invoke", v, TIMEOUT_INVOKE)
-                .map_err(|e| e.to_string())
-        })
-        .and_then(|v| {
-            serde_json::from_value::<CommandResult>(v).map_err(|e| format!("响应解析失败：{e}"))
-        })
+    proc.invoke(params).map_err(|e| e.to_string())
 }
 
 /// 在给定进程上全量拉取一页（协议 §6.3 `get_items`）。
@@ -1555,6 +1898,9 @@ impl eframe::App for PaletteApp {
         self.recenter_if_needed(ctx);
         self.poll_hotkey(ctx);
         self.handle_focus_loss(ctx);
+        // A8：每帧健康检查——面板可见期间扩展崩溃也能及时移除（此前仅 show() 时查一次，
+        // 面板一直开着时崩溃的进程会滞留到下次唤起才被清理）。
+        self.refresh_health();
         // A2 计时的正确性：聚合结果**必须**在窗口隐藏时也安装并完成计时。
         // 此前 poll_aggregate 只在 ui() 里调用，而 ui() 在 !visible 时直接 return
         // ——面板初始隐藏 ⇒ 冷启动计时会一直等到用户按下热键才触发，
@@ -1574,6 +1920,8 @@ impl eframe::App for PaletteApp {
         self.poll_invoke(&ctx);
         self.poll_page();
         self.poll_notifications();
+        self.poll_host_requests(); // M4 P2：host/* 副作用（Toast/剪贴板/开 URL）
+        self.poll_fallback(&ctx); // M4 宿主 fallback：兜底模板拉取结果
         self.tick_refresh();
 
         // Toast 到期清除；未到期则预约重绘

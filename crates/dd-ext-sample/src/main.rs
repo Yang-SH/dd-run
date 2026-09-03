@@ -11,11 +11,16 @@
 //! M3（桩复热支撑，见 m3-record.md）：`get_command`（§6.4）——按 id 从顶层目录
 //! 取回真实命令，供宿主在 frozen 桩复热链路使用；找不到回 `command: null`（非错误）。
 //!
+//! M4（host/* 执行端支撑，见 m4-record.md P2）：声明 `host/show_status` /
+//! `host/set_clipboard` / `host/open_url` 三个能力，并提供 3 条触发命令——
+//! `invoke` 期间向宿主反向发 `host/*` 请求（§3.3），宿主应答并记录，
+//! 由 dd-gui 消费执行真实副作用（Toast / 剪贴板 / 默认浏览器）。
+//!
 //! 传输层约定（§2）：stdin 读 NDJSON、stdout **只写协议消息**，
 //! 任何日志一律走 stderr（§2.5）。
 
 use std::io::{self, Read, Write};
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 
 use dd_protocol::framing::{encode, Decoder, Frame};
 use dd_protocol::messages::{
@@ -174,6 +179,38 @@ fn handle(line: &str, out: &mut dyn Write) -> bool {
             match params.id.as_str() {
                 "m2.page.notify" => send_items_changed(out, Some(PAGE_ID.to_string())),
                 "m2.top.notify" => send_items_changed(out, None),
+                // M4（host/* 执行端，见 m4-record.md P2）：回包后向宿主发 host/* 请求，
+                // 由 dd-gui 消费执行真实副作用。宿主在 invoke 响应等待期间会应答
+                // （§3.3：扩展反向请求），故无需在此等待应答。
+                "m4.host.show_status" => {
+                    send_host_request(
+                        out,
+                        "host/show_status",
+                        &serde_json::json!({
+                            "message": "M4 host/show_status：Toast 显示成功".to_string(),
+                            "state": "success",
+                            "duration_ms": 3000_u64,
+                        }),
+                    );
+                }
+                "m4.host.copy" | "sample.copy" | "sample.copy.plain" => {
+                    send_host_request(
+                        out,
+                        "host/set_clipboard",
+                        &serde_json::json!({
+                            "text": "dd-run M4 clipboard demo：3.14159".to_string(),
+                        }),
+                    );
+                }
+                "m4.host.open_url" => {
+                    send_host_request(
+                        out,
+                        "host/open_url",
+                        &serde_json::json!({
+                            "url": "https://github.com/Yang-SH/dd-run".to_string(),
+                        }),
+                    );
+                }
                 _ => {}
             }
         }
@@ -239,8 +276,13 @@ fn initialize_result() -> InitializeResult {
             frozen: true,
             has_fallback: false,
         },
-        // M0/M2 不调用任何 host/* 方法；声明后宿主才会响应（§7.4 能力前置）
-        capabilities: vec![],
+        // M4（host/* 执行端验证，见 m4-record.md P2）：声明后宿主才应答
+        // 并执行真实副作用（Toast / 剪贴板 / 开 URL，§7.4 能力前置）。
+        capabilities: vec![
+            "host/show_status".to_string(),
+            "host/set_clipboard".to_string(),
+            "host/open_url".to_string(),
+        ],
         timeouts: None,
     }
 }
@@ -276,7 +318,7 @@ fn top_level_commands() -> Vec<CommandItem> {
         CommandItem {
             id: "sample.copy".to_string(),
             title: "Copy Sample Text".to_string(),
-            subtitle: Some("演示 §7.3 host/set_clipboard 的调用路径（M4 接入）".to_string()),
+            subtitle: Some("M4：host/set_clipboard → 写剪贴板（粘贴验证）".to_string()),
             icon: Some(Icon {
                 kind: IconKind::Glyph,
                 value: "\u{E8C8}".to_string(),
@@ -367,6 +409,28 @@ fn top_level_commands() -> Vec<CommandItem> {
         &["a9"],
         CommandRef::Invoke,
     ));
+    // 「M4 host/* 执行端」分组（见 m4-record.md P2 / §4 清单 #6–#8）
+    cmds.push(item(
+        "m4.host.show_status",
+        "M4：host/show_status",
+        "调宿主 Toast（扩展请求宿主显示状态，§7.2）",
+        &["m4", "host"],
+        CommandRef::Invoke,
+    ));
+    cmds.push(item(
+        "m4.host.copy",
+        "M4：host/set_clipboard",
+        "调宿主写剪贴板（§7.3），随后粘贴验证文本",
+        &["m4", "host"],
+        CommandRef::Invoke,
+    ));
+    cmds.push(item(
+        "m4.host.open_url",
+        "M4：host/open_url",
+        "调宿主用默认浏览器打开仓库主页（§7.4）",
+        &["m4", "host"],
+        CommandRef::Invoke,
+    ));
     cmds
 }
 
@@ -422,6 +486,9 @@ fn invoke_result(params: &InvokeParams) -> CommandResult {
         },
         // 保持打开：M4 接入 set_clipboard 前仅演示 KeepOpen Kind
         "sample.copy" | "sample.copy.plain" => CommandResult::KeepOpen,
+        // M4：host/* 触发命令——真实副作用在 dd-gui 执行端（Toast/剪贴板/浏览器），
+        // 此处仅回 KeepOpen（面板保持打开以便观察），host 请求在 invoke 回包后补发。
+        "m4.host.show_status" | "m4.host.copy" | "m4.host.open_url" => CommandResult::KeepOpen,
         "m2.kind.dismiss" | "m2.page.dismiss" => CommandResult::Dismiss,
         "m2.kind.hide" => CommandResult::Hide,
         "m2.kind.go_home" | "m2.page.home" => CommandResult::GoHome,
@@ -477,6 +544,24 @@ fn send_items_changed(out: &mut dyn Write, page_id: Option<String>) {
         }),
     );
     log("-> items_changed");
+}
+
+/// §3.3：扩展向宿主发 `host/*` **请求**（带 id，等待应答）。
+/// 宿主在 in-flight 等待期间应答（`call` 内），或空闲轮询应答（M4 起），
+/// 应答结果本示例不等待（Fire-and-forget，宿主必应答后记录）。
+fn send_host_request(out: &mut dyn Write, method: &str, params: &serde_json::Value) {
+    static REQ_ID: AtomicU64 = AtomicU64::new(1);
+    let id = REQ_ID.fetch_add(1, Ordering::Relaxed);
+    send(
+        out,
+        &serde_json::json!({
+            "jsonrpc": JSONRPC_VERSION,
+            "id": id,
+            "method": method,
+            "params": params
+        }),
+    );
+    log(&format!("-> {method} (id={id})"));
 }
 
 /// 构造一条「M2 验收」分组命令（section 固定，字段取最小集）。

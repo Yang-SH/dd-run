@@ -13,7 +13,7 @@ use std::path::{Path, PathBuf};
 use dd_host::manifest::{Entry, LoadedExtension, Manifest, ScanOptions};
 use dd_host::process::{ExtensionProcess, ProtocolError, TIMEOUT_GET_ITEMS, TIMEOUT_INVOKE};
 use dd_protocol::messages::{
-    error_codes, GetItemsParams, GetItemsResult, InvokeContext, InvokeParams,
+    error_codes, GetItemsParams, GetItemsResult, InvokeContext, InvokeParams, RawMessage,
 };
 use dd_protocol::model::{CommandRef, CommandResult, Sender};
 
@@ -134,17 +134,23 @@ fn roundtrip_initialize_top_level_commands_close() {
     );
     assert!(init.provider.frozen);
     assert!(!init.provider.has_fallback);
-    assert!(
-        init.capabilities.is_empty(),
-        "M0 示例不使用任何 host/* 能力"
+    // M4（host/* 执行端，见 m4-record.md P2）：示例扩展声明 3 个 host 能力
+    assert_eq!(
+        init.capabilities,
+        vec![
+            "host/show_status".to_string(),
+            "host/set_clipboard".to_string(),
+            "host/open_url".to_string(),
+        ],
+        "M4：示例扩展声明 host/show_status + host/set_clipboard + host/open_url"
     );
 
-    // ③ top_level_commands（§6.1：M0 2 条 + 「M2 验收」分组 9 条，共 11 条）
+    // ③ top_level_commands（§6.1：M0 2 条 + 「M2 验收」分组 9 条 + 「M4 host」3 条，共 14 条）
     let commands = process.top_level_commands().expect("拉取顶层命令");
     assert_eq!(
         commands.len(),
-        11,
-        "M0 2 条 + M2 验收 9 条（Page + 7 种 Kind + 顶层通知；GoBack 属 A5 边界只在嵌套页）"
+        14,
+        "M0 2 条 + M2 验收 9 条 + M4 host 3 条（GoBack 属 A5 边界只在嵌套页）"
     );
     let ids: Vec<&str> = commands.iter().map(|c| c.id.as_str()).collect();
     assert_eq!(
@@ -161,12 +167,15 @@ fn roundtrip_initialize_top_level_commands_close() {
             "m2.kind.show_toast",
             "m2.kind.confirm",
             "m2.top.notify",
+            "m4.host.show_status",
+            "m4.host.copy",
+            "m4.host.open_url",
         ]
     );
     for item in &commands {
         assert!(!item.title.is_empty());
     }
-    // M2：m2.page 为 Page 引用（A5 嵌套页），其余 10 条均为 Invoke
+    // M2：m2.page 为 Page 引用（A5 嵌套页），其余 13 条均为 Invoke
     assert_eq!(
         commands[2].command,
         CommandRef::Page {
@@ -443,6 +452,114 @@ fn roundtrip_m3_get_command_reheat_chain() {
         process.get_command("no.such.command").expect("应 Ok"),
         None,
         "未知命令应回 null 而非错误"
+    );
+
+    process.close().expect("优雅关闭");
+}
+
+/// M4 P2 host/* 执行端支撑的运行时验证（支撑 m4-record.md §4 清单 #6–#8）：
+/// 扩展在 `invoke` 回包后向宿主发 `host/show_status` / `host/set_clipboard` /
+/// `host/open_url` 请求（§3.3 反向请求），宿主须应答（§7.4 能力前置：已声明回 `{}`）
+/// 并记录进 `host_requests`，供 UI 层 `drain_host_requests` 消费执行真实副作用。
+#[test]
+fn roundtrip_m4_host_requests_are_answered_and_recorded() {
+    let tmp = TempDir::new("m4-host");
+    let ext = load_sample(&tmp);
+    let mut process = ExtensionProcess::spawn(&ext).expect("spawn 示例扩展");
+    let init = process.initialize("1.0", "0.1.0").expect("握手成功");
+    // M4：示例扩展声明了 3 个 host/* 能力（§7.4 能力前置的"白名单"）
+    assert!(
+        init.capabilities.contains(&"host/show_status".to_string()),
+        "M4：应声明 host/show_status"
+    );
+
+    let invoke = |process: &mut ExtensionProcess, id: &str| {
+        let params = InvokeParams {
+            id: id.to_string(),
+            sender: Sender::TopLevel,
+            context: None,
+        };
+        let value = process
+            .call(
+                "invoke",
+                serde_json::to_value(params).expect("序列化"),
+                TIMEOUT_INVOKE,
+            )
+            .expect("invoke 成功");
+        serde_json::from_value::<CommandResult>(value).expect("解析 CommandResult")
+    };
+
+    // 时序稳健 helper：invoke 的响应可能先于扩展的 host 请求到达（host 请求仍
+    // 在子进程管道/读线程中）。改为「截止时间条件等待」：轮询直至 host 请求落袋，
+    // 或超 2s 预算才放弃——避免原固定 25×20ms 预算在高负载/并行跑多个 roundtrip
+    // 时窗口被放大而偶发错过（M4 P4 宿主 fallback 轮修复的竞态，本轮进一步加固）。
+    let drain_host_requests = |process: &mut ExtensionProcess| -> Vec<RawMessage> {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        loop {
+            let _ = process.poll_notifications();
+            let requests = process.drain_host_requests();
+            if !requests.is_empty() {
+                return requests;
+            }
+            if std::time::Instant::now() >= deadline {
+                return Vec::new();
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+    };
+
+    // ① m4.host.show_status → invoke 本身成功（KeepOpen），随后 host 请求被应答并记录。
+    assert_eq!(
+        invoke(&mut process, "m4.host.show_status"),
+        CommandResult::KeepOpen
+    );
+    let requests = drain_host_requests(&mut process);
+    assert!(
+        requests.iter().any(|m| {
+            m.method.as_deref() == Some("host/show_status")
+                && m.params
+                    .as_ref()
+                    .and_then(|p| p.get("message"))
+                    .and_then(|v| v.as_str())
+                    .is_some_and(|s| s.contains("Toast"))
+        }),
+        "host/show_status 请求应被记录（带 message 参数）：{requests:?}"
+    );
+
+    // ② m4.host.copy → host/set_clipboard（text 参数完整）
+    assert_eq!(
+        invoke(&mut process, "m4.host.copy"),
+        CommandResult::KeepOpen
+    );
+    let requests = drain_host_requests(&mut process);
+    assert!(
+        requests.iter().any(|m| {
+            m.method.as_deref() == Some("host/set_clipboard")
+                && m.params
+                    .as_ref()
+                    .and_then(|p| p.get("text"))
+                    .and_then(|v| v.as_str())
+                    .is_some()
+        }),
+        "host/set_clipboard 请求应被记录（带 text 参数）：{requests:?}"
+    );
+
+    // ③ m4.host.open_url → host/open_url（url 参数完整）
+    assert_eq!(
+        invoke(&mut process, "m4.host.open_url"),
+        CommandResult::KeepOpen
+    );
+    let requests = drain_host_requests(&mut process);
+    assert!(
+        requests.iter().any(|m| {
+            m.method.as_deref() == Some("host/open_url")
+                && m.params
+                    .as_ref()
+                    .and_then(|p| p.get("url"))
+                    .and_then(|v| v.as_str())
+                    .is_some()
+        }),
+        "host/open_url 请求应被记录（带 url 参数）：{requests:?}"
     );
 
     process.close().expect("优雅关闭");

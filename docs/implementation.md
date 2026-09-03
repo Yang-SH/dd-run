@@ -133,9 +133,10 @@
 | 过滤性能 | 模糊匹配（如 `nucleo` / `skim`）；帧耗时采样埋点 |
 
 **完成判据**：
-- 故障注入（kill 子进程）后宿主不退出、可恢复（A8）；
-- 5 个内置扩展功能清单核对通过（A10）；
-- 实测结果列表过滤帧耗时，记录是否达成 A3 的 16ms/帧目标（**未达成则记录实测值**）。
+- 故障注入（kill 子进程）后宿主不退出、可恢复（A8）——P1 代码完成，待真机复验（m4-record §4 #1–#3）；
+- 5 个内置扩展功能清单核对通过（A10）——P4 扩展侧 + 宿主 fallback 轮代码完成（146/146 全绿，
+  含无匹配渲染 + `{query}` 替换 + `context.query` 透传），真机清单见 m4-record §4 #9–#13；
+- 实测结果列表过滤帧耗时，记录是否达成 A3 的 16ms/帧目标（**未达成则记录实测值**）——P5。
 
 **验收映射**：A8、A10、A3（实测）。
 
@@ -221,7 +222,7 @@
 | M1 最小可用面板 | ✅ 已关闭 | 全部任务完成：GUI 骨架 + 全局热键 + Root View 渲染 + 清单扫描接入 + 进程管理（保活/崩溃检测骨架）+ 键盘导航（↑↓/Tab/Enter/Esc）+ **首屏并行聚合 `top_level_commands`**（错误隔离 + 示例扩展兜底）；12/12 单测 + 工程验收全绿；**2026-09-02 真机人工验收 11 项全过，R1 通过、ADR-2 成立**，见 [`./m1-record.md`](./m1-record.md)。残留：启动一帧闪屏（视觉瑕疵，见其 §4.6，未排期） |
 | M2 命令执行与状态机 | ✅ 已关闭 | 逻辑层（页面栈 `navigation.rs` A5 + 8 种 Kind 裁决 `result.rs` A4 + Confirm 挂起重发 + invoke 参数 + `PanelItem` 透传 id/ext_id/command）+ UI 接线（`main.rs`：Enter 分派 `Invoke`→后台 `invoke` 并裁决 / `Page`→推页+`get_items`；Esc 非 Root 先返回、Root 隐藏；Toast（独立 Area）；Confirm 对话框；嵌套页；`items_changed` 100ms 合并全量重拉 A9）；**24/24 单测** + 工程验收全绿 + 全 workspace 构建无回归。十项真机复验全部通过（2026-09-02，见 [`./m2-record.md`](./m2-record.md) §4.5），完成判据 A4/A5/A9 全部达成。下一项进入 M3 UI 接线 |
 | M3 缓存与懒加载 | ✅ 已关闭 | 逻辑层 `cache.rs`（FrozenCache/LruWarmSet/ColdStartTimer，对齐 A6/A7/A2，8 单测）+ 协议 `get_command` 接线（process 封装 / 示例扩展 handler / roundtrip 7 测）+ UI 接线（冷启动 frozen 读桩**不拉起进程** / 点击桩项复热 spawn→initialize→get_command→执行 / LRU 保活 8 个超容驱逐回落 stub / A2 计时日志 / 页脚三态 ◌✓✗）；**真机反馈 5 处修复**（见 [`./m3-record.md`](./m3-record.md) §3.4）：① 补 seguisym.ttf 解决 ◌ tofu；② 空态改 vertical_centered 不撑满页脚；③ #5 步骤改写为"启动后改名/杀进程"才能复现复热失败；④ A2 拆 agg_ms 分项日志定位 GUI/字体瓶颈；⑤ 列表长时页脚被挤出窗口 → 把 sources+键位提示移到 `egui::containers::Panel::bottom` 独立底栏。全 workspace **73/73 测试** + clippy/fmt 0 告警；`dd-gui.exe` 重编（16:05）。**A6/A2 真机复验已通过（2026-09-02）** |
-| M4 内置扩展与健壮性 | ⬜ 未开始 | — |
+| M4 内置扩展与健壮性 | 🟨 进行中（P1–P3 完成，待真机） | 实施决策已定（2026-09-02，见 [`./m4-record.md`](./m4-record.md) §0）：D1 共享扩展运行时 / D2 本轮只做健壮性基础层 / D3 过滤用 nucleo。**P1–P3 代码完成**：崩溃恢复链 A8（`refresh_health` 每帧检测 + poll 死进程丢弃回落 stub）/ `host/*` 执行端接 UI（Toast + arboard 剪贴板 + webbrowser，空闲轮询也应答 HostRequest）/ 连续崩溃保护 §11（`robustness.rs` CrashGuard 熔断 + dispatch 拦截）。全 workspace **79/79 测试** + clippy/fmt 0 告警。P4（5 内置扩展 A10）/ P5（A3 nucleo 过滤）后续轮次 |
 
 **已就绪的前置资产**：
 
@@ -255,4 +256,4 @@
 
 **M3 已关闭（2026-09-02 真机复验 A6/A2 通过）**（逻辑层 `cache.rs` + `get_command` 协议接线 + UI 接线 + 5 处真机反馈修复——◌ 字体、空态撑满、#5 步骤、A2 拆计时、列表长时页脚被挤出窗口（移至 `Panel::bottom` 独立底栏）；73/73 测试全绿，见 [`./m3-record.md`](./m3-record.md) §3.4 / §4）：用 16:05 版 `./target/x86_64-pc-windows-gnu/debug/dd-gui.exe`（终端启动）按 §4 清单复验——首启落盘 → 重启读桩不拉起（A6，日志+页脚 ◌ 正常渲染，**页脚现在独立底栏**始终可见）→ 点击桩项复热成功（Invoke/Page 两条路径）→ 复热失败回退 stub（**先启动再改名 exe / 杀进程**）→ 记录 A2 冷启动分项耗时（`total = data_ready + gui_init`，15:53 实测 `2 ms + ~2861 ms`——瓶颈在 wgpu+msyh 22MB 字体加载）。**已进入 M4 内置扩展与健壮性**。
 
-**当前状态（2026-09-02 16:10）**：M1 已关闭；M2 已关闭；M3 逻辑层 + `get_command` 接线 + UI 接线 + 真机反馈 5 处修复全部落地并通过工程验收（workspace **73/73**、clippy 0、fmt 通过），`dd-gui.exe`（16:05）已就位，**A6/A2 真机复验已通过（2026-09-02）**（清单见 `m3-record.md` §4，**注意 #5 步骤修正**：先启动再改名/杀进程）。M1/M2 已提交推送（commit `7375355`、`d466656`）；M3 改动未 commit，待审核。
+**当前状态（2026-09-03 09:5x）**：M1 已关闭；M2 已关闭；M3 已关闭（已提交推送，commit `0c42465`）。**M4 进行中**（见 [`./m4-record.md`](./m4-record.md)）：实施决策 D1–D3 已确认；P1–P3 健壮性基础层代码完成（崩溃恢复链 A8 / `host/*` 执行端接 UI / 连续崩溃保护 §11，79/79 全绿）；**P4 扩展侧完成**（补充决策 D4–D7：扩展侧先行 / 宿主内存自注册 / Windows 优先 / 内置取代 sample）——`dd-ext` 共享运行时 + 5 内置扩展（Apps/Calc/System/WebSearch/Shell）+ `dd-host/builtin.rs` 注册表 + `fallback_commands()`/`invoke()` 方法封装 + `roundtrip_builtins` 6 项全链路往返；**宿主 fallback 轮完成**（补充决策 D8–D10：§6.3 含兜底者视为 fresh / 全局无匹配触发 / 模板拉一次缓存）——`BuiltinSpec` 拆 `frozen`(自述) 与 `host_frozen`(策略)、`FrozenCache::remove`、`load_one` 按 `provider.has_fallback` 跳过落桩、`FallbackStore` 模板缓存与 `{query}` 渲染、`PanelState` 无匹配分流、main.rs 拉取/轮询接线。**全 workspace 146/146 测试全绿**（A10 清单真机核对见 m4-record §4 #9–#13，不再拆批）；P5 nucleo 过滤后续轮次。

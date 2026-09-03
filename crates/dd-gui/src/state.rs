@@ -58,10 +58,18 @@ pub enum Selected {
 ///
 /// 不持有过滤后的缓存列表，而是实时按 `query` 从 `items` 过滤，
 /// 保证"查询字符串 ↔ 可见列表 ↔ 选中索引"三者永远一致（SSOT）。
+///
+/// M4 宿主 fallback 轮：`fallback` 是"当前查询无匹配时的兜底展示集"
+/// （宿主按 §6.2 从扩展 `fallback_commands` 模板渲染得到，见 [`crate::fallback`]）。
+/// 显示规则：查询**非空**且常规 `items` **全部不匹配**时，可见列表切换为
+/// `fallback`（原样展示，不再二次过滤——它们已按当前查询渲染好）；
+/// 其余情况（空查询 / 常规有匹配）与 M1–M3 一致，fallback 不参与。
 #[derive(Debug, Clone, PartialEq)]
 pub struct PanelState {
     items: Vec<PanelItem>,
     query: String,
+    /// 当前查询无匹配时的兜底展示集（空 = 无兜底项可用）。
+    fallback: Vec<PanelItem>,
     selected: Selected,
 }
 
@@ -70,6 +78,7 @@ impl PanelState {
         let mut s = Self {
             items,
             query: String::new(),
+            fallback: Vec::new(),
             selected: Selected::None,
         };
         s.reset_selection();
@@ -84,23 +93,65 @@ impl PanelState {
         &self.query
     }
 
+    /// 设置当前查询的兜底展示集（宿主在拉取模板并渲染后调用）。
+    /// 空查询时忽略（兜底仅在查询非空场景参与显示）。
+    pub fn set_fallback(&mut self, items: Vec<PanelItem>) {
+        if !self.query.is_empty() {
+            self.fallback = items;
+            self.clamp_selection();
+        }
+    }
+
+    /// 清空兜底集（如进入嵌套页 / 回根视图时重置）。
+    pub fn clear_fallback(&mut self) {
+        self.fallback.clear();
+        self.clamp_selection();
+    }
+
     /// 设置查询文本；查询变化时选中索引自动夹紧（可能变成 None）。
     pub fn set_query(&mut self, q: impl Into<String>) {
         self.query = q.into();
         self.clamp_selection();
     }
 
-    /// 当前查询下的可见项个数。
+    /// 当前查询下可见项个数（fallback 模式时 = fallback 长度）。
     pub fn visible_count(&self) -> usize {
         self.filtered().count()
     }
 
-    /// 过滤后的可见项迭代器：`(过滤后下标, 原始项)`，供渲染与选中高亮使用。
-    pub fn filtered(&self) -> impl Iterator<Item = (usize, &PanelItem)> + '_ {
-        self.items
+    /// 可见项迭代器（**fallback 模式下不二次过滤**——项已按查询渲染好）：
+    /// `(可见下标, 原始项)`，供渲染与选中高亮使用。
+    pub fn filtered(&self) -> Box<dyn Iterator<Item = (usize, &PanelItem)> + '_> {
+        if self.is_fallback_mode() {
+            return Box::new(self.fallback.iter().enumerate());
+        }
+        Box::new(
+            self.items
+                .iter()
+                .filter(|it| Self::is_visible(it, &self.query))
+                .enumerate(),
+        )
+    }
+
+    /// 是否处于 fallback 展示模式：查询非空、常规项全部不匹配、且有兜底项。
+    pub fn is_fallback_mode(&self) -> bool {
+        if self.query.is_empty() || self.fallback.is_empty() {
+            return false;
+        }
+        !self
+            .items
             .iter()
-            .filter(|it| Self::is_visible(it, &self.query))
-            .enumerate()
+            .any(|it| Self::is_visible(it, &self.query))
+    }
+
+    /// 常规过滤（不含 fallback）是否有匹配项——宿主据此决定是否触发
+    /// `fallback_commands` 拉取（有匹配则不拉，§6.2"搜索无匹配时"）。
+    pub fn has_regular_match(&self) -> bool {
+        self.query.is_empty()
+            || self
+                .items
+                .iter()
+                .any(|it| Self::is_visible(it, &self.query))
     }
 
     pub fn selected(&self) -> Selected {
@@ -170,6 +221,7 @@ impl PanelState {
     /// 查询与选中回落到初始态（面板重新唤起时调用）。
     pub fn reset(&mut self) {
         self.query.clear();
+        self.fallback.clear();
         self.reset_selection();
     }
 
@@ -359,5 +411,107 @@ mod tests {
         assert_eq!(s.selected_index(), Some(0));
         assert!(!s.set_selected(0)); // 同项重复设置：无变化 → false
         assert_eq!(s.selected_index(), Some(0));
+    }
+
+    fn fallback_item(id: &str, title: &str) -> PanelItem {
+        PanelItem {
+            id: id.to_string(),
+            ext_id: "com.ddrun.calc".to_string(),
+            title: title.to_string(),
+            subtitle: String::new(),
+            section: "计算".to_string(),
+            tags: Vec::new(),
+            command: CommandRef::Invoke,
+        }
+    }
+
+    #[test]
+    fn fallback_shows_only_when_query_nonempty_and_no_regular_match() {
+        let mut s = PanelState::new(sample_items());
+
+        // 空查询：fallback 不参与，全部常规项可见（此时 set_fallback 被忽略）
+        s.set_fallback(vec![fallback_item("calc.eval.query", "= {query}")]);
+        assert_eq!(s.query(), "");
+        assert!(!s.is_fallback_mode());
+        assert_eq!(s.visible_count(), 3);
+
+        // 查询命中常规项：fallback 不参与（即使注入了 fallback 集）
+        s.set_query("open");
+        s.set_fallback(vec![fallback_item("calc.eval.query", "= open")]);
+        assert!(!s.is_fallback_mode(), "常规有匹配时不进入 fallback");
+        assert_eq!(s.visible_count(), 2);
+
+        // 查询无匹配：注入渲染好的兜底项 → 进入 fallback 模式
+        s.set_query("zzz-no-match");
+        s.set_fallback(vec![fallback_item("calc.eval.query", "= zzz-no-match")]);
+        assert!(s.is_fallback_mode());
+        assert_eq!(s.visible_count(), 1);
+        assert_eq!(
+            s.selected_item().map(|i| i.id.as_str()),
+            Some("calc.eval.query")
+        );
+        assert_eq!(s.selected_index(), Some(0));
+        // 兜底项在 fallback 模式下可见 title 为渲染后文本
+        assert_eq!(
+            s.selected_item().map(|i| i.title.as_str()),
+            Some("= zzz-no-match")
+        );
+    }
+
+    #[test]
+    fn set_fallback_updates_items_and_selection_clamps() {
+        let mut s = PanelState::new(sample_items());
+        s.set_query("zzz");
+        // 先给 2 个兜底项，选中第二个
+        s.set_fallback(vec![fallback_item("a", "A"), fallback_item("b", "B")]);
+        s.move_down();
+        assert_eq!(s.selected_index(), Some(1));
+        // fallback 集缩小到 1 → 选中夹紧回 0
+        s.set_fallback(vec![fallback_item("c", "C")]);
+        assert_eq!(s.selected_index(), Some(0));
+        assert_eq!(s.confirm().map(|i| i.id.as_str()), Some("c"));
+    }
+
+    #[test]
+    fn set_fallback_ignored_when_query_empty() {
+        let mut s = PanelState::new(sample_items());
+        // 空查询时 set_fallback 不生效（fallback 仅在查询非空参与）
+        s.set_fallback(vec![fallback_item("x", "X")]);
+        assert!(!s.is_fallback_mode());
+        assert_eq!(s.visible_count(), 3);
+    }
+
+    #[test]
+    fn has_regular_match_distinguishes() {
+        let mut s = PanelState::new(sample_items());
+        s.set_fallback(vec![fallback_item("x", "X")]);
+        assert!(s.has_regular_match(), "空查询视为有匹配（显示全部）");
+        s.set_query("open");
+        assert!(s.has_regular_match());
+        s.set_query("zzz-no-match");
+        assert!(!s.has_regular_match(), "常规项全不匹配 → 触发兜底拉取");
+    }
+
+    #[test]
+    fn reset_clears_fallback() {
+        let mut s = PanelState::new(sample_items());
+        s.set_query("zzz");
+        s.set_fallback(vec![fallback_item("x", "X")]);
+        assert!(s.is_fallback_mode());
+        s.reset();
+        assert_eq!(s.query(), "");
+        assert!(!s.is_fallback_mode());
+        assert_eq!(s.visible_count(), 3);
+    }
+
+    #[test]
+    fn clear_fallback_restores_regular_empty_state() {
+        let mut s = PanelState::new(sample_items());
+        s.set_query("zzz");
+        s.set_fallback(vec![fallback_item("x", "X")]);
+        assert_eq!(s.visible_count(), 1);
+        s.clear_fallback();
+        assert_eq!(s.visible_count(), 0, "清空兜底后回到常规空态");
+        assert_eq!(s.selected(), Selected::None);
     }
 }

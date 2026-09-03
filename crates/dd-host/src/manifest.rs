@@ -397,6 +397,53 @@ pub fn load_manifest(path: &Path, opts: &ScanOptions) -> Result<LoadedExtension,
 /// 它绕过 §7 校验——调用方必须在输出中说明这一点，避免把"内置兜底"
 /// 误读为"扫描发现"。
 pub fn from_executable(command: PathBuf, id: &str, name: &str) -> LoadedExtension {
+    from_command(
+        command,
+        id,
+        name,
+        "0.0.0",
+        true,
+        &[],
+        "内置兜底清单（非磁盘扫描产物）",
+    )
+}
+
+/// 由可执行文件直接构造**内置扩展**的内存清单（P4 `ensure_builtins` 用）。
+///
+/// 与 [`from_executable`] 的区别：`frozen` / `capabilities` / `version` 由
+/// 调用方（宿主内置注册表）显式给定——Apps 是 fresh（`frozen=false`，
+/// 应用列表随安装/卸载变化，不落磁盘桩），Calc/System/WebSearch/Shell 可缓存。
+/// `version` 参与磁盘桩缓存键（M3 `FrozenCache`），内置扩展升级时须同步。
+pub fn from_builtin(
+    command: PathBuf,
+    id: &str,
+    name: &str,
+    frozen: bool,
+    capabilities: &[&str],
+    version: &str,
+) -> LoadedExtension {
+    from_command(
+        command,
+        id,
+        name,
+        version,
+        frozen,
+        capabilities,
+        "内置扩展（宿主内存注册，非磁盘扫描产物）",
+    )
+}
+
+/// [`from_executable`] / [`from_builtin`] 共用的构造体。
+#[allow(clippy::too_many_arguments)]
+fn from_command(
+    command: PathBuf,
+    id: &str,
+    name: &str,
+    version: &str,
+    frozen: bool,
+    capabilities: &[&str],
+    description: &str,
+) -> LoadedExtension {
     let dir = command
         .parent()
         .map(Path::to_path_buf)
@@ -406,8 +453,8 @@ pub fn from_executable(command: PathBuf, id: &str, name: &str) -> LoadedExtensio
             schema_version: SCHEMA_VERSION.to_string(),
             id: id.to_string(),
             name: name.to_string(),
-            version: "0.0.0".to_string(),
-            description: "内置兜底清单（非磁盘扫描产物）".to_string(),
+            version: version.to_string(),
+            description: description.to_string(),
             author: String::new(),
             license: String::new(),
             homepage: String::new(),
@@ -418,8 +465,8 @@ pub fn from_executable(command: PathBuf, id: &str, name: &str) -> LoadedExtensio
                 env: BTreeMap::new(),
                 cwd: None,
             },
-            frozen: true,
-            capabilities: Vec::new(),
+            frozen,
+            capabilities: capabilities.iter().map(|s| (*s).to_string()).collect(),
             platforms: None,
             min_host_version: None,
         },

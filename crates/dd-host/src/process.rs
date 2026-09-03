@@ -19,15 +19,18 @@ use std::time::{Duration, Instant};
 use dd_protocol::framing::{encode, Decoder, Frame, DEFAULT_MAX_MESSAGE_BYTES};
 use dd_protocol::messages::{
     error_codes, CommandListResult, GetCommandParams, GetCommandResult, HostInfo, InitializeParams,
-    InitializeResult, ItemsChangedParams, RawMessage, RpcError, TransportInfo, JSONRPC_VERSION,
+    InitializeResult, InvokeParams, ItemsChangedParams, RawMessage, RpcError, TransportInfo,
+    JSONRPC_VERSION,
 };
-use dd_protocol::model::CommandItem;
+use dd_protocol::model::{CommandItem, CommandResult};
 
 use crate::manifest::{current_platform, LoadedExtension, HOST_CAPABILITIES};
 
 /// §10 各阶段默认超时。
 pub const TIMEOUT_INITIALIZE: Duration = Duration::from_millis(5_000);
 pub const TIMEOUT_TOP_LEVEL_COMMANDS: Duration = Duration::from_millis(3_000);
+/// §10 `fallback_commands` = 2000 ms。
+pub const TIMEOUT_FALLBACK_COMMANDS: Duration = Duration::from_millis(2_000);
 /// §10 `get_command` = 5000 ms（含冷启动进程的 spawn 开销，协议 §10 表）。
 pub const TIMEOUT_GET_COMMAND: Duration = Duration::from_millis(5_000);
 /// §10 `get_items` = 2000 ms（首屏路径上的热路径）。
@@ -318,6 +321,32 @@ impl ExtensionProcess {
         Ok(result.command)
     }
 
+    /// §6.2 拉取兜底命令模板列表（用户输入未命中顶层命令时宿主调用）。
+    ///
+    /// 返回的命令 `title` 含 `{query}` 占位符，宿主渲染时替换为当前搜索词；
+    /// **空列表表示该 provider 无兜底能力**（协议 §6.2：宿主以结果非空判定 fresh）。
+    pub fn fallback_commands(&mut self) -> Result<Vec<CommandItem>, ProtocolError> {
+        let value = self.call(
+            "fallback_commands",
+            serde_json::json!({}),
+            TIMEOUT_FALLBACK_COMMANDS,
+        )?;
+        let result: CommandListResult = serde_json::from_value(value)?;
+        Ok(result.commands)
+    }
+
+    /// §6.5 执行一条命令。`params` 携带 id / sender / context（含 `query`、`confirmed` 等）。
+    ///
+    /// 返回 §8.3 `CommandResult` 本体——`call` 已解开 JSON-RPC 信封，其内层
+    /// `result` 即 `CommandResult`，直接解析；**不要**再用 `InvokeResult`
+    /// （要求 `result` 字段）包一层，否则成功响应会报「missing field `result`」
+    /// （M2 修复记录，见 dd-gui `invoke_on` 注释）。
+    pub fn invoke(&mut self, params: &InvokeParams) -> Result<CommandResult, ProtocolError> {
+        let value = self.call("invoke", serde_json::to_value(params)?, TIMEOUT_INVOKE)?;
+        let result: CommandResult = serde_json::from_value(value)?;
+        Ok(result)
+    }
+
     /// §6.6 优雅关闭：发 `close` → 等 result → 等进程自行退出；超时则强杀。
     pub fn close(mut self) -> Result<(), CloseError> {
         self.call("close", serde_json::json!({}), TIMEOUT_CLOSE_RESPONSE)
@@ -346,17 +375,32 @@ impl ExtensionProcess {
         matches!(self.child.try_wait(), Ok(Some(_)))
     }
 
+    /// §11：进程已退出时的退出码（`None` = 仍在运行 / 信号终止等无码退出）。
+    /// 用于区分「崩溃（非 0 退出码 / EOF）」与「正常退出（0）」——M4 熔断只对崩溃计数。
+    pub fn exit_status(&mut self) -> Option<ExitStatus> {
+        match self.child.try_wait() {
+            Ok(Some(status)) => Some(status),
+            _ => None,
+        }
+    }
+
     /// §2.5：已捕获的扩展 stderr（截断到 [`STDERR_CAPTURE_LIMIT`]）。
     pub fn stderr(&self) -> String {
         let bytes = self.stderr.lock().map(|g| g.clone()).unwrap_or_default();
         String::from_utf8_lossy(&bytes).to_string()
     }
 
-    /// §7.1 通知轮询（非阻塞）：在没有 in-flight 请求时消费扩展发来的通知。
+    /// §7.1 通知轮询（非阻塞）：在没有 in-flight 请求时消费扩展发来的消息。
     ///
     /// 返回本次轮询收到的 `items_changed` 的 `page_id`（`None` 表示"顶层
     /// 命令变了"）。宿主据此在 UI 空闲时触发**全量重拉**
     /// （§6.3 + 验收 A9：协议层不做增量推送）。
+    ///
+    /// M4（`host/*` 执行端，见 [`docs/m4-record.md`](../../../docs/m4-record.md) P2）：
+    /// 空闲轮询同样处理扩展发来的 **`host/*` 请求**——按 §7.4 能力前置应答
+    /// （已声明回 `{}`，未声明回 `-32601`），并把请求记入 [`Self::host_requests`]
+    /// 供 UI 层取走执行真实副作用（Toast / 剪贴板 / 开 URL）。此前这类请求只
+    /// 在 [`Self::call`] 等待期间应答，空闲到达会被静默丢弃导致扩展等待超时。
     ///
     /// 所有通知仍会记入 [`Self::notifications`]，供诊断与后续处理。
     pub fn poll_notifications(&mut self) -> Vec<Option<String>> {
@@ -370,18 +414,26 @@ impl ExtensionProcess {
                     if msg.jsonrpc != JSONRPC_VERSION {
                         continue;
                     }
-                    if msg.method.as_deref() == Some("items_changed") {
-                        // §7.1：params 可缺省，缺省即"顶层"
-                        let page_id = msg
-                            .params
-                            .as_ref()
-                            .and_then(|v| {
-                                serde_json::from_value::<ItemsChangedParams>(v.clone()).ok()
-                            })
-                            .and_then(|p| p.page_id);
-                        changed.push(page_id);
+                    match classify(&msg) {
+                        // §7.4：host/* 请求 → 应答并记录（UI 层消费执行副作用）
+                        MessageKind::HostRequest => {
+                            let _ = self.answer_host_request(&msg);
+                        }
+                        _ => {
+                            if msg.method.as_deref() == Some("items_changed") {
+                                // §7.1：params 可缺省，缺省即"顶层"
+                                let page_id = msg
+                                    .params
+                                    .as_ref()
+                                    .and_then(|v| {
+                                        serde_json::from_value::<ItemsChangedParams>(v.clone()).ok()
+                                    })
+                                    .and_then(|p| p.page_id);
+                                changed.push(page_id);
+                            }
+                            self.notifications.push(msg);
+                        }
                     }
-                    self.notifications.push(msg);
                 }
                 // 超限/非法编码的通知：与 call 侧同口径，忽略不致命
                 Ok(_) => {}
@@ -389,6 +441,11 @@ impl ExtensionProcess {
             }
         }
         changed
+    }
+
+    /// 取走并清空积压的 `host/*` 请求记录（M4 P2：UI 层消费并执行真实副作用）。
+    pub fn drain_host_requests(&mut self) -> Vec<RawMessage> {
+        std::mem::take(&mut self.host_requests)
     }
 
     /// 发出一次请求并等待**属于该请求**的响应。

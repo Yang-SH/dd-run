@@ -4,21 +4,27 @@
 //! 与 [`docs/implementation.md`](../../docs/implementation.md) M1「首屏聚合」任务：
 //! - **并行**：每扩展一个线程（进程对象线程独占），互不阻塞（A12 能力调用不阻塞 UI）；
 //! - **错误隔离**：单个扩展失败只记入 [`SourceSummary`]，不影响其他扩展与整体渲染；
-//! - **兜底**：扩展目录无清单时，回退到与 `dd-gui` 同目录的 `dd-ext-sample.exe`
-//!   （M0 `--roundtrip` 同款思路，保证无扩展环境的开发验收路径）。
+//! - **内置扩展常驻**（M4 P4 `ensure_builtins`）：与 `dd-gui` 同目录的
+//!   `dd-ext-apps/calc/system/websearch/shell` 由宿主**内存自注册**（manifest-schema
+//!   §10：内置同样走清单注册，MVP 无安装器 → 宿主启动时直接构造 `LoadedExtension`）；
+//!   扩展目录中的第三方清单与其**并存**，同 id 以内置优先。
 //!
 //! M3 缓存与懒加载（见 [`docs/implementation.md`](../../docs/implementation.md) §M3）：
 //! - **frozen + 磁盘桩命中** → [`ExtItems::Stub`]：**不拉起进程**（A6），首屏读桩渲染；
 //! - **frozen 无桩**（首次运行）→ 照常 spawn 拉取并**落盘**（下次冷启动读桩）；
 //! - **fresh**（`frozen=false`）→ spawn 拉取，**不落盘**；
+//! - M4 宿主 fallback 轮补充：握手后 `provider.has_fallback == true`（设计文档 §6.3
+//!   "含兜底能力者一律视为 fresh"）→ **即使清单标 frozen 也不落盘**，并清除历史桩，
+//!   保证进程恒 warm 可响应 `fallback_commands`；
 //! - 源状态三态：Warm（进程活）/ Stub（仅桩）/ Failed（失败），供页脚展示与 A6 观察。
 
-use std::path::PathBuf;
 use std::thread;
 
+use dd_host::builtin::{ensure_builtins, merge_builtins};
 use dd_host::cache::{FrozenCache, FrozenSnapshot};
 use dd_host::manifest::{self, LoadedExtension, ScanOptions};
 use dd_host::process::ExtensionProcess;
+use dd_protocol::messages::InitializeResult;
 use dd_protocol::model::CommandItem;
 
 use crate::state::PanelItem;
@@ -111,61 +117,60 @@ impl ExtItems {
     }
 }
 
-/// 扫描扩展目录；**目录无扩展时**用与 `dd-gui` 同目录的示例扩展兜底。
+/// 扫描扩展目录并**合并内置扩展**（M4 P4 `ensure_builtins`）。
 ///
-/// 返回 `(扩展列表, 备注)`。备注说明扩展来源（真实扫描 / 兜底 / 均不可用），
-/// 供 UI 提示，避免把「内置兜底」误读为「扫描发现」。
+/// 返回 `(扩展列表, 备注)`。内置 5 个（exe 与 `dd-gui` 同目录、存在者）**恒注册**，
+/// 扩展目录中的第三方清单与其并存（同 id 以内置优先，`merge_builtins` 去重）。
+/// 备注仅在异常时非空（找不到内置 exe / 目录不可读），供 UI 提示。
 pub fn load_extension_sources() -> (Vec<LoadedExtension>, String) {
-    let dir = manifest::extensions_dir();
-    match &dir {
+    // 内置扩展：与宿主同目录的 dd-ext-*.exe（cargo 把 workspace 所有 bin 放同一目录）
+    let exe_dir = std::env::current_exe()
+        .ok()
+        .and_then(|p| p.parent().map(|d| d.to_path_buf()));
+    let mut note = String::new();
+    let builtins = match &exe_dir {
         Some(d) => {
-            let outcome = manifest::scan_dir(d, &ScanOptions::default());
-            if let Some(err) = &outcome.dir_error {
-                return fallback(d, format!("未找到扩展目录：{err}"));
+            let exts = ensure_builtins(d);
+            if exts.is_empty() {
+                note = format!(
+                    "未找到内置扩展可执行文件（{} 下无 dd-ext-*.exe）",
+                    d.display()
+                );
             }
-            if !outcome.loaded.is_empty() {
-                return (outcome.loaded, String::new());
-            }
-            // 目录存在但无清单 → 兜底示例扩展
-            fallback(d, "扩展目录为空，未发现清单".to_string())
+            exts
         }
         None => {
-            let note = "无法定位扩展目录（home 环境变量缺失）".to_string();
-            match find_sample_executable() {
-                Some(sample) => {
-                    let ext = manifest::from_executable(sample, "dev.sample-ext", "Sample Ext");
-                    (vec![ext], format!("{note}；已回退内置示例扩展"))
+            note = "无法定位宿主可执行文件目录，内置扩展未注册".to_string();
+            Vec::new()
+        }
+    };
+
+    // 第三方/磁盘扩展：extensions.d 扫描结果并入（同 id 内置优先）
+    let scanned = match manifest::extensions_dir() {
+        Some(d) => {
+            let outcome = manifest::scan_dir(&d, &ScanOptions::default());
+            if let Some(err) = &outcome.dir_error {
+                if !note.is_empty() {
+                    note.push('；');
                 }
-                None => (Vec::new(), format!("{note}，且未找到示例扩展")),
+                note.push_str(&format!("扩展目录不可读：{err}"));
             }
+            outcome.loaded
         }
-    }
-}
-
-/// 目录不可用/为空时回退到示例扩展。
-fn fallback(dir: &std::path::Path, reason: String) -> (Vec<LoadedExtension>, String) {
-    match find_sample_executable() {
-        Some(sample) => {
-            let ext = manifest::from_executable(sample, "dev.sample-ext", "Sample Ext");
-            (
-                vec![ext],
-                format!("{reason}（{}）；已回退内置示例扩展", dir.display()),
-            )
+        None => {
+            if !note.is_empty() {
+                note.push('；');
+            }
+            note.push_str("无法定位扩展目录（home 环境变量缺失）");
+            Vec::new()
         }
-        None => (Vec::new(), format!("{reason}，且未找到示例扩展可执行文件")),
-    }
-}
+    };
 
-/// 与 `dd-gui` 同目录的 `dd-ext-sample.exe`（cargo 会把 workspace 内各 crate
-/// 的可执行文件都输出到同一 `target/<profile>/` 目录）。
-fn find_sample_executable() -> Option<PathBuf> {
-    let exe_dir = std::env::current_exe().ok()?.parent()?.to_path_buf();
-    let candidate = exe_dir.join(if cfg!(windows) {
-        "dd-ext-sample.exe"
-    } else {
-        "dd-ext-sample"
-    });
-    candidate.is_file().then_some(candidate)
+    let merged = merge_builtins(builtins, scanned);
+    if merged.is_empty() && note.is_empty() {
+        note = "无可用扩展（内置与扩展目录均为空）".to_string();
+    }
+    (merged, note)
 }
 
 /// 单个扩展线程的原始结果（携带进程，跨线程回传）。
@@ -233,11 +238,21 @@ pub fn collect_top_level(exts: &[LoadedExtension], cache: Option<&FrozenCache>) 
 
 /// spawn → `initialize`（握手+版本协商）。供首屏拉取与 **GUI 桩复热链路**复用。
 pub fn spawn_and_initialize(ext: &LoadedExtension) -> Result<ExtensionProcess, String> {
+    spawn_and_initialize_with_info(ext).map(|(proc, _)| proc)
+}
+
+/// 同 [`spawn_and_initialize`]，但一并返回握手结果（`ProviderInfo`）。
+///
+/// 用途：宿主需据 `provider.has_fallback` 决定是否落 frozen 桩
+/// （设计文档 §6.3：含兜底能力者一律视为 fresh，不落桩）。
+pub fn spawn_and_initialize_with_info(
+    ext: &LoadedExtension,
+) -> Result<(ExtensionProcess, InitializeResult), String> {
     let mut spawned = ExtensionProcess::spawn(ext).map_err(|e| format!("spawn 失败：{e}"))?;
-    spawned
+    let init = spawned
         .initialize(PROTOCOL_VERSION, HOST_VERSION)
         .map_err(|e| format!("initialize 失败：{e}"))?;
-    Ok(spawned)
+    Ok((spawned, init))
 }
 
 /// 一个扩展的完整链路：M3 分流后 spawn → initialize → top_level_commands（+落盘）。
@@ -259,16 +274,19 @@ fn load_one(ext: LoadedExtension, cache: Option<&FrozenCache>) -> ExtOutcome {
     }
 
     // 无桩（frozen 首启）或 fresh：spawn → initialize → top_level_commands。
-    let mut spawned = match spawn_and_initialize(&ext) {
-        Ok(p) => p,
+    let (mut spawned, init) = match spawn_and_initialize_with_info(&ext) {
+        Ok(pair) => pair,
         Err(e) => return ExtOutcome::Failed { id, name, error: e },
     };
+    // §6.3：含兜底能力者一律视为 fresh——不落桩；若历史桩存在则清除，
+    // 避免下次冷启动读桩（无进程 → fallback_commands 拉不到）。
+    let has_fallback = init.provider.has_fallback;
     match spawned.top_level_commands() {
         Ok(items) => {
-            // M3：frozen 成功拉取 → 落盘桩（下次冷启动读桩不拉起）。
-            // 先清同 id 的旧版本桩，避免旧文件残留；落盘失败不致命（本次仍 warm 服务，
-            // 仅下次冷启动退化为再拉一次）。
-            if ext.manifest.frozen {
+            if ext.manifest.frozen && !has_fallback {
+                // M3：frozen 成功拉取 → 落盘桩（下次冷启动读桩不拉起）。
+                // 先清同 id 的旧版本桩，避免旧文件残留；落盘失败不致命（本次仍 warm 服务，
+                // 仅下次冷启动退化为再拉一次）。
                 if let Some(c) = cache {
                     c.invalidate_if_version_changed(&id, &version);
                     let snap = FrozenSnapshot {
@@ -277,6 +295,11 @@ fn load_one(ext: LoadedExtension, cache: Option<&FrozenCache>) -> ExtOutcome {
                         commands: items.clone(),
                     };
                     let _ = c.save(&snap);
+                }
+            } else if has_fallback {
+                // fresh（含兜底）：确保磁盘上没有它的桩文件
+                if let Some(c) = cache {
+                    let _ = c.remove(&id);
                 }
             }
             ExtOutcome::Ready {

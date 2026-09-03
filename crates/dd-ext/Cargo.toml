@@ -1,0 +1,31 @@
+[package]
+name = "dd-ext"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "dd-run 共享扩展运行时：5 个内置扩展（Apps/Calc/System/WebSearch/Shell）共用的 JSON-RPC 服务端样板与命令注册模型（契约来源：docs/protocol.md；决策 D1-A 见 docs/m4-record.md §0）"
+publish = false
+
+[dependencies]
+dd-protocol = { path = "../dd-protocol" }
+serde_json = "1"
+
+[[bin]]
+name = "dd-ext-apps"
+path = "src/bin/apps.rs"
+
+[[bin]]
+name = "dd-ext-calc"
+path = "src/bin/calc.rs"
+
+[[bin]]
+name = "dd-ext-system"
+path = "src/bin/system.rs"
+
+[[bin]]
+name = "dd-ext-websearch"
+path = "src/bin/websearch.rs"
+
+[[bin]]
+name = "dd-ext-shell"
+path = "src/bin/shell.rs"

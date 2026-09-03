@@ -9,11 +9,17 @@
 //! - [`navigation`]：页面栈（Root / 嵌套页，`GoBack`/`GoHome` 导航，A5）；
 //! - [`result`]：8 种 `CommandResultKind` 裁决（A4）+ `Confirm` 挂起重发
 //!   + `invoke` 参数构造；
+//! - [`fallback`]：M4 兜底命令模板缓存与渲染（协议 §6.2：`{query}` 占位符
+//!   替换；每扩展只拉一次，全局无匹配时展示）；
+//! - [`robustness`]：M4 崩溃保护状态机（协议 §11：连续崩溃 N 次 → 熔断"暂时
+//!   不可用"，恢复后清零；验收 A8）；
 //! - `main`（bin）：eframe/egui 窗口骨架（无边框、置顶、失焦隐藏、
 //!   初始隐藏），FilterBox + 分组列表 + 页脚键位提示，对应设计稿界面 01。
 
 pub mod aggregator;
+pub mod fallback;
 pub mod hotkey;
 pub mod navigation;
 pub mod result;
+pub mod robustness;
 pub mod state;
