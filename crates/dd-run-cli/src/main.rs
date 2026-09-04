@@ -1,4 +1,5 @@
-//! dd-run 宿主 CLI（M0 范围）。
+//! dd-run 开发自检 CLI（M0 范围；产物名 `dd-run-cli`——对外 `dd-run.exe` 已由
+//! GUI 宿主入口（`crates/dd-gui`）占用）。
 //!
 //! | 子命令 | 对应 M0 任务 | 说明 |
 //! |---|---|---|

@@ -3,7 +3,13 @@ name = "dd-gui"
 version = "0.1.0"
 edition = "2021"
 license = "MIT"
-description = "dd-run host UI: frameless always-on-top command palette panel (egui)"
+description = "dd-run host UI: frameless always-on-top command palette panel (egui)。对外入口产物名 `dd-run`（[[bin]]），crate 包名保持 `dd-gui` 以沿用内部引用。"
+
+# 对外入口：产物名为 `dd-run`（单文件宿主，内含 5 个内置扩展 exe，见 build.rs +
+# src/embedded.rs）。包名 dd-gui 只是内部 crate 名，不产生同名 bin。
+[[bin]]
+name = "dd-run"
+path = "src/main.rs"
 
 [dependencies]
 dd-host = { path = "../dd-host" }

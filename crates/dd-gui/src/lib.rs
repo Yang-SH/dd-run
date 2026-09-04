@@ -17,10 +17,13 @@
 //!   不可用"，恢复后清零；验收 A8）；
 //! - [`theme`]：M5 批次 3 ueli 皮肤 token 源（设计稿 05 表 → 亮/暗双 `Visuals`；
 //!   绘制层经 [`theme::Palette`] 取组件色，本模块是唯一 token 源）；
+//! - [`embedded`]：M6 单文件分发——把 5 个内置扩展 exe 内嵌进宿主（build.rs +
+//!   `assets/embed/`），运行时物化到缓存目录供 spawn（进程隔离不变）；
 //! - `main`（bin）：eframe/egui 窗口骨架（无边框、置顶、失焦隐藏、
 //!   初始隐藏），FilterBox + 分组列表 + 页脚键位提示，对应设计稿界面 01。
 
 pub mod aggregator;
+pub mod embedded;
 pub mod fallback;
 pub mod fuzzy;
 pub mod hotkey;

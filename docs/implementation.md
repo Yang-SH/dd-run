@@ -1,6 +1,7 @@
 # dd-run 实施方案
 
 > **状态**：M0 已完成（`dd-protocol` / `dd-host` / `dd-ext-sample` / `dd-run` CLI 均已落地，40/40 测试全绿）；M1（`dd-gui` 窗口骨架 + 热键 + 首屏聚合 + 键盘全流程）已关闭（2026-09-02 真机人工验收通过，A1/A11/A12 全过，见 [`./m1-record.md`](./m1-record.md)）；M2（命令执行 + 8 种 Kind 状态机 + 页面栈 + UI 接线）已关闭（2026-09-02 十项真机复验全部通过，A4/A5/A9 达成，24/24 单测 + 全 workspace 构建无回归，见 [`./m2-record.md`](./m2-record.md) §4.5）。M3（缓存与懒加载）逻辑层 `cache.rs` + 协议 `get_command` 接线 + UI 接线（冷启动读桩不拉起 / 桩复热 / LRU 保活 / A2 计时）已完成并通过工程验收（73/73 测试全绿）；**真机反馈 5 处修复已落地**（◌ 补 seguisym 字体后援、空态改 vertical_centered 不撑满页脚、#5 步骤改写、A2 拆计时定位瓶颈、列表长时页脚移至 `Panel::bottom` 独立底栏，见 [`./m3-record.md`](./m3-record.md) §3.4），**A6/A2 真机复验已通过（2026-09-02，见 [`./m3-record.md`](./m3-record.md) §4）**。M4（5 内置扩展与健壮性）已关闭（2026-09-04，commit `757f3b4`，见 [`./m4-record.md`](./m4-record.md)）。M5（ueli 风格 UI 重构，插队于 M4 后）批次 1–4.2 与六轮真机反馈修复完成（2026-09-04，commit `5cf32b7`，设计稿 v4.3）；剩余设计稿 C 组占位见 §6.1 L8。
+> **单文件分发（2026-09-04 实施）**：`tools/package.sh` 产出单文件 `dist/dd-run-0.1.0.exe` —— 5 个内置扩展 exe 经 `dd-gui` build.rs + `assets/embed/` 内嵌进宿主，运行时由 `dd-gui::embedded` 物化到 `%APPDATA%/dd-run/cache/embedded/` 再 spawn（进程隔离 ADR-1 不变）。对外入口产物由 `dd-gui` 更名 `dd-run`；M0 CLI 更名 `dd-run-cli`。
 > **关联**：[`protocol.md`](./protocol.md)（扩展协议 v1.0）· [`manifest-schema.md`](./manifest-schema.md)（清单 v1.0）· [`../cmdpal-platform-agnostic-design.md`](../cmdpal-platform-agnostic-design.md)（设计参考与验收标准 A1–A12）。
 
 ---

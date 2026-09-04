@@ -3,15 +3,20 @@
 //! 契约来源：
 //! - [`docs/manifest-schema.md`](../../docs/manifest-schema.md) §10：内置扩展
 //!   **同样走清单注册**（与第三方无特判代码）；MVP 无安装器，故由宿主在启动时
-//!   **内存注册**——把与宿主同目录的 `dd-ext-*.exe` 直接构造为
+//!   **内存注册**——把 `exe_dir` 目录里的 `dd-ext-*.exe` 直接构造为
 //!   [`LoadedExtension`]，等效于"安装器写好了清单、扫描恰好扫到"。
+//!   `exe_dir` 的来源见 [`ensure_builtins`] 文档：开发期为宿主 exe 同目录；
+//!   单文件分发为内嵌扩展物化目录。
 //! - 5 个内置扩展的元数据（id / name / frozen / capabilities）必须与
 //!   `crates/dd-ext/src/bin/*.rs` 各自的 `spec()` 保持一致（宿主编排侧登记，
 //!   扩展自述侧为准——握手 `initialize` 后宿主会再次拿到真实 `ProviderInfo`）。
 //!
 //! 注册规则：
 //! - **内存构造，零文件写入**（不落 `extensions.d`，不产生清单文件）；
-//! - 只注册**同目录存在**的 exe（未构建 / 被移除的扩展静默跳过，不视为错误）；
+//! - 只注册**指定目录存在**的 exe（未构建 / 被移除的扩展静默跳过，不视为错误）；
+//!   `exe_dir` 由宿主决定——开发期通常是「宿主 exe 同目录」，打包后的单文件分发
+//!   则是「内嵌扩展物化目录」（`dd-gui::embedded::materialize`，见
+//!   `crates/dd-gui/src/embedded.rs`）；
 //! - `version` 取宿主包版本（内置扩展随宿主分发，宿主升级即桩缓存自然失效）。
 
 use std::path::Path;
@@ -105,7 +110,11 @@ fn builtin_version() -> &'static str {
     env!("CARGO_PKG_VERSION")
 }
 
-/// 在 `exe_dir`（通常 = 宿主 `current_exe` 同目录）中注册**存在**的内置扩展。
+/// 在 `exe_dir` 中注册**存在**的内置扩展。
+///
+/// `exe_dir` 由宿主决定：开发期为宿主 `current_exe` 同目录（workspace 各 bin 同放
+/// 一处）；打包后的单文件分发为内嵌扩展物化目录（`dd-gui::embedded::materialize`，
+/// 见 `crates/dd-gui/src/embedded.rs`）。
 ///
 /// 返回顺序与 [`BUILTINS`] 一致；找不到的 exe 静默跳过。这是纯内存构造，
 /// 不触碰文件系统（除 `is_file` 探测外），可安全在单测中调用。

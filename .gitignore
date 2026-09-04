@@ -8,3 +8,11 @@ Cargo.lock.orig
 # 反馈用的临时截图（根目录），不入库
 /image.png
 /image-*.png
+
+# 单文件分发生成物（tools/package.sh 产出），不入库
+/dist/
+
+# dd-gui 内嵌的扩展 exe（tools/package.sh 生成于 crates/dd-gui/assets/embed/，
+# 由 build.rs include_bytes!；非源码、不提交，保留 .gitkeep 占位）
+/crates/dd-gui/assets/embed/*.exe
+

@@ -4,9 +4,11 @@
 //! 与 [`docs/implementation.md`](../../docs/implementation.md) M1「首屏聚合」任务：
 //! - **并行**：每扩展一个线程（进程对象线程独占），互不阻塞（A12 能力调用不阻塞 UI）；
 //! - **错误隔离**：单个扩展失败只记入 [`SourceSummary`]，不影响其他扩展与整体渲染；
-//! - **内置扩展常驻**（M4 P4 `ensure_builtins`）：与 `dd-gui` 同目录的
-//!   `dd-ext-apps/calc/system/websearch/shell` 由宿主**内存自注册**（manifest-schema
-//!   §10：内置同样走清单注册，MVP 无安装器 → 宿主启动时直接构造 `LoadedExtension`）；
+//! - **内置扩展常驻**（M4 P4 `ensure_builtins`）：`dd-ext-apps/calc/system/websearch/shell`
+//!   由宿主**内存自注册**（manifest-schema §10：内置同样走清单注册，MVP 无安装器 →
+//!   宿主启动时直接构造 `LoadedExtension`）。其可执行文件来源见
+//!   [`load_extension_sources`]：打包后走**内嵌物化**（单文件 `dd-run.exe`），
+//!   开发期回退宿主 exe 同目录；
 //!   扩展目录中的第三方清单与其**并存**，同 id 以内置优先。
 //!
 //! M3 缓存与懒加载（见 [`docs/implementation.md`](../../docs/implementation.md) §M3）：
@@ -18,6 +20,7 @@
 //!   保证进程恒 warm 可响应 `fallback_commands`；
 //! - 源状态三态：Warm（进程活）/ Stub（仅桩）/ Failed（失败），供页脚展示与 A6 观察。
 
+use std::path::PathBuf;
 use std::thread;
 
 use dd_host::builtin::{ensure_builtins, merge_builtins};
@@ -119,14 +122,22 @@ impl ExtItems {
 
 /// 扫描扩展目录并**合并内置扩展**（M4 P4 `ensure_builtins`）。
 ///
-/// 返回 `(扩展列表, 备注)`。内置 5 个（exe 与 `dd-gui` 同目录、存在者）**恒注册**，
-/// 扩展目录中的第三方清单与其并存（同 id 以内置优先，`merge_builtins` 去重）。
+/// 返回 `(扩展列表, 备注)`。内置 5 个（exe 存在者）**恒注册**，扩展目录中的
+/// 第三方清单与其并存（同 id 以内置优先，`merge_builtins` 去重）。
 /// 备注仅在异常时非空（找不到内置 exe / 目录不可读），供 UI 提示。
+///
+/// 内置扩展的可执行文件来源（单文件分发后）：
+/// - **优先**：宿主内嵌的扩展 exe（经 [`crate::embedded::materialize`] 物化到
+///   `%APPDATA%/dd-run/cache/embedded/`）——这是打包后的 `dd-run.exe` 路径；
+/// - **回退**：与宿主 exe 同目录的 `dd-ext-*.exe`（开发期 / 未打包的多文件部署）。
 pub fn load_extension_sources() -> (Vec<LoadedExtension>, String) {
-    // 内置扩展：与宿主同目录的 dd-ext-*.exe（cargo 把 workspace 所有 bin 放同一目录）
-    let exe_dir = std::env::current_exe()
-        .ok()
-        .and_then(|p| p.parent().map(|d| d.to_path_buf()));
+    // 内置扩展目录：先尝试内嵌物化目录，其次宿主 exe 同目录（cargo 把 workspace
+    // 所有 bin 放同一目录，供开发期直接 cargo run / 测试使用）。
+    let exe_dir: Option<PathBuf> = crate::embedded::materialize().or_else(|| {
+        std::env::current_exe()
+            .ok()
+            .and_then(|p| p.parent().map(|d| d.to_path_buf()))
+    });
     let mut note = String::new();
     let builtins = match &exe_dir {
         Some(d) => {
@@ -140,7 +151,7 @@ pub fn load_extension_sources() -> (Vec<LoadedExtension>, String) {
             exts
         }
         None => {
-            note = "无法定位宿主可执行文件目录，内置扩展未注册".to_string();
+            note = "无法定位内置扩展可执行文件目录，内置扩展未注册".to_string();
             Vec::new()
         }
     };

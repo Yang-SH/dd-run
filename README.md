@@ -77,9 +77,30 @@
 
 ---
 
+---
+
+## 构建与打包
+
+> **强原则：每次打包都是——一个文件即是完整程序。**
+> 分发产物只有 `dist/dd-run-<version>.exe` 一个可执行文件，无需伴生扩展 exe、资源目录、安装器或额外配置；**双击即用，进程隔离（ADR-1）不变。**
+
+| 项 | 说明 |
+|---|---|
+| 入口产物 | `dist/dd-run-0.1.0.exe`（Windows，34 MB 量级；版本随 `dd-gui/Cargo.toml` 升） |
+| 内嵌方式 | 5 个内置扩展 exe（`dd-ext-{apps,calc,system,websearch,shell}`）经 `dd-gui/build.rs` 编译期内嵌进宿主字节（`assets/embed/` 为打包脚本的临时输入，已 gitignore） |
+| 运行机制 | 首次启动由 `dd-gui::embedded::materialize` 物化到 `%APPDATA%/dd-run/cache/embedded/`（`.host-version` 标记幂等刷新），宿主按原 `ensure_builtins` + `ExtensionProcess::spawn` 拉起子进程——**进程隔离完整保留** |
+| 入口命名 | `dd-run.exe` = GUI 宿主（crate 名仍 `dd-gui`）；M0 CLI 改名 `dd-run-cli.exe`（保留自检能力、让出产物名） |
+| 一键出包 | `bash tools/package.sh`（先 build `dd-ext` → 拷 5 exe → build `dd-gui --bin dd-run` → 拷贝产物到 `dist/`） |
+| 仓库纯净度 | 源码树不含任何二进制（`/dist/`、`/crates/dd-gui/assets/embed/*.exe` 均 gitignore） |
+| 验证口径 | `cargo fmt --check` / `cargo clippy --workspace --all-targets` / `cargo test --workspace` **全绿** + 脱离源码树冒烟（隔离目录仅 `dd-run.exe` → 物化 → 4/5 扩展 warm 握手成功，第 5 个经直接握手验证可枚举 99 应用） |
+
+**为什么不做安装器 / 不做 zip 多文件归集**：项目 MVP 阶段显式选择"简单可实现"——单文件产物同时满足"零安装仪式"与"任意机器双击即跑"，又不必为分发付注册表 / 安装卸载 / 升级脚本复杂度。详见 [`docs/implementation.md`](./docs/implementation.md) §5 状态注记与 ADR 部分。
+
+---
+
 ## 下一步
 
 - **M0–M4 已全部关闭**：协议冻结 → 最小面板 → 命令执行与状态机 → 缓存懒加载 → 5 内置扩展与健壮性（commit `757f3b4`）。
 - **M5（ueli 风格 UI 重构）主体完成**：设计稿 v4.3 + 批次 1–4.2 + 六轮真机反馈修复（commit `5cf32b7`）；剩余设计稿 C 组占位（嵌套页顶行统一 / Loading 骨架 / Dialog 遮罩 / 焦点态 / Toast 意图色），见 implementation.md §6.1 L8。
-- **候选 M6 方向（待定义）**：第三方扩展端到端验证、打包分发、A2 冷启动 GUI 瓶颈（wgpu + 22MB 字体 ~2.8s）、跨平台。
+- **候选 M6 方向（待定义）**：第三方扩展端到端验证、A2 冷启动 GUI 瓶颈（wgpu + 22MB 字体 ~2.8s）、跨平台。
 - 完整进度与遗留项台账见 [`docs/implementation.md`](./docs/implementation.md) §5 / §6.1。

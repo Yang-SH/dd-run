@@ -1,0 +1,11 @@
+[package]
+name = "dd-run-cli"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "dd-run 开发自检 CLI（M0：扩展清单扫描与协议全链路自检；产物改名 dd-run-cli 以把 dd-run.exe 让给 GUI 宿主入口）"
+publish = false
+
+[dependencies]
+dd-host = { path = "../dd-host" }
+serde_json = "1"
