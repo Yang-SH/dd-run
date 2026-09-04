@@ -73,6 +73,19 @@ const SEARCH_GLYPH: char = '\u{E721}';
 const REFRESH_WINDOW: Duration = Duration::from_millis(100);
 /// Toast 默认显示时长（扩展未指定 `duration_ms` 时）。
 const TOAST_DEFAULT_MS: u64 = 2_000;
+/// 失败路径(Error) Toast 固定时长：设计稿 §9.1 明令「执行失败路径固定 3000ms」。
+/// Error 为宿主侧语义（扩展只能发 Info，见 [`DdGui::show_toast`]），故强制固定、忽略调用方传入值。
+const TOAST_ERROR_MS: u64 = 3_000;
+
+/// 解析 Toast 最终显示时长（毫秒）。
+/// - Error 失败路径强制 [`TOAST_ERROR_MS`]，调用方传入值无效（设计稿 §9.1）；
+/// - 其余（Info/Success）默认 [`TOAST_DEFAULT_MS`]，扩展显式 `duration_ms` 时尊重。
+fn toast_duration_ms(kind: ToastKind, requested: Option<u64>) -> u64 {
+    match kind {
+        ToastKind::Error => TOAST_ERROR_MS,
+        _ => requested.unwrap_or(TOAST_DEFAULT_MS),
+    }
+}
 /// M3 LRU 保活容量（设计文档 §6.3"最近 N 个"；超出则 close+释放、命令回落 stub，A7）。
 const LRU_WARM_CAPACITY: usize = 8;
 
@@ -818,11 +831,7 @@ impl PaletteApp {
                             }
                         }
                         eprintln!("[dd-gui] invoke 失败：{e}");
-                        self.show_toast_kind(
-                            ToastKind::Error,
-                            format!("命令执行失败：{e}"),
-                            Some(3_000),
-                        );
+                        self.show_error_toast(format!("命令执行失败：{e}"));
                     }
                 }
             }
@@ -1116,11 +1125,9 @@ impl PaletteApp {
             eprintln!(
                 "[dd-gui] 扩展 {ext_id} 连续崩溃 {n} 次 ≥ {MAX_CONSECUTIVE_CRASHES}，标记暂时不可用（重启宿主或手动重试后恢复）"
             );
-            self.show_toast_kind(
-                ToastKind::Error,
-                format!("扩展 {ext_id} 暂时不可用（连续崩溃 {n} 次），重启后恢复"),
-                Some(4_000),
-            );
+            self.show_error_toast(format!(
+                "扩展 {ext_id} 暂时不可用（连续崩溃 {n} 次），重启后恢复"
+            ));
             if let Some(s) = self.sources.iter_mut().find(|s| s.id == ext_id) {
                 s.status = SourceStatus::Failed {
                     error: format!("暂时不可用（连续崩溃 {n} 次，重启宿主恢复）"),
@@ -1336,7 +1343,7 @@ impl PaletteApp {
             self.start_invoke_reheat(&ext, params); // 桩复热
         } else {
             eprintln!("[dd-gui] invoke 失败：ext={ext_id} 无扩展信息");
-            self.show_toast_kind(ToastKind::Error, "扩展信息缺失，无法执行", Some(2_000));
+            self.show_error_toast("扩展信息缺失，无法执行");
         }
     }
 
@@ -1347,11 +1354,7 @@ impl PaletteApp {
         eprintln!("[dd-gui] invoke 发起：ext={ext_id} cmd={}", params.id);
         let Some(idx) = self.processes.iter().position(|(id, _)| id == ext_id) else {
             eprintln!("[dd-gui] invoke 失败：ext={ext_id} 进程不可用（可能 in-flight）");
-            self.show_toast_kind(
-                ToastKind::Error,
-                "扩展进程不可用（可能正在处理上一个请求）",
-                Some(2_000),
-            );
+            self.show_error_toast("扩展进程不可用（可能正在处理上一个请求）");
             return;
         };
         let (_, mut proc) = self.processes.remove(idx);
@@ -1656,6 +1659,12 @@ impl PaletteApp {
         self.show_toast_kind(ToastKind::Info, message, duration_ms);
     }
 
+    /// 失败路径 Toast：固定 [`TOAST_ERROR_MS`] = 3000ms（设计稿 §9.1），
+    /// 不接收时长参数，杜绝调用方传入偏离值。
+    fn show_error_toast(&mut self, message: impl Into<String>) {
+        self.show_toast_kind(ToastKind::Error, message, None);
+    }
+
     /// 带意图的 Toast（C 组批次 C3）：宿主自身路径按语义标注意图；
     /// 扩展 `ShowToast` 路径走默认 info 的 [`Self::show_toast`]。
     fn show_toast_kind(
@@ -1664,7 +1673,7 @@ impl PaletteApp {
         message: impl Into<String>,
         duration_ms: Option<u64>,
     ) {
-        let ms = duration_ms.unwrap_or(TOAST_DEFAULT_MS);
+        let ms = toast_duration_ms(kind, duration_ms);
         self.toast = Some(ToastState {
             message: message.into(),
             expires: Instant::now() + Duration::from_millis(ms),
@@ -1903,19 +1912,21 @@ impl PaletteApp {
     }
 
     /// 底部固定栏内容：**设置按钮**（最左常驻，§6.1）+ **上下文动作提示**
-    /// （批次 4.1，§6.3）+ 异常源诊断（仅异常时）+ 键位提示。
+    /// （批次 4.1，§6.3）+ 键位图例。
     ///
-    /// 布局（§6.3 + C6）：
+    /// 布局（§6.3 + C6 + **D15 v4.3 修订**）：
     /// - **严格单行 32px**（`FOOTER_PAD_Y 8 + KEYCAP_H 16 + FOOTER_PAD_Y 8`，D8）：
-    ///   `allocate_exact_size` 锁一行 + 左右两块 `new_child` 精确排版，
-    ///   **禁止 `horizontal_wrapped`**（异常源多时会把页脚撑回 72px）；左块
-    ///   超宽时内容被 max_rect 裁剪，键位区始终完整靠右。
-    /// - **有选中项**：左侧 = 选中项默认动作文本（[`footer_action_text`] 实时
-    ///   推导，C7），右侧 = `↵ Enter` 单键帽；**无选中 / 空态**：左侧仅齿轮
-    ///   （+ 异常源诊断），右侧回退全局键位图例（↑↓/Enter/Esc，C8）。
-    /// - **源健康诊断仅异常时显示**（C8）：存在 stub/failed 源或 note 时追加
-    ///   状态点条目；全 ok 常态不占位。
-    /// - 批次 4.0：齿轮在最左（所有状态一致，§6.1"页脚最左侧常驻"）；
+    ///   `allocate_exact_size` 锁一行 + 手动锚定行中心线（混合高度内容下
+    ///   egui 自动居中逐项漂移，真机 2026-09-04 修复），**禁止 `horizontal_wrapped`**。
+    /// - **有选中项**：左侧 = 齿轮 + 选中项默认动作文本（[`footer_action_text`]
+    ///   实时推导，C7）；**无选中 / 空态**：左侧仅齿轮；拉取中显示「正在加载…」
+    ///   （§07 loading mockup）。
+    /// - **右侧键位图例恒定完整**（v4.3 修订：↑↓ 选择 / Enter 执行 / Esc
+    ///   返回·隐藏，不再随选中态退化为单键帽）；嵌套页右端追加 `ext_id` 徽标
+    ///   （§07.1，C 组批次 C1）。
+    /// - **源健康诊断整体移除**（v4.3 修订，2026-09-04 用户决策）：stub/err
+    ///   状态点与聚合 note 不再进页脚（原 C8"仅异常时显示"规格废止）。
+    /// - 批次 4.0：齿轮在最左（Root/子页/空态恒定，设置页除外，§6.1）；
     ///   返回值 = 本帧齿轮是否被点击（调用方在面板闭包结束后 `open_settings`）。
     fn draw_status_footer(&self, ui: &mut egui::Ui) -> bool {
         let p = theme::Palette::of(ui.visuals().dark_mode);
@@ -1974,7 +1985,13 @@ impl PaletteApp {
         } else {
             0.0
         };
-        let action = page.list.selected_item().map(footer_action_text);
+        // C7：动作文本随选中项实时变化（含 fallback 模式——filtered() 覆盖兜底集）。
+        // §07 loading mockup：拉取中（无选中项）页脚左侧显示「正在加载…」提示。
+        let action = page
+            .list
+            .selected_item()
+            .map(footer_action_text)
+            .or_else(|| page.is_loading.then(|| "正在加载…".to_string()));
         let keys_w = keys_width(ui)
             + if ext_chip_w > 0.0 {
                 theme::FOOTER_GAP + ext_chip_w
@@ -2078,9 +2095,10 @@ impl PaletteApp {
         );
         let back_clicked = draw_back_btn(&mut back_ui, &p);
 
-        // 页标题：painter 直绘锚定 cy（body 16px）
+        // 页标题：painter 直绘锚定 cy（body 16px；与返回按钮间距 = `.toprow`
+        // gap 8px，与嵌套页 back→searchbar 间距同口径）
         ui.painter().text(
-            egui::pos2(back_rect.right() + 12.0, cy),
+            egui::pos2(back_rect.right() + 8.0, cy),
             egui::Align2::LEFT_CENTER,
             "设置",
             egui::FontId::proportional(16.0),
@@ -2089,7 +2107,10 @@ impl PaletteApp {
 
         // 版本徽标：精确尺寸子区贴右缘垂直居中（draw_version_chip 恰好填满）
         let ver_text = format!("v{}", env!("CARGO_PKG_VERSION"));
-        let chip_w = text_width(ui, &ver_text, egui::FontId::proportional(10.0)) + 16.0;
+        // 宽度估算必须与 draw_ext_chip 的渲染字体一致（monospace）——曾错用
+        // proportional 导致 chip_rect 偏窄 ~6px，allocate 溢出 max_rect 向右多画，
+        // 胶囊右缘越过内容边线、距窗口边框只剩 ~5px（真机 2026-09-04 反馈）。
+        let chip_w = text_width(ui, &ver_text, egui::FontId::monospace(10.0)) + 16.0;
         let chip_rect = egui::Rect::from_min_size(
             egui::pos2(row_rect.right() - chip_w, cy - 8.0),
             egui::vec2(chip_w, 16.0),
@@ -2401,13 +2422,14 @@ impl PaletteApp {
         let mut clicked: Option<usize> = None;
         let scroll_follow = self.scroll_follow;
         egui::ScrollArea::vertical().show(ui, |ui| {
-            // `.results` 容器：padding 6px 6px 8px（行相对搜索栏再内收 6px、
-            // 列表底部留 8px；egui Frame inner_margin 承担）。
+            // `.results` 容器：padding 6px 6px 8px（CSS 简写 = 上 6 / 左右 6 /
+            // 下 8；行相对搜索栏再内收 6px、列表底部留 8px。egui Frame
+            // inner_margin 承担——与顶行 padding-bottom 4 合计 10px，同设计稿）。
             egui::Frame::default()
                 .inner_margin(egui::Margin {
                     left: 6,
                     right: 6,
-                    top: 0,
+                    top: 6,
                     bottom: 8,
                 })
                 .show(ui, |ui| {
@@ -2607,7 +2629,9 @@ impl PaletteApp {
                         // 键位提示（最左，hint margin-right auto）：Enter 键帽 +
                         // 确认 + Esc 键帽 + 取消（caption1 12 text-3）。
                         let esc_kw = keycap_width(ui, "Esc");
-                        let enter_kw = keycap_width(ui, "Enter");
+                        // §10.1 键帽行「↵ Enter 确认 / Esc 取消」：↵ 入键帽
+                        let enter_cap = "↵ Enter";
+                        let enter_kw = keycap_width(ui, enter_cap);
                         let que_w = text_width(ui, "确认", egui::FontId::proportional(12.0));
                         let qux_w = text_width(ui, "取消", egui::FontId::proportional(12.0));
                         let hint_w = enter_kw + 4.0 + que_w + 12.0 + esc_kw + 4.0 + qux_w;
@@ -2620,7 +2644,7 @@ impl PaletteApp {
                                     egui::pos2(x, cy - theme::KEYCAP_H / 2.0),
                                     egui::vec2(enter_kw, theme::KEYCAP_H),
                                 ),
-                                "Enter",
+                                enter_cap,
                                 &p,
                             );
                             x += enter_kw + 4.0;
@@ -2972,8 +2996,9 @@ fn draw_item_row(
                         }
                     }
                     // Tag（D13 组件化：圆角 4、subtle 底、caption1、fg2、不可关闭；
-                    // 最多显示 2 个，超出折叠为「+N」（mini 10px）。构建展示序列后
-                    // 反转适配 right_to_left 布局，保证视觉从左到右 = tags[0], tags[1], +N。
+                    // 最多显示 2 个，超出折叠为「+N」（同为 caption1 12px，与宽度
+                    // 预留口径一致）。构建展示序列后反转适配 right_to_left 布局，
+                    // 保证视觉从左到右 = tags[0], tags[1], +N。
                     let mut shown: Vec<(String, bool)> = item
                         .tags
                         .iter()
@@ -2983,17 +3008,13 @@ fn draw_item_row(
                     if item.tags.len() > 2 {
                         shown.push((format!("+{}", item.tags.len() - 2), true));
                     }
-                    for (tag, is_overflow) in shown.iter().rev() {
+                    for (tag, _) in shown.iter().rev() {
                         egui::Frame::default()
                             .fill(p.chip_bg)
                             .corner_radius(4.0)
                             .inner_margin(egui::Margin::symmetric(8, 2))
                             .show(ui, |ui| {
-                                ui.label(
-                                    egui::RichText::new(tag)
-                                        .size(if *is_overflow { 10.0 } else { 12.0 })
-                                        .color(p.text2),
-                                );
+                                ui.label(egui::RichText::new(tag).size(12.0).color(p.text2));
                             });
                         ui.add_space(8.0);
                     }
@@ -3116,22 +3137,22 @@ fn draw_searchbar(ui: &mut egui::Ui, query: &mut String, placeholder: &str) -> e
             .layout(egui::Layout::left_to_right(egui::Align::Center)),
     );
 
-    // 4) glyph 前缀（设计稿 01：text-2 16px）
+    // 4) glyph 前缀（设计稿 01：text-2 16px；与输入框间距 = `.searchbar` gap 8px）
     content_ui.label(
         egui::RichText::new(SEARCH_GLYPH.to_string())
             .size(16.0)
             .color(p.text2),
     );
-    content_ui.add_space(12.0);
+    content_ui.add_space(8.0);
 
-    // 5) TextEdit：在 child_ui（限定 46px 高度）里扩展 INFINITY 宽度撑满，
-    //    高度由 font(16px) 自定 ~22px，居中显示。
+    // 5) TextEdit：在 child_ui（限定 40px 高度）里扩展 INFINITY 宽度撑满，
+    //    高度由 font(14px, body1) 自定 ~20px，居中显示。
     let resp = content_ui.add(
         egui::TextEdit::singleline(query)
             .frame(egui::Frame::new()) // 空 Frame：无底无边框，外观由外层 Frame 承担
             .hint_text(egui::RichText::new(placeholder).color(p.text3))
             .desired_width(f32::INFINITY)
-            .font(egui::FontId::proportional(16.0)),
+            .font(egui::FontId::proportional(14.0)),
     );
 
     // 5.5) 中文输入法候选框位置修正：手动报告 IME 光标区域。
@@ -3141,7 +3162,7 @@ fn draw_searchbar(ui: &mut egui::Ui, query: &mut String, placeholder: &str) -> e
         let text_w = text_width(
             &content_ui,
             query.as_str(),
-            egui::FontId::proportional(16.0),
+            egui::FontId::proportional(14.0),
         );
         let cursor_x = (resp.rect.min.x + text_w).min(resp.rect.right() - 2.0);
         let cursor_y = resp.rect.center().y;
@@ -3463,6 +3484,11 @@ fn draw_settings_card_frame(
         .inner_margin(egui::Margin::same(12))
         .show(ui, |ui| {
             ui.vertical(|ui| {
+                // 卡片恒等宽（真机 2026-09-04 修复）：egui Frame 默认按内容最小宽
+                // 收缩——内容只有短文本+checkbox 的卡片（「打开面板时显示」）实测窄
+                // 84px（449 vs 533）。设计稿 §08.1 `.settings-card` 是 block 级全宽
+                // 卡片，这里把内层 min_width 钉到可用宽，使所有卡片恒为全宽。
+                ui.set_min_width(ui.available_width());
                 body(ui);
             });
         });
@@ -3525,16 +3551,23 @@ fn draw_radio_card(
     ui.painter()
         .rect_stroke(rect, radius, stroke, egui::StrokeKind::Inside);
 
-    // 圆点 12×12：rect 内部 padding 12 → 圆心 (rect.left+12+6, rect.top+12+6)
+    // 圆点 12×12（CSS `.rc-dot`：1.5px 描边）：rect 内部 padding 12 →
+    // 圆心 (rect.left+12+6, rect.top+12+6)。选中态（CSS
+    // `.radio-card.sel .rc-dot`）= accent 环 + 3.5px accent 实心内点。
     let dot_cx = rect.left() + 18.0;
     let dot_cy = rect.top() + 18.0;
     if selected {
+        ui.painter().circle_stroke(
+            egui::pos2(dot_cx, dot_cy),
+            6.0,
+            egui::Stroke::new(1.5, p.accent),
+        );
         ui.painter()
-            .circle_filled(egui::pos2(dot_cx, dot_cy), 5.5, p.accent);
+            .circle_filled(egui::pos2(dot_cx, dot_cy), 3.5, p.accent);
     } else {
         ui.painter().circle_stroke(
             egui::pos2(dot_cx, dot_cy),
-            5.5,
+            6.0,
             egui::Stroke::new(1.5, p.border_strong),
         );
     }
@@ -3900,6 +3933,26 @@ mod tests {
             },
         );
         assert_eq!(footer_action_text(&page_unknown), "进入");
+    }
+
+    // ── C 组批次 C3：Error Toast 失败路径固定 3000ms（设计稿 §9.1） ──
+
+    #[test]
+    fn error_toast_is_fixed_at_3000ms_regardless_of_requested() {
+        // §9.1：执行失败路径固定 3000ms；Error 是宿主侧语义、扩展只能发 Info，
+        // 故强制覆盖任何传入值（杜绝此前 6 条 Error 路径 3000/4000/2000/2500/2000/2000 偏离）。
+        assert_eq!(toast_duration_ms(ToastKind::Error, None), 3_000);
+        assert_eq!(toast_duration_ms(ToastKind::Error, Some(2_000)), 3_000);
+        assert_eq!(toast_duration_ms(ToastKind::Error, Some(9_999)), 3_000);
+    }
+
+    #[test]
+    fn non_error_toasts_respect_default_or_explicit() {
+        // Info/Success 默认 2000ms，显式值被尊重（扩展 ShowToast 可自定义时长）。
+        assert_eq!(toast_duration_ms(ToastKind::Info, None), 2_000);
+        assert_eq!(toast_duration_ms(ToastKind::Info, Some(5_000)), 5_000);
+        assert_eq!(toast_duration_ms(ToastKind::Success, None), 2_000);
+        assert_eq!(toast_duration_ms(ToastKind::Success, Some(1_500)), 1_500);
     }
 
     // ── 夹具 ───────────────────────────────────────────────

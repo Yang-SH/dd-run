@@ -66,10 +66,10 @@ mod sys {
     };
     use windows_sys::Win32::UI::Shell::Common::ITEMIDLIST;
     use windows_sys::Win32::UI::Shell::{
-        BHID_SFObject, FOLDERID_AppsFolder, SHCONTF_FOLDERS, SHCONTF_INCLUDEHIDDEN,
-        SHCONTF_NONFOLDERS, SHCreateItemFromIDList, SHCreateItemFromParsingName,
-        SHCreateItemWithParent, SHGetKnownFolderIDList, SIGDN_DESKTOPABSOLUTEPARSING,
-        SIGDN_NORMALDISPLAY, SIIGBF_BIGGERSIZEOK, SIIGBF_ICONONLY,
+        BHID_SFObject, FOLDERID_AppsFolder, SHCreateItemFromIDList, SHCreateItemFromParsingName,
+        SHCreateItemWithParent, SHGetKnownFolderIDList, SHCONTF_FOLDERS, SHCONTF_INCLUDEHIDDEN,
+        SHCONTF_NONFOLDERS, SIGDN_DESKTOPABSOLUTEPARSING, SIGDN_NORMALDISPLAY, SIIGBF_BIGGERSIZEOK,
+        SIIGBF_ICONONLY,
     };
     use windows_sys::Win32::UI::WindowsAndMessaging::DestroyIcon;
 
@@ -87,8 +87,11 @@ mod sys {
     // ────────────────────────────────────────────────────────────────
 
     // COM vtable 函数指针必须为 `extern "system"` ABI（Rust 默认 ABI 不保证与 C 兼容）。
-    type FnQueryInterface =
-        unsafe extern "system" fn(*mut core::ffi::c_void, *const GUID, *mut *mut core::ffi::c_void) -> HRESULT;
+    type FnQueryInterface = unsafe extern "system" fn(
+        *mut core::ffi::c_void,
+        *const GUID,
+        *mut *mut core::ffi::c_void,
+    ) -> HRESULT;
     type FnAddRef = unsafe extern "system" fn(*mut core::ffi::c_void) -> u32;
     type FnRelease = unsafe extern "system" fn(*mut core::ffi::c_void) -> u32;
 
@@ -113,12 +116,13 @@ mod sys {
             *const GUID,            // riid
             *mut *mut core::ffi::c_void,
         ) -> HRESULT,
-        get_parent:
-            unsafe extern "system" fn(*mut core::ffi::c_void, *mut *mut core::ffi::c_void) -> HRESULT,
+        get_parent: unsafe extern "system" fn(
+            *mut core::ffi::c_void,
+            *mut *mut core::ffi::c_void,
+        ) -> HRESULT,
         get_display_name:
             unsafe extern "system" fn(*mut core::ffi::c_void, i32, *mut *mut u16) -> HRESULT,
-        get_attributes:
-            unsafe extern "system" fn(*mut core::ffi::c_void, u32, *mut u32) -> HRESULT,
+        get_attributes: unsafe extern "system" fn(*mut core::ffi::c_void, u32, *mut u32) -> HRESULT,
         compare: unsafe extern "system" fn(
             *mut core::ffi::c_void,
             *mut core::ffi::c_void,
@@ -133,12 +137,8 @@ mod sys {
         query_interface: FnQueryInterface,
         add_ref: FnAddRef,
         release: FnRelease,
-        get_image: unsafe extern "system" fn(
-            *mut core::ffi::c_void,
-            SIZE,
-            i32,
-            *mut HBITMAP,
-        ) -> HRESULT,
+        get_image:
+            unsafe extern "system" fn(*mut core::ffi::c_void, SIZE, i32, *mut HBITMAP) -> HRESULT,
     }
 
     /// `IShellFolder`（shobjidl_core）。仅使用 EnumObjects（槽 4）；
@@ -275,9 +275,9 @@ mod sys {
             // ① shell:AppsFolder：应用本体（UWP + 桌面应用），对齐 PowerToys CmdPal
             match collect_apps_folder(&mut apps, &mut seen) {
                 Ok(n) => eprintln!("[dd-ext-apps] AppsFolder 枚举到 {n} 个应用"),
-                Err(e) => eprintln!(
-                    "[dd-ext-apps] AppsFolder 枚举失败（仅用开始菜单 .lnk 兜底）：{e}"
-                ),
+                Err(e) => {
+                    eprintln!("[dd-ext-apps] AppsFolder 枚举失败（仅用开始菜单 .lnk 兜底）：{e}")
+                }
             }
 
             // ② 开始菜单 .lnk 兜底（两个根，递归；按显示名去重，仅补 AppsFolder 缺席项）
@@ -354,8 +354,7 @@ mod sys {
     ) -> Result<usize, String> {
         unsafe {
             let mut pidl: *mut ITEMIDLIST = std::ptr::null_mut();
-            if SHGetKnownFolderIDList(&FOLDERID_AppsFolder, 0, std::ptr::null_mut(), &mut pidl)
-                != 0
+            if SHGetKnownFolderIDList(&FOLDERID_AppsFolder, 0, std::ptr::null_mut(), &mut pidl) != 0
             {
                 return Err("SHGetKnownFolderIDList(FOLDERID_AppsFolder) 失败".to_string());
             }
@@ -406,13 +405,8 @@ mod sys {
                 for &child in &batch[..fetched as usize] {
                     if apps.len() < MAX_APPS {
                         let mut item: *mut core::ffi::c_void = std::ptr::null_mut();
-                        if SHCreateItemWithParent(
-                            pidl,
-                            psf,
-                            child,
-                            &IID_ISHELL_ITEM,
-                            &mut item,
-                        ) == 0
+                        if SHCreateItemWithParent(pidl, psf, child, &IID_ISHELL_ITEM, &mut item)
+                            == 0
                             && !item.is_null()
                         {
                             if let (Some(title), Some(parsing)) = (
@@ -460,10 +454,7 @@ mod sys {
     }
 
     /// `IShellItem::GetDisplayName` → UTF-8 字符串（CoTaskMemFree 释放 PWSTR）。
-    unsafe fn shell_item_display_name(
-        item: *mut core::ffi::c_void,
-        sigdn: i32,
-    ) -> Option<String> {
+    unsafe fn shell_item_display_name(item: *mut core::ffi::c_void, sigdn: i32) -> Option<String> {
         let vt: *const IShellItemVtbl = *(item as *const *const IShellItemVtbl);
         let mut pw: *mut u16 = std::ptr::null_mut();
         if ((*vt).get_display_name)(item, sigdn, &mut pw) != 0 || pw.is_null() {
@@ -534,8 +525,7 @@ mod sys {
             // IPersistFile::Load 装载 .lnk（STGM_READ = 0）
             let mut hr = match com_qi(link, &IID_IPERSIST_FILE) {
                 Some(persist) => {
-                    let pvt: *const IPersistFileVtbl =
-                        *(persist as *const *const IPersistFileVtbl);
+                    let pvt: *const IPersistFileVtbl = *(persist as *const *const IPersistFileVtbl);
                     let r = ((*pvt).load)(persist, wide.as_ptr(), 0);
                     com_release(persist);
                     r
@@ -545,7 +535,8 @@ mod sys {
             let mut buf = [0u16; 1024];
             if hr == 0 {
                 let lvt: *const IShellLinkWVtbl = *(link as *const *const IShellLinkWVtbl);
-                hr = ((*lvt).get_path)(link, buf.as_mut_ptr(), 1024, std::ptr::null_mut(), 4); // SLGP_RAWPATH
+                hr = ((*lvt).get_path)(link, buf.as_mut_ptr(), 1024, std::ptr::null_mut(), 4);
+                // SLGP_RAWPATH
             }
             com_release(link);
             if hr != 0 {
@@ -653,7 +644,10 @@ mod sys {
     }
 
     /// 从活动 IShellItem（QI `IShellItemImageFactory`）抽 48px 图标 PNG。
-    unsafe fn shell_item_icon_png(item: *mut core::ffi::c_void, cache_key: &str) -> Option<PathBuf> {
+    unsafe fn shell_item_icon_png(
+        item: *mut core::ffi::c_void,
+        cache_key: &str,
+    ) -> Option<PathBuf> {
         let out_dir = icon_cache_dir()?;
         if let Some(p) = cached_icon_path(&out_dir, cache_key, ICON_SIZE) {
             return Some(p);
@@ -663,8 +657,11 @@ mod sys {
         let png = factory_get_image_png(factory);
         com_release(factory);
         let png = png?;
-        let out_path =
-            out_dir.join(format!("apps-{}-{}.png", icon_cache_key(cache_key), ICON_SIZE));
+        let out_path = out_dir.join(format!(
+            "apps-{}-{}.png",
+            icon_cache_key(cache_key),
+            ICON_SIZE
+        ));
         if !out_path.exists() {
             std::fs::write(&out_path, &png).ok()?;
         }
@@ -718,7 +715,15 @@ mod sys {
         }
         let mut bmi: BITMAPINFO = std::mem::zeroed();
         bmi.bmiHeader.biSize = std::mem::size_of::<BITMAPINFOHEADER>() as u32;
-        let ok = GetDIBits(hdc, hbm, 0, 0, std::ptr::null_mut(), &mut bmi, DIB_RGB_COLORS);
+        let ok = GetDIBits(
+            hdc,
+            hbm,
+            0,
+            0,
+            std::ptr::null_mut(),
+            &mut bmi,
+            DIB_RGB_COLORS,
+        );
         let w = bmi.bmiHeader.biWidth;
         let h = bmi.bmiHeader.biHeight.unsigned_abs() as i32;
         if ok == 0 || w <= 0 || h <= 0 || w > 512 || h > 512 {
@@ -743,12 +748,12 @@ mod sys {
         if n == 0 {
             return None;
         }
-        for px in buf.chunks_exact_mut(4) {
+        for px in buf.as_chunks_mut::<4>().0 {
             px.swap(0, 2); // B↔R
         }
-        let has_alpha = buf.chunks_exact(4).any(|p| p[3] != 0);
+        let has_alpha = buf.as_chunks::<4>().0.iter().any(|p| p[3] != 0);
         if !has_alpha {
-            for px in buf.chunks_exact_mut(4) {
+            for px in buf.as_chunks_mut::<4>().0 {
                 px[3] = 0xff;
             }
         }
@@ -756,14 +761,21 @@ mod sys {
         let mut out = Vec::with_capacity(16 * 1024);
         let encoder = image::codecs::png::PngEncoder::new(&mut out);
         encoder
-            .write_image(img.as_raw(), w as u32, h as u32, image::ExtendedColorType::Rgba8)
+            .write_image(
+                img.as_raw(),
+                w as u32,
+                h as u32,
+                image::ExtendedColorType::Rgba8,
+            )
             .ok()?;
         Some(out)
     }
 
     /// 回退链路：`SHGetFileInfoW` 取 32×32 HICON → PNG bytes（不落盘，调用方负责）。
     unsafe fn shfileinfo_png(path: &Path) -> Option<Vec<u8>> {
-        use windows_sys::Win32::UI::Shell::{SHGetFileInfoW, SHFILEINFOW, SHGFI_ICON, SHGFI_LARGEICON};
+        use windows_sys::Win32::UI::Shell::{
+            SHGetFileInfoW, SHFILEINFOW, SHGFI_ICON, SHGFI_LARGEICON,
+        };
 
         let path_wide: Vec<u16> = path
             .as_os_str()
@@ -825,7 +837,15 @@ mod sys {
         // ① 查询色位图实际尺寸（lpvBits=NULL 的 GetDIBits 会回填 bmiHeader）
         let mut bmi: BITMAPINFO = std::mem::zeroed();
         bmi.bmiHeader.biSize = std::mem::size_of::<BITMAPINFOHEADER>() as u32;
-        let ok = GetDIBits(hdc, hbm_color, 0, 0, std::ptr::null_mut(), &mut bmi, DIB_RGB_COLORS);
+        let ok = GetDIBits(
+            hdc,
+            hbm_color,
+            0,
+            0,
+            std::ptr::null_mut(),
+            &mut bmi,
+            DIB_RGB_COLORS,
+        );
         let w = bmi.bmiHeader.biWidth;
         let h = bmi.bmiHeader.biHeight.unsigned_abs() as i32;
         if ok == 0 || w <= 0 || h <= 0 || w > 512 || h > 512 {
@@ -871,16 +891,16 @@ mod sys {
         }
 
         // BGRA → RGBA
-        for px in buf.chunks_exact_mut(4) {
+        for px in buf.as_chunks_mut::<4>().0 {
             px.swap(0, 2); // B↔R
         }
         // alpha：有真实 per-pixel alpha 就保留；全 0 → 掩码生成 / 兜底不透明
-        let has_alpha = buf.chunks_exact(4).any(|p| p[3] != 0);
+        let has_alpha = buf.as_chunks::<4>().0.iter().any(|p| p[3] != 0);
         if !has_alpha {
             match mask {
                 Some((mask_bits, mask_stride)) => {
                     for (y, row) in buf.chunks_exact_mut(stride).enumerate() {
-                        for (x, px) in row.chunks_exact_mut(4).enumerate() {
+                        for (x, px) in row.as_chunks_mut::<4>().0.iter_mut().enumerate() {
                             let byte = mask_bits[y * mask_stride + x / 8];
                             // AND 掩码位 0 = 不透明
                             let opaque = (byte >> (7 - (x % 8))) & 1 == 0;
@@ -889,7 +909,7 @@ mod sys {
                     }
                 }
                 None => {
-                    for px in buf.chunks_exact_mut(4) {
+                    for px in buf.as_chunks_mut::<4>().0 {
                         px[3] = 0xff;
                     }
                 }
@@ -920,11 +940,21 @@ mod sys {
         w: usize,
         h: usize,
     ) -> Option<(Vec<u8>, usize)> {
-        use windows_sys::Win32::Graphics::Gdi::{GetDIBits, BITMAPINFO, BITMAPINFOHEADER, DIB_RGB_COLORS};
+        use windows_sys::Win32::Graphics::Gdi::{
+            GetDIBits, BITMAPINFO, BITMAPINFOHEADER, DIB_RGB_COLORS,
+        };
 
         let mut bmi: BITMAPINFO = std::mem::zeroed();
         bmi.bmiHeader.biSize = std::mem::size_of::<BITMAPINFOHEADER>() as u32;
-        let ok = GetDIBits(hdc, hbm_mask, 0, 0, std::ptr::null_mut(), &mut bmi, DIB_RGB_COLORS);
+        let ok = GetDIBits(
+            hdc,
+            hbm_mask,
+            0,
+            0,
+            std::ptr::null_mut(),
+            &mut bmi,
+            DIB_RGB_COLORS,
+        );
         let mw = bmi.bmiHeader.biWidth as usize;
         let mh = bmi.bmiHeader.biHeight.unsigned_abs() as usize;
         if ok == 0 || mw < w || mh < h || mw > 512 {
@@ -1142,15 +1172,11 @@ mod sys {
                 eprintln!("[file_icon_png_succeeds_for_real_exe] skip: {exe:?} 不存在");
                 return;
             }
-            let out = unsafe { file_icon_png(&path) }
-                .unwrap_or_else(|| panic!("抽 {exe:?} 图标应成功"));
+            let out =
+                unsafe { file_icon_png(&path) }.unwrap_or_else(|| panic!("抽 {exe:?} 图标应成功"));
             assert!(out.is_file(), "落盘 PNG 应存在：{}", out.display());
             let head = std::fs::read(&out).unwrap();
-            assert!(
-                head.len() > 8,
-                "PNG 文件应非空：{}",
-                out.display()
-            );
+            assert!(head.len() > 8, "PNG 文件应非空：{}", out.display());
             assert_eq!(
                 &head[..8],
                 &[0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A]

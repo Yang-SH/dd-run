@@ -99,9 +99,9 @@ impl Palette {
             text_disabled: rgb(0x5c_5c_5c),
             card: rgb(0x33_33_33),
             card_hover: rgb(0x3d_3d_3d),
-            accent: rgb(0x47_9e_f5),
-            success: rgb(0x6c_cb_5f), // 待核：官方 green[tint30]
-            danger: rgb(0xf2_55_5a),  // 待核：官方 cranberry[tint30]
+            accent: rgb(0x11_5e_a3), // brand[70] · colorBrandBackground（暗；#479ef5=brand[100] 属 Foreground/Compound 系）
+            success: rgb(0x54_b0_54), // green[tint30] · colorStatusSuccessForeground1（暗，2026-09 按 @fluentui/tokens 核实）
+            danger: rgb(0xdc_62_6d),  // cranberry[tint30] · colorStatusDangerForeground1（暗）
             row_hover: rgb(0x3d_3d_3d),
             row_pressed: rgb(0x1f_1f_1f),
             row_selected: rgb(0x38_38_38),
@@ -124,8 +124,8 @@ impl Palette {
             card: rgb(0xfa_fa_fa),
             card_hover: rgb(0xff_ff_ff),
             accent: rgb(0x0f_6c_bd),
-            success: rgb(0x10_7c_10), // green[shade10]
-            danger: rgb(0xc5_0f_1f),  // cranberry[shade10]
+            success: rgb(0x0e_70_0e), // green[shade10] · colorStatusSuccessForeground1（亮；#107c10 实为 primary）
+            danger: rgb(0xb1_0e_1c), // cranberry[shade10] · colorStatusDangerForeground1（亮；#c50f1f 实为 primary）
             row_hover: rgb(0xf5_f5_f5),
             row_pressed: rgb(0xe0_e0_e0),
             row_selected: rgb(0xeb_eb_eb),
@@ -270,9 +270,13 @@ mod tests {
             rgb(0x33_33_33),
             "--card 暗 = cardBackground grey[20]"
         );
-        assert_eq!(p.accent, rgb(0x47_9e_f5), "--accent 暗 = brand[100]");
-        assert_eq!(p.success, rgb(0x6c_cb_5f), "--success 暗（待核派生值）");
-        assert_eq!(p.danger, rgb(0xf2_55_5a), "--danger 暗（待核派生值）");
+        assert_eq!(
+            p.accent,
+            rgb(0x11_5e_a3),
+            "--accent 暗 = brand[70]（colorBrandBackground）"
+        );
+        assert_eq!(p.success, rgb(0x54_b0_54), "--success 暗 = green[tint30]");
+        assert_eq!(p.danger, rgb(0xdc_62_6d), "--danger 暗 = cranberry[tint30]");
         assert_eq!(
             p.row_hover,
             rgb(0x3d_3d_3d),
@@ -322,10 +326,10 @@ mod tests {
             "--card 亮 = cardBackground grey[98]"
         );
         assert_eq!(p.accent, rgb(0x0f_6c_bd), "--accent 亮 = brand[80]");
-        assert_eq!(p.success, rgb(0x10_7c_10), "--success 亮 = green[shade10]");
+        assert_eq!(p.success, rgb(0x0e_70_0e), "--success 亮 = green[shade10]");
         assert_eq!(
             p.danger,
-            rgb(0xc5_0f_1f),
+            rgb(0xb1_0e_1c),
             "--danger 亮 = cranberry[shade10]"
         );
         assert_eq!(

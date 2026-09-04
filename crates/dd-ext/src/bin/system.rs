@@ -61,10 +61,32 @@ mod sys {
     /// 专用于验收 Path 图标渲染（设计稿 04）。
     pub const DEMO_ICON_ITEM_ID: &str = "system.ui_accept.png_icon";
 
-    /// 演示用 PNG 资产：编译期锚定 `CARGO_MANIFEST_DIR`（= `crates/dd-ext`），
-    /// 换检出目录/盘符也能定位，不硬编码绝对路径。
-    pub const DEMO_ICON_PATH: &str =
-        concat!(env!("CARGO_MANIFEST_DIR"), r"\assets\ui-accept-icon.png");
+    /// 演示用 PNG 资产：**编译期内嵌**（`include_bytes!` 锚定源码树资产）。
+    /// 运行时物化到 `<APPDATA>/dd-run/cache/ui-accept-icon.png` 并以该路径经协议
+    /// 发送给宿主渲染。内嵌使打包分发后（脱离源码树、换机器）仍能工作，
+    /// 无需在发行包里额外带 assets 目录。
+    const DEMO_ICON_BYTES: &[u8] = include_bytes!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        r"\assets\ui-accept-icon.png"
+    ));
+
+    /// 返回演示图标文件路径：首次调用把内嵌 PNG 物化到数据缓存目录，之后复用。
+    /// 失败（无 APPDATA / 写入失败）返回 `None`，调用方回落为占位 glyph。
+    fn demo_icon_path() -> Option<String> {
+        let cache_dir = data_cache_dir()?;
+        let path = cache_dir.join("ui-accept-icon.png");
+        if !path.exists() {
+            std::fs::create_dir_all(&cache_dir).ok()?;
+            std::fs::write(&path, DEMO_ICON_BYTES).ok()?;
+        }
+        Some(path.to_string_lossy().into_owned())
+    }
+
+    /// `<APPDATA>/dd-run/cache`（与宿主桩缓存同根，必定可写）。
+    fn data_cache_dir() -> Option<std::path::PathBuf> {
+        let appdata = std::env::var("APPDATA").ok()?;
+        Some(std::path::Path::new(&appdata).join("dd-run").join("cache"))
+    }
 
     pub const COMMANDS: &[SystemCommand] = &[
         SystemCommand {
@@ -145,7 +167,7 @@ mod sys {
             subtitle: Some("Path 图标链路（PNG 资产 → 宿主解码 → 20×20 渲染）".to_string()),
             icon: Some(Icon {
                 kind: IconKind::Path,
-                value: DEMO_ICON_PATH.to_string(),
+                value: demo_icon_path().unwrap_or_default(),
             }),
             section: Some("系统".to_string()),
             tags: Some(vec!["ui".to_string(), "demo".to_string()]),
@@ -334,6 +356,24 @@ mod sys {
             };
             let result = decide(&p);
             assert!(matches!(result, Err(CommandResult::ShowToast { .. })));
+        }
+
+        /// 回归防线（2026-09-04）：仓库曾提交过一张**结构损坏**的演示图标——
+        /// IHDR 声明 32×32 RGBA（解压后应 4128 字节），IDAT 解压只有 1056 字节，
+        /// 于是宿主侧解码必然失败、每帧回落占位 glyph；而日志只在真机出现、
+        /// 无任何自动化拦截，问题一直潜伏。这里直接解码编译期锚定的资产，
+        /// 素材再损坏会立刻红灯，而不是静默降级。
+        #[test]
+        fn demo_icon_asset_is_decodable() {
+            // 内嵌资产编译期已锚定源码树；这里校验内嵌字节是合法 32×32 PNG，
+            // 素材再损坏会在编译/本测试红灯，而非静默降级。
+            let img = image::load_from_memory(DEMO_ICON_BYTES)
+                .expect("演示图标应是合法 PNG：损坏素材会让宿主侧静默回落占位 glyph");
+            assert_eq!(
+                (img.width(), img.height()),
+                (32, 32),
+                "演示图标约定为 32×32"
+            );
         }
     }
 }
