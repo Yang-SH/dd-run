@@ -54,6 +54,18 @@ impl PanelItem {
     }
 }
 
+/// 空查询（打开面板首屏）的显示范围（设置页「打开面板时」配置项，
+/// 真机反馈 2026-09-04：默认不铺全部应用，只显示默认功能）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum EmptyQueryView {
+    /// 全部项（旧行为）。
+    #[default]
+    All,
+    /// 隐藏「应用」类项（`result_category == "应用"`，来自 Apps 扩展的
+    /// 应用本体/lnk 项）；输入查询时应用仍参与模糊匹配。
+    WithoutApps,
+}
+
 /// 过滤后列表中当前选中的索引。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Selected {
@@ -85,20 +97,40 @@ pub struct PanelState {
     /// 当前查询无匹配时的兜底展示集（空 = 无兜底项可用）。
     fallback: Vec<PanelItem>,
     selected: Selected,
+    /// 空查询首屏显示范围（设置项；仅影响空查询分支，见 [`Self::recompute_visible`]）。
+    empty_view: EmptyQueryView,
 }
 
 impl PanelState {
     pub fn new(items: Vec<PanelItem>) -> Self {
+        Self::with_empty_view(items, EmptyQueryView::All)
+    }
+
+    /// 指定空查询首屏视图构造（宿主按设置项调用）。
+    pub fn with_empty_view(items: Vec<PanelItem>, empty_view: EmptyQueryView) -> Self {
         let mut s = Self {
             items,
             query: String::new(),
             visible: Vec::new(),
             fallback: Vec::new(),
             selected: Selected::None,
+            empty_view,
         };
         s.recompute_visible();
         s.reset_selection();
         s
+    }
+
+    /// 切换空查询首屏视图（设置页变更时调用）；空查询下立即重算可见表。
+    pub fn set_empty_view(&mut self, view: EmptyQueryView) {
+        if self.empty_view == view {
+            return;
+        }
+        self.empty_view = view;
+        if self.query.is_empty() {
+            self.recompute_visible();
+            self.clamp_selection();
+        }
     }
 
     pub fn items(&self) -> &[PanelItem] {
@@ -255,7 +287,14 @@ impl PanelState {
         let start = std::time::Instant::now(); // A3 埋点：一次重算 = 一次按键的过滤成本
         let n = self.items.len();
         if self.query.trim().is_empty() {
-            self.visible = (0..n).collect();
+            // 空查询：按首屏视图过滤（WithoutApps = 隐藏「应用」类项，
+            // 默认功能视图——应用仍可通过输入查询命中）
+            self.visible = (0..n)
+                .filter(|&i| {
+                    self.empty_view != EmptyQueryView::WithoutApps
+                        || self.items[i].result_category.as_deref() != Some("应用")
+                })
+                .collect();
             return;
         }
         let mut fm = crate::fuzzy::FuzzyMatcher::new(&self.query);
@@ -347,6 +386,37 @@ mod tests {
             s.selected_item().map(|i| i.title.as_str()),
             Some("Open Settings")
         );
+    }
+
+    /// 真机反馈（2026-09-04）：首屏默认不铺全部应用（WithoutApps 视图），
+    /// 「应用」类项在空查询下隐藏、查询时仍参与匹配。
+    #[test]
+    fn empty_view_without_apps_hides_apps_on_empty_query_only() {
+        let mut app = PanelItem::new("7-Zip File Manager");
+        app.result_category = Some("应用".into());
+        let mut calc = PanelItem::new("= 表达式");
+        calc.result_category = Some("命令".into());
+        let items = vec![app, calc];
+
+        // WithoutApps：空查询只见默认功能
+        let mut s = PanelState::with_empty_view(items.clone(), EmptyQueryView::WithoutApps);
+        assert_eq!(s.visible_count(), 1, "空查询应隐藏「应用」项");
+        assert_eq!(s.selected_item().map(|i| i.title.as_str()), Some("= 表达式"));
+
+        // 非空查询：应用照常参与模糊匹配
+        s.set_query("7-zip");
+        assert_eq!(s.visible_count(), 1);
+        assert_eq!(s.selected_item().map(|i| i.title.as_str()), Some("7-Zip File Manager"));
+
+        // All（旧行为）：空查询显示全部
+        let s = PanelState::with_empty_view(items.clone(), EmptyQueryView::All);
+        assert_eq!(s.visible_count(), 2);
+
+        // 运行中切换视图：立即生效并夹紧选中
+        let mut s = PanelState::with_empty_view(items, EmptyQueryView::All);
+        assert_eq!(s.visible_count(), 2);
+        s.set_empty_view(EmptyQueryView::WithoutApps);
+        assert_eq!(s.visible_count(), 1, "切换后空查询立即重算");
     }
 
     #[test]

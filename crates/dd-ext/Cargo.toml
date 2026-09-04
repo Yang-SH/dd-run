@@ -10,17 +10,19 @@ publish = false
 dd-protocol = { path = "../dd-protocol" }
 serde_json = "1"
 
-# M5 批次 3.5（apps.rs 真实图标抽取）：
-# - image[png]：把 SHGetFileInfoW 抽出的 HICON 经 GetDIBits 转 BGRA → RgbaImage →
-#   PngEncoder 写 PNG（bytes），复用 dd-gui 的 PNG 解码链路（resolve_icons）。
-#   仅启用 png，不开默认 features 全家桶。
+# M6（apps.rs 对齐 PowerToys CmdPal）：
+# - image[png]：HICON → GetDIBits → RgbaImage → PngEncoder 写 PNG（bytes），
+#   复用 dd-gui 的 PNG 解码链路（resolve_icons）。仅启用 png，不开默认 features 全家桶。
 # - windows-sys 0.61 features：
-#   - `Win32_UI_Shell`：SHGetFileInfoW / SHFILEINFOW / SHGFI_*（.lnk 解析 +
-#     .exe 系统缓存图标）；
-#   - `Win32_UI_WindowsAndMessaging`：GetIconInfo / ICONINFO / DestroyIcon（HICON
-#     拆位图与释放）；
+#   - `Win32_UI_Shell`：SHGetKnownFolderIDList/SHCreateItemFromIDList/SHCreateItemFromParsingName/
+#     SHGetFileInfoW/SIGDN_*/SIIGBF_*/FOLDERID_AppsFolder/BHID_EnumItems（AppsFolder 应用本体枚举 + 图标抽取）；
+#   - `Win32_UI_WindowsAndMessaging`：GetIconInfo / ICONINFO / DestroyIcon（HICON 拆位图与释放）；
 #   - `Win32_Graphics_Gdi`：GetDIBits / BITMAPINFO / DeleteObject（位图→bytes）；
-#   - `Win32_Foundation`：HWND 占位（SHGetFileInfoW 签名需要）。
+#   - `Win32_System_Com`：CoInitializeEx / CoTaskMemFree（Shell COM 初始化与 PIDL/PWSTR 释放）；
+#   - `Win32_Foundation`：SIZE / HANDLE / HWND 占位；
+#   - `Win32_Storage_FileSystem`：SHGetFileInfoW 的入参 FILE_FLAGS_AND_ATTRIBUTES 所在 module。
+#   COM 接口结构（IShellItem/IEnumShellItems/IShellItemImageFactory）windows-sys 不生成，
+#   在 apps.rs 内手绘 vtable（IID 为 shobjidl_core/thumbcache 稳定公开值）。
 image = { version = "0.25", default-features = false, features = ["png"] }
 
 [target.'cfg(windows)'.dependencies]
@@ -29,7 +31,13 @@ windows-sys = { version = "0.61", features = [
     # SHGetFileInfoW 的入参 FILE_FLAGS_AND_ATTRIBUTES 在此 module；
     # 不开则 SHGetFileInfoW 链接报 unresolved import
     "Win32_Storage_FileSystem",
+    "Win32_System_Com",
+    # shell.rs：GetConsoleOutputCP（cmd 输出代码页，GBK 乱码修复）
+    "Win32_System_Console",
+    # shell.rs：MultiByteToWideChar（非 UTF-8 输出按代码页转码）
+    "Win32_Globalization",
     "Win32_UI_Shell",
+    "Win32_UI_Shell_Common",
     "Win32_UI_WindowsAndMessaging",
     "Win32_Graphics_Gdi",
 ] }

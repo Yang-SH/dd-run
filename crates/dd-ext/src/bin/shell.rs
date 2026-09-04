@@ -181,13 +181,64 @@ mod sys {
         }
 
         let output = child.wait_with_output().map_err(|e| e.to_string())?;
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        let mut combined = stdout.into_owned();
-        if !stderr.is_empty() {
+        let mut combined = decode_output(&output.stdout);
+        let stderr = decode_output(&output.stderr);
+        if !stderr.trim().is_empty() {
             combined.push_str(&stderr);
         }
         Ok(combined)
+    }
+
+    /// 解码子进程输出为 UTF-8 字符串。
+    ///
+    /// 中文 Windows 的 cmd 输出是 OEM 代码页（简中 936/GBK），`from_utf8_lossy`
+    /// 会产生乱码（真机反馈：`'1+1' 不是内部或外部命令` → 乱码 toast）。策略：
+    /// ① 合法 UTF-8（多数现代 CLI 如 git/pwsh 输出 UTF-8）直接采用；
+    /// ② 否则按 `GetConsoleOutputCP()` 转码；③ 转码失败再回落 lossy。
+    #[cfg(windows)]
+    fn decode_output(bytes: &[u8]) -> String {
+        if let Ok(s) = std::str::from_utf8(bytes) {
+            return s.to_string();
+        }
+        let cp = unsafe { windows_sys::Win32::System::Console::GetConsoleOutputCP() };
+        decode_with_codepage(bytes, cp)
+            .unwrap_or_else(|| String::from_utf8_lossy(bytes).into_owned())
+    }
+
+    /// 按指定代码页把多字节字符串转为 UTF-16 再到 String（`MultiByteToWideChar`）。
+    #[cfg(windows)]
+    fn decode_with_codepage(bytes: &[u8], codepage: u32) -> Option<String> {
+        if bytes.is_empty() {
+            return Some(String::new());
+        }
+        let len = unsafe {
+            windows_sys::Win32::Globalization::MultiByteToWideChar(
+                codepage,
+                0,
+                bytes.as_ptr(),
+                bytes.len() as i32,
+                std::ptr::null_mut(),
+                0,
+            )
+        };
+        if len <= 0 {
+            return None;
+        }
+        let mut utf16 = vec![0u16; len as usize];
+        let written = unsafe {
+            windows_sys::Win32::Globalization::MultiByteToWideChar(
+                codepage,
+                0,
+                bytes.as_ptr(),
+                bytes.len() as i32,
+                utf16.as_mut_ptr(),
+                len,
+            )
+        };
+        if written != len {
+            return None;
+        }
+        Some(String::from_utf16_lossy(&utf16))
     }
 
     /// 结果摘要：trim、压缩多余空行、截断加省略号。
@@ -243,6 +294,26 @@ mod sys {
                 started.elapsed() < Duration::from_secs(5),
                 "超时终止不应拖过长"
             );
+        }
+
+        #[test]
+        #[cfg(windows)]
+        fn decode_with_codepage_converts_gbk() {
+            // "不是内部或外部命令" 的 GBK(CP936) 编码字节
+            // （python: '...'.encode('gbk') → B2BB CAC7 C4DA B2BF BBF2 CDE2 B2BF C3FC C1EE）
+            let gbk = [
+                0xB2u8, 0xBB, 0xCA, 0xC7, 0xC4, 0xDA, 0xB2, 0xBF, 0xBB, 0xF2, 0xCD, 0xE2, 0xB2,
+                0xBF, 0xC3, 0xFC, 0xC1, 0xEE,
+            ];
+            assert_eq!(
+                decode_with_codepage(&gbk, 936).as_deref(),
+                Some("不是内部或外部命令"),
+                "GBK 字节应按 CP936 正确转码"
+            );
+            // 合法 UTF-8 直接走快路径
+            assert_eq!(decode_output("你好 utf8".as_bytes()), "你好 utf8");
+            // 无效字节回落 lossy 不 panic
+            assert!(!decode_output(&[0xFF, 0xFE]).is_empty());
         }
     }
 }

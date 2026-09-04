@@ -128,12 +128,18 @@ fn handle_invoke(params: &InvokeParams) -> (CommandResult, Vec<Effect>) {
     }
 }
 
-/// `context.query` 可能带 "calc " 前缀（顶层入口的 `text_to_suggest` 回填），剥掉。
+/// `context.query` 可能带 "calc " 前缀（顶层入口的 `text_to_suggest` 回填）或
+/// 前导 `=`（兜底项 `= {query}` 的提示语义，用户会照着输入 "=1+1"）——剥掉后再求值。
 fn query_after_prefix(query: &str) -> Option<&str> {
-    if let Some(rest) = query.strip_prefix("calc") {
-        return Some(rest.trim_start_matches(' '));
-    }
-    Some(query)
+    let q = if let Some(rest) = query.strip_prefix("calc") {
+        rest.trim_start_matches(' ')
+    } else {
+        query
+    };
+    let q = q.trim_start();
+    // 只剥一层 `=`：`==1+1` 的剩余 `=1+1` 交给求值器报 Unexpected（防御性，不静默吞错）
+    let q = q.strip_prefix('=').map(str::trim_start).unwrap_or(q);
+    Some(q)
 }
 
 // ─── 表达式求值器（纯函数，可单测）──────────────────────────
@@ -456,6 +462,26 @@ mod tests {
         let (result, effects) = handle_invoke(&invoke("calc.eval", "calc 2+2"));
         assert!(matches!(result, CommandResult::ShowToast { .. }));
         assert_eq!(effects.len(), 1, "带 calc 前缀也应成功求值");
+    }
+
+    /// 真机反馈（2026-09-04）：用户照兜底项「= {query}」的提示直接输入 "=1+1"
+    /// 后选中 → 旧实现把 `=` 一并喂给求值器 → MissingOperand。前导 `=` 应剥离。
+    #[test]
+    fn invoke_strips_leading_equals() {
+        let (result, effects) = handle_invoke(&invoke("calc.eval.query", "=1+1"));
+        if let CommandResult::ShowToast { message, .. } = &result {
+            assert_eq!(message, "= 2", "前导 = 应剥离后求值");
+        } else {
+            panic!("expected ShowToast");
+        }
+        assert_eq!(effects.len(), 1);
+        // 前缀组合："calc = 2^8"
+        let (result, _) = handle_invoke(&invoke("calc.eval", "calc = 2^8"));
+        if let CommandResult::ShowToast { message, .. } = &result {
+            assert_eq!(message, "= 256");
+        } else {
+            panic!("expected ShowToast");
+        }
     }
 
     #[test]

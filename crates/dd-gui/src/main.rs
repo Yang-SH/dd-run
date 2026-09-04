@@ -48,6 +48,10 @@ use dd_protocol::model::{CommandItem, CommandRef, CommandResult, IconKind};
 /// 面板逻辑尺寸（设计稿 v2：宽 560；高沿用现行 460）。`show()` 居中定位用。
 const APP_W: f32 = 560.0;
 const APP_H: f32 = 460.0;
+/// 设置页窗口尺寸：设置卡片内容（主题三选 + 首屏视图 + 快捷键/自启占位 +
+/// 页脚）在 460px 高度下截断（真机反馈），设置页允许与启动页尺寸不一致。
+const SETTINGS_W: f32 = 560.0;
+const SETTINGS_H: f32 = 640.0;
 /// 启动期窗口的屏幕外坐标（远离所有显示器的负象限）——实现"物理不可见"：
 /// eframe 0.36 首帧渲染后**无条件** `set_visible(true)`（egui PR #2279"画完才
 /// 显示"），`with_visible(false)` 拦不住；把窗口放屏幕外，即使被强制显示也
@@ -80,8 +84,6 @@ struct AggregatePayload {
     processes: Vec<(String, ExtensionProcess)>,
     /// 已扫描扩展（含 manifest frozen/entry），供桩复热 spawn（M3）。
     exts: Vec<LoadedExtension>,
-    /// 来源备注（兜底/异常提示，空串表示正常扫描）。
-    note: String,
     /// 聚合线程内从"开始 scan"到"完成 collect+flatten"耗时（ms）。
     /// 与 [`PaletteApp::cold`] 的"进程启动→首屏就绪"总耗时对照，便于 A2 瓶颈定位
     /// （implementation.md R2：未达标记录实测与瓶颈，不调目标）。
@@ -206,7 +208,9 @@ fn spawn_aggregation(tx: mpsc::Sender<AggregatePayload>, cache: Option<FrozenCac
     thread::spawn(move || {
         // A2 拆分计时的"数据平面"：从 scan 起到聚合完成止（不含 GUI/字体加载）
         let agg_start = Instant::now();
-        let (exts, note) = aggregator::load_extension_sources();
+        // note（来源备注）不再进页脚（用户决策 2026-09-04）：丢弃即可，
+        // 异常细节已由 load_extension_sources 内部日志输出。
+        let (exts, _note) = aggregator::load_extension_sources();
         let result = aggregator::collect_top_level(&exts, cache.as_ref());
         let (items, sources) = aggregator::flatten(&result.per_ext);
 
@@ -228,7 +232,6 @@ fn spawn_aggregation(tx: mpsc::Sender<AggregatePayload>, cache: Option<FrozenCac
             sources,
             processes,
             exts,
-            note,
             agg_ms,
         });
     });
@@ -356,8 +359,35 @@ enum IconView {
     Empty,
     /// glyph 码位文本（§8.6 glyph 值本身；path 解码失败回落占位 glyph 也走此态）。
     Glyph { text: String },
-    /// path 本地文件解码成功后的纹理。
-    Texture(egui::TextureHandle),
+    /// path 本地文件解码成功后的纹理；`dark` = 图标本体偏暗（暗色主题下
+    /// 需垫浅色圆角底，否则黑 glyph 贴暗背景不可见——真机反馈 ChatGPT 图标）。
+    Texture {
+        tex: egui::TextureHandle,
+        dark: bool,
+    },
+}
+
+/// 判断图标是否"本体偏暗"：不透明像素（α≥32）的 **max(r,g,b) 均值** < 90。
+/// 全透明图（无有效像素）不算暗。纯函数，可无窗口单测。
+/// 用 max 通道而非感知亮度：暗底可见性取决于最亮通道——饱和红（AMD，
+/// max=224、感知亮度仅 ~60）在暗底上清晰可见，不该垫底；黑/深灰 glyph
+/// （ChatGPT，max≈32）不可见，该垫底。
+fn icon_is_dark(img: &egui::ColorImage) -> bool {
+    let mut sum = 0u32;
+    let mut n = 0u32;
+    for px in &img.pixels {
+        // ColorImage 存 unmultiplied RGBA
+        let [r, g, b, a] = px.to_array();
+        if a < 32 {
+            continue;
+        }
+        sum += r.max(g).max(b) as u32;
+        n += 1;
+    }
+    if n == 0 {
+        return false;
+    }
+    (sum / n) < 90
 }
 
 /// 解码 PNG/ICO 字节 → egui 颜色纹理数据（§8.6 path 图标）。
@@ -390,10 +420,8 @@ struct PaletteApp {
     aggregate_rx: Option<Receiver<AggregatePayload>>,
     /// 聚合是否仍在进行（列表区显示加载态）。
     aggregating: bool,
-    /// 扩展源状态（页脚展示）。
+    /// 扩展源状态（健康检查/LRU 复热逻辑用；**页脚不再展示**，用户决策 2026-09-04）。
     sources: Vec<aggregator::SourceSummary>,
-    /// 聚合来源备注。
-    note: String,
     /// 保活进程：`(扩展 id, 进程)`。发起请求时 take、结果归还，
     /// 保证同一进程同一时刻最多 1 个 in-flight 请求（协议 §4 串行化）。
     processes: Vec<(String, ExtensionProcess)>,
@@ -443,9 +471,12 @@ struct PaletteApp {
     fallback_rx: Option<Receiver<FallbackFetchOutcome>>,
     /// path 图标纹理缓存：路径 → TextureHandle（每路径只读盘+解码一次，
     /// 避免列表每次重绘都重复 I/O 与解码——设计稿 04"按路径缓存 textureId"）。
-    icon_cache: HashMap<String, egui::TextureHandle>,
+    icon_cache: HashMap<String, (egui::TextureHandle, bool)>,
     /// M5 批次 4.0：宿主本地设置（当前仅主题偏好；启动加载、设置页改选即存）。
     settings: dd_gui::settings::Settings,
+    /// 当前窗口是否已按设置页尺寸调整（帧间 diff，仅在进/出设置页时发
+    /// `InnerSize`，避免每帧塞 ViewportCommand）。
+    settings_sized: bool,
 }
 
 impl PaletteApp {
@@ -464,7 +495,6 @@ impl PaletteApp {
             aggregate_rx: Some(aggregate_rx),
             aggregating: true,
             sources: Vec::new(),
-            note: String::new(),
             processes: Vec::new(),
             exts: Vec::new(),
             lru: LruWarmSet::new(LRU_WARM_CAPACITY),
@@ -486,6 +516,7 @@ impl PaletteApp {
             fallback_rx: None,
             icon_cache: HashMap::new(),
             settings,
+            settings_sized: false,
         }
     }
 
@@ -500,7 +531,10 @@ impl PaletteApp {
         // - 扩展 `Hide` → 保留状态不复位（再次唤起仍在当前页/查询）；
         // - 扩展 `Dismiss` → 已在 dismiss() 清空，复位为空操作。
         if self.reset_on_show {
-            self.stack.current_mut().list.reset();
+            // 嵌套页一并出栈回 Root：设置页打开时失焦/Esc 之外路径隐藏（热键
+            // Toggle）后再次唤起，必须回到首屏而非停留在设置页（真机反馈）。
+            self.stack.go_home();
+            self.stack.root_mut().list.reset();
         }
         // 每次唤起都在**光标所在屏居中**（grill 决策 A1；PowerToys Run 行为）。
         // 不能复用 egui `center_on_screen`：它按窗口**当前所在 monitor** 居中，
@@ -640,11 +674,17 @@ impl PaletteApp {
                 let query = self.stack.current().list.query().to_owned();
                 let mut root = PageState::root(payload.items);
                 root.list.set_query(query);
+                // 首屏视图（设置项）：默认功能 / 全部——真机反馈 2026-09-04
+                root.list
+                    .set_empty_view(if self.settings.open_view == dd_gui::settings::OpenView::All {
+                        dd_gui::state::EmptyQueryView::All
+                    } else {
+                        dd_gui::state::EmptyQueryView::WithoutApps
+                    });
                 *self.stack.root_mut() = root;
                 self.sources = payload.sources;
                 self.processes = payload.processes;
                 self.exts = payload.exts;
-                self.note = payload.note;
                 self.aggregating = false;
                 self.aggregate_rx = None;
                 // M3：cold-start 保活进程计入 LRU（超出容量即驱逐，一般场景不会触发）
@@ -1645,6 +1685,27 @@ impl PaletteApp {
         self.settings.save();
     }
 
+    /// 设置页改选「打开面板时显示」：立即生效（重算 root 首屏可见表）+ 持久化。
+    fn apply_open_view(&mut self, ctx: &egui::Context, show_all: bool) {
+        let view = if show_all {
+            dd_gui::settings::OpenView::All
+        } else {
+            dd_gui::settings::OpenView::Default
+        };
+        if self.settings.open_view == view {
+            return;
+        }
+        eprintln!("[dd-gui] 首屏视图变更：{}", view.label());
+        self.settings.open_view = view;
+        self.stack.root_mut().list.set_empty_view(if show_all {
+            dd_gui::state::EmptyQueryView::All
+        } else {
+            dd_gui::state::EmptyQueryView::WithoutApps
+        });
+        self.settings.save();
+        ctx.request_repaint();
+    }
+
     // ── 渲染 ─────────────────────────────────────────────────
 
     fn draw_panel(&mut self, ui: &mut egui::Ui) {
@@ -1653,18 +1714,18 @@ impl PaletteApp {
         // CentralPanel 内的 ScrollArea 之后，长列表时整个 footer 块被推到
         // 视口下方。Panel::bottom 是 egui 0.36 处理 chrome vs content 的标准做法）。
         // 这里对 self 做不可变再借用，闭包结束后即可变借用给下面的 CentralPanel。
-        // 批次 4.0 真机反馈（2026-09-03）：设置页不显示页脚（用户：设置视图
-        // 更干净，且页脚键位图例/诊断与设置内容无关）。
+        // 批次 4.2：设置页**也**渲染全局页脚——`draw_status_footer` 内按 `is_settings`
+        // 早返回到「左说明文案 + 右 Esc 返回」分支（设计稿 §08 line 1223-1226 + D15 line 971）。
         let mut open_settings = false;
-        if !self.stack.current().is_settings {
-            let self_ref: &Self = &*self;
-            let p = theme::Palette::of(ui.visuals().dark_mode);
-            // 批次 4.0：页脚最左齿轮按钮的点击旗标（闭包内置位，面板结束后消费）。
-            let footer = egui::containers::Panel::bottom("status_footer")
+        let self_ref: &Self = &*self;
+        let p = theme::Palette::of(ui.visuals().dark_mode);
+        // 批次 4.0：页脚最左齿轮按钮的点击旗标（闭包内置位，面板结束后消费）。
+        let footer =
+            egui::containers::Panel::bottom("status_footer")
                 // 关掉内建分隔线：它用 `widgets.noninteractive.bg_stroke`（默认灰），
                 // 颜色与 `--border` 不一致，下面按设计稿手绘 1px `--border` 顶边。
                 .show_separator_line(false)
-                // CSS `.panel-footer`：background `--panel-2` + padding 9px 16px。
+                // CSS `.panel-footer`：background `--panel-2` + padding 8px 16px。
                 // `Panel` 默认 frame 是 `Frame::side_top_panel`：fill 取 `--panel`
                 // （页脚与列表区同色，失去区隔）且 margin 仅 (8,2)。
                 .frame(egui::Frame::default().fill(p.panel_2).inner_margin(
@@ -1673,14 +1734,13 @@ impl PaletteApp {
                 .show(ui, |ui| {
                     open_settings = self_ref.draw_status_footer(ui);
                 });
-            // 顶部 1px `--border`（CSS `.panel-footer` border-top）；贴面板外框上沿，
-            // 因此用返回的 response.rect（= 面板外矩形），而非闭包内被 margin 收缩过的 max_rect。
-            ui.painter().hline(
-                footer.response.rect.x_range(),
-                footer.response.rect.top(),
-                egui::Stroke::new(1.0, p.border),
-            );
-        }
+        // 顶部 1px `--border`（CSS `.panel-footer` border-top）；贴面板外框上沿，
+        // 因此用返回的 response.rect（= 面板外矩形），而非闭包内被 margin 收缩过的 max_rect。
+        ui.painter().hline(
+            footer.response.rect.x_range(),
+            footer.response.rect.top(),
+            egui::Stroke::new(1.0, p.border),
+        );
         if open_settings {
             self.open_settings();
         }
@@ -1689,13 +1749,13 @@ impl PaletteApp {
             .frame(
                 egui::Frame::default()
                     .fill(ui.style().visuals.panel_fill)
-                    // 设计稿 `.searchbar` margin: 12px 12px 6px —— 顶部 12（对齐
-                    // 05 note 面板几何），底部 10 由 `.results` padding-bottom 承担。
+                    // 设计稿 00.1 顶行 padding（v4）：8px 12px 4px —— 顶部 8 +
+                    // 搜索栏 40 + 下方 4 = 52px；底部 8 由 `.results` padding-bottom 承担。
                     .inner_margin(egui::Margin {
                         left: 12,
                         right: 12,
-                        top: 12,
-                        bottom: 10,
+                        top: 8,
+                        bottom: 8,
                     }),
             )
             .show(ui, |ui| {
@@ -1742,7 +1802,7 @@ impl PaletteApp {
                 }
                 // M4 宿主 fallback：查询变化后同步兜底展示/拉取（页面借用已释放）
                 self.sync_fallback();
-                ui.add_space(6.0);
+                ui.add_space(4.0);
 
                 // ── 列表区 ───────────────────────────────────
                 if self.aggregating {
@@ -1762,7 +1822,7 @@ impl PaletteApp {
     /// （批次 4.1，§6.3）+ 异常源诊断（仅异常时）+ 键位提示。
     ///
     /// 布局（§6.3 + C6）：
-    /// - **严格单行 35px**（`FOOTER_PAD_Y 9 + KEYCAP_H 17 + FOOTER_PAD_Y 9`）：
+    /// - **严格单行 32px**（`FOOTER_PAD_Y 8 + KEYCAP_H 16 + FOOTER_PAD_Y 8`，D8）：
     ///   `allocate_exact_size` 锁一行 + 左右两块 `new_child` 精确排版，
     ///   **禁止 `horizontal_wrapped`**（异常源多时会把页脚撑回 72px）；左块
     ///   超宽时内容被 max_rect 裁剪，键位区始终完整靠右。
@@ -1775,154 +1835,330 @@ impl PaletteApp {
     ///   返回值 = 本帧齿轮是否被点击（调用方在面板闭包结束后 `open_settings`）。
     fn draw_status_footer(&self, ui: &mut egui::Ui) -> bool {
         let p = theme::Palette::of(ui.visuals().dark_mode);
-        // C7：动作文本随选中项实时变化（含 fallback 模式——filtered() 覆盖兜底集）
+
+        // §08 设计稿 D15（line 595、line 971、line 1449）：设置页**不渲染齿轮**，
+        // 左 = "修改主题立即生效并持久化" 说明文案，右 = "Esc 返回" 键位。
+        // 此分支早返回 false（设置页无齿轮点击）。
+        //
+        // 对齐策略（真机 2026-09-04 修复"底栏不在一条线上"）：egui 自动垂直居中
+        // （`Align::Center`）把每个控件居中于**剩余**空间，混合高度内容（24px 齿轮 /
+        // 16px 键帽 / 文本）会逐项漂移。因此本函数所有元素改为**手动锚定行中心线
+        // `cy`**：键帽/文本用 `paint_keycap` / `painter.text` 显式定位，齿轮用
+        // 24×24 精确 max_rect 子区（恰好填满，无漂移），动作文本用 16px 高子区
+        // （首控件居中无漂移）。
+        if self.stack.current().is_settings {
+            let total_w = ui.available_width();
+            let (row, _) =
+                ui.allocate_exact_size(egui::vec2(total_w, theme::KEYCAP_H), egui::Sense::hover());
+            let cy = row.center().y;
+            // 左：说明文案（与齿轮同 x 起点——Panel 内边距已含 16px，不再额外缩进）
+            ui.painter().text(
+                egui::pos2(row.min.x, cy),
+                egui::Align2::LEFT_CENTER,
+                "修改主题立即生效并持久化",
+                egui::FontId::proportional(theme::FOOTER_FONT),
+                p.text3,
+            );
+            // 右：`[Esc] 返回`——「返回」贴右缘，Esc 键帽在其左 4px
+            let back_w = text_width(ui, "返回", egui::FontId::proportional(theme::FOOTER_FONT));
+            let esc_w = keycap_width(ui, "Esc");
+            let text_left = row.right() - back_w;
+            let krect = egui::Rect::from_min_size(
+                egui::pos2(text_left - 4.0 - esc_w, cy - theme::KEYCAP_H / 2.0),
+                egui::vec2(esc_w, theme::KEYCAP_H),
+            );
+            paint_keycap(ui, krect, "Esc", &p);
+            ui.painter().text(
+                egui::pos2(text_left, cy),
+                egui::Align2::LEFT_CENTER,
+                "返回",
+                egui::FontId::proportional(theme::FOOTER_FONT),
+                p.text3,
+            );
+            return false;
+        }
+
+        // C7：动作文本随选中项实时变化（含 fallback 模式——filtered() 覆盖兜底集）。
+        // 用户决策（2026-09-04）：页脚不再显示源状态诊断（stub 状态点 / failed
+        // 报错 / 聚合 note）——左块 = 齿轮 + 上下文动作，右块 = 完整键位图例
+        // （↑↓ 选择 / Enter 执行 / Esc 返回·隐藏，用户要求补全）。
         let action = self
             .stack
             .current()
             .list
             .selected_item()
             .map(footer_action_text);
-        // C8：仅异常时显示（全 ok → 空 Vec，不占位）
-        let entries = self.footer_entries(&p);
-        // 右块宽度随上下文切换：动作键帽 vs 全局键位图例
-        let keys_w = match &action {
-            Some(_) => keycap_width(ui, ENTER_KEYCAP),
-            None => keys_width(ui),
-        };
+        let keys_w = keys_width(ui);
         let total_w = ui.available_width();
 
-        // 严格单行：一行 KEYCAP_H + 左右两块（左块被 split 截断，不换行）
+        // 严格单行：分配 KEYCAP_H 高的行矩形，所有元素锚定中心线 cy
         let (row, _) =
             ui.allocate_exact_size(egui::vec2(total_w, theme::KEYCAP_H), egui::Sense::hover());
+        let cy = row.center().y;
         let split_x = row.right() - keys_w;
-        let mut left = ui.new_child(
-            egui::UiBuilder::new()
-                .max_rect(egui::Rect::from_min_max(
-                    row.min,
-                    egui::pos2(split_x - theme::FOOTER_GAP, row.bottom()),
-                ))
-                .layout(egui::Layout::left_to_right(egui::Align::Center)),
+
+        // 左 1：齿轮（24×24 子区恰好填满，中心 = cy）
+        let gear_rect = egui::Rect::from_min_size(
+            egui::pos2(row.min.x, cy - theme::GEAR_SIZE / 2.0),
+            egui::vec2(theme::GEAR_SIZE, theme::GEAR_SIZE),
         );
-        let clicked = draw_settings_gear(&mut left, &p);
+        let mut gear_ui = ui.new_child(
+            egui::UiBuilder::new()
+                .max_rect(gear_rect)
+                .layout(egui::Layout::left_to_right(egui::Align::Min)),
+        );
+        let clicked = draw_settings_gear(&mut gear_ui, &p);
+
+        // 左 2：上下文动作文本（16px 高子区，首控件垂直居中无漂移；`Label::truncate`
+        // 让超宽文本在左块边界处省略号截断，不溢出盖到右侧键位区）。
         if let Some(text) = &action {
-            // 动作文本用 text2（较键位图例的 text3 略强调一级）；`Label::truncate`
-            // 让超宽文本在左块边界处省略号截断（egui label 默认不裁剪、会溢出盖到
-            // 右侧键位区——真机 2026-09-03 实测重叠，此为修复）。
-            left.add(
-                egui::Label::new(
-                    egui::RichText::new(text)
-                        .size(theme::FOOTER_FONT)
-                        .color(p.text2),
-                )
-                .truncate(),
+            let text_rect = egui::Rect::from_min_max(
+                egui::pos2(gear_rect.right() + theme::FOOTER_GAP, cy - 8.0),
+                egui::pos2(split_x - theme::FOOTER_GAP, cy + 8.0),
             );
-            if !entries.is_empty() {
-                left.add_space(theme::FOOTER_GAP);
-                draw_footer_entries(&mut left, &entries, theme::FOOTER_GAP, &p);
+            if text_rect.width() > 24.0 {
+                let mut text_ui = ui.new_child(
+                    egui::UiBuilder::new()
+                        .max_rect(text_rect)
+                        .layout(egui::Layout::left_to_right(egui::Align::Center)),
+                );
+                // 动作文本用 text2（较键位图例的 text3 略强调一级）
+                text_ui.add(
+                    egui::Label::new(
+                        egui::RichText::new(text)
+                            .size(theme::FOOTER_FONT)
+                            .color(p.text2),
+                    )
+                    .truncate(),
+                );
             }
-        } else if !entries.is_empty() {
-            draw_footer_entries(&mut left, &entries, theme::FOOTER_GAP, &p);
         }
-        let mut right = ui.new_child(
-            egui::UiBuilder::new()
-                .max_rect(egui::Rect::from_min_max(
-                    egui::pos2(split_x, row.top()),
-                    row.max,
-                ))
-                .layout(egui::Layout::left_to_right(egui::Align::Center)),
-        );
-        match &action {
-            Some(_) => draw_keycap(&mut right, ENTER_KEYCAP, &p),
-            None => draw_footer_keys(&mut right, &p),
-        }
+
+        // 右：完整键位图例，全部手绘锚定 cy（↑↓ 选择 / Enter 执行 / Esc 返回·隐藏）
+        paint_keys_at(ui, egui::pos2(split_x, cy), &p);
         clicked
     }
 
-    /// 设置页（批次 4.0，§6.1 用户决策：内容仅主题偏好）。
+    /// 设置页（§08 v4.2）：顶行三段式（返回 + 标题 + 版本徽标）+ 两张 settings-card
+    /// （主题三选 + 占位项）。**键位提示由全局页脚统一渲染**（draw_status_footer
+    /// 在 is_settings 时显示"修改主题立即生效并持久化" + Esc 返回）。
     ///
-    /// - 三选（跟随系统/亮色/暗色）：点击即 `set_theme` 生效 + 持久化；
-    /// - Esc 返回由 `handle_keys` 的页面栈语义承担（推了设置页，go_back 弹出）；
-    /// - 键盘可达经 `Ctrl+,`（Tab 保持列表导航语义，见批次 4.0 决策记录）。
+    /// 设计稿 §08.1 验收 B1：选中态 = 2px accent + accent_soft 底 + 实心圆点；
+    /// 未选 = 1px border-strong + input_fill 底 + 空心圆点（1.5px stroke）。
+    /// 选择即生效：点击 radio-card → 立即 `apply_theme_pref`（set_theme + save）。
     fn draw_settings(&mut self, ui: &mut egui::Ui) {
         let p = theme::Palette::of(ui.visuals().dark_mode);
-        ui.add_space(6.0);
-        ui.label(
-            egui::RichText::new("设置")
-                .size(18.0)
-                .strong()
-                .color(p.text),
-        );
-        ui.add_space(12.0);
-        // section 标签对齐设计稿 §05 全局规格：11px / 600 / text-3
-        ui.label(
-            egui::RichText::new("主题外观")
-                .size(11.0)
-                .strong()
-                .color(p.text3),
-        );
-        ui.add_space(4.0);
+        let dark = ui.visuals().dark_mode;
 
-        let mut pick: Option<dd_gui::settings::ThemePref> = None;
-        for pref in [
-            dd_gui::settings::ThemePref::System,
-            dd_gui::settings::ThemePref::Light,
-            dd_gui::settings::ThemePref::Dark,
-        ] {
-            let selected = self.settings.theme == pref;
-            // 选中态：accent 底 + 面板底文字（egui selection 语义色已在 theme.rs 接管）
-            let resp = ui.selectable_label(
-                selected,
-                egui::RichText::new(pref.label()).size(14.0).color(p.text),
-            );
-            if resp.clicked() {
-                pick = Some(pref);
-            }
+        // ── 顶行（D3 + §08.1）：40px 高，与 01 / 07 顶行同构 ──
+        // 真机 2026-09-04 修复"标题上面空了很多"：旧实现先 allocate 40px 再另起
+        // horizontal 行——40px 成了死空间。改为在 40px 行矩形内手动锚定中心线 cy
+        // （返回按钮 28×28 子区、标题 painter 直绘、版本徽标精确子区，全部居中）。
+        let total_w = ui.available_width();
+        let (row_rect, _) = ui.allocate_exact_size(
+            egui::vec2(total_w, theme::SEARCHBAR_H),
+            egui::Sense::hover(),
+        );
+        let cy = row_rect.center().y;
+
+        // 返回按钮：28×28 子区恰好填满（中心 = cy）
+        let back_rect = egui::Rect::from_min_size(
+            egui::pos2(row_rect.min.x, cy - 14.0),
+            egui::vec2(28.0, 28.0),
+        );
+        let mut back_ui = ui.new_child(
+            egui::UiBuilder::new()
+                .max_rect(back_rect)
+                .layout(egui::Layout::left_to_right(egui::Align::Min)),
+        );
+        let back_clicked = draw_back_btn(&mut back_ui, &p);
+
+        // 页标题：painter 直绘锚定 cy（body 16px）
+        ui.painter().text(
+            egui::pos2(back_rect.right() + 12.0, cy),
+            egui::Align2::LEFT_CENTER,
+            "设置",
+            egui::FontId::proportional(16.0),
+            p.text,
+        );
+
+        // 版本徽标：精确尺寸子区贴右缘垂直居中（draw_version_chip 恰好填满）
+        let ver_text = format!("v{}", env!("CARGO_PKG_VERSION"));
+        let chip_w = text_width(ui, &ver_text, egui::FontId::proportional(10.0)) + 16.0;
+        let chip_rect = egui::Rect::from_min_size(
+            egui::pos2(row_rect.right() - chip_w, cy - 8.0),
+            egui::vec2(chip_w, 16.0),
+        );
+        let mut chip_ui = ui.new_child(
+            egui::UiBuilder::new()
+                .max_rect(chip_rect)
+                .layout(egui::Layout::left_to_right(egui::Align::Min)),
+        );
+        draw_version_chip(&mut chip_ui, env!("CARGO_PKG_VERSION"), &p);
+
+        if back_clicked {
+            self.stack.go_back();
         }
+        ui.add_space(8.0); // 顶行 padding-bottom
+
+        // ── settings-card #1：主题外观（setting-row 头部 + radio-cards） ──
+        let mut pick: Option<dd_gui::settings::ThemePref> = None;
+        draw_settings_card_frame(ui, &p, |card| {
+            // 主题 icon + 名称 + 描述（16px / 14/20 / 12/16 fg-2 / text / text-3）
+            // item_spacing.x 清零：gap 严格 12px（§08 CSS setting-row gap），不受
+            // egui 默认 8px item_spacing 叠加影响。
+            card.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = 0.0;
+                let (icon_rect, _) =
+                    ui.allocate_exact_size(egui::vec2(16.0, 16.0), egui::Sense::hover());
+                ui.painter().text(
+                    icon_rect.center(),
+                    egui::Align2::CENTER_CENTER,
+                    '\u{E790}',
+                    egui::FontId::proportional(16.0),
+                    p.text2,
+                );
+                ui.add_space(12.0); // gap 12（§08 CSS line 470 setting-row gap）
+                ui.vertical(|ui| {
+                    ui.set_min_height(36.0);
+                    ui.label(egui::RichText::new("主题外观").size(14.0).color(p.text));
+                    ui.label(
+                        egui::RichText::new("选择亮暗主题；「跟随系统」随 Windows 主题实时切换")
+                            .size(12.0)
+                            .color(p.text3),
+                    );
+                });
+            });
+            card.add_space(8.0);
+            // radio-cards（三张等宽，gap 8px）
+            // 真机 2026-09-04 修复"右边框线被盖/超出"：宽度必须在**卡片内**实测
+            // （外层 total_w 未扣卡片 padding/描边，且 egui item_spacing 8px 会叠加
+            // 在 add_space 之上，导致三卡总宽超卡内宽、盖住右边框）——
+            // 本行 item_spacing.x 清零、间隙全部手动控制，宽度 = (内宽 - 2×gap)/3。
+            let gap = 8.0;
+            card.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = 0.0;
+                let avail = ui.available_width();
+                let card_w = ((avail - 2.0 * gap) / 3.0).floor().max(64.0);
+                let prefs = [
+                    (
+                        dd_gui::settings::ThemePref::System,
+                        "跟随系统",
+                        "System",
+                        // swatch 系统卡显示亮 + 暗双本色
+                        [
+                            egui::Color32::WHITE,
+                            egui::Color32::from_rgb(0x1b, 0x1b, 0x1b),
+                        ],
+                    ),
+                    (
+                        dd_gui::settings::ThemePref::Light,
+                        "亮色",
+                        "Light",
+                        // 亮色主题卡：白 + 浅灰
+                        [
+                            egui::Color32::WHITE,
+                            egui::Color32::from_rgb(0xf4, 0xf4, 0xf4),
+                        ],
+                    ),
+                    (
+                        dd_gui::settings::ThemePref::Dark,
+                        "暗色",
+                        "Dark",
+                        // 暗色主题卡：灰[16] + 灰[12]
+                        [
+                            egui::Color32::from_rgb(0x29, 0x29, 0x29),
+                            egui::Color32::from_rgb(0x1f, 0x1f, 0x1f),
+                        ],
+                    ),
+                ];
+                for (i, (pref, zh, en, sw)) in prefs.iter().enumerate() {
+                    if i > 0 {
+                        ui.add_space(gap);
+                    }
+                    let selected = self.settings.theme == *pref;
+                    if draw_radio_card(ui, card_w, zh, en, *sw, selected, &p, dark) {
+                        pick = Some(*pref);
+                    }
+                }
+            });
+        });
         if let Some(pref) = pick {
             self.apply_theme_pref(ui.ctx(), pref);
         }
+        ui.add_space(8.0); // 两卡间距 8px（§08.1 line 467 margin-top）
 
-        ui.add_space(16.0);
-        // 提示行对齐设计稿键帽语言（§6.3 `.panel-footer b`：chip 底 + 1px 描边 +
-        // 下边 2px + 圆角 4 + monospace；desc 用 FOOTER_FONT/text3）——不再是纯文本。
-        ui.horizontal(|ui| {
-            draw_keycap(ui, "Esc", &p);
-            ui.label(
-                egui::RichText::new("返回")
-                    .size(theme::FOOTER_FONT)
-                    .color(p.text3),
+        // ── settings-card #1.5：打开面板时的首屏视图（设置项，真机反馈 2026-09-04）──
+        let mut show_all = self.settings.open_view == dd_gui::settings::OpenView::All;
+        let mut view_changed = false;
+        draw_settings_card_frame(ui, &p, |card| {
+            card.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = 0.0;
+                let (icon_rect, _) =
+                    ui.allocate_exact_size(egui::vec2(16.0, 16.0), egui::Sense::hover());
+                ui.painter().text(
+                    icon_rect.center(),
+                    egui::Align2::CENTER_CENTER,
+                    '\u{E8A9}', // Fluent "Home" 图标码位
+                    egui::FontId::proportional(16.0),
+                    p.text2,
+                );
+                ui.add_space(12.0);
+                ui.vertical(|ui| {
+                    ui.set_min_height(36.0);
+                    ui.label(
+                        egui::RichText::new("打开面板时显示")
+                            .size(14.0)
+                            .color(p.text),
+                    );
+                    ui.label(
+                        egui::RichText::new(
+                            "「默认功能」只显示计算、网页搜索等入口；输入查询时应用仍会参与匹配",
+                        )
+                        .size(12.0)
+                        .color(p.text3),
+                    );
+                });
+            });
+            card.add_space(4.0);
+            card.horizontal(|ui| {
+                if ui.checkbox(&mut show_all, "显示所有应用").changed() {
+                    view_changed = true;
+                }
+            });
+        });
+        if view_changed {
+            self.apply_open_view(ui.ctx(), show_all);
+        }
+        ui.add_space(8.0);
+
+        // ── settings-card #2：占位项（全局热键 / 开机自启 / 扩展管理，disabled） ──
+        draw_settings_card_frame(ui, &p, |card| {
+            draw_setting_row_disabled(
+                card,
+                '\u{E92E}',
+                "全局热键",
+                "自定义唤起快捷键（当前固定 Alt+Space）",
+                PlaceholderSuffix::Soon,
+                &p,
             );
-            ui.add_space(theme::FOOTER_GAP);
-            draw_keycap(ui, "Ctrl+,", &p);
-            ui.label(
-                egui::RichText::new("打开设置")
-                    .size(theme::FOOTER_FONT)
-                    .color(p.text3),
+            draw_setting_row_disabled(
+                card,
+                '\u{E7E8}',
+                "开机自启",
+                "登录 Windows 后自动后台运行",
+                PlaceholderSuffix::DisabledSwitch,
+                &p,
+            );
+            draw_setting_row_disabled(
+                card,
+                '\u{E74E}',
+                "扩展管理",
+                "启用/禁用扩展、查看扩展清单与版本",
+                PlaceholderSuffix::Soon,
+                &p,
             );
         });
-    }
-
-    /// 页脚异常源诊断条目（批次 4.1，C8）：`(状态点颜色, 文本)`；`None` 点色 =
-    /// 无点（note 文本）。**仅异常时输出**——Warm 源跳过；全 ok 且无 note 时
-    /// 返回空 Vec（常态不占位，见 `draw_status_footer`）。
-    fn footer_entries(&self, p: &theme::Palette) -> Vec<(Option<egui::Color32>, String)> {
-        let mut out = Vec::new();
-        for s in &self.sources {
-            match &s.status {
-                // 正常态不显示（C8：避免常态撑高页脚）
-                SourceStatus::Warm { .. } => {}
-                SourceStatus::Stub { commands } => {
-                    out.push((Some(p.text3), format!("{}（{} 命令·桩）", s.name, commands)))
-                }
-                SourceStatus::Failed { error } => {
-                    out.push((Some(p.dot_err), format!("{}：{error}", s.name)))
-                }
-            }
-        }
-        if !self.note.is_empty() {
-            out.push((None, self.note.clone()));
-        }
-        out
     }
 
     /// 预解析一批可见项的图标为渲染形态（M5 批次 2）。
@@ -1948,18 +2184,25 @@ impl PaletteApp {
                     text: icon.value.clone(),
                 },
                 IconKind::Path => {
-                    if let Some(tex) = self.icon_cache.get(&icon.value) {
-                        IconView::Texture(tex.clone())
+                    if let Some((tex, dark)) = self.icon_cache.get(&icon.value) {
+                        IconView::Texture {
+                            tex: tex.clone(),
+                            dark: *dark,
+                        }
                     } else {
                         match std::fs::read(&icon.value)
                             .ok()
                             .and_then(|bytes| decode_icon_image(&bytes))
                         {
                             Some(img) => {
+                                let dark = icon_is_dark(&img);
                                 let name = format!("dd-path-icon://{}", icon.value);
                                 let tex = ctx.load_texture(name, img, egui::TextureOptions::LINEAR);
-                                let view = IconView::Texture(tex.clone());
-                                self.icon_cache.insert(icon.value.clone(), tex);
+                                let view = IconView::Texture {
+                                    tex: tex.clone(),
+                                    dark,
+                                };
+                                self.icon_cache.insert(icon.value.clone(), (tex, dark));
                                 view
                             }
                             None => {
@@ -2062,14 +2305,14 @@ impl PaletteApp {
                 .show(ui, |ui| {
                     for (section, group_items) in &groups {
                         if !section.is_empty() {
-                            // 分组标题（CSS `.section-label`：11px/600、text-3、
-                            // padding 10px 10px 4px）
-                            ui.add_space(10.0);
+                            // 分组标题（CSS `.section-label` v4/D14：caption1Strong
+                            // 12/16·600、text-3、上方留白 12、下方 4；组间留白无分隔线）
+                            ui.add_space(12.0);
                             ui.horizontal(|ui| {
                                 ui.add_space(10.0);
                                 ui.label(
                                     egui::RichText::new(section)
-                                        .size(11.0)
+                                        .size(12.0)
                                         .strong()
                                         .color(p.text3),
                                 );
@@ -2142,14 +2385,25 @@ impl PaletteApp {
             .order(egui::Order::Foreground)
             .anchor(egui::Align2::CENTER_BOTTOM, [0.0, -48.0])
             .show(ctx, |ui| {
-                // 底色显式取 Palette（设计稿未定义 Toast 组件，复用徽标底语义）
+                // 锚定 Area 初始可用宽度为 0：短消息（`= 2`）看不出异常，长消息
+                // （shell 输出摘要）会被按 ~1 字符换行成竖条（真机反馈）。先按
+                // 12px 字体实测单行宽度，限宽 [80, 420] 再渲染——长消息在
+                // 420px 内换行，整体仍由 CENTER_BOTTOM 锚点水平居中。
+                let w = text_width(ui, &toast.message, egui::FontId::proportional(12.0))
+                    .min(420.0)
+                    .max(80.0);
+                ui.set_max_width(w);
+                // 设计稿 09：elevated card 表面 —— card 底 + 1px stroke2 描边 +
+                // 圆角 8 + shadow16（D10）；padding 8px 12px；caption1 12/16。
                 let p = theme::Palette::of(ui.visuals().dark_mode);
                 egui::Frame::default()
-                    .fill(p.badge_bg)
-                    .corner_radius(4.0)
-                    .inner_margin(egui::Margin::symmetric(10, 6))
+                    .fill(p.card)
+                    .stroke(egui::Stroke::new(1.0, p.border))
+                    .corner_radius(8.0)
+                    .shadow(theme::toast_shadow(ui.visuals().dark_mode))
+                    .inner_margin(egui::Margin::symmetric(12, 8))
                     .show(ui, |ui| {
-                        ui.label(egui::RichText::new(&toast.message).size(12.0));
+                        ui.label(egui::RichText::new(&toast.message).size(12.0).color(p.text));
                     });
             });
     }
@@ -2215,16 +2469,6 @@ impl PaletteApp {
     }
 }
 
-/// 6px 状态圆点（CSS `.panel-footer .dot`：6px 圆、margin-right 5px）。
-/// 色：ok=dot_ok / stub=text3 / err=dot_err——语义色统一经 [`theme::Palette`]。
-fn draw_status_dot(ui: &mut egui::Ui, color: egui::Color32) {
-    // CSS `.dot`：6×6 圆点 + margin-right 5px（原 10px 宽 + 3px 间距，比设计稿宽 2px）
-    let (rect, _) = ui.allocate_exact_size(egui::vec2(theme::DOT_SIZE, 12.0), egui::Sense::hover());
-    ui.painter()
-        .circle_filled(rect.center(), theme::DOT_SIZE / 2.0, color);
-    ui.add_space(theme::DOT_GAP);
-}
-
 /// 在给定进程上执行一次 `invoke`（协议 §6.5），返回 `CommandResult` 本体。
 ///
 /// 委托 [`ExtensionProcess::invoke`]（M4 P4：协议方法封装上提至 dd-host，
@@ -2263,7 +2507,7 @@ fn weak_text_color(ui: &egui::Ui) -> egui::Color32 {
 }
 
 /// 单个列表项行（设计稿 01 ueli 式布局）：**图标 20px 列 + 名称 + 描述徽标
-/// （名称右侧）+ tags chips（贴右）**；44px 高（[`theme::ROW_H`]）。
+/// （名称右侧）+ Tag chips（贴右）**；40px 高（[`theme::ROW_H`]，D8）。
 ///
 /// 行态（设计稿 CSS `.row`）：
 /// - hover → [`theme::Palette::row_hover`] 填充；
@@ -2280,20 +2524,20 @@ fn weak_text_color(ui: &egui::Ui) -> egui::Color32 {
 /// 避免依赖交互响应回读的帧延迟；预算矩形与实际分配矩形一致的前提是行前无
 /// 其它布局消耗（ScrollArea 内逐行调用，成立）。
 /// 纯空态（设计稿 02 屏 `.empty`）：搜索图标 glyph 30px/text-3 + 标题
-/// 15px/600/text + 可选描述 12.5px/text-3，居中、间距 10px。
+/// 16px/600/text（base400）+ 可选描述 12px/text-3（caption1），居中、间距 10px。
 fn draw_empty_state(ui: &mut egui::Ui, p: &theme::Palette, title: &str, desc: Option<&str>) {
     ui.vertical_centered(|ui| {
         ui.add_space(34.0);
         ui.label(
             egui::RichText::new(SEARCH_GLYPH.to_string())
-                .size(30.0)
+                .size(32.0)
                 .color(p.text3),
         );
         ui.add_space(10.0);
-        ui.label(egui::RichText::new(title).size(15.0).color(p.text));
+        ui.label(egui::RichText::new(title).size(16.0).color(p.text));
         if let Some(desc) = desc {
             ui.add_space(2.0);
-            ui.label(egui::RichText::new(desc).size(12.5).color(p.text3));
+            ui.label(egui::RichText::new(desc).size(12.0).color(p.text3));
         }
     });
 }
@@ -2323,52 +2567,70 @@ fn draw_item_row(
     let frame_resp = egui::Frame::default()
         .fill(fill)
         .corner_radius(theme::ROW_RADIUS)
-        // CSS `.row` padding：9px 10px 9px 8px（左右紧凑、上下撑出 44px 行高）。
+        // CSS `.row` padding（v4）：8px 10px 8px 8px（4px ramp，上下 8 → 行高 40）。
         // 注意 egui 0.36 `Margin` 字段为 i8。
         .inner_margin(egui::Margin {
             left: 8,
             right: 10,
-            top: 9,
-            bottom: 9,
+            top: 8,
+            bottom: 8,
         })
         .show(ui, |ui| {
-            // 内容区固定 44 - 18 = 26px 高（垂直居中图标与文字）
-            ui.set_min_height(theme::ROW_H - 18.0);
+            // 内容区固定 40 - 16 = 24px 高（垂直居中图标与文字）
+            ui.set_min_height(theme::ROW_H - 16.0);
             ui.horizontal(|ui| {
                 // 图标列（20px；无图标/url 也占位，各行对齐——设计稿 04）
                 draw_icon_cell(ui, icon);
                 ui.add_space(12.0); // CSS `.row` gap 12px
                                     // 名称：14px（设计稿 `.name` font-weight 500——egui FontId 不携带
                                     // 字重、`.strong()` 只变色不改字重，平台限制无法等价实现，留档）
-                ui.label(egui::RichText::new(&item.title).size(14.0));
-                // 描述徽标：subtitle 上移为名称右侧 badge（设计稿 01），
-                // 限宽 220 截断（`.desc-badge` max-width）；tags 无预留时的窄余量
-                // 由 badge 上限兜底，极端长标题场景让位给右侧 tags。
+                // ── 右列宽度预留（真机反馈修复：长名时标题/副标题把右侧「应用」
+                //    类型标签挤跑/重叠）——先测类型标签 + tag chips 的宽度并从左侧
+                //    可用宽度中扣除，右列因此贴右且逐行垂直对齐。
+                let font14 = egui::FontId::proportional(14.0);
+                let font12 = egui::FontId::proportional(12.0);
+                let mut right_reserve = 0.0;
+                if let Some(cat) = &item.result_category {
+                    right_reserve += text_width(ui, cat, font12.clone()).min(90.0) + 8.0;
+                }
+                // tag chip：文本 + Frame 左右 margin 8×2 + chip 后间距 8（最多 2 + 「+N」）
+                for tag in item.tags.iter().take(2) {
+                    right_reserve += text_width(ui, tag, font12.clone()) + 16.0 + 8.0;
+                }
+                if item.tags.len() > 2 {
+                    right_reserve += text_width(ui, "+N", font12) + 16.0 + 8.0;
+                }
+                // 4px 余量吸收测量舍入（chip 描边/字重差异）
+                let avail = (ui.available_width() - right_reserve - 4.0).max(0.0);
+
+                // 标题：占宽不超过左侧可用空间，过长截断（不再无限伸展）；
+                // +2px 吸收布局舍入，避免整除边界误截断
+                let title_w = (text_width(ui, &item.title, font14) + 2.0).min(avail).max(1.0);
+                ui.add_sized(
+                    egui::vec2(title_w, 16.0),
+                    egui::Label::new(egui::RichText::new(&item.title).size(14.0)).truncate(),
+                );
+                // 描述：纯文本次级文本（D12——Fluent Badge 只用于状态/计数，
+                // caption1 12/fg3、无底无框、最大 240px 截断）。仅在标题截断后的
+                // 剩余空间 ≥48px 时显示，不足则整段省略（避免挤压右列）。
                 if !item.subtitle.is_empty() {
                     ui.add_space(12.0);
-                    let avail = ui.available_width();
-                    let w = avail.min(220.0);
-                    if w > 48.0 {
-                        egui::Frame::default()
-                            .fill(p.badge_bg)
-                            .corner_radius(4.0)
-                            .inner_margin(egui::Margin::symmetric(8, 2))
-                            .show(ui, |ui| {
-                                ui.add_sized(
-                                    egui::vec2((w - 16.0).max(24.0), 16.0),
-                                    egui::Label::new(
-                                        egui::RichText::new(&item.subtitle)
-                                            .size(11.0)
-                                            .color(p.text2),
-                                    )
-                                    .truncate(),
-                                );
-                            });
+                    let remain = (avail - title_w - 12.0).clamp(0.0, 240.0);
+                    if remain >= 48.0 {
+                        ui.add_sized(
+                            egui::vec2(remain, 16.0),
+                            egui::Label::new(
+                                egui::RichText::new(&item.subtitle)
+                                    .size(12.0)
+                                    .color(p.text3),
+                            )
+                            .truncate(),
+                        );
                     }
                 }
-                // 类型标签 + tags chips：均贴右；类型最右，tags 其左（设计文档 §6.2）。
+                // 类型标签 + Tag chips：均贴右；类型最右，Tags 其左（设计文档 §6.2）。
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    // 类型标签：最右，12px text-3，最长 90px 截断。
+                    // 类型标签：最右，caption1 12px text-3，最长 90px 截断。
                     if let Some(cat) = &item.result_category {
                         let cat_w = text_width(ui, cat, egui::FontId::proportional(12.0)).min(90.0);
                         if cat_w > 0.0 {
@@ -2382,14 +2644,29 @@ fn draw_item_row(
                             ui.add_space(8.0);
                         }
                     }
-                    // tags chips（顺序反转保证视觉从左到右）
-                    for tag in item.tags.iter().rev() {
+                    // Tag（D13 组件化：圆角 4、subtle 底、caption1、fg2、不可关闭；
+                    // 最多显示 2 个，超出折叠为「+N」（mini 10px）。构建展示序列后
+                    // 反转适配 right_to_left 布局，保证视觉从左到右 = tags[0], tags[1], +N。
+                    let mut shown: Vec<(String, bool)> = item
+                        .tags
+                        .iter()
+                        .take(2)
+                        .map(|t| (t.clone(), false))
+                        .collect();
+                    if item.tags.len() > 2 {
+                        shown.push((format!("+{}", item.tags.len() - 2), true));
+                    }
+                    for (tag, is_overflow) in shown.iter().rev() {
                         egui::Frame::default()
                             .fill(p.chip_bg)
-                            .corner_radius(9.0)
-                            .inner_margin(egui::Margin::symmetric(9, 2))
+                            .corner_radius(4.0)
+                            .inner_margin(egui::Margin::symmetric(8, 2))
                             .show(ui, |ui| {
-                                ui.label(egui::RichText::new(tag).size(10.5).color(p.text3));
+                                ui.label(
+                                    egui::RichText::new(tag)
+                                        .size(if *is_overflow { 10.0 } else { 12.0 })
+                                        .color(p.text2),
+                                );
                             });
                         ui.add_space(8.0);
                     }
@@ -2441,7 +2718,18 @@ fn draw_icon_cell(ui: &mut egui::Ui, icon: Option<&IconView>) {
                 weak_text_color(ui),
             );
         }
-        IconView::Texture(tex) => {
+        IconView::Texture { tex, dark } => {
+            // 暗色主题 + 暗色本体图标：垫浅色圆角底（ueli/Start 菜单式白底 tile），
+            // 否则黑 glyph 贴暗背景不可见（真机反馈 ChatGPT 图标）。亮色主题不需要
+            // （浅底上深 glyph 本就清晰）。底比图标区外扩 2px、圆角 4，贴近 Fluent。
+            if *dark && ui.visuals().dark_mode {
+                let bg = egui::Rect::from_center_size(
+                    rect.center(),
+                    egui::vec2(ICON_CELL + 4.0, ICON_CELL + 4.0),
+                );
+                ui.painter()
+                    .rect_filled(bg, egui::CornerRadius::same(4), egui::Color32::from_rgb(0xf5, 0xf5, 0xf5));
+            }
             // uv = 全图 [0,1]×[0,1]；超出 20px 的原图由渲染缩放，不做预缩放
             let uv = egui::Rect::from_min_max(egui::Pos2::ZERO, egui::pos2(1.0, 1.0));
             ui.painter().image(tex.id(), rect, uv, egui::Color32::WHITE);
@@ -2463,30 +2751,24 @@ fn draw_icon_cell(ui: &mut egui::Ui, icon: Option<&IconView>) {
 fn draw_searchbar(ui: &mut egui::Ui, query: &mut String) -> egui::Response {
     let p = theme::Palette::of(ui.visuals().dark_mode);
 
-    // 1) 在父 Ui 里**先**预留 46px 高的精确矩形（这一步决定了 searchbar 真实占位高度，
-    //    后面 child Ui 只能在这 46px 里横排，不会再把父 Ui 撑高）。
+    // 1) 在父 Ui 里**先**预留 40px 高的精确矩形（Fluent Input large，D8；这一步
+    //    决定了 searchbar 真实占位高度，后面 child Ui 只能在这 40px 里横排，
+    //    不会再把父 Ui 撑高）。
     let (rect, _) = ui.allocate_exact_size(
         egui::vec2(ui.available_width(), theme::SEARCHBAR_H),
         egui::Sense::hover(),
     );
 
-    // 2) 手工画 Frame 的 fill + stroke（不再用 `Frame::show` —— 它的 inner Ui 会被
-    //    child 撑高，破坏上方精确矩形）。
-    let fill_rect = rect.shrink(0.5); // 给 1px stroke 留位置（不缩 round corner 视觉）
-    ui.painter()
-        .rect_filled(fill_rect, egui::CornerRadius::same(6), p.input_fill);
-    ui.painter().rect_stroke(
-        fill_rect,
-        egui::CornerRadius::same(6),
-        egui::Stroke::new(1.0, p.border_strong),
-        egui::StrokeKind::Inside,
-    );
+    // 2) filled-darker 外观（D17）：只画 bg3 凹陷填充、圆角 4，**无边框**——
+    //    Fluent 三种外观互斥，不再保留 v2 的「1px 全边框 + 2px 底边」混合形态。
+    let radius = egui::CornerRadius::same(theme::SEARCHBAR_RADIUS);
+    ui.painter().rect_filled(rect, radius, p.input_fill);
 
-    // 3) 在 46px 矩形内开 child Ui：左右各留 14px padding（设计稿 searchbar 边距），
-    //    内容用 left_to_right + Align::Center 垂直居中。
+    // 3) 在 40px 矩形内开 child Ui：左右各留 12px padding（设计稿 searchbar
+    //    padding 0 12px），内容用 left_to_right + Align::Center 垂直居中。
     let content_rect = egui::Rect::from_min_max(
-        egui::pos2(rect.left() + 14.0, rect.top()),
-        egui::pos2(rect.right() - 14.0, rect.bottom()),
+        egui::pos2(rect.left() + 12.0, rect.top()),
+        egui::pos2(rect.right() - 12.0, rect.bottom()),
     );
     let mut content_ui = ui.new_child(
         egui::UiBuilder::new()
@@ -2494,10 +2776,10 @@ fn draw_searchbar(ui: &mut egui::Ui, query: &mut String) -> egui::Response {
             .layout(egui::Layout::left_to_right(egui::Align::Center)),
     );
 
-    // 4) glyph 前缀（设计稿 05：text-2 15px）
+    // 4) glyph 前缀（设计稿 01：text-2 16px）
     content_ui.label(
         egui::RichText::new(SEARCH_GLYPH.to_string())
-            .size(15.0)
+            .size(16.0)
             .color(p.text2),
     );
     content_ui.add_space(12.0);
@@ -2535,20 +2817,16 @@ fn draw_searchbar(ui: &mut egui::Ui, query: &mut String) -> egui::Response {
         });
     }
 
-    // 6) 底部 2px 边：聚焦 → accent 下划线；否则 border-strong（CSS border-bottom 2px）
-    let bottom_bar = egui::Rect::from_min_max(
-        egui::pos2(rect.left(), rect.bottom() - 2.0),
-        egui::pos2(rect.right(), rect.bottom()),
-    );
-    ui.painter().rect_filled(
-        bottom_bar,
-        egui::CornerRadius::same(2),
-        if resp.has_focus() {
-            p.accent
-        } else {
-            p.border_strong
-        },
-    );
+    // 6) 聚焦指示（filled-darker）：仅聚焦时底部 2px accent 下划线；
+    //    未聚焦无任何描边（Fluent 外观规范，与旧 border-strong 底边区分）。
+    if resp.has_focus() {
+        let bottom_bar = egui::Rect::from_min_max(
+            egui::pos2(rect.left(), rect.bottom() - 2.0),
+            egui::pos2(rect.right(), rect.bottom()),
+        );
+        ui.painter()
+            .rect_filled(bottom_bar, egui::CornerRadius::same(2), p.accent);
+    }
 
     resp
 }
@@ -2599,6 +2877,19 @@ impl eframe::App for PaletteApp {
         }
 
         self.handle_keys(&ctx);
+        // 设置页与启动页窗口尺寸不同：按当前栈顶页帧间 diff 同步 `InnerSize`。
+        // 进设置页放大、返回/出栈/清栈缩回——所有路径（Esc/Dismiss/show 复位）
+        // 都经此处收口，不依赖各转换点逐一接线。
+        let want_settings = self.stack.current().is_settings;
+        if want_settings != self.settings_sized {
+            self.settings_sized = want_settings;
+            let (w, h) = if want_settings {
+                (SETTINGS_W, SETTINGS_H)
+            } else {
+                (APP_W, APP_H)
+            };
+            ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(egui::vec2(w, h)));
+        }
         self.draw_panel(ui);
         self.draw_toast(&ctx);
         self.draw_confirm(&ctx);
@@ -2626,9 +2917,6 @@ const KEY_GROUPS: [KeyGroup; 3] = [
         desc: "返回 / 隐藏",
     },
 ];
-
-/// 批次 4.1：有选中项时页脚右侧的单键帽（§6.3 示例：`↵ Enter`）。
-const ENTER_KEYCAP: &str = "↵ Enter";
 
 /// 页脚上下文动作文本（设计稿 §6.3，批次 4.1）。
 ///
@@ -2689,35 +2977,9 @@ fn keys_width(ui: &egui::Ui) -> f32 {
     sum + theme::FOOTER_GAP * (KEY_GROUPS.len() - 1) as f32
 }
 
-/// 画源条目（不换行；超宽在左块剩余宽度内省略号截断，不溢出到键位区）。
-fn draw_footer_entries(
-    ui: &mut egui::Ui,
-    entries: &[(Option<egui::Color32>, String)],
-    gap: f32,
-    p: &theme::Palette,
-) {
-    for (i, (dot, text)) in entries.iter().enumerate() {
-        if i > 0 {
-            ui.add_space(gap);
-        }
-        if let Some(color) = dot {
-            draw_status_dot(ui, *color);
-        }
-        // `Label::truncate`：诊断文本（note/失败原因可含长路径）超宽时省略号
-        // 截断——egui label 默认不裁剪，真机实测溢出盖到右侧键位图例。
-        ui.add(
-            egui::Label::new(
-                egui::RichText::new(text)
-                    .size(theme::FOOTER_FONT)
-                    .color(p.text3),
-            )
-            .truncate(),
-        );
-    }
-}
-
-/// 页脚最左**设置按钮**（设计稿 §6.1）：齿轮 `\u{E713}`、16px、颜色 `--text-3`、
-/// hover 变 `--text-2`（无背景变化）、24×24 热区。返回是否被点击。
+/// 页脚最左**设置按钮**（设计稿 §6.1 line 970）：齿轮 `\u{E713}`、16px、
+/// 颜色恒为 `--text-2`（fg2 = 暗 #d6d6d6 / 亮 #424242，**hover 不变色**）、
+/// hover 加 `bg1Hover` 圆角背景、24×24 热区。返回是否被点击。
 ///
 /// glyph 经图标字体渲染（`SegoeIcons.ttf` → `segmdl2.ttf` 已在字体回退链，
 /// 与列表行图标同链路）；键盘可达经 `Ctrl+,` 快捷键（批次 4.0 决策）。
@@ -2726,48 +2988,357 @@ fn draw_settings_gear(ui: &mut egui::Ui, p: &theme::Palette) -> bool {
         egui::vec2(theme::GEAR_SIZE, theme::GEAR_SIZE),
         egui::Sense::click(),
     );
-    let color = if resp.hovered() { p.text2 } else { p.text3 };
+    // hover 反馈按设计稿 §6.1 line 970："hover 不变色、仅加深背景 = bg1Hover"——
+    // 圆角 4 圆角矩形底，圆心不变，glyph 始终 text2。
+    if resp.hovered() {
+        ui.painter()
+            .rect_filled(rect, egui::CornerRadius::same(4), p.row_hover);
+    }
     ui.painter().text(
         rect.center(),
         egui::Align2::CENTER_CENTER,
         theme::GEAR_GLYPH,
         egui::FontId::proportional(theme::GEAR_FONT),
-        color,
+        p.text2,
     );
     resp.clicked()
 }
 
-/// 画键位区（左→右；调用方负责把它推到右侧）。
-fn draw_footer_keys(ui: &mut egui::Ui, p: &theme::Palette) {
+// ── 设置页（§08 v4.2）─────────────────────────────────────────────────
+
+/// 设置页顶行返回按钮（设计稿 §07.1 line 1121 + §08.1）：28×28 热区、
+/// ChevronLeft `\u{E72B}` 16px、颜色恒为 `--text-2`、hover 加 `bg1Hover`
+/// 圆角 4 背景。返回是否被点击。
+///
+/// 与 `draw_settings_gear` 同链路（统一字体与 token 取色）。
+fn draw_back_btn(ui: &mut egui::Ui, p: &theme::Palette) -> bool {
+    let (rect, resp) = ui.allocate_exact_size(egui::vec2(28.0, 28.0), egui::Sense::click());
+    if resp.hovered() {
+        ui.painter()
+            .rect_filled(rect.shrink(2.0), egui::CornerRadius::same(4), p.row_hover);
+    }
+    ui.painter().text(
+        rect.center(),
+        egui::Align2::CENTER_CENTER,
+        '\u{E72B}',
+        egui::FontId::proportional(16.0),
+        p.text2,
+    );
+    resp.clicked()
+}
+
+/// 版本徽标 chip（设计稿 §08 mockup `.ext-chip` line 1161 + CSS line 243）：
+/// `v0.5.0` 文字 + 1px border 描边 + 胶囊圆角 + 1px 8px padding。
+/// mini 10/14 + fg3 + card 底 + 高度 16px。
+fn draw_version_chip(ui: &mut egui::Ui, version: &str, p: &theme::Palette) -> egui::Rect {
+    let text = format!("v{version}");
+    let text_w = text_width(ui, &text, egui::FontId::proportional(10.0));
+    let w = text_w + 16.0;
+    let h = 16.0;
+    let (rect, _) = ui.allocate_exact_size(egui::vec2(w, h), egui::Sense::hover());
+    ui.painter()
+        .rect_filled(rect, egui::CornerRadius::same(8), p.card);
+    ui.painter().rect_stroke(
+        rect,
+        egui::CornerRadius::same(8),
+        egui::Stroke::new(1.0, p.border),
+        egui::StrokeKind::Inside,
+    );
+    ui.painter().text(
+        rect.center(),
+        egui::Align2::CENTER_CENTER,
+        text,
+        egui::FontId::proportional(10.0),
+        p.text3,
+    );
+    rect
+}
+
+/// 设置页卡片容器（Fluent 9 Card，§08.1 "卡片" 规格）：
+/// card 底 + 1px `--border` 描边 + radius-xl(8) + padding 12px。
+///
+/// `body` 在卡内绘制内容；调用方需自己管理各 section 的间距。
+fn draw_settings_card_frame(
+    ui: &mut egui::Ui,
+    p: &theme::Palette,
+    body: impl FnOnce(&mut egui::Ui),
+) {
+    egui::Frame::new()
+        .fill(p.card)
+        .stroke(egui::Stroke::new(1.0, p.border))
+        .corner_radius(egui::CornerRadius::same(8))
+        .inner_margin(egui::Margin::same(12))
+        .show(ui, |ui| {
+            ui.vertical(|ui| {
+                body(ui);
+            });
+        });
+}
+
+/// 选中态 radio-card 的填充色（§08.1 line 486 `.radio-card.sel`）：
+/// accent 软色叠加于 card 底之上。暗色 0.28 / 亮色 0.08 不透明度。
+///
+/// 绘制时由 `draw_radio_card` 直接 `rect_filled` 此色一次完成，不必先填
+/// card 再叠 alpha——egui `rect_filled` 单色 + 边框即可等价视觉（卡片本身
+/// 已 `draw_settings_card_frame` 在外层填过 card 底，此处填 alpha-多重 accent
+/// 在视觉上与"accent_soft over card"等价）。
+fn accent_soft(dark: bool, p: &theme::Palette) -> egui::Color32 {
+    let alpha = if dark { 0.28 } else { 0.08 };
+    p.accent.gamma_multiply(alpha)
+}
+
+/// 单张 radio-card（§08.1 "主题单选"）：圆点 12×12 + 名称 (caption1 12/16)
+/// + 副标题 (mini 10/14 fg-3) + swatch (16px 高两色色板)。
+///
+/// 规格（§08.1 line 1236）：
+/// - 未选：1px `--border-strong` + `--input-fill` 底 + 圆点 1.5px stroke 空心；
+/// - 选中：2px accent 边 + accent_soft 底 + 圆点实心 (5.5px accent)；
+/// - padding 10 12（line 482）；等宽由调用方按 `(avail - 2*gap) / 3` 计算。
+///
+/// 返回是否被点击。
+#[allow(clippy::too_many_arguments)]
+fn draw_radio_card(
+    ui: &mut egui::Ui,
+    w: f32,
+    label: &str,
+    sub: &str,
+    swatch_colors: [egui::Color32; 2],
+    selected: bool,
+    p: &theme::Palette,
+    dark: bool,
+) -> bool {
+    // 高度 = padding 10 top + name 20 + sub 14 + gap 8 + swatch 16 + padding 10 bot = 78
+    let h = 78.0;
+    let (rect, resp) = ui.allocate_exact_size(egui::vec2(w, h), egui::Sense::click());
+    let radius = egui::CornerRadius::same(8);
+
+    // 底色：未选 = input_fill；选中 = accent 软色
+    if selected {
+        ui.painter().rect_filled(rect, radius, accent_soft(dark, p));
+    } else {
+        ui.painter().rect_filled(rect, radius, p.input_fill);
+    }
+    // hover（未选）：叠加 row_hover 暗示可点
+    if !selected && resp.hovered() {
+        ui.painter()
+            .rect_filled(rect.shrink(1.0), radius, p.row_hover);
+    }
+    // 边框
+    let stroke = if selected {
+        egui::Stroke::new(2.0, p.accent)
+    } else {
+        egui::Stroke::new(1.0, p.border_strong)
+    };
+    ui.painter()
+        .rect_stroke(rect, radius, stroke, egui::StrokeKind::Inside);
+
+    // 圆点 12×12：rect 内部 padding 12 → 圆心 (rect.left+12+6, rect.top+12+6)
+    let dot_cx = rect.left() + 18.0;
+    let dot_cy = rect.top() + 18.0;
+    if selected {
+        ui.painter()
+            .circle_filled(egui::pos2(dot_cx, dot_cy), 5.5, p.accent);
+    } else {
+        ui.painter().circle_stroke(
+            egui::pos2(dot_cx, dot_cy),
+            5.5,
+            egui::Stroke::new(1.5, p.border_strong),
+        );
+    }
+    // 名称（caption1 12/16、text 色）
+    let name_x = dot_cx + 12.0; // 圆点右 6 + 文字前内 padding 6
+    let name_y = rect.top() + 12.0;
+    ui.painter().text(
+        egui::pos2(name_x, name_y),
+        egui::Align2::LEFT_TOP,
+        label,
+        egui::FontId::proportional(12.0),
+        p.text,
+    );
+    // 副标题（mini 10/14、text-3）
+    ui.painter().text(
+        egui::pos2(name_x, name_y + 16.0),
+        egui::Align2::LEFT_TOP,
+        sub,
+        egui::FontId::proportional(10.0),
+        p.text3,
+    );
+    // swatch 两色色板（16px 高 + gap 4 + 各自 1px stroke）
+    let sw_y = rect.bottom() - 10.0 - 16.0;
+    let sw_w = ((rect.width() - 24.0 - 4.0) / 2.0).max(8.0); // 横向 padding 12 两侧 + gap 4
+    let sw_left = rect.left() + 12.0;
+    for (i, c) in swatch_colors.iter().enumerate() {
+        let sx = sw_left + i as f32 * (sw_w + 4.0);
+        let srect = egui::Rect::from_min_size(egui::pos2(sx, sw_y), egui::vec2(sw_w, 16.0));
+        ui.painter()
+            .rect_filled(srect, egui::CornerRadius::same(4), *c);
+        ui.painter().rect_stroke(
+            srect,
+            egui::CornerRadius::same(4),
+            egui::Stroke::new(1.0, p.border),
+            egui::StrokeKind::Inside,
+        );
+    }
+    resp.clicked()
+}
+
+/// 占位设置行（§08.1 line 1238 "占位项"）：图标 16px (fg-disabled) +
+/// 名称 (body1 14/20 fg-disabled) + 描述 (caption1 12/16 fg-disabled) +
+/// 尾缀（Soon chip 或 Disabled Toggle）。
+///
+/// **不注册任何点击处理**——占位项不绑定行为，仅做视觉占位。
+fn draw_setting_row_disabled(
+    ui: &mut egui::Ui,
+    icon: char,
+    name: &str,
+    desc: &str,
+    suffix: PlaceholderSuffix,
+    p: &theme::Palette,
+) {
+    let h = 48.0;
+    // 注意：必须用 `allocate_exact_size` 返回的 rect 作为行矩形。
+    // 之前误用 `ui.min_rect()`——它是 Ui 创建以来的**累计**包围盒，随每行
+    // 递增膨胀，导致三行文字全部绘制到第一行位置（真机 2026-09-04 重叠）。
+    let (row, _) =
+        ui.allocate_exact_size(egui::vec2(ui.available_width(), h), egui::Sense::hover());
+
+    // 图标 16px（fg-disabled）
+    ui.painter().text(
+        egui::pos2(row.left() + 4.0, row.center().y),
+        egui::Align2::LEFT_CENTER,
+        icon,
+        egui::FontId::proportional(16.0),
+        p.text_disabled,
+    );
+    // 名称 + 描述
+    let main_x = row.left() + 28.0; // 4 left pad + 16 icon + 8 gap
+    let main_y = row.top() + 8.0;
+    ui.painter().text(
+        egui::pos2(main_x, main_y),
+        egui::Align2::LEFT_TOP,
+        name,
+        egui::FontId::proportional(14.0),
+        p.text_disabled,
+    );
+    ui.painter().text(
+        egui::pos2(main_x, main_y + 20.0),
+        egui::Align2::LEFT_TOP,
+        desc,
+        egui::FontId::proportional(12.0),
+        p.text_disabled,
+    );
+
+    match suffix {
+        PlaceholderSuffix::Soon => draw_soon_chip_at(ui, row, p),
+        PlaceholderSuffix::DisabledSwitch => draw_disabled_switch_at(ui, row, p),
+    }
+}
+
+/// 「即将支持」chip（mini 10/14 + text-3 + 1px border + 胶囊 + padding 1px 8px），
+/// 贴给定 row 的右内边缘绘制。
+fn draw_soon_chip_at(ui: &mut egui::Ui, row: egui::Rect, p: &theme::Palette) {
+    let text = "即将支持";
+    let text_w = text_width(ui, text, egui::FontId::proportional(10.0));
+    let w = text_w + 16.0;
+    let h = 16.0;
+    let rect = egui::Rect::from_min_size(
+        egui::pos2(row.right() - 4.0 - w, row.center().y - h / 2.0),
+        egui::vec2(w, h),
+    );
+    ui.painter()
+        .rect_filled(rect, egui::CornerRadius::same(8), p.card);
+    ui.painter().rect_stroke(
+        rect,
+        egui::CornerRadius::same(8),
+        egui::Stroke::new(1.0, p.border),
+        egui::StrokeKind::Inside,
+    );
+    ui.painter().text(
+        rect.center(),
+        egui::Align2::CENTER_CENTER,
+        text,
+        egui::FontId::proportional(10.0),
+        p.text3,
+    );
+}
+
+/// 禁用 Toggle（36×18 + 1px border-strong + 12×12 fg-disabled 内圆），
+/// 贴右绘制。
+fn draw_disabled_switch_at(ui: &mut egui::Ui, row: egui::Rect, p: &theme::Palette) {
+    let w = 36.0;
+    let h = 18.0;
+    let rect = egui::Rect::from_min_size(
+        egui::pos2(row.right() - 4.0 - w, row.center().y - h / 2.0),
+        egui::vec2(w, h),
+    );
+    ui.painter()
+        .rect_filled(rect, egui::CornerRadius::same(9), p.card);
+    ui.painter().rect_stroke(
+        rect,
+        egui::CornerRadius::same(9),
+        egui::Stroke::new(1.0, p.border_strong),
+        egui::StrokeKind::Inside,
+    );
+    ui.painter().circle_filled(
+        egui::pos2(rect.left() + 8.0, rect.center().y),
+        6.0,
+        p.text_disabled,
+    );
+}
+
+/// 占位行尾缀类型（§08.1 占位项规格表）。
+enum PlaceholderSuffix {
+    Soon,
+    DisabledSwitch,
+}
+
+// ── 现有页脚键位区 ────────────────────────────────────────────────
+
+/// 在 `(x, cy)` 起点向右**手绘**完整键位图例（[`KEY_GROUPS`]），所有键帽与
+/// 说明文本统一垂直锚定 `cy`——egui 自动居中在混合高度内容下逐项漂移
+/// （真机 2026-09-04 修复"底栏不在一条线上"），页脚键位区弃用光标布局。
+///
+/// 宽度推进与 [`keys_width`] / [`key_group_width`] 的口径完全一致
+/// （键帽间 `KEYCAP_GAP`、键帽与说明间 4px、组间 `FOOTER_GAP`），
+/// 保证 `split_x = row.right() - keys_width()` 后恰好从 `split_x` 起排。
+fn paint_keys_at(ui: &mut egui::Ui, origin: egui::Pos2, p: &theme::Palette) {
+    let font = egui::FontId::proportional(theme::FOOTER_FONT);
+    let mut x = origin.x;
     for (i, group) in KEY_GROUPS.iter().enumerate() {
         if i > 0 {
-            ui.add_space(theme::FOOTER_GAP);
+            x += theme::FOOTER_GAP;
         }
         for (j, cap) in group.caps.iter().enumerate() {
             if j > 0 {
-                ui.add_space(theme::KEYCAP_GAP);
+                x += theme::KEYCAP_GAP;
             }
-            draw_keycap(ui, cap, p);
+            let kw = keycap_width(ui, cap);
+            let krect = egui::Rect::from_min_size(
+                egui::pos2(x, origin.y - theme::KEYCAP_H / 2.0),
+                egui::vec2(kw, theme::KEYCAP_H),
+            );
+            paint_keycap(ui, krect, cap, p);
+            x += kw;
         }
-        ui.add_space(4.0);
-        ui.label(
-            egui::RichText::new(group.desc)
-                .size(theme::FOOTER_FONT)
-                .color(p.text3),
+        x += 4.0;
+        ui.painter().text(
+            egui::pos2(x, origin.y),
+            egui::Align2::LEFT_CENTER,
+            group.desc,
+            font.clone(),
+            p.text3,
         );
+        x += text_width(ui, group.desc, font.clone());
     }
 }
 
 /// 单个键帽（设计稿 `.panel-footer b`）：chip 底 + 1px 描边 + **下边 2px** +
-/// 圆角 4 + monospace 10.5px + 左右 6px padding。
+/// 圆角 4 + monospace 10px + 左右 6px padding（`border-bottom-width: 2px`）。
 ///
-/// 与 `draw_searchbar` 同理用 `allocate_exact_size` + `painter` 手绘：
-/// egui `Frame` 不支持按边设不同描边宽度，`border-bottom-width: 2px` 只能手画。
-fn draw_keycap(ui: &mut egui::Ui, cap: &str, p: &theme::Palette) {
-    let (rect, _) = ui.allocate_exact_size(
-        egui::vec2(keycap_width(ui, cap), theme::KEYCAP_H),
-        egui::Sense::hover(),
-    );
+/// 绘制核心 [`paint_keycap`] 接收**显式矩形**：egui `Frame` 不支持按边设不同
+/// 描边宽度只能手画，且页脚混合高度内容需手动锚定中心线（见 `paint_keys_at`），
+/// 故不再提供光标布局版包装。
+fn paint_keycap(ui: &mut egui::Ui, rect: egui::Rect, cap: &str, p: &theme::Palette) {
     let r = rect.shrink(0.5); // 给 1px 描边留位置
     ui.painter()
         .rect_filled(r, egui::CornerRadius::same(4), p.chip_bg);
@@ -2777,11 +3348,13 @@ fn draw_keycap(ui: &mut egui::Ui, cap: &str, p: &theme::Palette) {
         egui::Stroke::new(1.0, p.border),
         egui::StrokeKind::Inside,
     );
-    // 下边 2px
+    // 下边 2px（CSS `border-bottom-width: 2px`）——必须画在**收缩后的盒内**：
+    // 旧实现误用未收缩的 `rect` 底边，比描边盒多出 0.5px 悬空线，
+    // 真机 2026-09-04 反馈"方框下多了阴影"，此为根因。
     ui.painter().rect_filled(
         egui::Rect::from_min_max(
-            egui::pos2(rect.left(), rect.bottom() - 2.0),
-            rect.right_bottom(),
+            egui::pos2(r.left() + 1.0, r.bottom() - 2.0),
+            egui::pos2(r.right() - 1.0, r.bottom()),
         ),
         egui::CornerRadius::same(2),
         p.border,
@@ -2810,6 +3383,28 @@ mod tests {
             command,
             ..PanelItem::new("x")
         }
+    }
+
+    // ── 暗色图标检测（真机反馈 2026-09-04：ChatGPT 黑 glyph 暗主题不可见） ──
+
+    fn solid_image(r: u8, g: u8, b: u8, a: u8) -> egui::ColorImage {
+        egui::ColorImage::from_rgba_unmultiplied(
+            [4, 4],
+            &[r, g, b, a, r, g, b, a, r, g, b, a, r, g, b, a,
+              r, g, b, a, r, g, b, a, r, g, b, a, r, g, b, a,
+              r, g, b, a, r, g, b, a, r, g, b, a, r, g, b, a,
+              r, g, b, a, r, g, b, a, r, g, b, a, r, g, b, a],
+        )
+    }
+
+    #[test]
+    fn icon_darkness_detection() {
+        assert!(icon_is_dark(&solid_image(0x20, 0x20, 0x20, 255)), "黑 glyph → 暗");
+        assert!(!icon_is_dark(&solid_image(0xe0, 0x10, 0x10, 255)), "红（AMD）→ 不暗");
+        assert!(!icon_is_dark(&solid_image(0xff, 0xff, 0xff, 255)), "白 → 不暗");
+        assert!(!icon_is_dark(&solid_image(0, 0, 0, 0)), "全透明 → 不算暗");
+        // 半透明（α<32）像素不计入
+        assert!(!icon_is_dark(&solid_image(0, 0, 0, 16)), "α=16 视为透明 → 不暗");
     }
 
     #[test]

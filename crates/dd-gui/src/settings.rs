@@ -57,10 +57,49 @@ impl ThemePref {
     }
 }
 
-/// 宿主本地设置（当前仅主题偏好；后续字段向后兼容追加）。
+/// 打开面板（空查询）时的首屏显示范围（真机反馈 2026-09-04：
+/// 默认只显示默认功能，不铺全部应用；输入查询时应用仍参与匹配）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum OpenView {
+    /// 默认功能：隐藏「应用」列表（`result_category == "应用"`），其余分组照常。
+    #[default]
+    Default,
+    /// 显示全部（含所有应用，旧行为）。
+    All,
+}
+
+impl OpenView {
+    /// 设置页显示标签。
+    pub fn label(self) -> &'static str {
+        match self {
+            OpenView::Default => "默认功能",
+            OpenView::All => "所有应用与功能",
+        }
+    }
+
+    /// JSON 序列化值（稳定标识，与显示标签解耦）。
+    pub fn as_str(self) -> &'static str {
+        match self {
+            OpenView::Default => "default",
+            OpenView::All => "all",
+        }
+    }
+
+    /// JSON 值反解；未知值返回 `None`（调用方回落默认）。
+    pub fn parse(s: &str) -> Option<Self> {
+        match s {
+            "default" => Some(OpenView::Default),
+            "all" => Some(OpenView::All),
+            _ => None,
+        }
+    }
+}
+
+/// 宿主本地设置（当前仅主题偏好 + 首屏视图；后续字段向后兼容追加）。
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct Settings {
     pub theme: ThemePref,
+    pub open_view: OpenView,
 }
 
 impl Settings {
@@ -75,12 +114,21 @@ impl Settings {
                 s.theme = pref;
             }
         }
+        if let Some(t) = v.get("open_view").and_then(|t| t.as_str()) {
+            if let Some(view) = OpenView::parse(t) {
+                s.open_view = view;
+            }
+        }
         s
     }
 
     /// 序列化为 JSON 文本（单行，便于人查）。
     pub fn to_json_string(&self) -> String {
-        serde_json::json!({ "theme": self.theme.as_str() }).to_string()
+        serde_json::json!({
+            "theme": self.theme.as_str(),
+            "open_view": self.open_view.as_str(),
+        })
+        .to_string()
     }
 
     /// 从 [`config_file`] 读配置；文件缺失/读盘失败/解析失败 → 默认。
@@ -131,7 +179,10 @@ mod tests {
     #[test]
     fn theme_pref_json_roundtrip() {
         for pref in [ThemePref::System, ThemePref::Light, ThemePref::Dark] {
-            let s = Settings { theme: pref };
+            let s = Settings {
+                theme: pref,
+                ..Settings::default()
+            };
             let parsed = Settings::parse_json(&s.to_json_string());
             assert_eq!(parsed, s, "{} 往返一致", pref.label());
         }
@@ -168,6 +219,30 @@ mod tests {
         // 向后兼容：多出的字段忽略不报错
         let s = Settings::parse_json(r#"{"theme":"dark","future":"x"}"#);
         assert_eq!(s.theme, ThemePref::Dark);
+    }
+
+    #[test]
+    fn open_view_json_roundtrip_and_default() {
+        // 默认 = Default（首屏默认功能，不铺全部应用——真机反馈 2026-09-04）
+        assert_eq!(Settings::default().open_view, OpenView::Default);
+        assert_eq!(Settings::parse_json("{}").open_view, OpenView::Default);
+        for view in [OpenView::Default, OpenView::All] {
+            let s = Settings {
+                open_view: view,
+                ..Settings::default()
+            };
+            assert_eq!(
+                Settings::parse_json(&s.to_json_string()).open_view,
+                view,
+                "{} 往返一致",
+                view.label()
+            );
+        }
+        // 未知值回落默认
+        assert_eq!(
+            Settings::parse_json(r#"{"open_view":"neon"}"#).open_view,
+            OpenView::Default
+        );
     }
 
     #[test]

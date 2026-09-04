@@ -132,8 +132,24 @@ impl FallbackStore {
 
 /// 模板 `title` 渲染：把全部 `{query}` 占位符替换为真实搜索词。
 /// 协议 §6.2：占位符约定在 `title`；subtitle/其余字段不替换。
+///
+/// 特例：`"= "` 开头的模板（calc 兜底 `"= {query}"`）——用户会照兜底提示
+/// 直接输入带前导 `=` 的查询（如 `=1+11`），无脑替换会产生 `= =1+11`
+/// 双等号（真机反馈）。替换值统一剥掉前导 `=`，与 calc 求值端
+/// `query_after_prefix` 的语义一致（求值结果仍 `= 12`）。
 pub fn render_title(template: &str, query: &str) -> String {
-    template.replace("{query}", query)
+    let effective = if template.starts_with("= ") {
+        let stripped = query.trim_start().trim_start_matches('=').trim_start();
+        if stripped.is_empty() {
+            // 查询全是 '='：剥无可剥，退回原查询（求值端会给出引导提示）
+            query
+        } else {
+            stripped
+        }
+    } else {
+        query
+    };
+    template.replace("{query}", effective)
 }
 
 /// 在给定进程上拉取一次兜底模板（协议 §6.2）。供 main.rs 后台线程调用。
@@ -202,6 +218,19 @@ mod tests {
         assert!(store.is_empty(), "空结果 → 无兜底项");
         assert!(!store.wants("com.ddrun.system"), "已确认无兜底 → 不再拉取");
         assert!(store.render("x").is_empty());
+    }
+
+    #[test]
+    fn calc_template_strips_leading_equals_from_query() {
+        // 用户照兜底提示输入 '=1+11'：标题不得出现双等号 '= =1+11'
+        assert_eq!(render_title("= {query}", "=1+11"), "= 1+11");
+        assert_eq!(render_title("= {query}", " = 1+11"), "= 1+11");
+        // 普通查询不受影响
+        assert_eq!(render_title("= {query}", "1+1"), "= 1+1");
+        // 查询全是 '='：剥无可剥，保留原查询
+        assert_eq!(render_title("= {query}", "=="), "= ==");
+        // 非 '= ' 模板不剥（shell 等语义不同）
+        assert_eq!(render_title("运行 {query}", "=dir"), "运行 =dir");
     }
 
     #[test]
