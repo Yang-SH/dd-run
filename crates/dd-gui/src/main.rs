@@ -123,10 +123,47 @@ struct FallbackFetchOutcome {
     result: Result<Vec<CommandItem>, String>,
 }
 
+/// Toast 意图（设计稿 §09，C 组批次 C3）：success / error / info 三意图。
+///
+/// 协议层**不携带**意图字段（`ShowToast` 结果仅 message + duration）——
+/// 扩展产生的 Toast 默认 info（C2 验收口径「未接意图字段前默认 info」）；
+/// 宿主自身路径按语义标注（命令失败 → Error 等）。意图字段即"留接口"：
+/// 后续协议若扩展意图，只需在此枚举加映射。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ToastKind {
+    /// 接口预留（协议 `ShowToast` 暂无意图字段；宿主暂无确定 success 语义
+    /// 路径——calc 求值结果由扩展侧 Toast 文本呈现）。协议扩展意图后启用。
+    #[allow(dead_code)]
+    Success,
+    Error,
+    Info,
+}
+
+impl ToastKind {
+    /// 意图图标（§9.1：success E73E / error E783 / info E946，16px）。
+    fn glyph(self) -> char {
+        match self {
+            ToastKind::Success => '\u{E73E}',
+            ToastKind::Error => '\u{E783}',
+            ToastKind::Info => '\u{E946}',
+        }
+    }
+
+    /// 意图语义色（§9.1：success → --success / error → --danger / info → --text-2）。
+    fn color(self, p: &theme::Palette) -> egui::Color32 {
+        match self {
+            ToastKind::Success => p.success,
+            ToastKind::Error => p.danger,
+            ToastKind::Info => p.text2,
+        }
+    }
+}
+
 /// Toast 提示条（过期即清除）。
 struct ToastState {
     message: String,
     expires: Instant,
+    kind: ToastKind,
 }
 
 /// 待用户二次确认的对话框。
@@ -675,12 +712,13 @@ impl PaletteApp {
                 let mut root = PageState::root(payload.items);
                 root.list.set_query(query);
                 // 首屏视图（设置项）：默认功能 / 全部——真机反馈 2026-09-04
-                root.list
-                    .set_empty_view(if self.settings.open_view == dd_gui::settings::OpenView::All {
+                root.list.set_empty_view(
+                    if self.settings.open_view == dd_gui::settings::OpenView::All {
                         dd_gui::state::EmptyQueryView::All
                     } else {
                         dd_gui::state::EmptyQueryView::WithoutApps
-                    });
+                    },
+                );
                 *self.stack.root_mut() = root;
                 self.sources = payload.sources;
                 self.processes = payload.processes;
@@ -780,7 +818,11 @@ impl PaletteApp {
                             }
                         }
                         eprintln!("[dd-gui] invoke 失败：{e}");
-                        self.show_toast(format!("命令执行失败：{e}"), Some(3_000));
+                        self.show_toast_kind(
+                            ToastKind::Error,
+                            format!("命令执行失败：{e}"),
+                            Some(3_000),
+                        );
                     }
                 }
             }
@@ -1074,7 +1116,8 @@ impl PaletteApp {
             eprintln!(
                 "[dd-gui] 扩展 {ext_id} 连续崩溃 {n} 次 ≥ {MAX_CONSECUTIVE_CRASHES}，标记暂时不可用（重启宿主或手动重试后恢复）"
             );
-            self.show_toast(
+            self.show_toast_kind(
+                ToastKind::Error,
                 format!("扩展 {ext_id} 暂时不可用（连续崩溃 {n} 次），重启后恢复"),
                 Some(4_000),
             );
@@ -1271,12 +1314,17 @@ impl PaletteApp {
     fn dispatch_invoke(&mut self, ext_id: &str, params: InvokeParams) {
         if self.invoke_rx.is_some() || self.inflight.contains(ext_id) {
             eprintln!("[dd-gui] invoke 失败：ext={ext_id} 上一请求仍在处理");
-            self.show_toast("扩展进程不可用（可能正在处理上一个请求）", Some(2_000));
+            self.show_toast_kind(
+                ToastKind::Error,
+                "扩展进程不可用（可能正在处理上一个请求）",
+                Some(2_000),
+            );
             return;
         }
         if self.is_crash_tripped(ext_id) {
             eprintln!("[dd-gui] invoke 拒绝：ext={ext_id} 暂时不可用（连续崩溃熔断）");
-            self.show_toast(
+            self.show_toast_kind(
+                ToastKind::Error,
                 format!("扩展 {ext_id} 暂时不可用，重启宿主后恢复"),
                 Some(2_500),
             );
@@ -1288,7 +1336,7 @@ impl PaletteApp {
             self.start_invoke_reheat(&ext, params); // 桩复热
         } else {
             eprintln!("[dd-gui] invoke 失败：ext={ext_id} 无扩展信息");
-            self.show_toast("扩展信息缺失，无法执行", Some(2_000));
+            self.show_toast_kind(ToastKind::Error, "扩展信息缺失，无法执行", Some(2_000));
         }
     }
 
@@ -1299,7 +1347,11 @@ impl PaletteApp {
         eprintln!("[dd-gui] invoke 发起：ext={ext_id} cmd={}", params.id);
         let Some(idx) = self.processes.iter().position(|(id, _)| id == ext_id) else {
             eprintln!("[dd-gui] invoke 失败：ext={ext_id} 进程不可用（可能 in-flight）");
-            self.show_toast("扩展进程不可用（可能正在处理上一个请求）", Some(2_000));
+            self.show_toast_kind(
+                ToastKind::Error,
+                "扩展进程不可用（可能正在处理上一个请求）",
+                Some(2_000),
+            );
             return;
         };
         let (_, mut proc) = self.processes.remove(idx);
@@ -1601,10 +1653,22 @@ impl PaletteApp {
     }
 
     fn show_toast(&mut self, message: impl Into<String>, duration_ms: Option<u64>) {
+        self.show_toast_kind(ToastKind::Info, message, duration_ms);
+    }
+
+    /// 带意图的 Toast（C 组批次 C3）：宿主自身路径按语义标注意图；
+    /// 扩展 `ShowToast` 路径走默认 info 的 [`Self::show_toast`]。
+    fn show_toast_kind(
+        &mut self,
+        kind: ToastKind,
+        message: impl Into<String>,
+        duration_ms: Option<u64>,
+    ) {
         let ms = duration_ms.unwrap_or(TOAST_DEFAULT_MS);
         self.toast = Some(ToastState {
             message: message.into(),
             expires: Instant::now() + Duration::from_millis(ms),
+            kind,
         });
     }
 
@@ -1764,34 +1828,51 @@ impl PaletteApp {
                     self.draw_settings(ui);
                     return;
                 }
-                // ── 嵌套页标题栏（含返回提示） ───────────────
-                let (page_id, page_title) = {
-                    let page = self.stack.current();
-                    (page.page_id.clone(), page.title.clone())
+                // ── 统一顶行（设计稿 §07.1 v4，C 组批次 C1）──────────────
+                // Root = 搜索框占满；嵌套页 = 返回按钮 28×28 + 搜索框 flex:1，
+                // 页标题进 placeholder、ext_id 徽标移页脚右端（D2）。
+                // 三页顶行完全同构（同 40px 高），切换零位移（验收 A1/A5）。
+                // 旧实现（嵌套页独立标题行 + "[Esc] 返回" 文本）已废弃。
+                let page = self.stack.current();
+                let is_nested = page.page_id.is_some() && !page.is_settings;
+                let page_title = if is_nested {
+                    page.title.clone()
+                } else {
+                    String::new()
                 };
-                if let Some(pid) = &page_id {
-                    ui.horizontal(|ui| {
-                        ui.label(
-                            egui::RichText::new(if page_title.is_empty() {
-                                pid.clone()
-                            } else {
-                                page_title.clone()
-                            })
-                            .size(12.0)
-                            .color(weak_text_color(ui)),
-                        );
-                        ui.label(
-                            egui::RichText::new("[Esc] 返回")
-                                .size(11.0)
-                                .color(weak_text_color(ui)),
-                        );
-                    });
-                    ui.add_space(4.0);
+                let mut go_back_clicked = false;
+                let (row_rect, _) = ui.allocate_exact_size(
+                    egui::vec2(ui.available_width(), theme::SEARCHBAR_H),
+                    egui::Sense::hover(),
+                );
+                let mut search_rect = row_rect;
+                if is_nested {
+                    // 返回按钮：28×28 子区垂直居中（与设置页顶行同构，
+                    // `draw_back_btn` 恰好填满子区）
+                    let back_rect = egui::Rect::from_min_size(
+                        egui::pos2(row_rect.min.x, row_rect.center().y - 14.0),
+                        egui::vec2(28.0, 28.0),
+                    );
+                    let mut back_ui = ui.new_child(
+                        egui::UiBuilder::new()
+                            .max_rect(back_rect)
+                            .layout(egui::Layout::left_to_right(egui::Align::Min)),
+                    );
+                    go_back_clicked = draw_back_btn(&mut back_ui, &p);
+                    search_rect.min.x = back_rect.right() + 8.0;
                 }
-
-                // ── FilterBox（ueli 式搜索栏：glyph 前缀 + 46px 高 + 聚焦底边） ──
                 let mut query = self.stack.current().list.query().to_owned();
-                let resp = draw_searchbar(ui, &mut query);
+                let placeholder = if is_nested {
+                    nested_search_placeholder(&page_title)
+                } else {
+                    "搜索命令…".to_string()
+                };
+                let search_ui = &mut ui.new_child(
+                    egui::UiBuilder::new()
+                        .max_rect(search_rect)
+                        .layout(egui::Layout::left_to_right(egui::Align::Center)),
+                );
+                let resp = draw_searchbar(search_ui, &mut query, &placeholder);
                 {
                     let page = self.stack.current_mut();
                     page.list.set_query(query);
@@ -1799,6 +1880,9 @@ impl PaletteApp {
                         resp.request_focus();
                         self.want_focus = false;
                     }
+                }
+                if go_back_clicked {
+                    self.stack.go_back();
                 }
                 // M4 宿主 fallback：查询变化后同步兜底展示/拉取（页面借用已释放）
                 self.sync_fallback();
@@ -1882,13 +1966,21 @@ impl PaletteApp {
         // 用户决策（2026-09-04）：页脚不再显示源状态诊断（stub 状态点 / failed
         // 报错 / 聚合 note）——左块 = 齿轮 + 上下文动作，右块 = 完整键位图例
         // （↑↓ 选择 / Enter 执行 / Esc 返回·隐藏，用户要求补全）。
-        let action = self
-            .stack
-            .current()
-            .list
-            .selected_item()
-            .map(footer_action_text);
-        let keys_w = keys_width(ui);
+        // C 组批次 C1（§07.1）：嵌套页页脚右端常驻 ext_id 徽标——键位图例
+        // 整体左移 chip 宽 + 间距让位。
+        let page = self.stack.current();
+        let ext_chip_w = if page.page_id.is_some() && !page.is_settings {
+            text_width(ui, &page.ext_id, egui::FontId::monospace(10.0)) + 16.0
+        } else {
+            0.0
+        };
+        let action = page.list.selected_item().map(footer_action_text);
+        let keys_w = keys_width(ui)
+            + if ext_chip_w > 0.0 {
+                theme::FOOTER_GAP + ext_chip_w
+            } else {
+                0.0
+            };
         let total_w = ui.available_width();
 
         // 严格单行：分配 KEYCAP_H 高的行矩形，所有元素锚定中心线 cy
@@ -1936,6 +2028,19 @@ impl PaletteApp {
 
         // 右：完整键位图例，全部手绘锚定 cy（↑↓ 选择 / Enter 执行 / Esc 返回·隐藏）
         paint_keys_at(ui, egui::pos2(split_x, cy), &p);
+        // 嵌套页：ext_id 徽标贴右缘垂直居中（draw_ext_chip 恰好填满其子区）
+        if ext_chip_w > 0.0 {
+            let chip_rect = egui::Rect::from_min_size(
+                egui::pos2(row.right() - ext_chip_w, cy - 8.0),
+                egui::vec2(ext_chip_w, 16.0),
+            );
+            let mut chip_ui = ui.new_child(
+                egui::UiBuilder::new()
+                    .max_rect(chip_rect)
+                    .layout(egui::Layout::left_to_right(egui::Align::Min)),
+            );
+            draw_ext_chip(&mut chip_ui, &self.stack.current().ext_id, &p);
+        }
         clicked
     }
 
@@ -2257,10 +2362,13 @@ impl PaletteApp {
         };
 
         if is_loading {
-            // 紧凑居中：不撑满高度，避免把列表外的 sources/键位挤出窗口
-            ui.vertical_centered(|ui| {
-                ui.weak("正在加载…");
-            });
+            // C 组批次 C2（§07.2）：Spinner + 3 条骨架行替换纯文本；
+            // 动画驱动：egui 按需重绘，加载期间 ~30fps 轮询重绘。
+            let dark = ui.visuals().dark_mode;
+            let time = ui.ctx().time();
+            draw_loading_state(ui, &p, dark, time);
+            ui.ctx()
+                .request_repaint_after(std::time::Duration::from_millis(33));
             return;
         }
         if let Some(empty) = empty {
@@ -2377,6 +2485,9 @@ impl PaletteApp {
     /// 必须画在独立 `Area`（ctx 层）：若在 `CentralPanel` 之后追加到根 `Ui`，
     /// 布局会落到面板矩形之外被裁剪——真机表现为「Toast 永远不显示」
     /// （M2 真机反馈 #1/#5/#6/#8 的共同根因）。
+    ///
+    /// C 组批次 C3（§09）：意图图标（success/error/info 语义色，16px）+
+    /// caption1 12/16 单行文本。同一时刻至多 1 条（单槽语义不变）。
     fn draw_toast(&self, ctx: &egui::Context) {
         let Some(toast) = &self.toast else {
             return;
@@ -2387,11 +2498,12 @@ impl PaletteApp {
             .show(ctx, |ui| {
                 // 锚定 Area 初始可用宽度为 0：短消息（`= 2`）看不出异常，长消息
                 // （shell 输出摘要）会被按 ~1 字符换行成竖条（真机反馈）。先按
-                // 12px 字体实测单行宽度，限宽 [80, 420] 再渲染——长消息在
-                // 420px 内换行，整体仍由 CENTER_BOTTOM 锚点水平居中。
-                let w = text_width(ui, &toast.message, egui::FontId::proportional(12.0))
-                    .min(420.0)
-                    .max(80.0);
+                // 12px 字体实测单行宽度（+意图图标 16px + 间隙 6px），限宽
+                // [250, 420]（§9.1 最小宽 250px）再渲染——长消息在 420px 内
+                // 换行，整体仍由 CENTER_BOTTOM 锚点水平居中。
+                let w =
+                    (16.0 + 6.0 + text_width(ui, &toast.message, egui::FontId::proportional(12.0)))
+                        .clamp(250.0, 420.0);
                 ui.set_max_width(w);
                 // 设计稿 09：elevated card 表面 —— card 底 + 1px stroke2 描边 +
                 // 圆角 8 + shadow16（D10）；padding 8px 12px；caption1 12/16。
@@ -2403,14 +2515,28 @@ impl PaletteApp {
                     .shadow(theme::toast_shadow(ui.visuals().dark_mode))
                     .inner_margin(egui::Margin::symmetric(12, 8))
                     .show(ui, |ui| {
-                        ui.label(egui::RichText::new(&toast.message).size(12.0).color(p.text));
+                        ui.horizontal(|ui| {
+                            ui.spacing_mut().item_spacing.x = 6.0;
+                            ui.label(
+                                egui::RichText::new(toast.kind.glyph().to_string())
+                                    .size(16.0)
+                                    .color(toast.kind.color(&p)),
+                            );
+                            ui.label(egui::RichText::new(&toast.message).size(12.0).color(p.text));
+                        });
                     });
             });
     }
 
-    /// 二次确认对话框（居中浮层，Enter 确认 / Esc 取消；鼠标点击 确认 同样
-    /// 触发 invoke）。渲染只读借用 `self.confirm`，点击后再取走并真正发起请求，
-    /// 避免闭包内同时持有 `self` 的不可变与可变借用。
+    /// 二次确认对话框（设计稿 §10 Fluent Dialog 语义，C 组批次 C3）：
+    /// 全屏遮罩（blackAlpha .50 暗 / .40 亮，点击遮罩 = 取消）+ 420px 面板
+    /// （panel 底 + 1px border + 圆角 8 + shadow64、padding 20/20/16）+
+    /// 右对齐按钮区（键位提示最左 + 取消 secondary + 确认 accent/critical
+    /// danger 底，高 32 圆角 4）。
+    ///
+    /// 键盘语义不变（`handle_keys`：对话框活跃时 Enter=确认、Esc=取消、
+    /// 其余键不穿透 → 遮罩期间列表键盘选择冻结）。鼠标点击确认同样触发。
+    /// 渲染只读借用 `self.confirm`，点击后再取走并真正发起请求。
     fn draw_confirm(&mut self, ctx: &egui::Context) {
         let dialog = match self.confirm.as_ref() {
             Some(d) => d,
@@ -2418,44 +2544,145 @@ impl PaletteApp {
         };
         let title = dialog.title.clone();
         let description = dialog.description.clone();
-        let confirm_label = dialog.confirm_label.clone();
+        let confirm_label = if dialog.confirm_label.is_empty() {
+            "确认".to_string()
+        } else {
+            dialog.confirm_label.clone()
+        };
         let is_critical = dialog.is_critical;
+        let dark = ctx.theme() == egui::Theme::Dark;
+        let p = theme::Palette::of(dark);
 
         let mut confirmed = false;
         let mut cancelled = false;
-        egui::Window::new(title)
-            .collapsible(false)
-            .resizable(false)
+        let mut dialog_rect = egui::Rect::NOTHING;
+
+        // ── 对话框面板（Tooltip 层：高于遮罩 Foreground，面板自动按内容定高） ──
+        egui::Area::new(egui::Id::new("dd-gui-dialog"))
+            .order(egui::Order::Tooltip)
             .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
             .show(ctx, |ui| {
-                ui.label(&description);
-                ui.add_space(6.0);
-                ui.horizontal(|ui| {
-                    let label = if confirm_label.is_empty() {
-                        "确认".to_string()
-                    } else {
-                        confirm_label
-                    };
-                    let color = if is_critical {
-                        ui.visuals().error_fg_color
-                    } else {
-                        ui.visuals().text_color()
-                    };
-                    if ui
-                        .add(egui::Button::new(egui::RichText::new(label).color(color)))
-                        .clicked()
-                    {
-                        confirmed = true;
+                let frame = egui::Frame::default()
+                    .fill(p.panel)
+                    .stroke(egui::Stroke::new(1.0, p.border))
+                    .corner_radius(8.0)
+                    .shadow(theme::dialog_shadow(dark))
+                    .inner_margin(egui::Margin {
+                        left: 20,
+                        right: 20,
+                        top: 20,
+                        bottom: 16,
+                    })
+                    .show(ui, |ui| {
+                        // §10.1 面板宽 420px（含 padding 20×2 → 内容 380），
+                        // 窄屏时 clamp 到可用宽度（max-width:100%）。
+                        ui.set_min_width(380.0f32.min(ui.available_width()));
+                        // 标题 subtitle1 16/22·600 text
+                        ui.label(
+                            egui::RichText::new(&title)
+                                .size(16.0)
+                                .strong()
+                                .color(p.text),
+                        );
+                        ui.add_space(8.0);
+                        // 正文 body1 14/20 text-2（可换行）
+                        ui.label(egui::RichText::new(&description).size(14.0).color(p.text2));
+                        ui.add_space(20.0);
+                        // ── 按钮区（右对齐、间距 8、高 32 圆角 4；提示最左） ──
+                        let row_w = ui.available_width();
+                        let (row, _) =
+                            ui.allocate_exact_size(egui::vec2(row_w, 32.0), egui::Sense::hover());
+                        let confirm_w =
+                            text_width(ui, &confirm_label, egui::FontId::proportional(14.0)) + 24.0;
+                        let cancel_w =
+                            text_width(ui, "取消", egui::FontId::proportional(14.0)) + 24.0;
+                        let confirm_rect = egui::Rect::from_min_size(
+                            egui::pos2(row.right() - confirm_w, row.min.y),
+                            egui::vec2(confirm_w, 32.0),
+                        );
+                        let cancel_rect = egui::Rect::from_min_size(
+                            egui::pos2(confirm_rect.left() - 8.0 - cancel_w, row.min.y),
+                            egui::vec2(cancel_w, 32.0),
+                        );
+                        // 键位提示（最左，hint margin-right auto）：Enter 键帽 +
+                        // 确认 + Esc 键帽 + 取消（caption1 12 text-3）。
+                        let esc_kw = keycap_width(ui, "Esc");
+                        let enter_kw = keycap_width(ui, "Enter");
+                        let que_w = text_width(ui, "确认", egui::FontId::proportional(12.0));
+                        let qux_w = text_width(ui, "取消", egui::FontId::proportional(12.0));
+                        let hint_w = enter_kw + 4.0 + que_w + 12.0 + esc_kw + 4.0 + qux_w;
+                        let cy = row.center().y;
+                        if cancel_rect.left() - row.min.x > hint_w + 12.0 {
+                            let mut x = row.min.x;
+                            paint_keycap(
+                                ui,
+                                egui::Rect::from_min_size(
+                                    egui::pos2(x, cy - theme::KEYCAP_H / 2.0),
+                                    egui::vec2(enter_kw, theme::KEYCAP_H),
+                                ),
+                                "Enter",
+                                &p,
+                            );
+                            x += enter_kw + 4.0;
+                            ui.painter().text(
+                                egui::pos2(x, cy),
+                                egui::Align2::LEFT_CENTER,
+                                "确认",
+                                egui::FontId::proportional(12.0),
+                                p.text3,
+                            );
+                            x += que_w + 12.0;
+                            paint_keycap(
+                                ui,
+                                egui::Rect::from_min_size(
+                                    egui::pos2(x, cy - theme::KEYCAP_H / 2.0),
+                                    egui::vec2(esc_kw, theme::KEYCAP_H),
+                                ),
+                                "Esc",
+                                &p,
+                            );
+                            x += esc_kw + 4.0;
+                            ui.painter().text(
+                                egui::pos2(x, cy),
+                                egui::Align2::LEFT_CENTER,
+                                "取消",
+                                egui::FontId::proportional(12.0),
+                                p.text3,
+                            );
+                        }
+                        // 确认按钮：默认 accent 底白字；critical → danger 底白字
+                        let (fill, tcol) = if is_critical {
+                            (p.danger, egui::Color32::WHITE)
+                        } else {
+                            (p.accent, egui::Color32::WHITE)
+                        };
+                        if draw_dialog_button(ui, confirm_rect, &confirm_label, fill, tcol, false) {
+                            confirmed = true;
+                        }
+                        // 取消按钮：secondary 形态（card 底 + border-strong 描边）
+                        if draw_dialog_button(ui, cancel_rect, "取消", p.card, p.text, true) {
+                            cancelled = true;
+                        }
+                    });
+                dialog_rect = frame.response.rect;
+            });
+
+        // ── 全屏遮罩（Foreground 层：盖住列表/页脚，Tooltip 层对话框在其上）──
+        let screen = ctx.viewport_rect();
+        egui::Area::new(egui::Id::new("dd-gui-confirm-overlay"))
+            .order(egui::Order::Foreground)
+            .anchor(egui::Align2::LEFT_TOP, [0.0, 0.0])
+            .show(ctx, |ui| {
+                ui.painter().rect_filled(screen, 0.0, theme::overlay(dark));
+                let resp = ui.allocate_exact_size(screen.size(), egui::Sense::click());
+                if resp.1.clicked() {
+                    // 点击遮罩 = 取消（§10.1）；落在对话框面板内的点击不算
+                    if let Some(pos) = resp.1.interact_pointer_pos() {
+                        if !dialog_rect.contains(pos) {
+                            cancelled = true;
+                        }
                     }
-                    if ui.button("取消").clicked() {
-                        cancelled = true;
-                    }
-                });
-                ui.label(
-                    egui::RichText::new("[Enter] 确认   [Esc] 取消")
-                        .size(11.0)
-                        .color(weak_text_color(ui)),
-                );
+                }
             });
 
         if confirmed {
@@ -2542,6 +2769,104 @@ fn draw_empty_state(ui: &mut egui::Ui, p: &theme::Palette, title: &str, desc: Op
     });
 }
 
+// ── Loading 态（设计稿 §07.2，C 组批次 C2）────────────────────────────
+
+/// 骨架行三段宽度占行宽比例（行 `idx` 决定、确定性）。设计稿 §07 mockup：
+/// 三行 name 34%（CSS 默认）/26%/30%，desc 20%（CSS 默认）/20%/14%。
+fn skeleton_fractions(idx: usize) -> (f32, f32) {
+    const NAME: [f32; 3] = [0.34, 0.26, 0.30];
+    const DESC: [f32; 3] = [0.20, 0.20, 0.14];
+    (NAME[idx % 3], DESC[idx % 3])
+}
+
+/// 两色按 `s`（0..1）线性插值。
+fn lerp_color(a: egui::Color32, b: egui::Color32, s: f32) -> egui::Color32 {
+    let mix = |x: u8, y: u8| -> u8 {
+        (x as f32 + (y as f32 - x as f32) * s.clamp(0.0, 1.0)).round() as u8
+    };
+    egui::Color32::from_rgb(mix(a.r(), b.r()), mix(a.g(), b.g()), mix(a.b(), b.b()))
+}
+
+/// shimmer 颜色：bg3（input_fill）↔ bg2（panel_2）按 1.4s 周期平滑往返
+/// （§07.2「底色 bg3 ↔ bg2」）。`time` 秒。
+fn shimmer_color(p: &theme::Palette, time: f64) -> egui::Color32 {
+    let t = (time % 1.4) / 1.4;
+    let s = (0.5 - 0.5 * (std::f64::consts::TAU * t).cos()) as f32;
+    lerp_color(p.input_fill, p.panel_2, s)
+}
+
+/// Loading 态（§07.2）：Spinner（22×22、环宽 2.5px、accent 旋转弧 +
+/// accent-soft 底环、0.9s/圈）+ caption「正在加载…」+ 3 条骨架行
+/// （行高 [`theme::ROW_H`]：图标块 20×20 圆角 6 + 名称条 12px 高 +
+/// 描述条 10px 高右对齐，shimmer 底色）。加载完成行高一致 → 无布局跳动（A3）。
+///
+/// 占位设计：不改拉取时序与超时语义（`TIMEOUT_GET_ITEMS` 不变）。
+/// 动画由调用方 `request_repaint_after` 驱动（egui 按需重绘）。
+fn draw_loading_state(ui: &mut egui::Ui, p: &theme::Palette, dark: bool, time: f64) {
+    // ── Spinner + 文案（`.loading`：居中、gap 12） ──
+    ui.vertical_centered(|ui| {
+        ui.add_space(26.0);
+        let (rect, _) = ui.allocate_exact_size(egui::vec2(22.0, 22.0), egui::Sense::hover());
+        let center = rect.center();
+        let radius = 11.0 - 2.5 / 2.0; // 环中径（外径 22/2 - 环宽一半）
+                                       // 底环：accent-soft 全圆
+        ui.painter()
+            .circle_stroke(center, radius, egui::Stroke::new(2.5, accent_soft(dark, p)));
+        // 旋转弧：accent，90° 扇段，0.9s/圈（CSS @keyframes spin）
+        let a0 = (time % 0.9) / 0.9 * std::f64::consts::TAU;
+        let arc = std::f64::consts::FRAC_PI_2;
+        const SEGS: usize = 20;
+        let pts: Vec<egui::Pos2> = (0..=SEGS)
+            .map(|i| {
+                let a = a0 + arc * i as f64 / SEGS as f64;
+                egui::pos2(
+                    center.x + (radius as f64 * a.cos()) as f32,
+                    center.y + (radius as f64 * a.sin()) as f32,
+                )
+            })
+            .collect();
+        ui.painter()
+            .add(egui::Shape::line(pts, egui::Stroke::new(2.5, p.accent)));
+        ui.add_space(12.0);
+        ui.label(
+            egui::RichText::new("正在加载…")
+                .size(theme::FOOTER_FONT)
+                .color(p.text3),
+        );
+    });
+    // ── 3 条骨架行（`.skel-row`：min-height 40、padding 8 10 8 8、gap 12） ──
+    for idx in 0..3usize {
+        let (name_frac, desc_frac) = skeleton_fractions(idx);
+        let c = shimmer_color(p, time + idx as f64 * 0.18); // 各行相位微错开
+        let (row, _) = ui.allocate_exact_size(
+            egui::vec2(ui.available_width(), theme::ROW_H),
+            egui::Sense::hover(),
+        );
+        let cy = row.center().y;
+        // 图标块 20×20 圆角 6
+        let icon_rect = egui::Rect::from_min_size(
+            egui::pos2(row.min.x + 8.0, cy - 10.0),
+            egui::vec2(20.0, 20.0),
+        );
+        ui.painter()
+            .rect_filled(icon_rect, egui::CornerRadius::same(6), c);
+        // 名称条 12px 高
+        let name_rect = egui::Rect::from_min_size(
+            egui::pos2(icon_rect.right() + 12.0, cy - 6.0),
+            egui::vec2(row.width() * name_frac, 12.0),
+        );
+        ui.painter()
+            .rect_filled(name_rect, egui::CornerRadius::same(3), c);
+        // 描述条 10px 高、右对齐（margin-left auto + padding-right 10）
+        let desc_rect = egui::Rect::from_min_max(
+            egui::pos2(row.right() - 10.0 - row.width() * desc_frac, cy - 5.0),
+            egui::pos2(row.right() - 10.0, cy + 5.0),
+        );
+        ui.painter()
+            .rect_filled(desc_rect, egui::CornerRadius::same(3), c);
+    }
+}
+
 fn draw_item_row(
     ui: &mut egui::Ui,
     item: &PanelItem,
@@ -2584,9 +2909,9 @@ fn draw_item_row(
                 ui.add_space(12.0); // CSS `.row` gap 12px
                                     // 名称：14px（设计稿 `.name` font-weight 500——egui FontId 不携带
                                     // 字重、`.strong()` 只变色不改字重，平台限制无法等价实现，留档）
-                // ── 右列宽度预留（真机反馈修复：长名时标题/副标题把右侧「应用」
-                //    类型标签挤跑/重叠）——先测类型标签 + tag chips 的宽度并从左侧
-                //    可用宽度中扣除，右列因此贴右且逐行垂直对齐。
+                                    // ── 右列宽度预留（真机反馈修复：长名时标题/副标题把右侧「应用」
+                                    //    类型标签挤跑/重叠）——先测类型标签 + tag chips 的宽度并从左侧
+                                    //    可用宽度中扣除，右列因此贴右且逐行垂直对齐。
                 let font14 = egui::FontId::proportional(14.0);
                 let font12 = egui::FontId::proportional(12.0);
                 let mut right_reserve = 0.0;
@@ -2605,7 +2930,9 @@ fn draw_item_row(
 
                 // 标题：占宽不超过左侧可用空间，过长截断（不再无限伸展）；
                 // +2px 吸收布局舍入，避免整除边界误截断
-                let title_w = (text_width(ui, &item.title, font14) + 2.0).min(avail).max(1.0);
+                let title_w = (text_width(ui, &item.title, font14) + 2.0)
+                    .min(avail)
+                    .max(1.0);
                 ui.add_sized(
                     egui::vec2(title_w, 16.0),
                     egui::Label::new(egui::RichText::new(&item.title).size(14.0)).truncate(),
@@ -2727,8 +3054,11 @@ fn draw_icon_cell(ui: &mut egui::Ui, icon: Option<&IconView>) {
                     rect.center(),
                     egui::vec2(ICON_CELL + 4.0, ICON_CELL + 4.0),
                 );
-                ui.painter()
-                    .rect_filled(bg, egui::CornerRadius::same(4), egui::Color32::from_rgb(0xf5, 0xf5, 0xf5));
+                ui.painter().rect_filled(
+                    bg,
+                    egui::CornerRadius::same(4),
+                    egui::Color32::from_rgb(0xf5, 0xf5, 0xf5),
+                );
             }
             // uv = 全图 [0,1]×[0,1]；超出 20px 的原图由渲染缩放，不做预缩放
             let uv = egui::Rect::from_min_max(egui::Pos2::ZERO, egui::pos2(1.0, 1.0));
@@ -2748,7 +3078,17 @@ fn draw_icon_cell(ui: &mut egui::Ui, icon: Option<&IconView>) {
 ///
 /// 返回 TextEdit 的 [`egui::Response`]（焦点请求/输入事件由调用方处理——
 /// `want_focus` 唤起聚焦机制不变）。组件色一律经 [`theme::Palette`] 取，不写裸色值。
-fn draw_searchbar(ui: &mut egui::Ui, query: &mut String) -> egui::Response {
+/// 嵌套页搜索框 placeholder（设计稿 §07.1「页标题」行：不占独立行，
+/// 放入搜索框 placeholder）。空标题回落「筛选命令…」。
+fn nested_search_placeholder(page_title: &str) -> String {
+    if page_title.is_empty() {
+        "筛选命令…".to_string()
+    } else {
+        format!("在「{page_title}」中筛选…")
+    }
+}
+
+fn draw_searchbar(ui: &mut egui::Ui, query: &mut String, placeholder: &str) -> egui::Response {
     let p = theme::Palette::of(ui.visuals().dark_mode);
 
     // 1) 在父 Ui 里**先**预留 40px 高的精确矩形（Fluent Input large，D8；这一步
@@ -2789,7 +3129,7 @@ fn draw_searchbar(ui: &mut egui::Ui, query: &mut String) -> egui::Response {
     let resp = content_ui.add(
         egui::TextEdit::singleline(query)
             .frame(egui::Frame::new()) // 空 Frame：无底无边框，外观由外层 Frame 承担
-            .hint_text(egui::RichText::new("搜索命令…").color(p.text3))
+            .hint_text(egui::RichText::new(placeholder).color(p.text3))
             .desired_width(f32::INFINITY)
             .font(egui::FontId::proportional(16.0)),
     );
@@ -3006,6 +3346,52 @@ fn draw_settings_gear(ui: &mut egui::Ui, p: &theme::Palette) -> bool {
 
 // ── 设置页（§08 v4.2）─────────────────────────────────────────────────
 
+/// Dialog 按钮（§10.1，C 组批次 C3）：高 32、圆角 4、padding 0 12、
+/// body1 14px。`stroked` = secondary 形态（card 底 + border-strong 描边，
+/// hover → row-hover）；主按钮 accent/danger 底白字无描边。
+/// 用 `ui.interact` 在给定绝对矩形上注册点击（矩形已由调用方排定）。
+fn draw_dialog_button(
+    ui: &mut egui::Ui,
+    rect: egui::Rect,
+    label: &str,
+    fill: egui::Color32,
+    text_color: egui::Color32,
+    stroked: bool,
+) -> bool {
+    let resp = ui.interact(
+        rect,
+        egui::Id::new(("dd-dialog-btn", label)),
+        egui::Sense::click(),
+    );
+    let hover_fill = theme::Palette::of(ui.visuals().dark_mode).row_hover;
+    let bg = if resp.hovered() && stroked {
+        hover_fill
+    } else {
+        fill
+    };
+    ui.painter()
+        .rect_filled(rect, egui::CornerRadius::same(4), bg);
+    if stroked {
+        ui.painter().rect_stroke(
+            rect,
+            egui::CornerRadius::same(4),
+            egui::Stroke::new(
+                1.0,
+                theme::Palette::of(ui.visuals().dark_mode).border_strong,
+            ),
+            egui::StrokeKind::Inside,
+        );
+    }
+    ui.painter().text(
+        rect.center(),
+        egui::Align2::CENTER_CENTER,
+        label,
+        egui::FontId::proportional(14.0),
+        text_color,
+    );
+    resp.clicked()
+}
+
 /// 设置页顶行返回按钮（设计稿 §07.1 line 1121 + §08.1）：28×28 热区、
 /// ChevronLeft `\u{E72B}` 16px、颜色恒为 `--text-2`、hover 加 `bg1Hover`
 /// 圆角 4 背景。返回是否被点击。
@@ -3027,17 +3413,19 @@ fn draw_back_btn(ui: &mut egui::Ui, p: &theme::Palette) -> bool {
     resp.clicked()
 }
 
-/// 版本徽标 chip（设计稿 §08 mockup `.ext-chip` line 1161 + CSS line 243）：
-/// `v0.5.0` 文字 + 1px border 描边 + 胶囊圆角 + 1px 8px padding。
-/// mini 10/14 + fg3 + card 底 + 高度 16px。
-fn draw_version_chip(ui: &mut egui::Ui, version: &str, p: &theme::Palette) -> egui::Rect {
-    let text = format!("v{version}");
-    let text_w = text_width(ui, &text, egui::FontId::proportional(10.0));
+/// 徽标 chip（设计稿 CSS `.ext-chip` line 243 + §08 mockup）：文字 +
+/// 1px border 描边 + 胶囊圆角（radius-circular）+ 1px/8px padding，
+/// mini 10px monospace + fg3 + chip 底 + 高度 16px。返回实测矩形。
+///
+/// 用途：设置页顶行版本徽标（`v{version}`）、嵌套页页脚右端 `ext_id`
+/// 徽标（§07.1，C 组批次 C1）。
+fn draw_ext_chip(ui: &mut egui::Ui, text: &str, p: &theme::Palette) -> egui::Rect {
+    let text_w = text_width(ui, text, egui::FontId::monospace(10.0));
     let w = text_w + 16.0;
     let h = 16.0;
     let (rect, _) = ui.allocate_exact_size(egui::vec2(w, h), egui::Sense::hover());
     ui.painter()
-        .rect_filled(rect, egui::CornerRadius::same(8), p.card);
+        .rect_filled(rect, egui::CornerRadius::same(8), p.chip_bg);
     ui.painter().rect_stroke(
         rect,
         egui::CornerRadius::same(8),
@@ -3048,10 +3436,15 @@ fn draw_version_chip(ui: &mut egui::Ui, version: &str, p: &theme::Palette) -> eg
         rect.center(),
         egui::Align2::CENTER_CENTER,
         text,
-        egui::FontId::proportional(10.0),
+        egui::FontId::monospace(10.0),
         p.text3,
     );
     rect
+}
+
+/// 版本徽标 chip（设计稿 §08 mockup `.ext-chip`）：`v{version}` 文字。
+fn draw_version_chip(ui: &mut egui::Ui, version: &str, p: &theme::Palette) -> egui::Rect {
+    draw_ext_chip(ui, &format!("v{version}"), p)
 }
 
 /// 设置页卡片容器（Fluent 9 Card，§08.1 "卡片" 规格）：
@@ -3387,24 +3780,83 @@ mod tests {
 
     // ── 暗色图标检测（真机反馈 2026-09-04：ChatGPT 黑 glyph 暗主题不可见） ──
 
+    // ── C 组批次 C1：嵌套页统一顶行（§07.1，验收 A1） ──────────────
+
+    #[test]
+    fn nested_placeholder_uses_page_title() {
+        assert_eq!(
+            nested_search_placeholder("应用列表"),
+            "在「应用列表」中筛选…",
+            "页标题进 placeholder（D2：不占独立行）"
+        );
+        assert_eq!(
+            nested_search_placeholder(""),
+            "筛选命令…",
+            "空标题回落通用文案"
+        );
+    }
+
+    // ── C 组批次 C2：Loading 骨架（§07.2，验收 A3） ────────────────
+
+    #[test]
+    fn skeleton_fractions_are_deterministic_and_in_design_range() {
+        // 设计稿 §07 mockup：name 34/26/30、desc 20/20/14
+        let expected = [(0.34, 0.20), (0.26, 0.20), (0.30, 0.14)];
+        for idx in 0..6usize {
+            let (n, d) = skeleton_fractions(idx);
+            assert_eq!((n, d), expected[idx % 3], "行 {idx} 宽度确定且符合设计稿");
+        }
+    }
+
+    #[test]
+    fn shimmer_color_oscillates_between_bg3_and_bg2() {
+        let p = theme::Palette::dark();
+        assert_eq!(
+            shimmer_color(&p, 0.0),
+            p.input_fill,
+            "t=0 → bg3（input_fill）"
+        );
+        assert_eq!(
+            shimmer_color(&p, 0.7),
+            p.panel_2,
+            "t=半周期 → bg2（panel_2）"
+        );
+        let mid = shimmer_color(&p, 0.35);
+        assert_ne!(mid, p.input_fill, "中间相位 ≠ 两端色");
+        assert_ne!(mid, p.panel_2, "中间相位 ≠ 两端色");
+    }
+
     fn solid_image(r: u8, g: u8, b: u8, a: u8) -> egui::ColorImage {
         egui::ColorImage::from_rgba_unmultiplied(
             [4, 4],
-            &[r, g, b, a, r, g, b, a, r, g, b, a, r, g, b, a,
-              r, g, b, a, r, g, b, a, r, g, b, a, r, g, b, a,
-              r, g, b, a, r, g, b, a, r, g, b, a, r, g, b, a,
-              r, g, b, a, r, g, b, a, r, g, b, a, r, g, b, a],
+            &[
+                r, g, b, a, r, g, b, a, r, g, b, a, r, g, b, a, r, g, b, a, r, g, b, a, r, g, b, a,
+                r, g, b, a, r, g, b, a, r, g, b, a, r, g, b, a, r, g, b, a, r, g, b, a, r, g, b, a,
+                r, g, b, a, r, g, b, a,
+            ],
         )
     }
 
     #[test]
     fn icon_darkness_detection() {
-        assert!(icon_is_dark(&solid_image(0x20, 0x20, 0x20, 255)), "黑 glyph → 暗");
-        assert!(!icon_is_dark(&solid_image(0xe0, 0x10, 0x10, 255)), "红（AMD）→ 不暗");
-        assert!(!icon_is_dark(&solid_image(0xff, 0xff, 0xff, 255)), "白 → 不暗");
+        assert!(
+            icon_is_dark(&solid_image(0x20, 0x20, 0x20, 255)),
+            "黑 glyph → 暗"
+        );
+        assert!(
+            !icon_is_dark(&solid_image(0xe0, 0x10, 0x10, 255)),
+            "红（AMD）→ 不暗"
+        );
+        assert!(
+            !icon_is_dark(&solid_image(0xff, 0xff, 0xff, 255)),
+            "白 → 不暗"
+        );
         assert!(!icon_is_dark(&solid_image(0, 0, 0, 0)), "全透明 → 不算暗");
         // 半透明（α<32）像素不计入
-        assert!(!icon_is_dark(&solid_image(0, 0, 0, 16)), "α=16 视为透明 → 不暗");
+        assert!(
+            !icon_is_dark(&solid_image(0, 0, 0, 16)),
+            "α=16 视为透明 → 不暗"
+        );
     }
 
     #[test]

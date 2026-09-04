@@ -2,7 +2,7 @@
 
 **跨平台命令面板（Rust）** —— 设计参考自 [PowerToys Command Palette（CmdPal）](https://github.com/microsoft/PowerToys/tree/main/src/modules/cmdpal)
 
-> **当前状态：设计阶段，尚无代码。** 仓库目前只有设计文档与设计稿；第一行 Rust 代码在里程碑 M0 才会出现（见 [`docs/implementation.md`](./docs/implementation.md)）。
+> **当前状态：MVP（M0–M4）已全部关闭并通过真机验收；M5（ueli 风格 UI 重构）主体完成，设计稿 v4.3。** 里程碑进度见 [`docs/implementation.md`](./docs/implementation.md) §5，遗留项台账见其 §6.1。
 
 ---
 
@@ -72,12 +72,14 @@
 
 - 本项目的设计文档大量**提炼、改写自** [`microsoft/PowerToys`](https://github.com/microsoft/PowerToys) 仓库中 CmdPal 模块的官方文档（README / SDK Spec / UI 解剖 / 设计原则 / Gallery 说明），出处逐条列于设计文档 §11。
 - **核验基准**：设计文档与规范中对上游事实的引用，均以 `microsoft/PowerToys` tag **v0.101.2362.0**（2026-09-01 核验）为准；上游仍处 preview，可能演进（见设计文档 §11 与 implementation.md R6）。
-- PowerToys 采用 **MIT License**，其文档内容的引用边界见 §11 说明。
-- **`dd-run` 自身尚未确定开源许可证**（LICENSE 文件待补）——若你打算公开此仓库，需先补 LICENSE 并复核上游引用边界。
+- PowerToys 采用 **MIT License**；`dd-run` 自身同样采用 **MIT License**（根 `LICENSE` + 各 crate `license = "MIT"`）。引用边界复核为遗留项 L6（见 implementation.md §6.1）。
 - `dd-run` 不含任何 PowerToys 源码；所有 Rust 代码为独立实现。
 
 ---
 
 ## 下一步
 
-`dd-run` 当前处于 **M0 之前**。M0 的第一个动作是建 Cargo workspace 并冻结协议 v1.0（宿主与扩展的唯一硬契约）——顺序与验收条件见 [`docs/implementation.md`](./docs/implementation.md)。
+- **M0–M4 已全部关闭**：协议冻结 → 最小面板 → 命令执行与状态机 → 缓存懒加载 → 5 内置扩展与健壮性（commit `757f3b4`）。
+- **M5（ueli 风格 UI 重构）主体完成**：设计稿 v4.3 + 批次 1–4.2 + 六轮真机反馈修复（commit `5cf32b7`）；剩余设计稿 C 组占位（嵌套页顶行统一 / Loading 骨架 / Dialog 遮罩 / 焦点态 / Toast 意图色），见 implementation.md §6.1 L8。
+- **候选 M6 方向（待定义）**：第三方扩展端到端验证、打包分发、A2 冷启动 GUI 瓶颈（wgpu + 22MB 字体 ~2.8s）、跨平台。
+- 完整进度与遗留项台账见 [`docs/implementation.md`](./docs/implementation.md) §5 / §6.1。

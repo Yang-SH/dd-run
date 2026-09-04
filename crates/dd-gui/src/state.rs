@@ -401,12 +401,18 @@ mod tests {
         // WithoutApps：空查询只见默认功能
         let mut s = PanelState::with_empty_view(items.clone(), EmptyQueryView::WithoutApps);
         assert_eq!(s.visible_count(), 1, "空查询应隐藏「应用」项");
-        assert_eq!(s.selected_item().map(|i| i.title.as_str()), Some("= 表达式"));
+        assert_eq!(
+            s.selected_item().map(|i| i.title.as_str()),
+            Some("= 表达式")
+        );
 
         // 非空查询：应用照常参与模糊匹配
         s.set_query("7-zip");
         assert_eq!(s.visible_count(), 1);
-        assert_eq!(s.selected_item().map(|i| i.title.as_str()), Some("7-Zip File Manager"));
+        assert_eq!(
+            s.selected_item().map(|i| i.title.as_str()),
+            Some("7-Zip File Manager")
+        );
 
         // All（旧行为）：空查询显示全部
         let s = PanelState::with_empty_view(items.clone(), EmptyQueryView::All);

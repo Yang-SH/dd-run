@@ -156,6 +156,25 @@ pub fn toast_shadow(dark: bool) -> eframe::egui::Shadow {
     }
 }
 
+/// 对话框阴影（05 `--shadow` = shadow64，D10：面板/对话框级）。
+/// Fluent：dark `0 32px 64px rgba(0,0,0,.28)` / light `0 32px 64px rgba(0,0,0,.24)`；
+/// ambient 层（0 0 2px）由面板 1px 描边替代（Windows 约定，egui Shadow 单层）。
+pub fn dialog_shadow(dark: bool) -> eframe::egui::Shadow {
+    let a: f32 = if dark { 0.28 } else { 0.24 };
+    eframe::egui::Shadow {
+        offset: [0, 32],
+        blur: 64,
+        spread: 0,
+        color: Color32::from_black_alpha((a * 255.0).round() as u8),
+    }
+}
+
+/// Dialog 遮罩（§10.1 `colorBackgroundOverlay`）：
+/// 暗 blackAlpha[50]、亮 blackAlpha[40]。
+pub fn overlay(dark: bool) -> Color32 {
+    Color32::from_black_alpha(if dark { 128 } else { 102 })
+}
+
 /// 05 表 → egui `Visuals`：以 egui 默认视觉为基底，覆盖 token 可映射字段。
 /// 组件类色板（Tag/行态）不进 `Visuals`（无对应字段），由绘制层经
 /// [`Palette`] 直接取用。
@@ -407,6 +426,35 @@ mod tests {
         assert_eq!(
             toast_shadow(false).color.a(),
             (0.14f32 * 255.0).round() as u8
+        );
+    }
+
+    /// C 组批次 C3（§10.1）：遮罩 blackAlpha[50]（暗）/ [40]（亮）。
+    #[test]
+    fn overlay_matches_fluent_black_alpha() {
+        assert_eq!(
+            overlay(true),
+            Color32::from_black_alpha(128),
+            "暗 = blackAlpha[50]"
+        );
+        assert_eq!(
+            overlay(false),
+            Color32::from_black_alpha(102),
+            "亮 = blackAlpha[40]"
+        );
+    }
+
+    /// C 组批次 C3（§10.1）：对话框 shadow64——offset (0,32) blur 64，
+    /// key 层不透明度暗 28% / 亮 24%。
+    #[test]
+    fn dialog_shadow_follows_elevation_opacities() {
+        let s = dialog_shadow(true);
+        assert_eq!(s.offset, [0, 32]);
+        assert_eq!(s.blur, 64);
+        assert_eq!(s.color.a(), (0.28f32 * 255.0).round() as u8);
+        assert_eq!(
+            dialog_shadow(false).color.a(),
+            (0.24f32 * 255.0).round() as u8
         );
     }
 
