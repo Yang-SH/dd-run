@@ -25,6 +25,11 @@ windows-sys = { version = "0.61", features = [
     "Win32_UI_WindowsAndMessaging",
     # 唤起居中（grills A1）：MonitorFromPoint / GetMonitorInfoW / MONITORINFO
     "Win32_Graphics_Gdi",
+    # v4.4 右键菜单 10B.2「以管理员身份运行」：ShellExecuteW(runas)
+    # v4.5 托盘 10C：Shell_NotifyIconW / NOTIFYICONDATAW
+    "Win32_UI_Shell",
+    # v4.5 托盘 10C：GetModuleHandleW（托盘窗口类注册）
+    "Win32_System_LibraryLoader",
 ] }
 # M4 P2（host/* 执行端）：写剪贴板（host/set_clipboard）+ 打开系统浏览器（host/open_url）
 arboard = "3"

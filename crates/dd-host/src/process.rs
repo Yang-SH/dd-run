@@ -220,6 +220,17 @@ impl ExtensionProcess {
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
 
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt;
+            // CREATE_NO_WINDOW（真机 2026-09-05 反馈）：宿主改为 windows 子系统
+            // （无控制台）后，console 子系统的扩展进程若不加此标志会各自弹出
+            // 独立控制台窗口（此前宿主是 console 子系统，子进程继承其控制台，
+            // 问题被掩盖）。stdio 全部 piped，隐藏控制台不影响 NDJSON 通道。
+            const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+            command.creation_flags(CREATE_NO_WINDOW);
+        }
+
         let mut child = command.spawn()?;
         let stdin = child.stdin.take().expect("stdin 已 piped");
         let stdout = child.stdout.take().expect("stdout 已 piped");

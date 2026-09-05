@@ -169,6 +169,41 @@ pub fn dialog_shadow(dark: bool) -> eframe::egui::Shadow {
     }
 }
 
+// ── 右键菜单（设计稿 10B，v4.4）────────────────────────────────────────
+/// 容器 min-width（10B.1：200px）。
+pub const CTX_MENU_MIN_W: f32 = 200.0;
+/// 菜单项高（10B.1：32px）。
+pub const CTX_ITEM_H: f32 = 32.0;
+/// 菜单容器内边距（10B.1：padding 4px）。
+pub const CTX_MENU_PAD: f32 = 4.0;
+/// 菜单项水平内边距（10B.1：padding 0 10px）。
+pub const CTX_ITEM_PAD_X: f32 = 10.0;
+/// 菜单项内部间距（图标↔名称↔快捷键，CSS `.ctx-item` gap 10px）。
+pub const CTX_ITEM_GAP: f32 = 10.0;
+/// 菜单项图标尺寸（10B.1：glyph 16px）。
+pub const CTX_ICON: f32 = 16.0;
+/// 分隔线总占高（1px 线 + 上下各 4px margin）。
+pub const CTX_SEP_H: f32 = 9.0;
+/// 分隔线水平内缩（10B.1：左右内缩 8px）。
+pub const CTX_SEP_INSET: f32 = 8.0;
+/// 面板内夹紧边距（D20：菜单绝不溢出面板，越界先翻转后夹紧）。
+pub const CTX_MENU_MARGIN: f32 = 8.0;
+/// 指针锚点偏移（D20：右键点即菜单左上角偏移 2,2）。
+pub const CTX_ANCHOR_OFFSET: f32 = 2.0;
+
+/// 右键菜单阴影（05 `--shadow-8` = shadow8，v4.4 新增 token；官方 elevation
+/// 低层 ramp：暗 28% / 亮 14%，offset (0,4) blur 8。菜单归此档——暗色 shadow8
+/// 用途 = command bars / command dropdowns / tooltips）。
+pub fn menu_shadow(dark: bool) -> eframe::egui::Shadow {
+    let a: f32 = if dark { 0.28 } else { 0.14 };
+    eframe::egui::Shadow {
+        offset: [0, 4],
+        blur: 8,
+        spread: 0,
+        color: Color32::from_black_alpha((a * 255.0).round() as u8),
+    }
+}
+
 /// Dialog 遮罩（§10.1 `colorBackgroundOverlay`）：
 /// 暗 blackAlpha[50]、亮 blackAlpha[40]。
 pub fn overlay(dark: bool) -> Color32 {
@@ -460,6 +495,35 @@ mod tests {
             dialog_shadow(false).color.a(),
             (0.24f32 * 255.0).round() as u8
         );
+    }
+
+    /// v4.4（10B.1）：右键菜单 shadow8——offset (0,4) blur 8，key 层
+    /// 不透明度暗 28% / 亮 14%（与官方 elevation 低层 ramp 一致）。
+    #[test]
+    fn menu_shadow_follows_elevation_opacities() {
+        let s = menu_shadow(true);
+        assert_eq!(s.offset, [0, 4]);
+        assert_eq!(s.blur, 8);
+        assert_eq!(s.color.a(), (0.28f32 * 255.0).round() as u8);
+        assert_eq!(
+            menu_shadow(false).color.a(),
+            (0.14f32 * 255.0).round() as u8
+        );
+    }
+
+    /// v4.4（10B.1）几何常量：min-width 200 / 项高 32 / 容器 padding 4 /
+    /// 分隔线 1+4+4=9 / 面板内夹紧边距 8（D20）。
+    #[test]
+    fn context_menu_geometry_matches_design_10b() {
+        assert_eq!(CTX_MENU_MIN_W, 200.0, "容器 min-width 200");
+        assert_eq!(CTX_ITEM_H, 32.0, "菜单项高 32");
+        assert_eq!(CTX_MENU_PAD, 4.0, "容器 padding 4");
+        assert_eq!(CTX_ITEM_PAD_X, 10.0, "菜单项 padding 0 10");
+        assert_eq!(CTX_ICON, 16.0, "图标 16px");
+        assert_eq!(CTX_SEP_H, 9.0, "分隔线 = 1px + 上下 4px margin");
+        assert_eq!(CTX_SEP_INSET, 8.0, "分隔线水平内缩 8");
+        assert_eq!(CTX_MENU_MARGIN, 8.0, "面板内夹紧边距 8（D20）");
+        assert_eq!(CTX_ANCHOR_OFFSET, 2.0, "指针锚点偏移 2,2（D20）");
     }
 
     /// 几何常量与设计稿 v4 一致（D8：搜索栏 40 / 行 40 / 页脚 32）。

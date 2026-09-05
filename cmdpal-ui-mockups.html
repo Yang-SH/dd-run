@@ -3,7 +3,7 @@
 <head data-page-node-id="s3qopa5FNyLjHL5eCuYZs0">
 <meta charset="UTF-8" data-page-node-id="iCtBYFbeT3CyD5jPQ5rxbB">
 <meta name="viewport" content="width=device-width, initial-scale=1.0" data-page-node-id="2ZgnDE6QB4A9RQBpLJBYoZ">
-<title>dd-run CmdPal UI 设计稿 v4 — Fluent 2 / Fluent UI 9 token 驱动（亮暗双主题）</title>
+<title>dd-run CmdPal UI 设计稿 v4.4 — Fluent 2 / Fluent UI 9 token 驱动（亮暗双主题）</title>
 <style>
   /* ============================================================
      主题 token（v4：值全部对齐 Fluent 2 alias token，灰阶 grey[N] = N% 亮度）
@@ -47,6 +47,7 @@
     /* elevation（暗色 key 层 28% / ambient 20%） */
     --shadow: 0 32px 64px rgba(0, 0, 0, 0.28), 0 0 2px rgba(0, 0, 0, 0.20);   /* shadow64：面板 / 对话框 */
     --shadow-16: 0 8px 16px rgba(0, 0, 0, 0.28), 0 0 2px rgba(0, 0, 0, 0.20); /* shadow16：Toast */
+    --shadow-8: 0 4px 8px rgba(0, 0, 0, 0.28), 0 0 2px rgba(0, 0, 0, 0.14);   /* shadow8：右键菜单（v4.4，官方暗色低层 ramp 28%/14%） */
     --shadow-ambient: 0 0 2px rgba(0, 0, 0, 0.20); /* Windows 约定：描边替代 key 阴影，面板只取 ambient */
     /* overlay / focus */
     --overlay: rgba(0, 0, 0, 0.50);  /* colorBackgroundOverlay · blackAlpha[50] */
@@ -90,6 +91,7 @@
     /* elevation（亮色 key 层：低 14% / 高 24%，ambient 20%） */
     --shadow: 0 32px 64px rgba(0, 0, 0, 0.24), 0 0 8px rgba(0, 0, 0, 0.20);   /* shadow64 */
     --shadow-16: 0 8px 16px rgba(0, 0, 0, 0.14), 0 0 2px rgba(0, 0, 0, 0.12); /* shadow16 */
+    --shadow-8: 0 4px 8px rgba(0, 0, 0, 0.14), 0 0 2px rgba(0, 0, 0, 0.12);   /* shadow8：右键菜单（v4.4，官方亮色低层 ramp 14%） */
     --shadow-ambient: 0 0 8px rgba(0, 0, 0, 0.20);
     /* overlay / focus */
     --overlay: rgba(0, 0, 0, 0.40);  /* blackAlpha[40] */
@@ -507,6 +509,111 @@
   .setting-row.disabled .setting-name { color: var(--text-disabled); }
   .setting-row.disabled .setting-desc { color: var(--text-disabled); }
   .setting-row.disabled > .glyph { color: var(--text-disabled); }
+
+  /* ============ 10B 右键菜单（Fluent Menu 语义，v4.4 新增） ============ */
+  .ctx-stage { position: relative; }
+  .ctx-demo-panel { position: relative; }
+  .ctx-menu {
+    position: absolute; z-index: 60; min-width: 200px; max-width: 300px;
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    box-shadow: var(--shadow-8);
+    padding: var(--space-4);
+    display: none;
+  }
+  .ctx-menu.open { display: block; }
+  /* 静态解剖图里的菜单：直接常显、随文档流排布 */
+  .ctx-menu.static { position: static; display: block; }
+  .ctx-item {
+    display: flex; align-items: center; gap: var(--space-10);
+    min-height: 32px; padding: 0 var(--space-10);
+    border-radius: var(--radius-md);
+    font-size: var(--font-body); line-height: var(--lh-body);
+    color: var(--text); cursor: default; user-select: none; white-space: nowrap;
+  }
+  .ctx-item:hover, .ctx-item.focus { background: var(--row-hover); }
+  .ctx-item .glyph { font-size: 16px; color: var(--text-2); flex: 0 0 16px; }
+  .ctx-item .label { flex: 0 1 auto; overflow: hidden; text-overflow: ellipsis; }
+  .ctx-item .spacer { flex: 1; }
+  .ctx-item .kbd { flex: 0 0 auto; font-size: var(--font-caption); line-height: var(--lh-caption); color: var(--text-3); }
+  .ctx-sep { height: 1px; background: var(--border); margin: var(--space-4) var(--space-8); }
+
+  /* ============ 10C 系统托盘（v4.5 新增） ============ */
+  /* 托盘 = 宿主平台层表面（OS shell），演示面板沿用本稿 token；原生菜单为系统渲染示意 */
+  .tray-stage { position: relative; flex-direction: column; padding: 0; overflow: hidden; }
+  .tray-desktop {
+    position: relative; width: 100%; height: 322px;
+    display: flex; align-items: center; justify-content: center;
+  }
+  .panel.mini { width: 420px; height: 298px; }
+  .taskbar {
+    height: 48px; display: flex; align-items: center; gap: 4px;
+    background: var(--panel-2); border-top: 1px solid var(--border);
+    padding: 0 10px;
+  }
+  .tb-icon {
+    width: 40px; height: 40px; border-radius: 6px; flex: 0 0 40px;
+    display: flex; align-items: center; justify-content: center;
+    color: var(--text-2); font-size: 18px; cursor: default;
+  }
+  .tb-icon:hover { background: var(--row-hover); }
+  .tb-spacer { flex: 1; }
+  .tray-area { display: flex; align-items: center; gap: 2px; padding: 0 4px; }
+  .tray-sys {
+    width: 28px; height: 40px; border-radius: 4px; flex: 0 0 28px;
+    display: flex; align-items: center; justify-content: center;
+    color: var(--text-2); font-size: 15px; cursor: default;
+  }
+  .tray-sys:hover { background: var(--row-hover); }
+  .tb-clock {
+    font-size: 11px; line-height: 1.35; color: var(--text-2); text-align: center;
+    padding: 0 8px; white-space: nowrap;
+  }
+  .tray-icon {
+    position: relative; width: 32px; height: 40px; border-radius: 4px; flex: 0 0 32px;
+    display: flex; align-items: center; justify-content: center;
+    cursor: default; user-select: none;
+  }
+  .tray-icon:hover, .tray-icon.armed { background: var(--row-hover); }
+  .tray-icon svg { width: 16px; height: 16px; display: block; }
+  .tray-icon.outline { outline: 2px solid var(--accent); outline-offset: -2px; }
+  .tray-icon.gone { opacity: .25; filter: grayscale(1); pointer-events: none; }
+  /* 系统 Tooltip 示意（D25：静态字符串） */
+  .tray-tip {
+    position: absolute; bottom: 46px; right: -12px; z-index: 66;
+    background: var(--panel); border: 1px solid var(--border); border-radius: 4px;
+    box-shadow: var(--shadow-8); padding: 4px 10px;
+    font-size: 12px; line-height: 16px; color: var(--text-2); white-space: nowrap;
+    display: none; pointer-events: none;
+  }
+  .tray-icon:hover .tray-tip { display: block; }
+  /* 原生菜单示意（D24：TrackPopupMenu，Windows 11 系统渲染——数值仅示意，非 token 治理域） */
+  .winmenu {
+    position: absolute; z-index: 70; min-width: 220px;
+    background: var(--panel); border: 1px solid var(--border); border-radius: 8px;
+    box-shadow: var(--shadow-8); padding: 4px; display: none;
+  }
+  .winmenu.open { display: block; }
+  .winmenu.static { position: static; display: block; }
+  .wm-item {
+    display: flex; align-items: center; gap: 10px; min-height: 32px; padding: 0 10px;
+    border-radius: 4px; font-size: 13px; line-height: 20px; color: var(--text);
+    cursor: default; user-select: none; white-space: nowrap;
+  }
+  .wm-item:hover { background: var(--row-hover); }
+  .wm-item .label { flex: 0 1 auto; overflow: hidden; text-overflow: ellipsis; }
+  .wm-item .accel { margin-left: auto; flex: 0 0 auto; font-size: 11px; line-height: 16px; color: var(--text-3); }
+  .wm-sep { height: 1px; background: var(--border); margin: 4px 8px; }
+  /* 退出演示态（演示中不真正结束页面，仅示意进程终止语义） */
+  .tray-exited {
+    position: absolute; inset: 0; z-index: 68; display: none;
+    flex-direction: column; align-items: center; justify-content: center; gap: 10px;
+    background: var(--overlay); text-align: center; padding: 0 24px;
+  }
+  .tray-exited.show { display: flex; }
+  .tray-exited .t1 { font-size: 14px; line-height: 20px; color: var(--text); font-weight: 600; }
+  .tray-exited .t2 { font-size: 12px; line-height: 16px; color: var(--text-3); max-width: 420px; }
 </style>
 </head>
 <body data-page-node-id="aJcAPz0UpZDE7PEkWTH9oR">
@@ -517,7 +624,7 @@
     <button data-mode="light" data-page-node-id="I0F3kdp2bjXztvBFXivHhW">亮色</button>
     <button data-mode="dark" data-page-node-id="QcDEiiz92pB71IV93qkfmK">暗色</button>
   </div>
-  <p class="eyebrow" data-page-node-id="fpLkL7zs0ObqBBmOVMTlKL">dd-run · CmdPal UI Mockups v4</p>
+  <p class="eyebrow" data-page-node-id="fpLkL7zs0ObqBBmOVMTlKL">dd-run · CmdPal UI Mockups v4.5</p>
   <h1 data-page-node-id="9L8F9mN3UyuFLT5dTNiY9z">Fluent 2 设计体系 <em data-page-node-id="UQT9uCqkC6dyICtq0CWQvR">·</em> 全界面详设</h1>
   <p class="sub" data-page-node-id="MX3op44ckD1aHMFNDT6VFJ">
     v4 相对 v3 的实质变化：<b data-page-node-id="0sWPRUFNovWfzUeciNdVZT">从「ueli 像素级复刻 + Fluent 命名」转为「Fluent 2 token 驱动」</b>——
@@ -531,7 +638,14 @@
     页脚源状态诊断（stub/err 状态点、聚合 note）<b data-page-node-id="7WFOm4HstlsSdWzDq1mSGj">整体移除</b>、键位图例恒定完整（D15 修订）；
     键位区所有元素手动锚定行中心线（修复混合高度内容下 egui 自动居中的逐项漂移）、
     键帽下边 2px 画入边框盒内部（修复 0.5px 悬空"阴影"）。
-    <b data-page-node-id="WPjunx4BqSS5pFrg4P4FUi">本批只改设计稿，代码与测试留后续批次实施。</b>
+    <b>本批只改设计稿，代码与测试留后续批次实施。</b>
+    <b>v4.4（2026-09-05）：</b>新增 10B「搜索结果右键菜单」——右键结果行按
+    <code>result_category</code> 弹出不同菜单项（GUI 层静态映射，<b>零协议字段新增</b>，
+    协议 v1.0 冻结不变），含静态解剖图 + 可交互演示页与决策 D18–D21。
+    <b>v4.5（2026-09-05 真机驱动）：</b>新增 10C「系统托盘」——应用启动后常驻托盘图标，
+    左键单击 = 切换面板（与全局热键 Win+Alt+Space 同语义），右键 = <b>系统原生菜单</b>
+    （显示/隐藏、设置、退出——退出为<b>唯一显式退出入口</b>，现行进程无任何显式退出路径）；
+    宿主平台层能力、<b>零协议字段新增</b>，决策 D22–D26，应用图标视觉同批定稿（10C.3「DD 快进」字标）；本批只改设计稿 + HTML 交互演示。
   </p>
 </header>
 
@@ -599,6 +713,15 @@
       <tr data-page-node-id="BRakXlNXeQwHgljSgkMBXp"><td data-page-node-id="lQiuozrStOZAkPEjVAb8fg">D15</td><td data-page-node-id="4ux5nBoeuXN8SP25MQsBQT">页脚规则（v4.3 修订）</td><td data-page-node-id="Tp3fJTlxejaOQ5jKYIj4xX"><b data-page-node-id="EzuUR57sNjcAlC3oh9bwA4">最左 = 设置齿轮</b>（面板左下角，Root/子页/空态恒定，设置页除外）；其后左 = 上下文提示，右 = <b data-page-node-id="ssFOBaJBSdJcBQzb1zftmM">完整键位图例恒定</b>（↑↓ 选择 / Enter 执行 / Esc 返回·隐藏）。<b data-page-node-id="246rLW85N4CIWV6GVGrwTF">v4.3（2026-09-04 用户决策）：</b>状态点/源状态诊断整体移除；键位图例不再随选中态退化为单键帽。</td></tr>
       <tr data-page-node-id="BAslV7XXZQld3nAUMP5B4t"><td data-page-node-id="lrVC8PTmHn2bmfWh0JhkU1">D16</td><td data-page-node-id="KtoegdIMHZvqRw5vqYUBbk">本批交付范围</td><td data-page-node-id="m5UajEA3IpvkHmbH1rbBlq"><b data-page-node-id="LwpcUwzo6x5Weg5xGZdugm">只改设计稿</b>，代码与测试留后续批次</td></tr>
       <tr data-page-node-id="qtIzsCTLL9pPqtdI0TwKW8"><td data-page-node-id="RCZVXzOzVnfOeMWVyPG8Ee">D17</td><td data-page-node-id="GftBxJVDLGwQdT8bNcRuAo">搜索框外观</td><td data-page-node-id="D3CG90DpULeSYZGruEixh2"><b data-page-node-id="ihxLF5XAXN7CL8bKpf7GdM">filled-darker</b>：bg3 底、无边框、圆角 4、聚焦时底部 2px brand 下划线</td></tr>
+      <tr><td>D18</td><td>菜单项来源（v4.4）</td><td>GUI 层按 <code>result_category</code> <b>静态硬编码映射</b>（10B.2）；<b>零协议字段新增</b>（协议 v1.0 冻结不变），与页脚动作 <code>com.ddrun.</code> 前缀硬编码同口径；第一项恒为默认动作（= 页脚 / Enter 同款）</td></tr>
+      <tr><td>D19</td><td>触发与关闭（v4.4）</td><td>右键结果行打开；键盘 <b>Menu / Shift+F10</b> 对选中行打开（键盘可达，同 6.1 设置入口逻辑）；<b>Esc、点击面板其他区域、列表滚动或改选</b>任一发生即关闭</td></tr>
+      <tr><td>D20</td><td>定位规则（v4.4）</td><td>指针锚点（右键点为菜单左上角偏移 2,2），键盘触发时锚定选中行底边；越界时先翻转、再在面板内 <b>8px 边距夹紧，绝不溢出面板</b>；与 Toast / 确认对话框同为面板内 Area 层（D1 in-place 原则）</td></tr>
+      <tr><td>D21</td><td>本批范围（v4.4）</td><td><b>只改设计稿 + HTML 交互演示</b>；egui 实施留后续批次（<code>draw_context_menu</code> 占位）</td></tr>
+      <tr><td>D22</td><td>托盘图标（v4.5）</td><td>单一应用图标（复用 exe 内嵌 .ico 资源；<b>当前 exe 未嵌产品图标 → 实施批次须先产出多尺寸 .ico：16/20/24/32 = 100/125/150/200% DPI 档</b>）；<b>无状态变化、无 badge</b>；逻辑 16×16，物理随 DPI 取档；<b>视觉定稿 = 10C.3「DD 快进」字标</b>（结合应用名 dd-run，v4.5 同批细化）</td></tr>
+      <tr><td>D23</td><td>左键行为（v4.5）</td><td><b>单击 = 切换面板显示/隐藏</b>——与全局热键 Win+Alt+Space 走同一 toggle 入口（行为一致性）；<b>不区分单击/双击</b>（无 500ms 延迟）</td></tr>
+      <tr><td>D24</td><td>右键菜单（v4.5）</td><td><b>系统原生菜单</b>（Win32 <code>TrackPopupMenu</code>，Windows 11 系统自渲染）——不自绘 Fluent：托盘菜单宿主是 shell 而非 dd-run 面板，自绘需独立置顶窗口与外点关闭逻辑（成本高收益低）；固定 4 项（10C.2）；<b>退出 = 唯一显式退出入口、不二次确认</b>（低危）；视觉不在本稿 token 治理域（有意偏离记档）；<b>零协议字段新增</b></td></tr>
+      <tr><td>D25</td><td>Tooltip（v4.5）</td><td>静态字符串「dd-run — Win+Alt+Space 呼出」；热键可配置化后跟随配置拼接，不做动态查询</td></tr>
+      <tr><td>D26</td><td>本批范围（v4.5）</td><td><b>只改设计稿 + HTML 交互演示</b>；Win32 <code>Shell_NotifyIconW</code> 实施留后续批次（平台层落点，对齐 refactor-layering-plan 的 <code>platform.rs</code> 分层，建议独立 <code>tray.rs</code>）</td></tr>
     </table>
 
     <h3 data-page-node-id="qIjrLO1eIcZw1mWFYlpkAw">00.3 有意偏离清单（P2：明确不改，并记录理由）</h3>
@@ -621,6 +744,13 @@
       <code data-page-node-id="xfmzi5wTngsNNQ7Ov4RtxD">microsoft/fluentui · packages/react-input/Spec-styling.md</code>（Input 尺寸 small 24 / medium 32 / large 40）。
       实现现状依据：<code data-page-node-id="3byaVfClsGxjNPGdbTFfCK">crates/dd-gui/src/main.rs</code>（<code data-page-node-id="FleTyuDfwsHpBWTRE2SFUA">APP_W/APP_H = 560×460</code>、<code data-page-node-id="cq9Jub8JqYuAHjNOET1Eqc">with_resizable(false)</code>）、
       <code data-page-node-id="Ogy8ECRMNDxzdhPzWCecmv">crates/dd-gui/src/theme.rs</code>（<code data-page-node-id="2JAH06UlA9wpI3DqAaw3wW">Palette</code> 与 parity 单测）。
+      v4.4 增补（右键菜单）：<code>fluent2.microsoft.design/elevation</code>（低层 ramp——暗色 shadow8 用途 = command bars / command dropdowns / tooltips，菜单阴影归此档；亮色 key 14%）；
+      <code>microsoft/fluentui · Menu spec</code>（分区用分隔线、禁用态、外点关闭等行为语义）；菜单项几何（高 32 / 圆角 4 / 图标 16）按本稿既有控件 ramp（D8）推导。
+      v4.5 增补（托盘）：<code>learn.microsoft.com · Shell_NotifyIcon / NOTIFYICONDATA</code>（托盘图标注册、NIF_MESSAGE 回调消息、NIF_TIP 静态 Tooltip）、
+      <code>learn.microsoft.com · TrackPopupMenu</code> 官方备注（弹出前必须 <code>SetForegroundWindow</code>，否则点击菜单外不关闭——实施注意项）；
+      现行代码依据：<code>crates/dd-gui/src/hotkey.rs</code>（全局热键 = Win+Alt+Space，MOD_WIN|MOD_ALT|MOD_NOREPEAT）、
+      <code>crates/dd-gui/build.rs</code>（当前仅内嵌扩展、无 .ico 图标资源 → D22 前置依赖）。托盘原生菜单视觉由系统渲染，不属本稿 token 治理域。
+      v4.5 同批（10C.3 图标）：Win11 应用图标惯例（圆角 22–25%、渐变底、白色 mark）为公开系统视觉观察归纳；mark 几何（DD 快进同构）为本稿原创推导；图标资产独立于主题 token（D22）。
     </p>
   </section>
 
@@ -1447,6 +1577,453 @@
     </table>
   </section>
 
+  <!-- ================= 10B 搜索结果右键菜单（v4.4 新增） ================= -->
+  <section class="screen">
+    <div class="s-head">
+      <span class="s-num">10B</span>
+      <h2>搜索结果右键菜单 — Context Menu</h2>
+      <span class="chip">Fluent Menu 语义</span>
+      <span class="chip">按类型出菜单（D18）</span>
+      <span class="chip">指针锚点 · 面板内翻转（D20）</span>
+    </div>
+    <p class="s-desc">
+      v4.4 新增交互（现行无右键菜单）。为 Root / 子页的搜索结果行补齐 Fluent 9 <b>Menu（上下文菜单）</b>语义：
+      右键结果行弹出，菜单项由 <b>GUI 层按 <code>result_category</code> 静态硬编码映射</b>（D18——协议 v1.0 冻结不变、零协议字段新增，
+      与页脚动作 <code>com.ddrun.</code> 前缀硬编码同口径）；<b>第一项恒为默认动作</b>（与页脚 / Enter 等价），
+      其后为该类型的二级动作，动作分组间用分隔线。菜单为面板内 Area 浮层（与 Toast / 确认对话框同级），不新开 OS 窗口（D1 in-place 原则）。
+    </p>
+
+    <h3>10B.0 菜单结构解剖（静态参照）</h3>
+    <div class="stage" style="flex-wrap:wrap; gap:28px; align-items:flex-start; justify-content:center">
+      <div style="width:340px">
+        <div class="row selected">
+          <span class="icon glyph">&#xE8EF;</span>
+          <span class="name">计算器</span>
+          <span class="desc">Calculator</span>
+          <span class="spacer"></span>
+          <span class="kind">应用</span>
+        </div>
+        <div class="row">
+          <span class="icon glyph">&#xE8E5;</span>
+          <span class="name">项目文件夹</span>
+          <span class="desc">path 图标示例（本地 PNG/ICO）</span>
+          <span class="spacer"></span>
+          <span class="kind">文件</span>
+        </div>
+        <div class="kv" style="margin-top:12px">← 右键「计算器」（应用类型）触发</div>
+      </div>
+      <div class="ctx-menu static">
+        <div class="ctx-item"><span class="glyph">&#xE8E5;</span><span class="label">打开</span><span class="spacer"></span><span class="kbd">↵ Enter</span></div>
+        <div class="ctx-item"><span class="glyph">&#xE7EF;</span><span class="label">以管理员身份运行</span><span class="spacer"></span><span class="kbd">Ctrl+↵</span></div>
+        <div class="ctx-item"><span class="glyph">&#xE8DA;</span><span class="label">打开所在位置</span><span class="spacer"></span><span class="kbd"></span></div>
+        <div class="ctx-sep"></div>
+        <div class="ctx-item"><span class="glyph">&#xE8C8;</span><span class="label">复制路径</span><span class="spacer"></span><span class="kbd">Ctrl+Shift+C</span></div>
+      </div>
+    </div>
+    <div class="note">
+      <b>几何标注：</b>容器 min-width 200 · 圆角 4（radius-md）· shadow8 · 内边距 4；菜单项高 <b>32</b> · 圆角 4 ·
+      图标 glyph 16px（fg2）+ 名称 body1 14/20（fg1）+ 快捷键 caption1 12/16（fg3，右对齐）；分隔线 1px stroke2、垂直 margin 4 / 水平内缩 8。
+      第一项「打开」= 默认动作，与页脚上下文动作 / Enter 同款。
+    </div>
+
+    <h3>10B.0b 交互演示（不同类型 → 不同菜单）</h3>
+    <div class="stage ctx-stage">
+      <div class="panel ctx-demo-panel" id="ctxDemoPanel">
+        <div class="toprow">
+          <div class="searchbar focus">
+            <span class="glyph">&#xE721;</span>
+            <input value="" placeholder="搜索命令…">
+          </div>
+        </div>
+        <div class="results" id="ctxDemoResults">
+          <div class="section-label">演示数据（右键任意行）</div>
+          <div class="row selected" data-ctx-type="命令">
+            <span class="icon glyph">&#xE8C8;</span>
+            <span class="name">Say Hello</span>
+            <span class="desc">M0 smoke test command</span>
+            <span class="spacer"></span>
+            <span class="kind">命令</span>
+          </div>
+          <div class="row" data-ctx-type="应用">
+            <span class="icon glyph">&#xE8EF;</span>
+            <span class="name">计算器</span>
+            <span class="desc">Calculator</span>
+            <span class="spacer"></span>
+            <span class="kind">应用</span>
+          </div>
+          <div class="row" data-ctx-type="文件">
+            <span class="icon"><img alt="" src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20'%3E%3Cpath fill='%230f6cbd' d='M2 4.5A1.5 1.5 0 0 1 3.5 3h4.086a1.5 1.5 0 0 1 1.06.44L10.112 4.9a.5.5 0 0 0 .354.146H16.5A1.5 1.5 0 0 1 18 6.55v9A1.5 1.5 0 0 1 16.5 17h-13A1.5 1.5 0 0 1 2 15.5v-11Z'/%3E%3C/svg%3E"></span>
+            <span class="name">项目文件夹</span>
+            <span class="desc">G:\AI\dd-run</span>
+            <span class="spacer"></span>
+            <span class="kind">文件</span>
+          </div>
+          <div class="row" data-ctx-type="网页">
+            <span class="icon glyph">&#xE774;</span>
+            <span class="name">网页搜索</span>
+            <span class="desc">在浏览器中搜索</span>
+            <span class="spacer"></span>
+            <span class="kind">网页</span>
+          </div>
+          <div class="row" data-ctx-type="设置">
+            <span class="icon glyph">&#xE713;</span>
+            <span class="name">Open Settings</span>
+            <span class="desc">打开 Windows 设置</span>
+            <span class="spacer"></span>
+            <span class="kind">设置</span>
+          </div>
+        </div>
+        <div class="panel-footer">
+          <span class="gear glyph" title="设置">&#xE713;</span>
+          <span>执行</span>
+          <span class="keys">
+            <span><b>↑</b> <b>↓</b> 选择</span>
+            <span><b>Enter</b> 执行</span>
+            <span><b>Esc</b> 隐藏</span>
+          </span>
+        </div>
+        <div class="ctx-menu" id="ctxDemoMenu"></div>
+      </div>
+    </div>
+    <div class="note">
+      <b>演示操作：</b>在结果行上<b>右键</b>弹出菜单（演示面板内生效）；Esc 或点击面板空白处关闭。
+      五种类型（命令 / 应用 / 文件 / 网页 / 设置）分别弹出 10B.2 映射表对应的菜单项；
+      右键同时把该行置为选中态（bg1Selected + 3px accent 指示条），与键盘选中视觉一致。
+    </div>
+
+    <h3>10B.1 规格表</h3>
+    <table>
+      <tr><th>项</th><th>规格</th></tr>
+      <tr><td>触发</td><td>右键结果行（指针）；键盘 <b>Menu / Shift+F10</b> 对选中行打开（键盘可达，D19）。菜单打开期间列表<b>滚动或改选即关闭</b>——防止锚点漂移后菜单指向错误行。</td></tr>
+      <tr><td>容器</td><td>底 <code>--panel</code>（colorNeutralBackground1）、1px <code>--border</code>（stroke2）描边、圆角 <b>4</b>（radius-md）、阴影 <code>--shadow-8</code>（v4.4 新增 token；官方 elevation 表：暗色 shadow8 = command bars / command dropdowns / tooltips —— 菜单归此档）；<b>min-width 200px</b>、padding 4px。Windows 约定：描边替代 key 阴影，与面板一致。</td></tr>
+      <tr><td>菜单项</td><td>高 <b>32</b>、圆角 4、padding 0 10；图标 glyph 16px（fg2）+ 名称 body1 14/20（fg1，超长省略号）+ 快捷键 caption1 12/16（fg3，右对齐）；hover = <code>bg1Hover</code>（亮 #f5f5f5 / 暗 #3d3d3d）；禁用项 <code>fgDisabled</code>。无选中底色残留——菜单项只有 hover/hover 键盘焦点两种激活态。</td></tr>
+      <tr><td>分隔线</td><td>1px <code>--border</code>（stroke2），垂直 margin 4、水平内缩 8；用于「默认/高频动作」与「次级动作」分组（对齐 Fluent Menu 分区惯例，D14 组间分隔仅在菜单内使用分隔线、列表内不用）。</td></tr>
+      <tr><td>默认动作</td><td><b>第一项恒为默认动作</b>：与页脚上下文动作 / Enter 同款（重发 invoke）；快捷键列显示 <code>↵ Enter</code>；名称不做加粗或强调——与列表行一致的纯文本层级（D12 口径）。</td></tr>
+      <tr><td>定位（D20）</td><td>指针触发 = 右键点即菜单左上角（偏移 2,2）；键盘触发 = 锚定选中行底边（水平对齐行左缘）。越界处理：<b>先翻转</b>（下放不下改向上）→ <b>再夹紧</b>（面板内 8px 边距内取齐），<b>绝不溢出面板</b>。</td></tr>
+      <tr><td>键盘（打开后）</td><td>键盘上下文移交菜单：↑↓ 移动（首尾循环）、Enter 激活当前项、Esc 关闭并把焦点还给列表选中行。菜单打开期间列表的 ↑↓ / Enter / Esc 不再直达列表——第一次 Esc 只关菜单。</td></tr>
+      <tr><td>互斥</td><td>与 Toast / 确认对话框同为面板内 Area 层；同一时刻至多 1 个菜单，再右键其他行 = 关旧开新（锚点跟随新行）。菜单打开不影响 Toast 计时。</td></tr>
+    </table>
+
+    <h3>10B.2 类型 → 菜单项映射表（D18：GUI 层静态硬编码）</h3>
+    <table>
+      <tr><th>result_category</th><th>菜单项（自上而下）</th><th>备注</th></tr>
+      <tr>
+        <td><b>应用</b></td>
+        <td>打开 <code>↵ Enter</code> ｜ 以管理员身份运行 <code>Ctrl+↵</code> ｜ 打开所在位置 ｜ ─ ｜ 复制路径 <code>Ctrl+Shift+C</code></td>
+        <td>对应 <code>.lnk</code> / <code>.exe</code> 结果；「打开所在位置」= explorer <code>/select</code> 定位宿主目录</td>
+      </tr>
+      <tr>
+        <td><b>文件</b></td>
+        <td>打开 <code>↵ Enter</code> ｜ 打开所在位置 ｜ ─ ｜ 复制路径 <code>Ctrl+Shift+C</code></td>
+        <td>path 类结果；无管理员运行项（非可执行语义）</td>
+      </tr>
+      <tr>
+        <td><b>网页</b></td>
+        <td>在默认浏览器打开 <code>↵ Enter</code> ｜ ─ ｜ 复制链接 <code>Ctrl+Shift+C</code></td>
+        <td>url 类结果</td>
+      </tr>
+      <tr>
+        <td><b>命令</b></td>
+        <td>执行 <code>↵ Enter</code></td>
+        <td>仅默认动作：命令无稳定二级语义，菜单保持单项（几何与视觉规格不变）</td>
+      </tr>
+      <tr>
+        <td><b>设置</b></td>
+        <td>打开设置 <code>↵ Enter</code></td>
+        <td>与页脚同款单动作</td>
+      </tr>
+    </table>
+    <div class="note">
+      <b>协议冻结约束（D18）：</b><code>result_category</code> 为既有字段（§6.2 类型标签同源），本期映射完全落在 GUI 层、
+      <b>零协议字段新增</b>。未来如需扩展自定义菜单项（如扩展声明 <code>context_actions</code>），须走协议 v1.x 增补评审，
+      不在 GUI 硬编码中预留。复制类快捷键统一 <code>Ctrl+Shift+C</code>，避免与面板全局键冲突。
+      <b>实施同步（2026-09-05，4.2 批次）：</b>二级动作按<b>数据可用性门控</b>——路径型动作要求 subtitle 为盘符/UNC
+      路径形态、「复制链接」要求 subtitle 为 http(s) URL，数据不可得时该项<b>不渲染</b>（现行 websearch 顶层项 subtitle
+      为提示文案，故网页类实际仅默认动作，扩展提供 URL 后自动出现）；键盘触发以 <code>Shift+F10</code> 实现
+      （egui 0.36 键表无 Menu 键，偏离记档）。
+    </div>
+  </section>
+
+  <!-- ================= 10C 系统托盘（v4.5 新增） ================= -->
+  <section class="screen">
+    <div class="s-head">
+      <span class="s-num">10C</span>
+      <h2>系统托盘 — System Tray</h2>
+      <span class="chip">常驻入口 · 唯一退出</span>
+      <span class="chip">左键 = toggle（D23）</span>
+      <span class="chip">右键 = 系统原生菜单（D24）</span>
+      <span class="chip">零协议字段新增</span>
+      <span class="chip">本批只改设计稿（D26）</span>
+    </div>
+    <p class="s-desc">
+      v4.5 新增（真机驱动 2026-09-05：应用启动后<b>无鼠标入口、无常驻可见性、且无法退出</b>——
+      现行进程只能以热键 Win+Alt+Space 呼出、Esc 隐藏，没有任何显式退出路径）。为常驻进程补齐<b>托盘图标</b>表面：
+      左键单击切换面板（与热键同语义，D23）；右键弹出<b>系统原生菜单</b>（D24）提供显示/隐藏、设置与唯一退出入口。
+      托盘属宿主平台层（OS shell 表面），<b>不进面板内 Area 层级</b>（D1 in-place 原则只约束面板内浮层），
+      <b>零协议字段新增</b>（协议 v1.0 冻结不变）。本批只改设计稿 + HTML 交互演示（D26）。
+    </p>
+
+    <h3>10C.0 托盘区与原生菜单解剖（静态参照）</h3>
+    <div class="stage split" style="align-items:flex-start">
+      <div style="width:420px; max-width:100%">
+        <div class="taskbar" style="border-radius:8px; border:1px solid var(--border); border-top:1px solid var(--border)">
+          <div class="tb-icon glyph" title="开始（示意）">&#xE700;</div>
+          <div class="tb-icon glyph" title="搜索（示意）">&#xE721;</div>
+          <div class="tb-icon glyph" title="任务视图（示意）">&#xE7C4;</div>
+          <div class="tb-spacer"></div>
+          <div class="tray-area">
+            <div class="tray-sys glyph" title="隐藏的图标（示意）">&#xE70D;</div>
+            <div class="tray-sys glyph" title="网络（示意）">&#xE701;</div>
+            <div class="tray-sys glyph" title="音量（示意）">&#xE767;</div>
+            <div class="tb-clock">12:12<br>2026/09/05</div>
+            <div class="tray-icon outline" title="">
+              <svg viewBox="0 0 32 32" aria-hidden="true"><rect x="1" y="1" width="30" height="30" rx="7.5" fill="url(#ddgIco)"/><g fill="#fff"><path d="M6 10 h3 a6 6 0 0 1 0 12 H6 z"/><path d="M17 10 h3 a6 6 0 0 1 0 12 H17 z"/></g></svg>
+            </div>
+          </div>
+        </div>
+        <div class="kv" style="margin-top:12px">← 任务栏右下角托盘区（放大示意，dd-run 图标以 accent 描边高亮）</div>
+        <div class="kv" style="margin-top:6px">① 左键单击 = 切换面板（D23）　② 右键 = 系统原生菜单（D24）　③ 悬停 Tooltip（D25）</div>
+      </div>
+      <div style="width:250px; max-width:100%">
+        <div class="winmenu static">
+          <div class="wm-item"><span class="label">显示/隐藏面板</span><span class="accel">Win+Alt+Space</span></div>
+          <div class="wm-item"><span class="label">设置</span><span class="accel"></span></div>
+          <div class="wm-sep"></div>
+          <div class="wm-item"><span class="label">退出</span><span class="accel"></span></div>
+        </div>
+        <div class="kv" style="margin-top:12px">← 原生菜单（系统渲染示意，非 dd-run 自绘）</div>
+      </div>
+    </div>
+    <div class="note">
+      <b>几何标注：</b>托盘图标逻辑 <b>16×16</b>（悬停反馈与点击热区由系统管理，dd-run 不绘制）；原生菜单 = 系统渲染
+      （圆角 8、项高 32、正文 13px、accel 11px 右对齐）——<b>数值为 Windows 11 当前系统渲染示意，非本稿 token 治理域</b>（D24 有意偏离记档）。
+      dd-run 只提供图标字节、菜单项文本与行为回调。图标 = <b>10C.3 定稿的「DD 快进」字标</b>（结合应用名 dd-run；此处为 SVG 示意，产品 .ico 由实施批次按 10C.3 几何产出并嵌入 exe，D22 前置依赖）。
+    </div>
+
+    <h3>10C.0b 交互演示（左键 toggle / 右键原生菜单 / 退出）</h3>
+    <div class="stage tray-stage">
+      <div class="tray-desktop" id="trayDesktop">
+        <div class="panel mini" id="trayPanel" style="position:relative; z-index:5">
+          <div id="trayPanelRoot" style="display:flex; flex-direction:column; flex:1; min-height:0">
+            <div class="toprow">
+              <div class="searchbar focus">
+                <span class="glyph">&#xE721;</span>
+                <input value="" placeholder="搜索命令…">
+              </div>
+            </div>
+            <div class="results">
+              <div class="section-label">应用</div>
+              <div class="row selected">
+                <span class="icon glyph">&#xE8EF;</span>
+                <span class="name">计算器</span>
+                <span class="desc">Calculator</span>
+                <span class="spacer"></span>
+                <span class="kind">应用</span>
+              </div>
+              <div class="row">
+                <span class="icon glyph">&#xE8E5;</span>
+                <span class="name">项目文件夹</span>
+                <span class="desc">G:\AI\dd-run</span>
+                <span class="spacer"></span>
+                <span class="kind">文件</span>
+              </div>
+              <div class="section-label">系统</div>
+              <div class="row">
+                <span class="icon glyph">&#xE7E8;</span>
+                <span class="name">Lock Screen</span>
+                <span class="desc">立即锁定工作站</span>
+                <span class="spacer"></span>
+                <span class="kind">命令</span>
+              </div>
+            </div>
+            <div class="panel-footer">
+              <span class="gear glyph" title="设置">&#xE713;</span>
+              <span>执行</span>
+              <span class="keys">
+                <span><b>↑</b> <b>↓</b> 选择</span>
+                <span><b>Enter</b> 执行</span>
+                <span><b>Esc</b> 隐藏</span>
+              </span>
+            </div>
+          </div>
+          <div id="trayPanelSettings" style="display:none; flex-direction:column; flex:1; min-height:0">
+            <div class="toprow">
+              <div class="back-btn glyph" title="返回">&#xE72B;</div>
+              <span class="page-title">设置</span>
+              <span class="ext-chip">v0.1.0</span>
+            </div>
+            <div class="results">
+              <div class="settings-card" style="margin-top:0">
+                <div class="setting-row">
+                  <span class="glyph">&#xEB51;</span>
+                  <div class="setting-main">
+                    <div class="setting-name">主题</div>
+                    <div class="setting-desc">亮色 / 暗色 / 跟随系统</div>
+                  </div>
+                </div>
+                <div class="radio-cards">
+                  <div class="radio-card"><div class="rc-name"><span class="rc-dot"></span>亮色</div></div>
+                  <div class="radio-card"><div class="rc-name"><span class="rc-dot"></span>暗色</div></div>
+                  <div class="radio-card sel"><div class="rc-name"><span class="rc-dot"></span>跟随系统</div><div class="rc-sub">当前</div></div>
+                </div>
+              </div>
+            </div>
+            <div class="panel-footer">
+              <span>设置</span>
+              <span class="keys"><span><b>Esc</b> 返回</span></span>
+            </div>
+          </div>
+        </div>
+        <div class="winmenu" id="trayMenu">
+          <div class="wm-item" data-act="toggle"><span class="label">显示/隐藏面板</span><span class="accel">Win+Alt+Space</span></div>
+          <div class="wm-item" data-act="settings"><span class="label">设置</span><span class="accel"></span></div>
+          <div class="wm-sep"></div>
+          <div class="wm-item" data-act="exit"><span class="label">退出</span><span class="accel"></span></div>
+        </div>
+        <div class="tray-exited" id="trayExited">
+          <span class="glyph" style="font-size:28px; color:var(--text-3)">&#xE7E8;</span>
+          <div class="t1">dd-run 已退出（演示态）</div>
+          <div class="t2">托盘图标已移除、面板不再可呼出、热键失效——「退出」是唯一显式退出入口（10C.2），隐藏面板 ≠ 退出。本演示不真正结束页面。</div>
+          <button class="btn" id="trayReset">重置演示</button>
+        </div>
+      </div>
+      <div class="taskbar">
+        <div class="tb-icon glyph" title="开始（示意）">&#xE700;</div>
+        <div class="tb-icon glyph" title="搜索（示意）">&#xE721;</div>
+        <div class="tb-icon glyph" title="任务视图（示意）">&#xE7C4;</div>
+        <div class="tb-spacer"></div>
+        <div class="tray-area">
+          <div class="tray-sys glyph" title="隐藏的图标（示意）">&#xE70D;</div>
+          <div class="tray-sys glyph" title="网络（示意）">&#xE701;</div>
+          <div class="tray-sys glyph" title="音量（示意）">&#xE767;</div>
+          <div class="tb-clock">12:12<br>2026/09/05</div>
+          <div class="tray-icon" id="trayIcon" title="">
+            <svg viewBox="0 0 32 32" aria-hidden="true"><rect x="1" y="1" width="30" height="30" rx="7.5" fill="url(#ddgIco)"/><g fill="#fff"><path d="M6 10 h3 a6 6 0 0 1 0 12 H6 z"/><path d="M17 10 h3 a6 6 0 0 1 0 12 H17 z"/></g></svg>
+            <div class="tray-tip">dd-run — Win+Alt+Space 呼出</div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="note">
+      <b>演示操作：</b><b>左键</b>单击托盘图标 = 切换面板（D23，与热键同款）；<b>右键</b> = 原生菜单（D24）——
+      「显示/隐藏面板」「设置」（打开面板并切到设置视图，D3）「退出」均可操作；「退出」进入演示态（图标移除 + 面板不可呼出），点「重置演示」恢复。
+      Esc / 点击菜单外关闭菜单（真机由 <code>SetForegroundWindow</code> 保证，见 10C.1）。亮暗主题跟随页面右上角开关（系统渲染示意随动）。
+    </div>
+
+    <h3>10C.1 规格表</h3>
+    <table>
+      <tr><th>项</th><th>规格</th></tr>
+      <tr><td>图标（D22）</td><td>复用应用 .ico；当前 exe 未嵌产品图标 → 实施批次须先产出<b>多尺寸 .ico（16/20/24/32 = 100/125/150/200% DPI 档）</b>并嵌入 exe 资源（winres / embedded-resource），托盘 <code>LoadImage</code> 复用同一资源。<b>无状态变化、无 badge</b>（保持单一语义，避免引入未知状态体系）。</td></tr>
+      <tr><td>左键（D23）</td><td>单击 = 切换面板显示/隐藏：隐藏态 → 显示（焦点落搜索框、按 <code>GetCursorPos</code> 所在屏工作区居中，与热键路径同款）；可见态 → 隐藏。<b>不区分单击/双击</b>（不引入 500ms 延迟——toggle 直觉性优先）。</td></tr>
+      <tr><td>右键菜单（D24）</td><td><b>系统原生菜单</b>（Win32 <code>TrackPopupMenu</code>）：宿主是 shell 而非 dd-run 面板，Windows 11 自渲染 Fluent 形态——<b>视觉不在本稿 token 治理域</b>（有意偏离记档，理由：自绘需独立置顶无边框窗口 + 外点关闭 + 定位逻辑，成本高收益低）。固定 4 项（10C.2）；<b>同一时刻至多 1 个菜单</b>；实施注意：<code>TrackPopupMenu</code> 前必须 <code>SetForegroundWindow</code>（官方要求，否则点击菜单外不关闭）。</td></tr>
+      <tr><td>Tooltip（D25）</td><td>静态字符串「dd-run — Win+Alt+Space 呼出」（NIF_TIP）；热键可配置化后跟随配置拼接，不做动态查询/每帧开销。</td></tr>
+      <tr><td>常驻与退出</td><td>Esc / 失焦 / 托盘 toggle 隐藏面板均<b>不退出进程</b>——托盘菜单「退出」是<b>唯一显式退出入口</b>；退出直接结束进程（低危、<b>不弹确认对话框</b>——与系统扩展 critical 确认语义不重叠）。</td></tr>
+      <tr><td>与面板的关系</td><td>托盘属宿主平台层（OS shell 表面），<b>不进面板内 Area 层级</b>（D1 in-place 只约束面板内浮层）；协议 <b>零字段新增</b>（协议 v1.0 冻结不变，与 D18 页脚/右键菜单硬编码同口径）。</td></tr>
+      <tr><td>平台</td><td>Windows 优先（P4 口径）：<code>Shell_NotifyIconW</code> + <code>TrackPopupMenu</code>；macOS <code>NSStatusItem</code>、Linux <code>AppIndicator</code> 留平台轮（占位策略同 dd-ext-system：顶层恒空 + 未实现提示）。</td></tr>
+    </table>
+
+    <h3>10C.2 菜单项 → 行为映射表（D24：固定 4 项，GUI/平台层硬编码）</h3>
+    <table>
+      <tr><th>菜单项</th><th>行为</th><th>备注</th></tr>
+      <tr>
+        <td><b>显示/隐藏面板</b></td>
+        <td>切换面板显示（= D23 左键 / 全局热键同款 toggle 入口）</td>
+        <td>accel 列显示 <code>Win+Alt+Space</code>；隐藏态下激活 = 显示并聚焦搜索框</td>
+      </tr>
+      <tr>
+        <td><b>设置</b></td>
+        <td>显示面板并 in-place 切到设置视图（D3）</td>
+        <td>复用 08 设置页；返回仍经返回按钮 / Esc，不新开窗口</td>
+      </tr>
+      <tr>
+        <td>─ 分隔</td>
+        <td>—</td>
+        <td>原生菜单分隔线，隔开「面板控制」与「进程生命周期」两组</td>
+      </tr>
+      <tr>
+        <td><b>退出</b></td>
+        <td>结束 dd-run 进程（托盘图标移除、热键注销）</td>
+        <td><b>唯一显式退出入口</b>；不二次确认（低危，区别于系统扩展 critical 确认）；隐藏面板 ≠ 退出</td>
+      </tr>
+    </table>
+    <div class="note">
+      <b>实施落点（D26 占位）：</b>平台层新模块（对齐 <code>docs/refactor-layering-plan.md</code> 的 <code>platform.rs</code> 分层，建议独立 <code>tray.rs</code>）；
+      Win32：<code>Shell_NotifyIconW</code>（NIF_MESSAGE | NIF_ICON | NIF_TIP）+ 自注册回调消息（左键 = toggle、右键 = 菜单），
+      <code>TrackPopupMenu</code> 前置 <code>SetForegroundWindow</code>。<b>前置依赖：</b>产品多尺寸 .ico 资源嵌入 exe（当前 build.rs 仅内嵌扩展、无图标资源，见 D22）。
+      <b>演示说明：</b>交互演示中「退出」不真正结束页面，仅演示托盘图标移除 + 进程终止语义。
+    </div>
+
+    <h3>10C.3 应用图标设计（v4.5 同批细化：结合名称「dd-run」）</h3>
+    <p class="s-desc">
+      设计语言对齐 Windows 11 现代应用图标惯例（圆角方 + 渐变底 + 白色 mark，参考 Office 系单字标思路），
+      并把<b>应用名编码进 mark</b>：两个大写 <b>D</b> 并排 = 应用名首音节「dd」，其轮廓同时构成<b>快进符号（▶▶）</b>——
+      语义 = <b>run</b>（快速呼出、执行）。一套 mark 兼顾名称关联与 16px 小尺寸可读性，替代 v4.5 初版的「搜索框」占位。
+    </p>
+    <div class="stage split" style="align-items:flex-start">
+      <div style="width:280px; max-width:100%; text-align:center">
+        <svg width="112" height="112" viewBox="0 0 32 32" style="filter:drop-shadow(0 4px 8px rgba(0,0,0,.28))" role="img" aria-label="dd-run 图标定稿">
+          <defs>
+            <linearGradient id="ddgIco" x1="0" y1="0" x2="1" y2="1">
+              <stop offset="0" stop-color="#3AA0FF"/>
+              <stop offset="1" stop-color="#0F5FC0"/>
+            </linearGradient>
+          </defs>
+          <rect x="1" y="1" width="30" height="30" rx="7.5" fill="url(#ddgIco)"/>
+          <g fill="#fff">
+            <path d="M6 10 h3 a6 6 0 0 1 0 12 H6 z"/>
+            <path d="M17 10 h3 a6 6 0 0 1 0 12 H17 z"/>
+          </g>
+        </svg>
+        <div class="kv" style="margin-top:14px; justify-content:center">← 推荐定稿：「DD 快进」字标（112px 渲染）</div>
+        <div class="kv" style="margin-top:6px; justify-content:center">dd = 名称首音节；D×D 连读 = 快进（run）</div>
+      </div>
+      <div style="width:380px; max-width:100%">
+        <div style="display:flex; align-items:flex-end; gap:18px">
+          <div style="text-align:center"><svg width="48" height="48" viewBox="0 0 32 32"><rect x="1" y="1" width="30" height="30" rx="7.5" fill="url(#ddgIco)"/><g fill="#fff"><path d="M6 10 h3 a6 6 0 0 1 0 12 H6 z"/><path d="M17 10 h3 a6 6 0 0 1 0 12 H17 z"/></g></svg><div class="kv" style="justify-content:center">48</div></div>
+          <div style="text-align:center"><svg width="32" height="32" viewBox="0 0 32 32"><rect x="1" y="1" width="30" height="30" rx="7.5" fill="url(#ddgIco)"/><g fill="#fff"><path d="M6 10 h3 a6 6 0 0 1 0 12 H6 z"/><path d="M17 10 h3 a6 6 0 0 1 0 12 H17 z"/></g></svg><div class="kv" style="justify-content:center">32</div></div>
+          <div style="text-align:center"><svg width="24" height="24" viewBox="0 0 32 32"><rect x="1" y="1" width="30" height="30" rx="7.5" fill="url(#ddgIco)"/><g fill="#fff"><path d="M6 10 h3 a6 6 0 0 1 0 12 H6 z"/><path d="M17 10 h3 a6 6 0 0 1 0 12 H17 z"/></g></svg><div class="kv" style="justify-content:center">24</div></div>
+          <div style="text-align:center"><svg width="20" height="20" viewBox="0 0 32 32"><rect x="1" y="1" width="30" height="30" rx="7.5" fill="url(#ddgIco)"/><g fill="#fff"><path d="M6 10 h3 a6 6 0 0 1 0 12 H6 z"/><path d="M17 10 h3 a6 6 0 0 1 0 12 H17 z"/></g></svg><div class="kv" style="justify-content:center">20</div></div>
+          <div style="text-align:center"><svg width="16" height="16" viewBox="0 0 32 32"><rect x="1" y="1" width="30" height="30" rx="7.5" fill="url(#ddgIco)"/><g fill="#fff"><path d="M6 10 h3 a6 6 0 0 1 0 12 H6 z"/><path d="M17 10 h3 a6 6 0 0 1 0 12 H17 z"/></g></svg><div class="kv" style="justify-content:center">16（托盘）</div></div>
+        </div>
+        <div style="display:flex; gap:14px; margin-top:18px; flex-wrap:wrap">
+          <div style="display:inline-flex; align-items:center; gap:8px; background:#1C1C1C; border:1px solid #3d3d3d; border-radius:8px; padding:6px 12px">
+            <svg width="16" height="16" viewBox="0 0 32 32"><rect x="1" y="1" width="30" height="30" rx="7.5" fill="url(#ddgIco)"/><g fill="#fff"><path d="M6 10 h3 a6 6 0 0 1 0 12 H6 z"/><path d="M17 10 h3 a6 6 0 0 1 0 12 H17 z"/></g></svg>
+            <span style="color:#fff; font-size:12px">深色任务栏</span>
+          </div>
+          <div style="display:inline-flex; align-items:center; gap:8px; background:#F3F3F3; border:1px solid #e0e0e0; border-radius:8px; padding:6px 12px">
+            <svg width="16" height="16" viewBox="0 0 32 32"><rect x="1" y="1" width="30" height="30" rx="7.5" fill="url(#ddgIco)"/><g fill="#fff"><path d="M6 10 h3 a6 6 0 0 1 0 12 H6 z"/><path d="M17 10 h3 a6 6 0 0 1 0 12 H17 z"/></g></svg>
+            <span style="color:#444; font-size:12px">浅色任务栏</span>
+          </div>
+        </div>
+        <div class="kv" style="margin-top:10px">↑ 多尺寸缩略与亮暗任务栏对照（16 = 托盘逻辑尺寸）</div>
+      </div>
+    </div>
+    <table>
+      <tr><th>项</th><th>规格</th></tr>
+      <tr><td>画布与圆角</td><td>设计网格 <b>32×32</b>；圆角 <b>7.5（≈23%，Win11 应用图标惯例 22–25%）</b>；整体 1px 内缩防边缘裁切。</td></tr>
+      <tr><td>底色</td><td>线性渐变 135°：<b>#3AA0FF → #0F5FC0</b>（Fluent brand 蓝亮化档——任务栏小尺寸可读性优先）。<b>图标资产独立于主题 token</b>（D22：不随亮暗主题变化）；与主题 accent（#0f6cbd / #115ea3）同族不同档。</td></tr>
+      <tr><td>主标 =「DD 快进」同构</td><td>大写 D × 2 字标：每个 D = 竖杠宽 <b>3</b> + 右半圆 <b>r6</b>（mark 高 <b>12</b>，y 10–22）；D 间距 <b>2</b>；整组居中（x 6–26）。<b>名称关联：dd = 应用名首音节；双 D 连读 = 快进符号（run 语义）</b>。白色 #FFF 实心填充。</td></tr>
+      <tr><td>小尺寸适配</td><td>16px：竖杠 3→1.5px（可按 1px 栅格微调）、半圆 r6→3px 保持轮廓、间距 2→1px；ico 产出尺寸：<b>16/20/24/32/48</b>（D22 DPI 档）+ <b>256</b>（安装器 / 资源管理器）。</td></tr>
+      <tr><td>亮暗任务栏</td><td>蓝渐变底 + 白标在深 / 浅任务栏均满足 ≥3:1 对比（系统自带 1px 投影增强边缘）。</td></tr>
+    </table>
+    <div class="note">
+      <b>落选方案记档：</b>①「搜索框」占位（v4.5 初版）——无名称关联；②「d»」混排 monogram——16px 下 chevron 与 d 的半圆轮廓互相混淆；③ 纯 wordmark「dd-run」——小尺寸文字不可读。
+      <b>产出要求（实施批次，D22/D26 前置依赖）：</b>按本节几何导出 SVG → 多尺寸 .ico（16/20/24/32/48/256，PNG 压缩）→ 经 winres / embedded-resource 嵌入 exe 资源 → 托盘 <code>LoadImage</code> 与窗口图标复用同一资源。
+    </div>
+    <div class="note">
+      <b>实施同步（2026-09-05，托盘 10C 实施批次）：</b>已按本章落地——落点 <code>crates/dd-gui/src/tray.rs</code>
+      （lib 模块，对齐 <code>hotkey</code> 的「独立线程 + channel + request_repaint」模式；重构方案 <code>platform.rs</code>
+      分层实施时再归位）。偏离记档：① .ico 不经 winres 嵌入 exe 资源（windows-gnu 工具链无 windres）→ 改
+      <code>include_bytes!</code> + 启动时物化到 <code>cache_dir()/app.ico</code> + <code>LoadImageW(LR_LOADFROMFILE)</code>（效果等价，BMP 条目全版本兼容）；
+      ② 256 档留安装器/打包批次（当前 16/20/24/32/48 五档 BMP）；③ 托盘生命周期 = 进程生命周期（退出即结束进程，
+      不主动 NIM_DELETE——进程死亡系统自动移除图标）；④ 托盘创建失败<b>降级不 panic</b>（区别于热键 fail-fast：托盘缺失不致命，热键仍可用）。
+      行为与 10C.1/10C.2 逐项一致：左键 toggle（与热键同款 reset 语义）、右键原生菜单 4 项（TrackPopupMenu 前置
+      SetForegroundWindow + 后投 WM_NULL）、「设置」= 隐藏时先显示再推设置页（同 Ctrl+,）、「退出」= ViewportCommand::Close
+      → 进程结束。Tooltip = D25 静态文本。守卫测试 ×5：DPI 档位（96/120/144/192→16/20/24/32）、菜单 id→事件映射、
+      ico 容器五档条目、Tooltip UTF-16 ≤127 单元、to_wide NUL 结尾。
+    </div>
+  </section>
+
   <!-- ================= 11 Fluent UI 9 组件映射总表 ================= -->
   <section class="screen" data-page-node-id="hjftlk2ZflheBsVpAxVsKf">
     <div class="s-head" data-page-node-id="JWr0va4dOvQZiCk3zRvdED">
@@ -1537,6 +2114,18 @@
         <td data-page-node-id="wDzebiJ36yV7q9uPtCCvlt">遮罩 <code data-page-node-id="IVxwzp51B9Zp4p5nNKA75F">colorBackgroundOverlay</code>（.50/.40）、面板 420px + shadow64、右对齐按钮、critical danger 底</td>
         <td data-page-node-id="Bn5FEnf5X0JPopUPcnLdSc"><code data-page-node-id="E96heT555gvfDjqyf72UZB">draw_confirm</code>（遮罩为新增规格，占位）</td>
       </tr>
+      <tr>
+        <td><b>右键菜单</b>（10B，v4.4）</td>
+        <td>Menu + MenuPopover + MenuItem / MenuDivider</td>
+        <td>surface = panel 底 + stroke2 描边 + radius-md（4）+ <code>shadow8</code>；项高 32、hover <code>bg1Hover</code>、快捷键 caption1/fg3 右对齐；分隔线 1px 内缩 8</td>
+        <td><code>draw_context_menu</code>（egui Area + 10B.2 类型映射表，D21 占位）</td>
+      </tr>
+      <tr>
+        <td><b>系统托盘</b>（10C，v4.5）</td>
+        <td>无 Fluent 组件（OS shell 表面）</td>
+        <td>原生菜单（TrackPopupMenu）由 Windows 渲染，<b>不在本稿 token 治理域</b>（D24 有意偏离记档）；图标 = 应用 .ico（16/20/24/32 DPI 档，D22）；Tooltip 静态（D25）</td>
+        <td>平台层新模块（refactor 方案 <code>platform.rs</code> 分层，建议 <code>tray.rs</code>）；<code>Shell_NotifyIconW</code> + 回调消息（D26 占位）</td>
+      </tr>
       <tr data-page-node-id="cYDFI9E1ZgpTCk8olS9xqM">
         <td data-page-node-id="WrWH07twv1FUPvWdZUem8q"><b data-page-node-id="b5o5bsAxqOf7DUstVzJSRI">空态</b>（02）</td>
         <td data-page-node-id="T83H9XI0BTqxgCdCzn19Lk">EmptyState 模式（大图标 + 标题 + 描述）</td>
@@ -1550,12 +2139,12 @@
   <section class="screen" data-page-node-id="L6iEhCagQTB9C9S6J4ACzC">
     <div class="s-head" data-page-node-id="wcnTV9vWl1qcsB6fExaLir">
       <span class="s-num" data-page-node-id="MDGUYBUj0ASdSN7Sz81Lwv">12</span>
-      <h2 data-page-node-id="MEsJHQAbs6nkiMATdLJcIZ">全界面验收核对表（v4）</h2>
+      <h2 data-page-node-id="MEsJHQAbs6nkiMATdLJcIZ">全界面验收核对表（v4.5）</h2>
       <span class="chip" data-page-node-id="oexn91omsB8ODgbbT1O4At">本期强制仅 D 组</span>
     </div>
     <p class="s-desc" data-page-node-id="mFFFhCHq07brlk9Rs1or3g">
-      各界面（01–10）的可量化验收标准。<b data-page-node-id="oEdsLqXyvMhp5Sc4evKcbI">本期性质 = 设计稿占位</b>：仅 D 组（文档一致性 + 00 决策合规）为强制验收项；
-      A–C 组为后续实施批次的验收预留，实施时逐项打勾。核对方式：真机截图（亮/暗双主题各一张）+ 像素测量。
+      各界面（01–10C）的可量化验收标准。<b data-page-node-id="oEdsLqXyvMhp5Sc4evKcbI">本期性质 = 设计稿占位</b>：仅 D 组（文档一致性 + 00 决策合规）为强制验收项；
+      A–F 组为后续实施批次的验收预留，实施时逐项打勾。核对方式：真机截图（亮/暗双主题各一张）+ 像素测量。
     </p>
     <table data-page-node-id="tfDrwygBSrCJhSRPzaKmK8">
       <tr data-page-node-id="Hq1fniuuasA4y39ZXVBeDj"><th data-page-node-id="z7jonyBk9L1DIWGhMLtLnB">#</th><th data-page-node-id="SHbLtC4IVpsDHirGudG3LD">界面</th><th data-page-node-id="3FJCVtJRGpY2AJEPl4JT1M">验收项</th><th data-page-node-id="JNnYI2M5MHukGAmhuuio8C">通过标准</th></tr>
@@ -1572,10 +2161,16 @@
       <tr data-page-node-id="NMw0PNkLEArYDBQLkeZPfW"><td data-page-node-id="mAgYgX0pkpeyy2n852Ioyz">C1</td><td rowspan="3" data-page-node-id="17BS5vSvZ58glwGrUZ5CeK"><b data-page-node-id="cU1yqCXIO6Rjz5L1FCkXJi">09 Toast / 10 Dialog</b></td><td data-page-node-id="ndWLbx0VvHHSrXXHUJIpfU">Toast 几何与时长</td><td data-page-node-id="9cyWjf2esMRdPnByksBhuA">card 表面 + shadow16；底部居中偏移 48px；圆角 8；默认 2s、失败路径 3s 自动消失；同一时刻至多 1 条。</td></tr>
       <tr data-page-node-id="R2db4e3vDdYCg8tHoxN0to"><td data-page-node-id="CVvyURE1AgLn7sPYr720CF">C2</td><td data-page-node-id="v3OfZxHS5krzHbtp510OZM">Toast 意图图标</td><td data-page-node-id="QB1Vqytl2QzaGXU1sbqGl1">success/error/info 图标与语义色逐项正确（未接意图字段前默认 info）。</td></tr>
       <tr data-page-node-id="OY1dzpuGqO4v0IH0uDzkGJ"><td data-page-node-id="6kOi3BgxEqb7OCl2ESiyop">C3</td><td data-page-node-id="0ZFCTEBP0fLWoA8pCrNJyx">Dialog 行为</td><td data-page-node-id="bBKiGyGof7E80yVt08iYS8">宽 420px 居中 + shadow64；遮罩 = blackAlpha .50（暗）/.40（亮）；Enter=确认、Esc=取消、点击遮罩=取消（遮罩实施后）；critical 确认按钮为 danger 底。</td></tr>
-      <tr data-page-node-id="k4NycA7gCrFp8nlLXe24VB"><td data-page-node-id="UF4YEjmAbmfrY0ACtOo7Qz">D1</td><td rowspan="4" data-page-node-id="TjcYgNaCwAnoT24imYbL7e"><b data-page-node-id="kjIeRaPFsE0vyz3lNQFyzo">文档一致性</b><br data-page-node-id="1rGxBjM1QrQ4VSYEikFbjT">（本期强制）</td><td data-page-node-id="S2N1OoL1B2ZfcDyVNCZ7CG">token 全覆盖</td><td data-page-node-id="VkaxPBpRGpxTf6EINA8Tui">产品 UI 区域（01–10 示例面板）全部色值经 CSS 变量引用；旧值清零（46/44 行高·35 页脚·半透明白行态·#4d4d4d 等无残留）。</td></tr>
+      <tr><td>E1</td><td rowspan="3"><b>10B 右键菜单</b><br>（v4.4）</td><td>菜单几何</td><td>容器 = <code>--panel</code> 底 + 1px stroke2 描边 + 圆角 4 + shadow8；min-width 200、padding 4；菜单项高 32、圆角 4、hover = bg1Hover；分隔线 1px、垂直 margin 4 / 水平内缩 8（像素测量）。</td></tr>
+      <tr><td>E2</td><td>类型映射正确性</td><td>五种 <code>result_category</code>（命令/应用/文件/网页/设置）弹出的菜单项与 10B.2 映射表<b>逐项一致</b>；第一项恒为默认动作（与页脚/Enter 同款，快捷键列显示 ↵ Enter）；非映射类型不弹菜单。</td></tr>
+      <tr><td>E3</td><td>行为（D19/D20）</td><td>Esc、点击面板其他区域、列表滚动/改选均关闭；右键与键盘（Menu / Shift+F10）两种触发均可；菜单不溢出面板（越界先翻转、后 8px 夹紧）；同一时刻至多 1 个菜单。</td></tr>
+      <tr><td>F1</td><td rowspan="3"><b>10C 系统托盘</b><br>（v4.5）</td><td>图标与常驻（D22）</td><td>启动后托盘图标出现；DPI 档位取整正确（100/125/150/200% → 16/20/24/32）；隐藏面板后进程常驻、托盘仍在；<b>无 badge / 无状态变化</b>。</td></tr>
+      <tr><td>F2</td><td>左键 toggle（D23）</td><td>单击托盘图标 = 面板显示（焦点落搜索框、当前屏工作区居中）→ 再击隐藏，与 Win+Alt+Space 行为<b>逐项一致</b>；无单击/双击延迟。</td></tr>
+      <tr><td>F3</td><td>右键菜单与退出（D24/D25）</td><td>菜单为系统原生样式，4 项与 10C.2 <b>逐项一致</b>；「显示/隐藏面板」效果 = F2；「设置」打开面板并进入设置视图；「退出」结束进程且托盘图标消失、热键注销；Tooltip 静态文本正确；同一时刻至多 1 个菜单。</td></tr>
+      <tr data-page-node-id="k4NycA7gCrFp8nlLXe24VB"><td data-page-node-id="UF4YEjmAbmfrY0ACtOo7Qz">D1</td><td rowspan="4" data-page-node-id="TjcYgNaCwAnoT24imYbL7e"><b data-page-node-id="kjIeRaPFsE0vyz3lNQFyzo">文档一致性</b><br data-page-node-id="1rGxBjM1QrQ4VSYEikFbjT">（本期强制）</td><td data-page-node-id="S2N1OoL1B2ZfcDyVNCZ7CG">token 全覆盖</td><td data-page-node-id="VkaxPBpRGpxTf6EINA8Tui">产品 UI 区域（01–10C 示例面板）全部色值经 CSS 变量引用；旧值清零（46/44 行高·35 页脚·半透明白行态·#4d4d4d 等无残留）。</td></tr>
       <tr data-page-node-id="fC7vsGz12xFzTTe0zIHyu5"><td data-page-node-id="h5Il7uQ4aW1xtUM6SgyNFe">D2</td><td data-page-node-id="e7ronPn5T2nz0dHMX9yyzu">映射表完整</td><td data-page-node-id="W0Y1p5dlHLFMA8AXLrGsh1">11 表覆盖全部界面区域；每个「占位」条目在对应章节规格表中可索引到。</td></tr>
-      <tr data-page-node-id="goCNUGdYhTVQUJ6NQEbbVm"><td data-page-node-id="cVudQr1AOKDAYj36B2jDLY">D3</td><td data-page-node-id="JiF5d4gG3FPJUWHXa0AmQm">双主题渲染</td><td data-page-node-id="6hJCakRDrc1526o9Lh0u58">亮/暗两主题下 01–10 各截图一张，对比度与交互态符合本稿（重点核对：暗色描边 #666666、暗色行态实色、filled-darker 搜索框）。</td></tr>
-      <tr data-page-node-id="RqCuB3cKJzvkCtyYRwa2dS"><td data-page-node-id="ASBaO1UXOE8UdLtKIH2rdi">D4</td><td data-page-node-id="LA6u2xN3myD37vwZFMeirl">与 00 决策一致</td><td data-page-node-id="dlx41WyjhFnbiVOXqAnRyA">逐章对照 00.2 决策清单 D1–D17 检查：无章节引用已废弃方案（独立 44px 标题栏 / 描述徽标 / ueli auto 搜索框 / 半透明白行态等）。</td></tr>
+      <tr data-page-node-id="goCNUGdYhTVQUJ6NQEbbVm"><td data-page-node-id="cVudQr1AOKDAYj36B2jDLY">D3</td><td data-page-node-id="JiF5d4gG3FPJUWHXa0AmQm">双主题渲染</td><td data-page-node-id="6hJCakRDrc1526o9Lh0u58">亮/暗两主题下 01–10C 各截图一张，对比度与交互态符合本稿（重点核对：暗色描边 #666666、暗色行态实色、filled-darker 搜索框）。</td></tr>
+      <tr data-page-node-id="RqCuB3cKJzvkCtyYRwa2dS"><td data-page-node-id="ASBaO1UXOE8UdLtKIH2rdi">D4</td><td data-page-node-id="LA6u2xN3myD37vwZFMeirl">与 00 决策一致</td><td data-page-node-id="dlx41WyjhFnbiVOXqAnRyA">逐章对照 00.2 决策清单 D1–D26（含 v4.4 右键菜单决策 D18–D21、v4.5 托盘决策 D22–D26）检查：无章节引用已废弃方案（独立 44px 标题栏 / 描述徽标 / ueli auto 搜索框 / 半透明白行态等）。</td></tr>
     </table>
     <div class="note" data-page-node-id="F5mG5JIbDYfS2wtp6HIA28">
       <b data-page-node-id="BGVxIQsF02i2uDf9LkKHTD">与 6.4（C1–C13）的关系：</b>6.4 验收「设置按钮 / 类型标签 / 上下文页脚」三项既有优化；
@@ -1606,6 +2201,199 @@
     });
     mql.addEventListener("change", function () { if (mode === "system") apply(); });
     apply();
+  })();
+
+  /* ============ 10B 交互演示：右键菜单（v4.4） ============ */
+  (function () {
+    var panel = document.getElementById("ctxDemoPanel");
+    var results = document.getElementById("ctxDemoResults");
+    var menu = document.getElementById("ctxDemoMenu");
+    if (!panel || !results || !menu) return;
+
+    /* 10B.2 类型 → 菜单项映射（GUI 层静态硬编码，D18） */
+    var GLYPH_OPEN = "\uE8E5", GLYPH_ADMIN = "\uE7EF", GLYPH_FOLDER = "\uE8DA",
+        GLYPH_COPY = "\uE8C8", GLYPH_PLAY = "\uE768", GLYPH_WEB = "\uE774",
+        GLYPH_LINK = "\uE71B", GLYPH_SETTINGS = "\uE713";
+    var CTX_MENUS = {
+      "应用": [
+        { g: GLYPH_OPEN, l: "打开", k: "\u21B5 Enter" },
+        { g: GLYPH_ADMIN, l: "以管理员身份运行", k: "Ctrl+\u21B5" },
+        { g: GLYPH_FOLDER, l: "打开所在位置", k: "" },
+        { sep: true },
+        { g: GLYPH_COPY, l: "复制路径", k: "Ctrl+Shift+C" }
+      ],
+      "文件": [
+        { g: GLYPH_OPEN, l: "打开", k: "\u21B5 Enter" },
+        { g: GLYPH_FOLDER, l: "打开所在位置", k: "" },
+        { sep: true },
+        { g: GLYPH_COPY, l: "复制路径", k: "Ctrl+Shift+C" }
+      ],
+      "网页": [
+        { g: GLYPH_WEB, l: "在默认浏览器打开", k: "\u21B5 Enter" },
+        { sep: true },
+        { g: GLYPH_LINK, l: "复制链接", k: "Ctrl+Shift+C" }
+      ],
+      "命令": [
+        { g: GLYPH_PLAY, l: "执行", k: "\u21B5 Enter" }
+      ],
+      "设置": [
+        { g: GLYPH_SETTINGS, l: "打开设置", k: "\u21B5 Enter" }
+      ]
+    };
+
+    function closeMenu() {
+      menu.classList.remove("open");
+    }
+    function buildMenu(type) {
+      menu.innerHTML = "";
+      (CTX_MENUS[type] || []).forEach(function (entry) {
+        if (entry.sep) {
+          var sep = document.createElement("div");
+          sep.className = "ctx-sep";
+          menu.appendChild(sep);
+          return;
+        }
+        var item = document.createElement("div");
+        item.className = "ctx-item";
+        var icon = document.createElement("span");
+        icon.className = "glyph";
+        icon.textContent = entry.g;
+        var label = document.createElement("span");
+        label.className = "label";
+        label.textContent = entry.l;
+        var spacer = document.createElement("span");
+        spacer.className = "spacer";
+        var kbd = document.createElement("span");
+        kbd.className = "kbd";
+        kbd.textContent = entry.k;
+        item.appendChild(icon); item.appendChild(label);
+        item.appendChild(spacer); item.appendChild(kbd);
+        menu.appendChild(item);
+      });
+    }
+    function openMenu(row, x, y) {
+      var type = row.getAttribute("data-ctx-type");
+      if (!CTX_MENUS[type]) return;                 /* 非映射类型不弹菜单（E2） */
+      rows.forEach(function (r) { r.classList.remove("selected"); });
+      row.classList.add("selected");                /* 右键 = 置为选中态 */
+      buildMenu(type);
+      menu.classList.add("open");
+      /* D20：指针锚点 + 面板内翻转/夹紧，绝不溢出 */
+      var pw = panel.clientWidth, ph = panel.clientHeight;
+      var mw = menu.offsetWidth, mh = menu.offsetHeight;
+      var nx = x + 2, ny = y + 2;
+      if (nx + mw > pw - 8) nx = Math.max(8, pw - mw - 8);   /* 水平夹紧 */
+      if (ny + mh > ph - 8) {                                 /* 垂直先翻转再夹紧 */
+        var flipped = y - mh - 2;
+        ny = (flipped >= 8) ? flipped : Math.max(8, ph - mh - 8);
+      }
+      menu.style.left = nx + "px";
+      menu.style.top = ny + "px";
+    }
+
+    var rows = Array.prototype.slice.call(results.querySelectorAll(".row"));
+    rows.forEach(function (row) {
+      row.addEventListener("contextmenu", function (e) {
+        e.preventDefault();
+        e.stopPropagation();
+        var rect = panel.getBoundingClientRect();
+        openMenu(row, e.clientX - rect.left, e.clientY - rect.top);
+      });
+    });
+    /* D19：Esc / 点击面板其他区域 / 列表滚动均关闭 */
+    panel.addEventListener("contextmenu", function (e) {
+      if (!e.target.closest || !e.target.closest(".row")) {
+        e.preventDefault();
+        closeMenu();
+      }
+    });
+    document.addEventListener("click", function (e) {
+      if (!menu.contains(e.target)) closeMenu();
+    });
+    results.addEventListener("scroll", closeMenu);
+    document.addEventListener("keydown", function (e) {
+      if (e.key === "Escape") closeMenu();
+    });
+  })();
+
+  /* ============ 10C 交互演示：系统托盘（v4.5） ============ */
+  (function () {
+    var icon = document.getElementById("trayIcon");
+    var menu = document.getElementById("trayMenu");
+    var panel = document.getElementById("trayPanel");
+    var rootView = document.getElementById("trayPanelRoot");
+    var setView = document.getElementById("trayPanelSettings");
+    var exited = document.getElementById("trayExited");
+    var desktop = document.getElementById("trayDesktop");
+    if (!icon || !menu || !panel || !rootView || !setView || !exited || !desktop) return;
+
+    function closeMenu() {
+      menu.classList.remove("open");
+      icon.classList.remove("armed");
+    }
+    /* 显示面板：toSettings=true 时 in-place 切到设置视图（10C.2「设置」项，D3） */
+    function showPanel(toSettings) {
+      exited.classList.remove("show");
+      panel.style.display = "flex";
+      rootView.style.display = toSettings ? "none" : "flex";
+      setView.style.display = toSettings ? "flex" : "none";
+    }
+    function hidePanel() { panel.style.display = "none"; }
+    function panelVisible() { return panel.style.display !== "none"; }
+    /* D23：单击 = toggle，与全局热键 Win+Alt+Space 同一语义 */
+    function togglePanel() { panelVisible() ? hidePanel() : showPanel(false); }
+
+    icon.addEventListener("click", function () { togglePanel(); });
+
+    /* D24：右键 = 系统原生菜单；锚点在图标上方，桌区内 8px 夹紧 */
+    icon.addEventListener("contextmenu", function (e) {
+      e.preventDefault();
+      e.stopPropagation();
+      menu.classList.add("open");
+      icon.classList.add("armed");
+      var dr = desktop.getBoundingClientRect();
+      var mw = menu.offsetWidth, mh = menu.offsetHeight;
+      var nx = e.clientX - dr.left - mw / 2;
+      var ny = dr.height - mh - 56;
+      nx = Math.max(8, Math.min(nx, dr.width - mw - 8));
+      menu.style.left = nx + "px";
+      menu.style.top = ny + "px";
+    });
+    /* 真机由 TrackPopupMenu 前置 SetForegroundWindow 保证外点关闭（10C.1） */
+    document.addEventListener("click", function (e) {
+      if (!menu.contains(e.target) && !icon.contains(e.target)) closeMenu();
+    });
+    document.addEventListener("keydown", function (e) {
+      if (e.key === "Escape") closeMenu();
+    });
+
+    /* 10C.2 菜单项 → 行为映射 */
+    Array.prototype.slice.call(menu.querySelectorAll(".wm-item")).forEach(function (item) {
+      item.addEventListener("click", function () {
+        var act = item.getAttribute("data-act");
+        closeMenu();
+        if (act === "toggle") togglePanel();
+        else if (act === "settings") showPanel(true);
+        else if (act === "exit") {
+          /* 演示态：图标移除 + 面板不可呼出（不真正结束页面） */
+          hidePanel();
+          icon.classList.add("gone");
+          exited.classList.add("show");
+        }
+      });
+    });
+
+    var reset = document.getElementById("trayReset");
+    if (reset) {
+      reset.addEventListener("click", function (e) {
+        e.stopPropagation();
+        icon.classList.remove("gone");
+        exited.classList.remove("show");
+        hidePanel();
+      });
+    }
+
+    hidePanel(); /* 初始：面板隐藏，仅托盘常驻 */
   })();
 </script>
 

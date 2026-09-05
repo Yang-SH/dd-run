@@ -54,40 +54,6 @@ mod sys {
         pub args: &'static [&'static str],
     }
 
-    /// M5 UI 批次 2 UI 验收项 id：一条真实走完「协议 icon 字段 → 宿主透传 →
-    /// PNG 解码 → 20×20 纹理渲染」链路的演示命令。**不进 [`COMMANDS`] 目录**
-    /// （保持"5 条系统命令"的目录不变式，目录测试不受影响），仅由
-    /// [`top_level_commands`] 末尾追加；点击无系统副作用（Toast 提示），
-    /// 专用于验收 Path 图标渲染（设计稿 04）。
-    pub const DEMO_ICON_ITEM_ID: &str = "system.ui_accept.png_icon";
-
-    /// 演示用 PNG 资产：**编译期内嵌**（`include_bytes!` 锚定源码树资产）。
-    /// 运行时物化到 `<APPDATA>/dd-run/cache/ui-accept-icon.png` 并以该路径经协议
-    /// 发送给宿主渲染。内嵌使打包分发后（脱离源码树、换机器）仍能工作，
-    /// 无需在发行包里额外带 assets 目录。
-    const DEMO_ICON_BYTES: &[u8] = include_bytes!(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        r"\assets\ui-accept-icon.png"
-    ));
-
-    /// 返回演示图标文件路径：首次调用把内嵌 PNG 物化到数据缓存目录，之后复用。
-    /// 失败（无 APPDATA / 写入失败）返回 `None`，调用方回落为占位 glyph。
-    fn demo_icon_path() -> Option<String> {
-        let cache_dir = data_cache_dir()?;
-        let path = cache_dir.join("ui-accept-icon.png");
-        if !path.exists() {
-            std::fs::create_dir_all(&cache_dir).ok()?;
-            std::fs::write(&path, DEMO_ICON_BYTES).ok()?;
-        }
-        Some(path.to_string_lossy().into_owned())
-    }
-
-    /// `<APPDATA>/dd-run/cache`（与宿主桩缓存同根，必定可写）。
-    fn data_cache_dir() -> Option<std::path::PathBuf> {
-        let appdata = std::env::var("APPDATA").ok()?;
-        Some(std::path::Path::new(&appdata).join("dd-run").join("cache"))
-    }
-
     pub const COMMANDS: &[SystemCommand] = &[
         SystemCommand {
             id: "system.lock",
@@ -137,7 +103,7 @@ mod sys {
     ];
 
     pub fn top_level_commands() -> Vec<CommandItem> {
-        let mut items: Vec<CommandItem> = COMMANDS
+        COMMANDS
             .iter()
             .map(|c| CommandItem {
                 id: c.id.to_string(),
@@ -158,25 +124,7 @@ mod sys {
                 more_commands: None,
                 command: CommandRef::Invoke,
             })
-            .collect();
-        // M5 UI 批次 2：追加 PNG Path 图标验收项（唯一走 Path 态的真实命令；
-        // 其余内置扩展均为 Glyph——本项用于验收宿主 20×20 PNG 渲染链路）。
-        items.push(CommandItem {
-            id: DEMO_ICON_ITEM_ID.to_string(),
-            title: "UI 验收：PNG 图标".to_string(),
-            subtitle: Some("Path 图标链路（PNG 资产 → 宿主解码 → 20×20 渲染）".to_string()),
-            icon: Some(Icon {
-                kind: IconKind::Path,
-                value: demo_icon_path().unwrap_or_default(),
-            }),
-            section: Some("系统".to_string()),
-            tags: Some(vec!["ui".to_string(), "demo".to_string()]),
-            details: None,
-            text_to_suggest: None,
-            more_commands: None,
-            command: CommandRef::Invoke,
-        });
-        items
+            .collect()
     }
 
     /// 纯决策层（无副作用，可安全单测）：
@@ -188,14 +136,6 @@ mod sys {
             .as_ref()
             .and_then(|c| c.confirmed)
             .unwrap_or(false);
-        // M5 UI 批次 2：验收项点击 → 提示性 Toast，不执行任何系统操作
-        // （与"未知 id → 报错 Toast"区分开，语义为"演示成功"而非错误）。
-        if params.id == DEMO_ICON_ITEM_ID {
-            return Err(CommandResult::ShowToast {
-                message: "UI 验收：PNG 图标渲染正常（演示项无操作）".to_string(),
-                duration_ms: Some(1_800),
-            });
-        }
         let Some(cmd) = COMMANDS.iter().find(|c| c.id == params.id) else {
             return Err(CommandResult::ShowToast {
                 message: format!("未知系统命令：{}", params.id),
@@ -264,43 +204,6 @@ mod sys {
         }
 
         #[test]
-        fn top_level_has_png_path_icon_demo_with_existing_asset() {
-            // M5 UI 批次 2：验收项 = 第 6 条（5 系统命令 + 1 demo），且其 icon
-            // 为 Path 态、资产文件在编译期路径上真实存在——锁住"宿主有真实
-            // Path 图标可渲染"这一验收前提（其余内置扩展全是 Glyph）。
-            let items = top_level_commands();
-            assert_eq!(items.len(), COMMANDS.len() + 1);
-            let demo = items
-                .iter()
-                .find(|i| i.id == DEMO_ICON_ITEM_ID)
-                .expect("验收 demo 应出现在顶层命令中");
-            assert_eq!(demo.title, "UI 验收：PNG 图标");
-            let Some(Icon {
-                kind: IconKind::Path,
-                value,
-            }) = &demo.icon
-            else {
-                panic!("demo icon 应为 Path 态");
-            };
-            let asset = std::path::Path::new(value);
-            assert!(asset.is_file(), "PNG 资产应存在（随 crate 分发）：{value}");
-            let len = std::fs::metadata(asset).expect("读取资产元数据").len();
-            assert!(len > 0, "PNG 资产不应为空文件");
-        }
-
-        #[test]
-        fn demo_item_invoke_toasts_without_confirm() {
-            // 点击验收项不触发任何系统副作用：直接 Toast（无需 Confirm 门禁）
-            let p = dd_protocol::messages::InvokeParams {
-                id: DEMO_ICON_ITEM_ID.into(),
-                sender: dd_protocol::model::Sender::TopLevel,
-                context: None,
-            };
-            let result = decide(&p);
-            assert!(matches!(result, Err(CommandResult::ShowToast { .. })));
-        }
-
-        #[test]
         fn dangerous_command_first_invoke_confirms() {
             // 决策层纯函数单测：不触发真实系统副作用
             let p = dd_protocol::messages::InvokeParams {
@@ -356,24 +259,6 @@ mod sys {
             };
             let result = decide(&p);
             assert!(matches!(result, Err(CommandResult::ShowToast { .. })));
-        }
-
-        /// 回归防线（2026-09-04）：仓库曾提交过一张**结构损坏**的演示图标——
-        /// IHDR 声明 32×32 RGBA（解压后应 4128 字节），IDAT 解压只有 1056 字节，
-        /// 于是宿主侧解码必然失败、每帧回落占位 glyph；而日志只在真机出现、
-        /// 无任何自动化拦截，问题一直潜伏。这里直接解码编译期锚定的资产，
-        /// 素材再损坏会立刻红灯，而不是静默降级。
-        #[test]
-        fn demo_icon_asset_is_decodable() {
-            // 内嵌资产编译期已锚定源码树；这里校验内嵌字节是合法 32×32 PNG，
-            // 素材再损坏会在编译/本测试红灯，而非静默降级。
-            let img = image::load_from_memory(DEMO_ICON_BYTES)
-                .expect("演示图标应是合法 PNG：损坏素材会让宿主侧静默回落占位 glyph");
-            assert_eq!(
-                (img.width(), img.height()),
-                (32, 32),
-                "演示图标约定为 32×32"
-            );
         }
     }
 }

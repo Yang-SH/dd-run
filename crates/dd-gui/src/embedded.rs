@@ -9,8 +9,9 @@
 //!   见 [`build.rs`](../build.rs)，经 `tools/package.sh` 构建才有内嵌内容）。
 //! - 物化目标：`cache_dir()/embedded/`（`dd-host::manifest::cache_dir`），
 //!   与第三方扩展、磁盘桩缓存同目录族，但不参与 LRU 驱逐。
-//! - 幂等 + 升级刷新：宿主以**版本标记文件**判断是否需要重写——仅当标记
-//!   ≠ 宿主版本时才重写全部内嵌 exe（宿主升级即刷新）；否则沿用已物化文件，
+//! - 幂等 + 内容感知刷新：宿主以**内容指纹标记文件**判断是否需要重写——
+//!   仅当标记 ≠ 内嵌内容指纹（FNV-1a）时才重写全部内嵌 exe（扩展字节一变
+//!   即刷新，开发期迭代无需手动清缓存）；否则沿用已物化文件，
 //!   避免每次冷启动重复写盘。
 
 use std::fs;
@@ -23,9 +24,23 @@ use dd_host::manifest;
 // 表格类型 `&[(&str, &[u8])]`：`(可执行文件名, 字节)`。
 include!(concat!(env!("OUT_DIR"), "/embedded.rs"));
 
-/// 宿主版本标记：物化目录里的 `.host-version` 与此一致则跳过重写。
+/// 物化标记：内嵌内容的 FNV-1a 64bit 指纹（over 文件名 + 字节）。
+///
+/// 此前按宿主版本号标记——开发期迭代扩展源码但不动版本号时，已物化的旧 exe
+/// 不会刷新（真机 2026-09-05 反馈：删掉 demo 项后旧 `dd-ext-system.exe` 仍被
+/// spawn，列表残留「UI 验收」行）。改为内容指纹后，内嵌字节任何变化都会触发
+/// 重写，开发期无需手动清缓存；运行时在内存中算指纹，无额外磁盘读开销。
 fn host_marker() -> String {
-    format!("dd-run-host-{}", env!("CARGO_PKG_VERSION"))
+    const FNV_OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
+    const FNV_PRIME: u64 = 0x0000_0100_0000_01b3;
+    let mut h = FNV_OFFSET;
+    for (fname, bytes) in EMBEDDED {
+        for b in fname.as_bytes().iter().chain(bytes.iter()) {
+            h ^= u64::from(*b);
+            h = h.wrapping_mul(FNV_PRIME);
+        }
+    }
+    format!("dd-run-embedded-{h:016x}")
 }
 
 /// 内嵌扩展是否非空（经 package.sh 构建 → 有内容；直接 cargo build → 空）。

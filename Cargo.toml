@@ -1,3 +1,13 @@
 [workspace]
 resolver = "2"
 members = ["crates/*"]
+
+# 发布 profile：只调编译器层面参数，不改任何代码/依赖/协议字段。
+# - strip = "symbols"：剥符号表（windows-gnu 默认 release 保留，纯体积税）
+# - lto = "fat" + codegen-units = 1：跨 crate 死代码消除，编译更慢但产物更小
+# - opt-level 保持默认 3：egui 渲染热路径性能不受影响（不用 z/s 换体积）
+# - panic 不改：保留默认 unwind 语义，行为零变化
+[profile.release]
+strip = "symbols"
+lto = "fat"
+codegen-units = 1
