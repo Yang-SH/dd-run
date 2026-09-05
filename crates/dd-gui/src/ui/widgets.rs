@@ -9,10 +9,12 @@ pub(crate) struct KeyGroup {
     pub(crate) desc: &'static str,
 }
 
-/// `<b>↑</b> <b>↓</b> 选择` ｜ `<b>Enter</b> 执行` ｜ `<b>Esc</b> 返回 / 隐藏`
+/// `<b>↑↓</b> 选择` ｜ `<b>Enter</b> 执行` ｜ `<b>Esc</b> 返回·隐藏`
+/// （v4.7 修订，真机反馈 2026-09-05：↑↓ 合并**单枚**键帽——两枚窄键帽各自
+/// 四边描边在行内形成「|||」碎裂感；文案统一用 D15 文字规格的「返回·隐藏」）
 pub(crate) const KEY_GROUPS: [KeyGroup; 3] = [
     KeyGroup {
-        caps: &["↑", "↓"],
+        caps: &["↑↓"],
         desc: "选择",
     },
     KeyGroup {
@@ -21,7 +23,7 @@ pub(crate) const KEY_GROUPS: [KeyGroup; 3] = [
     },
     KeyGroup {
         caps: &["Esc"],
-        desc: "返回 / 隐藏",
+        desc: "返回·隐藏",
     },
 ];
 
@@ -153,8 +155,15 @@ pub(crate) fn paint_keys_at(ui: &mut egui::Ui, origin: egui::Pos2, p: &theme::Pa
     }
 }
 
-/// 单个键帽（设计稿 `.panel-footer b`）：chip 底 + 1px 描边 + **下边 2px** +
-/// 圆角 4 + monospace 10px + 左右 6px padding（`border-bottom-width: 2px`）。
+/// 单个键帽（设计稿 `.panel-footer b`）：chip 底 + 1px 描边 + 圆角 4 +
+/// monospace 10px + 左右 6px padding。
+///
+/// v4.7 修订（真机反馈两轮）：
+/// ① 描边 `--border` → **`--border-strong`**——浅色主题下 #e0e0e0 键帽贴
+/// #fafafa 页脚几乎不可见，提一档后键帽轮廓清晰（与设计稿 CSS 同步修订）；
+/// ② **下边线统一 1px**——原设计的 2px 下边条（keycap 立体感）在 16px 高的
+/// 小键帽上明显重于三边 1px 描边（用户反馈"下划线比其他方向粗"），扁平化
+/// 为四边等宽；原"下边 2px 画入边框盒内部"的 0.5px 悬空线修复随之失效删除。
 ///
 /// 绘制核心 [`paint_keycap`] 接收**显式矩形**：egui `Frame` 不支持按边设不同
 /// 描边宽度只能手画，且页脚混合高度内容需手动锚定中心线（见 `paint_keys_at`），
@@ -166,19 +175,8 @@ pub(crate) fn paint_keycap(ui: &mut egui::Ui, rect: egui::Rect, cap: &str, p: &t
     ui.painter().rect_stroke(
         r,
         egui::CornerRadius::same(4),
-        egui::Stroke::new(1.0, p.border),
+        egui::Stroke::new(1.0, p.border_strong),
         egui::StrokeKind::Inside,
-    );
-    // 下边 2px（CSS `border-bottom-width: 2px`）——必须画在**收缩后的盒内**：
-    // 旧实现误用未收缩的 `rect` 底边，比描边盒多出 0.5px 悬空线，
-    // 真机 2026-09-04 反馈"方框下多了阴影"，此为根因。
-    ui.painter().rect_filled(
-        egui::Rect::from_min_max(
-            egui::pos2(r.left() + 1.0, r.bottom() - 2.0),
-            egui::pos2(r.right() - 1.0, r.bottom()),
-        ),
-        egui::CornerRadius::same(2),
-        p.border,
     );
     ui.painter().text(
         rect.center(),

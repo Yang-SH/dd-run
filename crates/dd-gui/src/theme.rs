@@ -213,7 +213,11 @@ pub fn overlay(dark: bool) -> Color32 {
 /// 05 表 → egui `Visuals`：以 egui 默认视觉为基底，覆盖 token 可映射字段。
 /// 组件类色板（Tag/行态）不进 `Visuals`（无对应字段），由绘制层经
 /// [`Palette`] 直接取用。
-pub fn visuals(dark: bool) -> Visuals {
+///
+/// `panel_transparent`（v4.7 D31）：窗口材质生效时面板背景透明——DWM 系统材质
+/// 画在窗口表面之后，egui 面板必须不涂底色才可见。只透明 `panel_fill`
+/// （CentralPanel 底），行/卡片/页脚等表面保持不透明层级。
+pub fn visuals(dark: bool, panel_transparent: bool) -> Visuals {
     let p = Palette::of(dark);
     let mut v = if dark {
         Visuals::dark()
@@ -221,7 +225,11 @@ pub fn visuals(dark: bool) -> Visuals {
         Visuals::light()
     };
     v.dark_mode = dark;
-    v.panel_fill = p.panel;
+    v.panel_fill = if panel_transparent {
+        Color32::TRANSPARENT
+    } else {
+        p.panel
+    };
     v.window_fill = p.panel;
     v.extreme_bg_color = p.input_fill; // TextEdit/滚动条底（bg3，filled-darker 同源）
     v.faint_bg_color = p.row_hover;
@@ -251,10 +259,21 @@ pub fn visuals(dark: bool) -> Visuals {
 /// 注册双主题 + 按用户偏好设定主题（M5 批次 4.0 起偏好来自持久化设置，
 /// 不再写死跟随系统）。程序启动时调用一次；此后用户在设置页改选时由
 /// `Context::set_theme` 运行时切换（无需重启）。
-pub fn apply(ctx: &Context, pref: ThemePreference) {
-    ctx.set_visuals_of(Theme::Dark, visuals(true));
-    ctx.set_visuals_of(Theme::Light, visuals(false));
+///
+/// `panel_transparent`（v4.7 D31）：材质生效时为 true——亮暗两套 Style **都**
+/// 带透明 panel_fill 注册，保证「跟随系统」在系统亮暗切换 re-resolve 后
+/// 透明性不丢失。
+pub fn apply(ctx: &Context, pref: ThemePreference, panel_transparent: bool) {
+    ctx.set_visuals_of(Theme::Dark, visuals(true, panel_transparent));
+    ctx.set_visuals_of(Theme::Light, visuals(false, panel_transparent));
     ctx.set_theme(pref);
+}
+
+/// 仅切换面板背景透明性（v4.7 D31：材质开/关与回退时调用），不动主题偏好。
+/// 亮暗两套 Style 同步重注册（同 [`apply`] 的透明性口径）。
+pub fn apply_panel_transparency(ctx: &Context, panel_transparent: bool) {
+    ctx.set_visuals_of(Theme::Dark, visuals(true, panel_transparent));
+    ctx.set_visuals_of(Theme::Light, visuals(false, panel_transparent));
 }
 
 /// [`settings::ThemePref`] → egui [`ThemePreference`]（设置页选择立即生效用）。
@@ -433,7 +452,7 @@ mod tests {
     #[test]
     fn visuals_reflect_palette_of_theme() {
         for dark in [true, false] {
-            let v = visuals(dark);
+            let v = visuals(dark, false);
             let p = Palette::of(dark);
             assert_eq!(v.dark_mode, dark, "dark_mode 标志随主题");
             assert_eq!(v.panel_fill, p.panel, "panel_fill = --panel");
@@ -446,6 +465,21 @@ mod tests {
                 CornerRadius::same(8),
                 "窗口圆角 8px（几何 note）"
             );
+        }
+    }
+
+    /// v4.7 D31：材质生效时 panel_fill 透明（其余字段不变），亮暗两套一致。
+    #[test]
+    fn panel_transparent_visuals_only_affect_panel_fill() {
+        for dark in [true, false] {
+            let opaque = visuals(dark, false);
+            let transparent = visuals(dark, true);
+            assert_eq!(transparent.panel_fill, Color32::TRANSPARENT);
+            assert_ne!(opaque.panel_fill, Color32::TRANSPARENT);
+            // 其余表面不透明层级不变（行/卡片经 Palette 取用，不在 Visuals 内）
+            assert_eq!(transparent.extreme_bg_color, opaque.extreme_bg_color);
+            assert_eq!(transparent.window_fill, opaque.window_fill);
+            assert_eq!(transparent.dark_mode, opaque.dark_mode);
         }
     }
 

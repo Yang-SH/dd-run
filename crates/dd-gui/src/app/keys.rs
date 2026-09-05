@@ -122,7 +122,74 @@ impl PaletteApp {
         eprintln!("[dd-gui] 主题偏好变更：{} → 立即生效并保存", pref.label());
         self.settings.theme = pref;
         ctx.set_theme(theme::theme_preference(pref));
+        // v4.7 D31：材质生效时同步 DWM 明暗染色（跟随新主题；best-effort）
+        if self.backdrop_active {
+            if let Some(hwnd) = self.hwnd {
+                let dark = ctx.theme() == egui::Theme::Dark;
+                crate::platform::set_immersive_dark(hwnd, dark);
+            }
+        }
         self.settings.save();
+    }
+
+    /// 设置页材质开关（v4.7 D30/D31）：更新设置 → 落盘 → 立即应用。
+    /// 两开关互斥·后开优先由单值 `backdrop` 派生（开关状态 = 与该值比较），
+    /// 开关行点击语义：已开 → 关（None）；未开 → 开（该项）。
+    pub(crate) fn apply_backdrop(
+        &mut self,
+        ctx: &egui::Context,
+        backdrop: dd_gui::settings::Backdrop,
+    ) {
+        if self.settings.backdrop == backdrop {
+            return;
+        }
+        eprintln!("[dd-gui] 窗口材质：{} → 立即生效并保存", backdrop.label());
+        self.settings.backdrop = backdrop;
+        self.settings.save();
+        self.refresh_backdrop(ctx);
+    }
+
+    /// 按当前设置应用 DWM 材质（v4.7 D31）。成功 → 面板背景透明化（亮暗两套
+    /// Style 同步注册）+ 明暗染色跟随主题；失败（Win10 / 22621 以下）→ 保持
+    /// 不透明（platform 层已记日志，回退不阻断）。HWND 未捕获（首帧前）时
+    /// 跳过——`ui()` 捕获后会再调用一次。
+    ///
+    /// **切换防闪（v4.7 真机反馈）**：透明化方向 DWM 先行——材质先在当前
+    /// （尚不透明）帧后面就位，下一帧透明面板呈现时即有材质可透出；不透明化
+    /// 方向（切到「无材质」）**不能立即清 DWM**——DWM 属性即时生效而 egui 要
+    /// 下一帧才画出不透明面板，间隙内桌面穿透一闪。改为置
+    /// `backdrop_clear_countdown`，由 `ui()` 末尾在不透明帧呈现之后倒计时清材质。
+    pub(crate) fn refresh_backdrop(&mut self, ctx: &egui::Context) {
+        let Some(hwnd) = self.hwnd else {
+            return;
+        };
+        // ── 不透明化方向（backdrop = None）：先绘制不透明，后清材质 ──
+        if self.settings.backdrop == dd_gui::settings::Backdrop::None {
+            if self.backdrop_active {
+                self.backdrop_active = false;
+                theme::apply_panel_transparency(ctx, false);
+                // 倒计时 3 帧：点击帧（旧透明视觉）→ 第 1 个不透明帧绘制并呈现
+                // → 第 2 个不透明帧呈现后清 DWM 材质。全程无透明帧暴露窗口。
+                self.backdrop_clear_countdown = 3;
+            }
+            return;
+        }
+        // ── 透明化方向（云母 / 亚克力）：DWM 先行，再切透明视觉 ──
+        let kind = match self.settings.backdrop {
+            dd_gui::settings::Backdrop::None => crate::platform::SystemBackdrop::None,
+            dd_gui::settings::Backdrop::Mica => crate::platform::SystemBackdrop::Mica,
+            dd_gui::settings::Backdrop::Acrylic => crate::platform::SystemBackdrop::Acrylic,
+        };
+        let ok = crate::platform::apply_system_backdrop(hwnd, kind);
+        let active = ok;
+        if active {
+            let dark = ctx.theme() == egui::Theme::Dark;
+            crate::platform::set_immersive_dark(hwnd, dark);
+        }
+        if active != self.backdrop_active {
+            self.backdrop_active = active;
+            theme::apply_panel_transparency(ctx, active);
+        }
     }
 
     /// 设置页改选「打开面板时显示」：立即生效（重算 root 首屏可见表）+ 持久化。

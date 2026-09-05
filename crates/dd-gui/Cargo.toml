@@ -25,12 +25,16 @@ windows-sys = { version = "0.61", features = [
     "Win32_UI_WindowsAndMessaging",
     # 唤起居中（grills A1）：MonitorFromPoint / GetMonitorInfoW / MONITORINFO
     "Win32_Graphics_Gdi",
+    # v4.7 窗口材质（D31）：DwmSetWindowAttribute / DWMWA_SYSTEMBACKDROP_TYPE
+    "Win32_Graphics_Dwm",
     # v4.4 右键菜单 10B.2「以管理员身份运行」：ShellExecuteW(runas)
     # v4.5 托盘 10C：Shell_NotifyIconW / NOTIFYICONDATAW
     "Win32_UI_Shell",
     # v4.5 托盘 10C：GetModuleHandleW（托盘窗口类注册）
     "Win32_System_LibraryLoader",
 ] }
+# v4.7 窗口材质（D31）：eframe::Frame 经 HasWindowHandle 取 Win32 HWND
+raw-window-handle = "0.6"
 # M4 P2（host/* 执行端）：写剪贴板（host/set_clipboard）+ 打开系统浏览器（host/open_url）
 arboard = "3"
 webbrowser = "1"

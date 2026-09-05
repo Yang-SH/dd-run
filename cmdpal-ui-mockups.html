@@ -3,7 +3,7 @@
 <head data-page-node-id="s3qopa5FNyLjHL5eCuYZs0">
 <meta charset="UTF-8" data-page-node-id="iCtBYFbeT3CyD5jPQ5rxbB">
 <meta name="viewport" content="width=device-width, initial-scale=1.0" data-page-node-id="2ZgnDE6QB4A9RQBpLJBYoZ">
-<title>dd-run CmdPal UI 设计稿 v4.6 — Fluent 2 / Fluent UI 9 token 驱动（亮暗双主题）</title>
+<title>dd-run CmdPal UI 设计稿 v4.7 — Fluent 2 / Fluent UI 9 token 驱动（亮暗双主题）</title>
 <style>
   /* ============================================================
      主题 token（v4：值全部对齐 Fluent 2 alias token，灰阶 grey[N] = N% 亮度）
@@ -311,12 +311,8 @@
     font-size: var(--font-caption); line-height: var(--lh-caption); color: var(--text-3);
     white-space: nowrap; max-width: 90px; overflow: hidden; text-overflow: ellipsis; flex: 0 0 auto;
   }
-  /* Tag：Fluent Tag 语义（圆角 medium、subtle 底、caption1、不可关闭）；最多 2 个 + 「+N」 */
-  .row .tag {
-    font-size: var(--font-caption); line-height: var(--lh-caption); color: var(--text-2);
-    background: var(--chip-bg); border-radius: var(--radius-md);
-    padding: var(--space-2) var(--space-8); white-space: nowrap; flex: 0 0 auto;
-  }
+  /* Tag（v4.7 废止）：行内 Tag chips 整体移除（D13 废止，用户决策 2026-09-05）——
+     规则保留注释留档，演示与实现均不再渲染 */
 
   /* —— 页脚（统一骨架第三段）：高 32、单行、bg2 底 + 顶部 1px stroke2 —— */
   .panel-footer {
@@ -334,11 +330,14 @@
   .panel-footer .keys { display: flex; gap: var(--space-12); margin-left: auto; flex: 0 0 auto; }
   .panel-footer b, .keycap {
     font-weight: 500; color: var(--text-2); background: var(--chip-bg);
-    border: 1px solid var(--border); border-bottom-width: 2px;
+    border: 1px solid var(--border-strong);
     border-radius: var(--radius-md); padding: 0 var(--space-6);
     font-family: "Cascadia Code", Consolas, monospace;
     font-size: var(--font-mini); line-height: var(--lh-mini);
   }
+  /* v4.7 修订（真机反馈两轮）：① 描边/下边线 --border → --border-strong（浅色对比不足）；
+     ② ↑↓ 合并单键帽；③ 文案统一「返回·隐藏」（D15 文字规格）；
+     ④ 下边线统一 1px——原 2px 下边条在 16px 小键帽上明显重于三边描边（用户反馈"下划线比其他方向粗"），扁平化。 */
 
   /* ============ 表格（行为规格 / 实现映射） ============ */
   table { border-collapse: collapse; width: 100%; font-size: 13px; }
@@ -548,6 +547,20 @@
   .engine-add input::placeholder { color: var(--text-3); }
   .engine-err { font-size: var(--font-mini); line-height: var(--lh-mini); color: var(--danger); margin-top: var(--space-4); }
 
+  /* ============ 08 窗口材质（v4.7 新增：功能态 ToggleSwitch，D30 互斥·后开优先） ============ */
+  /* 与占位 .switch（禁用态）区分：功能态开 = accent 底 + 白滑块居右；关 = input-fill 底 + border-strong 描边 + text-2 滑块居左 */
+  .switch-fn {
+    width: 36px; height: 18px; border-radius: var(--radius-circular); flex: 0 0 36px;
+    position: relative; background: var(--input-fill); border: 1px solid var(--border-strong);
+    cursor: default;
+  }
+  .switch-fn::after {
+    content: ""; position: absolute; top: 2px; left: 2px; width: 12px; height: 12px;
+    border-radius: var(--radius-circular); background: var(--text-2);
+  }
+  .switch-fn.on { background: var(--accent); border-color: var(--accent); }
+  .switch-fn.on::after { left: auto; right: 2px; background: #ffffff; }
+
   /* ============ 10B 右键菜单（Fluent Menu 语义，v4.4 新增） ============ */
   .ctx-stage { position: relative; }
   .ctx-demo-panel { position: relative; }
@@ -662,7 +675,7 @@
     <button data-mode="light" data-page-node-id="I0F3kdp2bjXztvBFXivHhW">亮色</button>
     <button data-mode="dark" data-page-node-id="QcDEiiz92pB71IV93qkfmK">暗色</button>
   </div>
-  <p class="eyebrow" data-page-node-id="fpLkL7zs0ObqBBmOVMTlKL">dd-run · CmdPal UI Mockups v4.6</p>
+  <p class="eyebrow" data-page-node-id="fpLkL7zs0ObqBBmOVMTlKL">dd-run · CmdPal UI Mockups v4.7</p>
   <h1 data-page-node-id="9L8F9mN3UyuFLT5dTNiY9z">Fluent 2 设计体系 <em data-page-node-id="UQT9uCqkC6dyICtq0CWQvR">·</em> 全界面详设</h1>
   <p class="sub" data-page-node-id="MX3op44ckD1aHMFNDT6VFJ">
     v4 相对 v3 的实质变化：<b data-page-node-id="0sWPRUFNovWfzUeciNdVZT">从「ueli 像素级复刻 + Fluent 命名」转为「Fluent 2 token 驱动」</b>——
@@ -688,6 +701,14 @@
     <b>左栏分组导航（外观 / 常规 / 搜索 / 扩展，Fluent NavigationView 语义）+ 右侧设置项卡片</b>，
     窗口加宽至 <b>640×640</b>（替换 v4.2 的 560×640，D28），决策 D27–D29；
     同批补齐「搜索引擎」卡片的演示与规格（代码 2026-09-05 已实现、此前未进稿）；本批只改设计稿 + HTML 交互演示。
+    <b>v4.7（2026-09-05）：</b>08 外观栏新增「窗口材质」卡——<b>云母（Mica）/ 亚克力（Acrylic）</b>两个
+    ToggleSwitch 开关（互斥·后开优先，全关 = 无材质，默认云母，D30）；效果 = Win11 DWM 系统背景材质 +
+    面板背景透明化，Win11 22H2 以下自动回退不透明（D31）；决策 D30–D32，本批只改设计稿 + HTML 交互演示。
+    <b>v4.7 修订（同日真机反馈，实施批次内）：</b>① 全关 = 不透明（透明只跟材质挂钩，修复全透明穿帮）；
+    ② 材质生效时页脚同步透明；③ 行内 Tag chips 整体移除（D13 废止，同步设计稿与演示）；
+    ④ 键帽优化：↑↓ 合并单键帽、描边/下边线提为 --border-strong、文案统一「返回·隐藏」；
+    <b>v4.7 修订二（同日真机反馈）：</b>⑤ 材质切换防闪——不透明化先绘制呈现、DWM 清材质延迟数帧（消除一瞬透明）；
+    ⑥ 键帽下边线统一 1px（原 2px 下边条比三边描边粗，扁平化）。
   </p>
 </header>
 
@@ -750,7 +771,7 @@
       <tr data-page-node-id="EirrZZTMjWG1OFx4eKXbT1"><td data-page-node-id="05YHCox6aRGcCtKxV81MeI">D10</td><td data-page-node-id="PpIsOiKrpxozN6vxoDUwHA">阴影分级</td><td data-page-node-id="Ocz4t2BeEaVoVTFOEoEy8o">面板/对话框 = <b data-page-node-id="5ydGKmcC4rTsN8aKsCTdlL">shadow64</b>（Windows 用 1px 描边替代 key 阴影）、Toast = <b data-page-node-id="Ic3gy198Uog0d5bcFN3tAT">shadow16</b>、卡片<b data-page-node-id="IQr1vwDRWuVl5HWkZmLjbP">无阴影</b>（有描边）</td></tr>
       <tr data-page-node-id="WfYAf5UNRw19Rwb7OshDcm"><td data-page-node-id="BdVWueQ5rAE8nz7WBYHqG5">D11</td><td data-page-node-id="daWwqLWpkoTtpyI1ZudEls">色值</td><td data-page-node-id="oQX33CDYKW4TWUx2tqIjgT"><b data-page-node-id="ZF3LXTHXzLFFcOtknbgekd">全面重排到 alias token</b>：暗色描边 #666666、行态改实色、文本层级归位（fg1/2/3/4）</td></tr>
       <tr data-page-node-id="DIoxnAFy90Nq3VFB1hxZSE"><td data-page-node-id="U07D1fUeKclxIXVOO0gTGy">D12</td><td data-page-node-id="skotccMArns3PRS0boGC7x">结果行架构</td><td data-page-node-id="yo1VtuKbsuItTiWkCfqIPK">描述改<b data-page-node-id="MCX9VIK6wc4JA8UqeUciFf">纯文本次级文本</b>（caption1/fg3，无徽标底）；类型标签最右（caption1/fg3）</td></tr>
-      <tr data-page-node-id="ZoZ1YbdlL7p7dSSsbC6hwa"><td data-page-node-id="kvA5hm5af9wSHjlF5cp5H2">D13</td><td data-page-node-id="LfTFFHocTWMNKH2ebFBM6B">Tag chips</td><td data-page-node-id="9MapxP50DxOOwMn6GZHCZl"><b data-page-node-id="zBBmCAStT5KjFBeuA0avAG">Tag 组件化</b>：圆角 4、subtle 底、caption1；<b data-page-node-id="MGHVWJm9hNekgkhpbHxE6c">最多 2 个</b> + 超出折叠「+N」</td></tr>
+      <tr data-page-node-id="ZoZ1YbdlL7p7dSSsbC6hwa"><td data-page-node-id="kvA5hm5af9wSHjlF5cp5H2">D13</td><td data-page-node-id="LfTFFHocTWMNKH2ebFBM6B">Tag chips（v4.7 废止）</td><td data-page-node-id="9MapxP50DxOOwMn6GZHCZl">原规格：Tag 组件化（圆角 4、subtle 底、caption1、最多 2 个 + 折叠「+N」）。<b>v4.7 废止（2026-09-05 用户决策）：</b>行内 Tag chips 整体移除——默认视图 tags 多余且挤占标题/副标题空间；行右端只保留类型标签，<code>PanelItem.tags</code> 数据字段保留仅不渲染（协议层不改）。</td></tr>
       <tr data-page-node-id="Gbn39rAJHsq1NL1IzSIIPS"><td data-page-node-id="5g8RQVXB1tAieOA0Lv5dvs">D14</td><td data-page-node-id="RlK9omB4um5W7PidhvvZ9l">分组标题</td><td data-page-node-id="iy0mH3pKEYwhwb6ig39tYW">保留，<b data-page-node-id="lmwD9SFWHmYNqxdFWhdHmm">caption1Strong</b> + 上方留白 12；组间用留白、无分隔线</td></tr>
       <tr data-page-node-id="BRakXlNXeQwHgljSgkMBXp"><td data-page-node-id="lQiuozrStOZAkPEjVAb8fg">D15</td><td data-page-node-id="4ux5nBoeuXN8SP25MQsBQT">页脚规则（v4.3 修订）</td><td data-page-node-id="Tp3fJTlxejaOQ5jKYIj4xX"><b data-page-node-id="EzuUR57sNjcAlC3oh9bwA4">最左 = 设置齿轮</b>（面板左下角，Root/子页/空态恒定，设置页除外）；其后左 = 上下文提示，右 = <b data-page-node-id="ssFOBaJBSdJcBQzb1zftmM">完整键位图例恒定</b>（↑↓ 选择 / Enter 执行 / Esc 返回·隐藏）。<b data-page-node-id="246rLW85N4CIWV6GVGrwTF">v4.3（2026-09-04 用户决策）：</b>状态点/源状态诊断整体移除；键位图例不再随选中态退化为单键帽。</td></tr>
       <tr data-page-node-id="BAslV7XXZQld3nAUMP5B4t"><td data-page-node-id="lrVC8PTmHn2bmfWh0JhkU1">D16</td><td data-page-node-id="KtoegdIMHZvqRw5vqYUBbk">本批交付范围</td><td data-page-node-id="m5UajEA3IpvkHmbH1rbBlq"><b data-page-node-id="LwpcUwzo6x5Weg5xGZdugm">只改设计稿</b>，代码与测试留后续批次</td></tr>
@@ -767,6 +788,9 @@
       <tr><td>D27</td><td>设置页信息架构（v4.6）</td><td>单列卡片页 → <b>左栏分组导航 + 右侧设置项</b>（Fluent NavigationView 语义）：左栏固定四类「外观 / 常规 / 搜索 / 扩展」，右栏沿用 settings-card 规格。动机：设置项随功能增加持续增多，单列滚动页过长；分组为后续新增配置预留归组位（新配置按类归组即可，不再挤压版式）；栏目 = 纯视图状态，<b>不落盘、不改协议</b>（协议 v1.0 冻结不变）</td></tr>
       <tr><td>D28</td><td>设置页窗口尺寸（v4.6）</td><td><b>640×640</b>——左栏占 168px 后内容区保持 ~440px，与单列 560 宽时的可用宽相当；<b>替换 v4.2 的 560×640</b>（真机反馈 2026-09-04 初定）；根页/子页仍 560×460；进入/返回仍按栈顶 <code>is_settings</code> 帧间 diff 放大/缩回（00.1）</td></tr>
       <tr><td>D29</td><td>本批范围（v4.6）</td><td><b>只改设计稿 + HTML 交互演示</b>；egui <code>draw_settings</code> 左右布局实施留后续批次（落点 <code>crates/dd-gui/src/ui/settings_view.rs</code>）；同批补齐「搜索引擎」卡片的演示与规格（代码 2026-09-05 已实现、此前未进稿）</td></tr>
+      <tr><td>D30</td><td>窗口材质模型（v4.7）</td><td>设置持久化单值枚举 <code>backdrop</code>（<code>none / mica / acrylic</code>）；外观栏两个 ToggleSwitch 的状态由该值派生——<b>互斥·后开优先</b>（开启某项自动关闭另一项，最后操作者优先；全关 = 无材质；用户决策 2026-09-05，理由 = DWM 材质为单值属性，开关状态须与实际效果强一致）；<b>默认 = 云母</b>（含旧配置升级：字段缺失 → 云母）；协议 v1.0 冻结零字段新增</td></tr>
+      <tr><td>D31</td><td>材质效果与回退（v4.7）</td><td>效果 = Win11 22H2+ <code>DWMWA_SYSTEMBACKDROP_TYPE</code>（云母 = MAINWINDOW、亚克力 = TRANSIENTWINDOW、关 = NONE）+ 材质生效时面板背景双透明（clear_color + panel_fill，亮暗两套 Style 同步注册）；<b>失败回退 = 保持不透明面板</b>（22621 以下 API 报错即降级，记日志一次、不阻断，区别热键 fail-fast）；材质明暗随主题（DWMWA_USE_IMMERSIVE_DARK_MODE 跟随亮暗设置）</td></tr>
+      <tr><td>D32</td><td>本批范围（v4.7）</td><td><b>只改设计稿 + HTML 交互演示</b>（用户要求设计确认后再实施）；实施落点：<code>dd-gui/src/settings.rs</code>（backdrop 模型）/ <code>platform.rs</code>（DwmSetWindowAttribute）/ <code>main.rs</code>（with_transparent + HWND 捕获）/ <code>ui/settings_view.rs</code>（材质开关卡）/ <code>theme.rs</code>(双 Style 透明化)</td></tr>
     </table>
 
     <h3 data-page-node-id="qIjrLO1eIcZw1mWFYlpkAw">00.3 有意偏离清单（P2：明确不改，并记录理由）</h3>
@@ -798,6 +822,9 @@
       v4.5 同批（10C.3 图标）：Win11 应用图标惯例（圆角 22–25%、渐变底、白色 mark）为公开系统视觉观察归纳；mark 几何（DD 快进同构）为本稿原创推导；图标资产独立于主题 token（D22）。
       v4.6 增补（设置页左右布局）：<code>learn.microsoft.com · WinUI NavigationView</code>（窗格语义：选中项 = 实色选中底 + accent 指示条、固定窗格宽 + 内容区自适应）；
       分组口径（外观 / 常规 / 搜索 / 扩展）为本稿信息架构决策（D27）；几何（左栏 168 / 项高 36 / 指示条 3×16）按本稿既有控件 ramp 与列表行选中语言（D9）推导，未引入新 token。
+      v4.7 增补（窗口材质）：<code>learn.microsoft.com · DWMWA_SYSTEMBACKDROP_TYPE / DWMSBT</code>（Win11 22H2+ 系统背景材质：Mica / Acrylic / Mica Alt / None 单值属性，22621 起可用）、
+      <code>DWMWA_USE_IMMERSIVE_DARK_MODE</code>（材质/标题栏明暗染色开关）；实现现状核验：eframe 0.36 glow 透明链路（<code>ViewportBuilder::with_transparent</code> → glow <code>with_transparency</code>，
+      <code>App::clear_color</code> 可覆写、默认即半透明）、<code>eframe::Frame: HasWindowHandle</code>（Win32 HWND 获取）；开关行图标码位（E771）实施时以真机字形为准。
     </p>
   </section>
 
@@ -809,7 +836,7 @@
       <span class="chip" data-page-node-id="inVqjYhGjUtVBJE5fFq8E1">顶行 40 · 搜索框 filled-darker</span>
       <span class="chip" data-page-node-id="bBE0DYuwufo6wwEVDwRpHW">行 40 · 一屏 9 行</span>
       <span class="chip" data-page-node-id="gRYdMamOHXD601SBZp86Ol">描述 = caption1/fg3 纯文本</span>
-      <span class="chip" data-page-node-id="TwSN27nZa1dsjOqjFDnHQm">Tag ≤ 2 +「+N」</span>
+      <span class="chip" data-page-node-id="TwSN27nZa1dsjOqjFDnHQm">v4.7 移除 Tag chips</span>
     </div>
     <p class="s-desc" data-page-node-id="zLqB4ie3ezdShiKp0Z4ZcB">
       v4 相对 v3 的改动：搜索栏由「1px 全边框 + 2px 底边」的 ueli 混合形态改为 Fluent <b data-page-node-id="AEO2arICMA7XMWylRQpL53">filled-darker</b>
@@ -818,6 +845,8 @@
       描述徽标（带底 Badge）改为 <b data-page-node-id="R8PeVVJ9bYX3xUmBZirs6R">纯文本次级文本</b>（caption1 / fg3），因为 Fluent 的 Badge 只用于状态与计数；
       tag chips 改为 Fluent <b data-page-node-id="kAeRX5ZwKL6MZDZEXKVtF4">Tag</b>（圆角 4、subtle 底）并限制<b data-page-node-id="K3hmAZ8tTr5qjLDiaoVv67">最多 2 个</b>；
       新增行右端<b data-page-node-id="PhaX9J3x5BNE8SypyrdXGH">类型标签</b>（caption1 / fg3）；行态改用 Fluent 实色（暗 #3d3d3d / #383838，不再用半透明白叠加）。
+      <b>v4.7 修订（2026-09-05 用户决策，D13 废止）：</b>行内 Tag chips 整体移除（默认视图中多余且挤占标题/副标题空间），
+      行右端只保留类型标签；<code>PanelItem.tags</code> 数据字段保留（协议层不改），仅不渲染。
     </p>
     <div class="stage" data-page-node-id="iAyFUHiVcDPOwzL9lrykW2">
       <div class="panel" data-page-node-id="KsrFVezZcedmCeJLxd15D0">
@@ -835,8 +864,6 @@
             <span class="name" data-page-node-id="4dxrddd1wbtyyIreGGIgd7">Say Hello</span>
             <span class="desc" data-page-node-id="pwT5XxQceXzPYWZkLKIUGg">M0 smoke test command</span>
             <span class="spacer" data-page-node-id="HV8ffrCzFGCmtQH2QvPgR9"></span>
-            <span class="tag" data-page-node-id="ff7w1TPaVK5qDxfCBQocZc">demo</span>
-            <span class="tag" data-page-node-id="DxfNmdSz5reXbapSlqlEmz">m0</span>
             <span class="kind" data-page-node-id="m6Duw9989IcsXPP5Ipww9x">命令</span>
           </div>
 
@@ -861,9 +888,6 @@
             <span class="name" data-page-node-id="zkbTlgSJ2FJuRH6JH4yFzh">项目文件夹</span>
             <span class="desc" data-page-node-id="x2630X5X9xzdeM4mFRTSon">path 图标示例（本地 PNG/ICO）</span>
             <span class="spacer" data-page-node-id="3wWK5HNQljeJxiYRCtVD7l"></span>
-            <span class="tag" data-page-node-id="FeZ1FO6bp8zhxQTQq7oQL4">dev</span>
-            <span class="tag" data-page-node-id="UYo4IdsBRhS5jmxQRFXSiY">工作</span>
-            <span class="tag" data-page-node-id="Ox8Pia0bU8lw4GytAn7Pf9">+2</span>
             <span class="kind" data-page-node-id="NPBioK41cgKNMbCNlEpmHw">文件</span>
           </div>
 
@@ -882,7 +906,6 @@
             <span class="name" data-page-node-id="rIfRyYbzF9QCKfuJxURysT">网页搜索</span>
             <span class="desc" data-page-node-id="i4wvKe6VF4wBf7795GmJeV">在浏览器中搜索</span>
             <span class="spacer" data-page-node-id="MHd1lhiUn8eO5wtAYI3TMc"></span>
-            <span class="tag" data-page-node-id="57scemQKcPJy7bFEDrG3fl">web</span>
             <span class="kind" data-page-node-id="5wkHQJ6EjwvtPfUPXcKcIN">网页</span>
           </div>
         </div>
@@ -890,9 +913,9 @@
           <span class="gear glyph" title="设置" data-page-node-id="pOuu5i0A32OSjm65ymhmW4">&#xE713;</span>
           <span data-page-node-id="CA6MgsHtagqi7s9R3t1mik">执行</span>
           <span class="keys" data-page-node-id="nSpl1xaDu9nsaigadIhfhd">
-            <span data-page-node-id="8j9aUO2BLqrjCjOMdtSDow"><b data-page-node-id="5YNs1pkbl0i2afVYVpOJ6i">↑</b> <b data-page-node-id="0RIpq4VU9GqWUO1QILEpqr">↓</b> 选择</span>
+            <span data-page-node-id="8j9aUO2BLqrjCjOMdtSDow"><b data-page-node-id="5YNs1pkbl0i2afVYVpOJ6i">↑↓</b> 选择</span>
             <span data-page-node-id="5hzLhKpgp03SNfJD5EDn5T"><b data-page-node-id="YNR7BzBSvTChlYb7TJxDIJ">Enter</b> 执行</span>
-            <span data-page-node-id="xhBfsR2zJbBJAbBO9S80am"><b data-page-node-id="vNuI3EVJnW8iZP1WDMclZz">Esc</b> 隐藏</span>
+            <span data-page-node-id="xhBfsR2zJbBJAbBO9S80am"><b data-page-node-id="vNuI3EVJnW8iZP1WDMclZz">Esc</b> 返回·隐藏</span>
           </span>
         </div>
       </div>
@@ -905,12 +928,12 @@
       <tr data-page-node-id="JPM0X6RMmggf8Mw2d3W07B"><td data-page-node-id="d7JUaIhfcWSGD1EuJFsB5Q">2</td><td data-page-node-id="u7bxHG11DM8Co7zCglGXZD">名称</td><td data-page-node-id="v3hgFDe8LoaDg1KMuh8XnA">body1 14/20，fg1，不截断（优先保障）</td></tr>
       <tr data-page-node-id="XZ8NHe4fFSZEDHTTF3voAs"><td data-page-node-id="qLUWpibkTxfVOeC6DaIrqs">3</td><td data-page-node-id="EZtd6ARV2v86zjwummTUcC">描述</td><td data-page-node-id="Ad6A7Ky2ECfO7a81npeUkc">caption1 12/16，fg3，纯文本无底；最大 240px，超长省略号</td></tr>
       <tr data-page-node-id="lyxxIq6iShjkhFFSNm1R4w"><td data-page-node-id="K57xw3GmW3IEIE114iMXqu">4</td><td data-page-node-id="dkCpG6zUixiuhBbn02mUxK">弹性间隔</td><td data-page-node-id="Nkr7SHfppFuIboPDLO5mdG"><code data-page-node-id="SsV4XKNmyLI4AqPyJo1Qg1">flex: 1</code>，把右侧元素推到行尾</td></tr>
-      <tr data-page-node-id="1fd3qiQ07WNL9XvIvfgjZN"><td data-page-node-id="9P0Be1LwPHsKX1ENcIrqnD">5</td><td data-page-node-id="WmuGSjnEsB8BovJQDAvXSZ">Tag（≤2）</td><td data-page-node-id="DBSjDZ3TiOsaGab5YTiUxy">Fluent Tag：圆角 4、subtle 底（= card 底）、caption1、fg2、不可关闭；第 3 个起折叠为「+N」</td></tr>
+      <tr data-page-node-id="1fd3qiQ07WNL9XvIvfgjZN"><td data-page-node-id="9P0Be1LwPHsKX1ENcIrqnD">5</td><td data-page-node-id="WmuGSjnEsB8BovJQDAvXSZ">Tag（≤2）</td><td data-page-node-id="DBSjDZ3TiOsaGab5YTiUxy"><b>v4.7 废止（用户决策 2026-09-05，D13）：</b>行内 Tag chips 整体移除，此行规格不再适用（原 Fluent Tag：圆角 4、subtle 底、caption1、fg2、≤2 折叠「+N」）。</td></tr>
       <tr data-page-node-id="XGQSIlkhMqgtcilywovSZS"><td data-page-node-id="cZU7Jwb5tnbn3hY9Nm891x">6</td><td data-page-node-id="aLcQepIbK8IUvObqBpDUoy">类型标签（最右）</td><td data-page-node-id="AMcg2XOpYResVMpzvIZfNa">caption1 12/16，fg3，纯文本；最大 90px，超长省略号</td></tr>
     </table>
     <div class="note" data-page-node-id="dV0ArW5JAj84V755YdlCs1">
-      <b data-page-node-id="sSe7i3rD5G2oDqls1WNASe">横向空间不足时的截断优先级：</b>① 描述（先缩短）→ ② Tag 折叠为「+N」→ ③ 类型标签截断 →
-      ④ 名称截断。<b data-page-node-id="d6PpJIwitH9g8lUIXHCx3L">名称与图标永远保底可见。</b>
+      <b data-page-node-id="sSe7i3rD5G2oDqls1WNASe">横向空间不足时的截断优先级（v4.7 修订——Tag 移除）：</b>① 描述（先缩短）→ ② 类型标签截断 →
+      ③ 名称截断。<b data-page-node-id="d6PpJIwitH9g8lUIXHCx3L">名称与图标永远保底可见。</b>
       行交互态：hover = <code data-page-node-id="teWXNAfgDYPLLSjqfuv7FJ">bg1Hover</code>（亮 #f5f5f5 / 暗 #3d3d3d）；选中 = <code data-page-node-id="zMwy6ZdkZnLFdFTMBEMDRa">bg1Selected</code>
       （亮 #ebebeb / 暗 #383838）+ 左侧 3px accent 指示条；<b data-page-node-id="ssgYdvw8svPnYSlxZHiAMk">行本身不加 focus 描边</b>（D9）。
     </div>
@@ -1003,9 +1026,9 @@
           <span class="gear glyph" title="设置" data-page-node-id="vNFYkKCiyAGT34yzLDveGe">&#xE713;</span>
           <span data-page-node-id="qKtrixyRmvVtKjmSNxuvIR">打开应用</span>
           <span class="keys" data-page-node-id="aZt3BXSSTcGv7L7WfnKSh8">
-            <span data-page-node-id="wmD8ZWyOCNrLVds3nNzEQU"><b data-page-node-id="SVgHkuvEfis0y8Pt1jBStk">↑</b> <b data-page-node-id="fnsAxU9REalwrSA8TlYBYx">↓</b> 选择</span>
+            <span data-page-node-id="wmD8ZWyOCNrLVds3nNzEQU"><b data-page-node-id="SVgHkuvEfis0y8Pt1jBStk">↑↓</b> 选择</span>
             <span data-page-node-id="8SG4f094fRNsxNA8Uut78y"><b data-page-node-id="QmK0SRG93gU4KibVPJqzru">Enter</b> 执行</span>
-            <span data-page-node-id="lOsK0a46d3xNMFwYee4KO8"><b data-page-node-id="NCCjVj0FP9dD24hBydDAF5">Esc</b> 隐藏</span>
+            <span data-page-node-id="lOsK0a46d3xNMFwYee4KO8"><b data-page-node-id="NCCjVj0FP9dD24hBydDAF5">Esc</b> 返回·隐藏</span>
           </span>
         </div>
       </div>
@@ -1020,7 +1043,7 @@
       <tr data-page-node-id="G4lGO8EBfsMAeNYIaeUxNr"><td data-page-node-id="zcoL5fGsFIKOLEHzRvL05C">类型标签</td><td data-page-node-id="34V4yB3T0BGYEGM4EXAeQT"><code data-page-node-id="OV0hx7M2afkQHIaGe1KsZi">result_category = 应用</code>（聚合器按 ext_id 去前缀推导，§6.2）。</td></tr>
       <tr data-page-node-id="tgcupzlU2mZbmD2cZ7aLcq"><td data-page-node-id="nbdB035YZIaLinDPsBaim7">过滤</td><td data-page-node-id="4D9SmjUkp4sv8CorWAxgfs">输入即过滤（名称前缀/子串匹配，现行 <code data-page-node-id="TXACHRPofGU2huRgGY5lhV">PanelState</code> 过滤语义）；无匹配时走 02 章兜底/空态。</td></tr>
       <tr data-page-node-id="CvW45vrR3PDiW9eKKHcQcu"><td data-page-node-id="tYpRclCSq5ZCyDuRievwMA">页脚</td><td data-page-node-id="YHC9TSTL03oLtOuzDYJGxH">左 = 齿轮 + 「打开应用」（选中项动作，§6.3 映射表）；右 = 完整键位图例；<b data-page-node-id="Pt4GUU8X9CxysLEC4gQ6yS">v4.3 修订：无源状态诊断</b>（stub 状态点/note 已移除，见 D15 修订）。</td></tr>
-      <tr data-page-node-id="p2uCwAh9Rm91JWnvXwdv1Y"><td data-page-node-id="Q4245538RytDTYBKOTTZVB">键帽渲染（v4.3 补）</td><td data-page-node-id="TGFB8Ag3I7HKCrYmbO59Jj">页脚所有元素<b data-page-node-id="i5VM9TCO2Wl1yNWFwx47Y6">手动锚定行中心线</b>（egui 自动居中在 24px 齿轮 / 16px 键帽 / 文本混合高度下逐项漂移，真机 2026-09-04 修复）；键帽下边 2px 画在边框盒<b data-page-node-id="Gw9a0ts1lFvMSzPPnsSZ9X">内部</b>（旧实现多出 0.5px 悬空线视觉上像阴影，已修）。</td></tr>
+      <tr data-page-node-id="p2uCwAh9Rm91JWnvXwdv1Y"><td data-page-node-id="Q4245538RytDTYBKOTTZVB">键帽渲染（v4.3 补 / v4.7 修订）</td><td data-page-node-id="TGFB8Ag3I7HKCrYmbO59Jj">页脚所有元素<b data-page-node-id="i5VM9TCO2Wl1yNWFwx47Y6">手动锚定行中心线</b>（egui 自动居中在 24px 齿轮 / 16px 键帽 / 文本混合高度下逐项漂移，真机 2026-09-04 修复）；键帽下边 2px 画在边框盒<b data-page-node-id="Gw9a0ts1lFvMSzPPnsSZ9X">内部</b>（旧实现多出 0.5px 悬空线视觉上像阴影，已修）。<b>v4.7 修订（2026-09-05 用户反馈）：</b>① <code>↑</code><code>↓</code> 合并为<b>单枚键帽「↑↓」</b>（两枚窄键帽各自四边描边视觉碎裂成「|||」）；② 键帽描边与下边线 <code>--border</code> → <b><code>--border-strong</code></b>（浅色主题下 #e0e0e0 贴 #fafafa 页脚几乎不可见）；③ 文案统一 D15 文字规格「Esc 返回·隐藏」（原「返回 / 隐藏」「隐藏」并存）；④ <b>下边线统一 1px</b>——原 2px 下边条在 16px 小键帽上明显重于三边描边（用户反馈"下划线比其他方向粗"），扁平化为四边等宽（原"下边 2px 画入边框盒内部"的悬空线修复随之失效删除）。</td></tr>
     </table>
   </section>
 
@@ -1063,7 +1086,7 @@
         <div class="panel-footer" data-page-node-id="TcU0wd6B5HXZhPANzQAVTn">
           <span class="gear glyph" title="设置" data-page-node-id="EaWWk5dZ1zDincqnZ33Eyk">&#xE713;</span>
           <span data-page-node-id="4RjD37TnoNTGzk6OpMVQpx">打开网页</span>
-          <span class="keys" data-page-node-id="SSFkv0r1JX21DNmjB7wfxa"><span data-page-node-id="LhZRUbIklBUp5CFASkZxQi"><b data-page-node-id="VtfdfrJhyFQFFtGmCbLmz4">Enter</b> 执行</span><span data-page-node-id="geFIn8nAxyqs6BvH8H86Fc"><b data-page-node-id="IJa3buUdudWzSgODcZ12HR">Esc</b> 隐藏</span></span>
+          <span class="keys" data-page-node-id="SSFkv0r1JX21DNmjB7wfxa"><span data-page-node-id="LhZRUbIklBUp5CFASkZxQi"><b data-page-node-id="VtfdfrJhyFQFFtGmCbLmz4">Enter</b> 执行</span><span data-page-node-id="geFIn8nAxyqs6BvH8H86Fc"><b data-page-node-id="IJa3buUdudWzSgODcZ12HR">Esc</b> 返回·隐藏</span></span>
         </div>
       </div>
       <div class="panel" data-page-node-id="IjHz8GtD2yiYsBjUwEV3eh">
@@ -1080,7 +1103,7 @@
         </div>
         <div class="panel-footer" data-page-node-id="pm2jvKJXgVcI4JgnfySPlv">
           <span class="gear glyph" title="设置" data-page-node-id="nhuF3J03qiCv1HvN6UgwOd">&#xE713;</span>
-          <span class="keys" style="margin-left:0" data-page-node-id="kiDTbUYIxhJxdXoR5frwnm"><span data-page-node-id="PEmiYpFyWU8eNLCVmOcous"><b data-page-node-id="gTkRUkhEuBLSV0kOSQ42Z7">Esc</b> 隐藏</span></span>
+          <span class="keys" style="margin-left:0" data-page-node-id="kiDTbUYIxhJxdXoR5frwnm"><span data-page-node-id="PEmiYpFyWU8eNLCVmOcous"><b data-page-node-id="gTkRUkhEuBLSV0kOSQ42Z7">Esc</b> 返回·隐藏</span></span>
         </div>
       </div>
       <div class="caption" data-page-node-id="LfKUjJk4I74brIzSdO8eHH">左：自动兜底列表（常态） ｜ 右：纯空态（无兜底可用时）</div>
@@ -1203,7 +1226,7 @@
       <tr data-page-node-id="5aCFFGU1LFCnUD0twFDQIp"><td data-page-node-id="TkTnC3zpfpcD0ymt1DPkYv"><code data-page-node-id="BQjacDPF1Z1Pta69c6vwCr">--border</code></td><td data-page-node-id="W2iEGpLrqhdl1J5z9hwkym">colorNeutralStroke2</td><td data-page-node-id="BCRri9mn0O1OOxO3Ykp6fj">#525252</td><td data-page-node-id="aZ9vWuYLp9U86Bab3VC8uG">#e0e0e0</td><td data-page-node-id="QyTU6ZLfzZ3xk0ZG1o6IoM">页脚顶边 / 键帽 / 卡片描边</td></tr>
       <tr data-page-node-id="jUdxIJYPET2GmKf9aodWhQ"><td data-page-node-id="avzsDJ96JQaDA8XXF7nDLO"><code data-page-node-id="C0i0AbdVRMuln56zHlbJbe">--border-accessible</code></td><td data-page-node-id="VJCIiCyozwZR0urVA1iPEi">colorNeutralStrokeAccessible</td><td data-page-node-id="xCatrp15Q6FcHSuOnHUB71">#adadad</td><td data-page-node-id="b8rlm6ZpGRvfPFA9aMted3">#616161</td><td data-page-node-id="eqGxAXMnfnZHk1Zf4uHeDe">无障碍描边（高对比需求）</td></tr>
       <tr data-page-node-id="p72ZKJsjsCTAuSmCDvB3cw"><td data-page-node-id="LYV9lpfYSvm1T3TjFkDFPe"><code data-page-node-id="2L6cGgG4HxJKbQ74hrr0ez">--text</code></td><td data-page-node-id="VTbMJMALwFojQdaDd4lcij">colorNeutralForeground1</td><td data-page-node-id="SM1edTpFEMxOv214bkhVq4">#ffffff</td><td data-page-node-id="jBoFd37UBCxvwV7isUZTnX">#242424</td><td data-page-node-id="kmDPYsdZbXJJD5yMH6EBCk">主文本 <code data-page-node-id="GmZ4A1OEFnEJYKtjgAHp9y">Visuals.override_text_color</code></td></tr>
-      <tr data-page-node-id="56A76qz4UOlDkSBB1bBGmd"><td data-page-node-id="kqC7ugKKkK0sgKs6PxNHeI"><code data-page-node-id="QNmGaqliBXTctIEhZaKkpO">--text-2</code></td><td data-page-node-id="kqYL32CHuAAY5gO7P88uH7">colorNeutralForeground2</td><td data-page-node-id="E6NGAB16CTBIZubeQes97K">#d6d6d6</td><td data-page-node-id="L6ep8UsCGw6JqSfN6KJ4OM">#424242</td><td data-page-node-id="akDPF9GG5V9rkTo0XsRzXX">次级文本 / 图标 / Tag 文本</td></tr>
+      <tr data-page-node-id="56A76qz4UOlDkSBB1bBGmd"><td data-page-node-id="kqC7ugKKkK0sgKs6PxNHeI"><code data-page-node-id="QNmGaqliBXTctIEhZaKkpO">--text-2</code></td><td data-page-node-id="kqYL32CHuAAY5gO7P88uH7">colorNeutralForeground2</td><td data-page-node-id="E6NGAB16CTBIZubeQes97K">#d6d6d6</td><td data-page-node-id="L6ep8UsCGw6JqSfN6KJ4OM">#424242</td><td data-page-node-id="akDPF9GG5V9rkTo0XsRzXX">次级文本 / 图标 / 设置开关文本</td></tr>
       <tr data-page-node-id="e1QGORtZtU2UaXxm59yHyu"><td data-page-node-id="tr0kARzfwNofPUEjzXeU6p"><code data-page-node-id="yzHO3MKJ0RMlO0a2G7kvQj">--text-3</code></td><td data-page-node-id="Qi7rIksHc9NzZGDu46xrLd">colorNeutralForeground3</td><td data-page-node-id="xZPTDHF76euWqyGm3pQCDp">#adadad</td><td data-page-node-id="qqBAK45zVIak7c6LC1w8Aw">#616161</td><td data-page-node-id="KkOBcVQDqDeNszrjXhirfS">描述 / 分组标题 / 类型标签 / placeholder</td></tr>
       <tr data-page-node-id="PWxSI163bKMYH7ZCIYldvn"><td data-page-node-id="IAMtMVqFH5SGjtZw51Vmlg"><code data-page-node-id="OKHRWfrFJtrqYoe4iqaOpb">--text-4</code></td><td data-page-node-id="jW9BdVKeXD3oC2UbtsGHpg">colorNeutralForeground4</td><td data-page-node-id="txk7t5DR5kSoBoqkCdrYaC">#999999</td><td data-page-node-id="2nDRl3XaQS5rrzAEFJFPdf">#707070</td><td data-page-node-id="5eH5ahGpGTHrMUgNoVEkQm">更弱文本（stub 状态点等）</td></tr>
       <tr data-page-node-id="5Hsy3EB6NVnnQdekpSDUVr"><td data-page-node-id="kkPsLCHgW0eNnBddQMxsr8"><code data-page-node-id="7cfUmPMmmlFF7jXpQjv4XG">--text-disabled</code></td><td data-page-node-id="5oWscGigjsH17FTmuKOrVn">colorNeutralForegroundDisabled</td><td data-page-node-id="fFJ5QeF9T9NPM6UjisbmyC">#5c5c5c</td><td data-page-node-id="CnOud1j1ka48tXBsaG4i2f">#bdbdbd</td><td data-page-node-id="TuT9Wd4RJLeBlPw6UsC4Sb">设置页占位项（禁用态）</td></tr>
@@ -1211,7 +1234,7 @@
       <tr data-page-node-id="h9szFIwuWGq3Ca0IsupeZx"><td data-page-node-id="2YRwSd7mUVdohSMdhErry5"><code data-page-node-id="aCt8QY6s1RLnQC66yvIsML">--row-hover</code></td><td data-page-node-id="kGzGR8xnqQPNVAEwHzZhsi">colorNeutralBackground1Hover</td><td data-page-node-id="SLCGA61EAd6AWbfjRLeMkG">#3d3d3d</td><td data-page-node-id="mwYTAiVpIt4XLiW0GpKhgF">#f5f5f5</td><td data-page-node-id="bUHkW0E1EPlRbLPMkebIgi">行 hover（<b data-page-node-id="Mq56EQDkLoKSXAPBRjbA6Y">实色，非半透明叠加</b>）</td></tr>
       <tr data-page-node-id="BgraKOmg6tPfiQnZB6FNfg"><td data-page-node-id="CcXnFfHdMYoYFvW7GTOBcm"><code data-page-node-id="vRewUl10y60kdnpUWLjixq">--row-selected</code></td><td data-page-node-id="FDSxCEcPQF7jMOOqzf7O5s">colorNeutralBackground1Selected</td><td data-page-node-id="C5HDyVMVjdxVRXN8lRxcDD">#383838</td><td data-page-node-id="nIVcxnz1uLc1hxx1Gcnyng">#ebebeb</td><td data-page-node-id="Ana4R11wyJBQGLKrSRHQdH">行选中（+ 左侧 3px accent 条）</td></tr>
       <tr data-page-node-id="vqP83CwNvbojDattKegr6A"><td data-page-node-id="Vif2zwGxQLY8CbLi44nOPN"><code data-page-node-id="FUWIyKYEm00nbhvVBZtxEL">--row-pressed</code></td><td data-page-node-id="nAVE3n9nrDG8M8p56Mw7gd">colorNeutralBackground1Pressed</td><td data-page-node-id="dMyIZgJXojAiw0BnMBOfmb">#1f1f1f</td><td data-page-node-id="k8LQBtirAyRlxmixeSwEL9">#e0e0e0</td><td data-page-node-id="FnEpamFHZH6o5f1BeXvNoL">行按下</td></tr>
-      <tr data-page-node-id="PzXqapkJ0GJPzIe4Bt1Ece"><td data-page-node-id="Y2bld41rOZ9QzuRfMnPaju"><code data-page-node-id="9AEmVaH8FC9vyD6DNkkcld">--chip-bg</code></td><td data-page-node-id="jZWE9IZdezUPGGRtco9lCU">colorNeutralBackground3（暗用 card）</td><td data-page-node-id="iHpudbpBdFKhRSuyNxHiyC">#333333</td><td data-page-node-id="iGkOQyGnaeHWw2uwg2tVgm">#f5f5f5</td><td data-page-node-id="BBuC6WD76W01RbVUaWpVxI">Tag / 键帽底</td></tr>
+      <tr data-page-node-id="PzXqapkJ0GJPzIe4Bt1Ece"><td data-page-node-id="Y2bld41rOZ9QzuRfMnPaju"><code data-page-node-id="9AEmVaH8FC9vyD6DNkkcld">--chip-bg</code></td><td data-page-node-id="jZWE9IZdezUPGGRtco9lCU">colorNeutralBackground3（暗用 card）</td><td data-page-node-id="iHpudbpBdFKhRSuyNxHiyC">#333333</td><td data-page-node-id="iGkOQyGnaeHWw2uwg2tVgm">#f5f5f5</td><td data-page-node-id="BBuC6WD76W01RbVUaWpVxI">键帽底（v4.7：Tag 移除后仅键帽）</td></tr>
       <tr data-page-node-id="ODdDctKwnvyk6JBIbnuEtJ"><td data-page-node-id="a1HgCCJUJT6LSQqHRh4UuQ"><code data-page-node-id="n2iULhyyINtRDHmB3224qu">--success</code></td><td data-page-node-id="yktBz8InhQIJz1J9I6ajWo">colorStatusSuccessForeground1</td><td data-page-node-id="SNA286yheoEeQbcQXEk33C">#54b054（green[tint30]）</td><td data-page-node-id="du6ttCHx8tZzdsL1tKX5xN">#0e700e（green[shade10]）</td><td data-page-node-id="HJevIHMqEJrw8GCn4qotbC">Toast / 状态点 ok</td></tr>
       <tr data-page-node-id="IEgtYajbx3QcZeD315r9hk"><td data-page-node-id="HQwPjmiy0gGPELkChEXXbF"><code data-page-node-id="MPYnFxXavGFdd9JH6xpRMJ">--danger</code></td><td data-page-node-id="LscEIt6ZHH4KFj05OcH8Q4">colorStatusDangerForeground1</td><td data-page-node-id="mG3i4im56cHNCTOgAQNHHF">#dc626d（cranberry[tint30]）</td><td data-page-node-id="4pt9SZKZFAIqmn5LwyA5F3">#b10e1c（cranberry[shade10]）</td><td data-page-node-id="BakrtrJjtkfbNATwIRJhSB">Toast / 状态点 err / critical 按钮</td></tr>
       <tr data-page-node-id="CtKtxYt793Up6KTocH6V9A"><td data-page-node-id="dAEC1aHjPHKebDpU5Y51UY"><code data-page-node-id="KrC5VndH4OX69qYCh7D8Ki">--focus</code></td><td data-page-node-id="mprYvz74TKc1zEhGSer5tM">colorStrokeFocus2</td><td data-page-node-id="VE3ensERBJyLqwGzG6OLXQ">#ffffff</td><td data-page-node-id="iQtjAdsoffq1Du2JL6vCX1">#000000</td><td data-page-node-id="fFuqkvIoW1Q2fBoCf3PFKk">2px 焦点描边（仅交互控件）</td></tr>
@@ -1223,8 +1246,8 @@
     <h3 data-page-node-id="R3NgcJvTl698KqKkYHaM6o">05.1 字号 ramp（Fluent 2 base100–500）</h3>
     <table data-page-node-id="6XBVE4hdXoiYSSlQjEhjA7">
       <tr data-page-node-id="d9KKgNhVfKZkeKTQdA7DU8"><th data-page-node-id="uAU8lu0Anfka1I2rlG7uzb">ramp</th><th data-page-node-id="2sTl5WWX47dbyYf74MfmPM">字号 / 行高</th><th data-page-node-id="HwCAlGBWx1oYJIPNZtWyEG">dd-run 用途</th></tr>
-      <tr data-page-node-id="JNaLmuB4GRlFZoSCvHlTaK"><td data-page-node-id="NY0iEGsOBZJbEEEvlRIUwv">base100</td><td data-page-node-id="oKEKQkumQRmJXiz0P08Zh0">10 / 14</td><td data-page-node-id="hB8hGytmr3uRVQ819uBSaC">键帽、Tag「+N」、<code data-page-node-id="RVicG4RW0aMYulvGwrgsEE">ext_id</code> 徽标、rc-sub</td></tr>
-      <tr data-page-node-id="GSPJyCmPhAjCAJbE4C9JyB"><td data-page-node-id="ahSuF8KCSAzD9xK8uFzCs3">base200</td><td data-page-node-id="i9iQ4X8qAK4ozEhDMauaD9">12 / 16</td><td data-page-node-id="gbmuirebaqn5TqMqsnkKDj">描述、类型标签、Tag、分组标题（600）、页脚、Toast、设置项描述、卡片名（600）</td></tr>
+      <tr data-page-node-id="JNaLmuB4GRlFZoSCvHlTaK"><td data-page-node-id="NY0iEGsOBZJbEEEvlRIUwv">base100</td><td data-page-node-id="oKEKQkumQRmJXiz0P08Zh0">10 / 14</td><td data-page-node-id="hB8hGytmr3uRVQ819uBSaC">键帽、<code data-page-node-id="RVicG4RW0aMYulvGwrgsEE">ext_id</code> 徽标、rc-sub</td></tr>
+      <tr data-page-node-id="GSPJyCmPhAjCAJbE4C9JyB"><td data-page-node-id="ahSuF8KCSAzD9xK8uFzCs3">base200</td><td data-page-node-id="i9iQ4X8qAK4ozEhDMauaD9">12 / 16</td><td data-page-node-id="gbmuirebaqn5TqMqsnkKDj">描述、类型标签、分组标题（600）、页脚、Toast、设置项描述、卡片名（600）</td></tr>
       <tr data-page-node-id="EkHXvRmejyiq4ZAvyr8kyk"><td data-page-node-id="hlMnCwZUlUs4S6b9kIvukD">base300</td><td data-page-node-id="IlT5jDgeiXOd9RyU3zK6CK">14 / 20</td><td data-page-node-id="UHVSL3zwDcl6l2zB7iCXPg">结果行名称、设置项名、对话框正文、搜索框输入（large）</td></tr>
       <tr data-page-node-id="kh9ikg2tOHUMmbnTKtAJtK"><td data-page-node-id="GaaoBFD2r8NqE56KIxKRTa">base400</td><td data-page-node-id="jAs0XFFAmZDvvTi72sZbp1">16 / 22</td><td data-page-node-id="w4nm549qhRt7k8NVsWCne2">页标题（子页 / 设置）、对话框标题、空态标题</td></tr>
       <tr data-page-node-id="482QXf0qQawJCZZEEYHMYw"><td data-page-node-id="dvkCmU91luSmUN9ms719m9">base500</td><td data-page-node-id="X2w5YHjSBoNY1KKqIu9vd4">20 / 28</td><td data-page-node-id="41c97djIgvikGpH01xSMo2">（预留：设置分区大标题）</td></tr>
@@ -1235,7 +1258,7 @@
       顶行控件 40（含 padding 52）、搜索栏 40（filled-darker，圆角 4）、行高 40（圆角 6）、
       页脚 32、图标列 20；间距全部取 4px 基准 ramp（2·4·6·8·10·12·16·20·24）；
       字重只用 400 / 600（Fluent regular / semibold），不再出现 500 / 650。
-      圆角梯度：2（指示条）/ 4（搜索框·键帽·Tag·卡片内缩略）/ 6（行）/ 8（面板·卡片·Toast·对话框）/ 9999（圆点·胶囊）。
+      圆角梯度：2（指示条）/ 4（搜索框·键帽·卡片内缩略）/ 6（行）/ 8（面板·卡片·Toast·对话框）/ 9999（圆点·胶囊）。
     </div>
   </section>
 
@@ -1268,7 +1291,7 @@
     <h3 data-page-node-id="hF4K0KPqZ7gKfpgsJWNj5L">6.2 搜索结果类型标签</h3>
     <table data-page-node-id="B622tE5N8g1dAmMMinNcf6">
       <tr data-page-node-id="xfYcNcw0s8a8s2ABhIHRvD"><th data-page-node-id="9RAzFYJNr9OwHJlLODCocy">项</th><th data-page-node-id="5NAKSomVvIPCC2BdCSpZuu">规格</th></tr>
-      <tr data-page-node-id="W4uzQItf125QUzN2uOpzF0"><td data-page-node-id="ss6UwcGlvLDxADPMADQZJP">位置</td><td data-page-node-id="HBd4btFHJXwV0X3X1bf7PY">每行<b data-page-node-id="570tvwhK6aYhYi9b9bdYjC">最右侧</b>，与行同高垂直居中；右边缘距行右内边距 <code data-page-node-id="xNfo7aULHWgV7dtPhneRCe">10px</code>。<b data-page-node-id="2qwtN30O88D7XZCjZgLqRf">共存次序</b>：类型标签最靠右，<code data-page-node-id="12JiLOHwFtl8zTvPiicmfO">.tag</code> chips 紧邻其左（类型比用户自定义 tag 更具结构性）。</td></tr>
+      <tr data-page-node-id="W4uzQItf125QUzN2uOpzF0"><td data-page-node-id="ss6UwcGlvLDxADPMADQZJP">位置</td><td data-page-node-id="HBd4btFHJXwV0X3X1bf7PY">每行<b data-page-node-id="570tvwhK6aYhYi9b9bdYjC">最右侧</b>，与行同高垂直居中；右边缘距行右内边距 <code data-page-node-id="xNfo7aULHWgV7dtPhneRCe">10px</code>。<b data-page-node-id="2qwtN30O88D7XZCjZgLqRf">共存次序（v4.7 修订）：</b>仅类型标签最靠右——原紧邻其左的 <code data-page-node-id="12JiLOHwFtl8zTvPiicmfO">.tag</code> chips 已整体移除（D13 废止）。</td></tr>
       <tr data-page-node-id="e42DOmCCmfLTv2YcyEDhSs"><td data-page-node-id="cI5VHgDc3sC9mDFHXFLaOu">内容</td><td data-page-node-id="5VRetac7hyjQYrgaBZw4Uu">按<b data-page-node-id="2jqZw71m5jNESkxF8h6xiT">通用内容类别</b>显示（应用 / 网页 / 命令 / 设置 / 文件 / 文本 / 音频 / 视频 / 图片 …）；内置扩展按 provider ID（全限定 <code data-page-node-id="Pnyo48UfyOpo7WXQUdfyC3">com.ddrun.*</code>，去 <code data-page-node-id="GAEURxwJROzIKeQruLemre">com.ddrun.</code> 前缀后匹配）硬编码映射到类别；第三方扩展未命中时回退「命令」或显示扩展 ID 原文。协议层不改。</td></tr>
       <tr data-page-node-id="ZbLSy45FhGdEkR0yFIMf16"><td data-page-node-id="J7LZ7Q8eN51DHst17V74d3">映射表（去 <code data-page-node-id="UykzzpCirkkvGkw7nQUmf6">com.ddrun.</code> 前缀后）</td><td data-page-node-id="NfZLFBWFByMcZo23uWpfyx">
         <code data-page-node-id="sztql7ScyFmZymLnSVxj2k">apps</code> → <b data-page-node-id="SMuXBBttkpMBx1TX4gFh8H">应用</b>；<code data-page-node-id="3n91tdxIEhXQksJSXNsLuE">calc</code> → <b data-page-node-id="tfldWA4JXap5U4slnPj5M6">命令</b>；<code data-page-node-id="h1GKkBJpu8DE82XQ0mzfRe">system</code> → <b data-page-node-id="eEostJE84AWs2dmFlhrPmF">设置</b>；
@@ -1307,7 +1330,7 @@
       <tr data-page-node-id="QH2f6Rycp6dNAVtozPUlrV"><td data-page-node-id="gZ7hDLuJBQtqqRtYHBuxOm">C8</td><td data-page-node-id="CKcz5Yj3BECMGPHUiVIuZu">空态 / 无选中回退（v4.3 修订）</td><td data-page-node-id="1uZAwsYf0SPEdcbfbDIDz2">清空调或 Esc 回首页</td><td data-page-node-id="QPTuSJsqoxPrKAhlodbAZ9">无选中时显示完整键位图例（↑↓/Enter/Esc）。<b data-page-node-id="FLMwAbpVgyecPA3Dz6hzl7">v4.3：异常状态点规格废止</b>——stub/err 源不再在页脚显示（源诊断整体移除）。</td></tr>
       <tr data-page-node-id="UXkPwiSJZ84XTkUoEk49yM"><td data-page-node-id="w6OAgfjKL95T4Mr31XFcdD">C9</td><td data-page-node-id="qdlgJCObpGPCQs8GqjMFll">不修改协议</td><td data-page-node-id="DCBReQzYxGfmEuQLroZNbi">代码审查</td><td data-page-node-id="IkgaStnyBP4UHAhJwlCxDE"><code data-page-node-id="EGvDzOJ8BmAWgroZAZcxUW">dd-protocol/src/model.rs</code> 中 <code data-page-node-id="m0l4UWtf3e2BdrFMQfkUpD">CommandItem</code> 不新增 kind 字段；映射在 GUI 层完成。</td></tr>
       <tr data-page-node-id="n8lEBC5b4oFH7frnP0n0jJ"><td data-page-node-id="uwOZZCX80NEIZLqAqjEfXQ">C10</td><td data-page-node-id="hB1hU23V6hk4RiPxqSBikV">回归测试</td><td data-page-node-id="L8EEs5o18aZ7xYroChLrTh"><code data-page-node-id="qHyBNIH0PZZjDtFLNO9BYf">cargo test --workspace</code></td><td data-page-node-id="Q3Pttgi0e6LUNArtvqJC1W">全量测试通过；新增 GUI 层单测覆盖类别映射与动作映射。</td></tr>
-      <tr data-page-node-id="jDqAE1kxTTXGnjZOESCPur"><td data-page-node-id="J3wQebd1niddIhtj5uHQuZ">C11</td><td data-page-node-id="kMWCUAAVZd1Qrey58iq9K3">类型与 tags 共存次序</td><td data-page-node-id="kvcPUlzV9yq4gGM8QIvEmc">真机截图</td><td data-page-node-id="gYy6P6Fp7K38EvQv0396O6">类型标签最靠右、<code data-page-node-id="ubtlSn4nNfr7qi5XSH6tQS">.tag</code> Tag chips 紧邻其左；行高保持 40px。</td></tr>
+      <tr data-page-node-id="jDqAE1kxTTXGnjZOESCPur"><td data-page-node-id="J3wQebd1niddIhtj5uHQuZ">C11</td><td data-page-node-id="kMWCUAAVZd1Qrey58iq9K3">类型与 tags 共存次序（v4.7 修订）</td><td data-page-node-id="kvcPUlzV9yq4gGM8QIvEmc">真机截图</td><td data-page-node-id="gYy6P6Fp7K38EvQv0396O6">类型标签最靠右；<b>Tag chips 已整体移除</b>（D13 废止，行右端仅类型标签）；行高保持 40px。</td></tr>
       <tr data-page-node-id="46WFweRn3DZ0DEhLuQwIT0"><td data-page-node-id="g78jfY5tOWO1CP1FIpOF8C">C12</td><td data-page-node-id="MU6VzIPamCWqiwU5nCC86O">设置面板为同窗口子视图</td><td data-page-node-id="LbEUN650WhFCmSCCPHf5KB">代码审查 + 真机</td><td data-page-node-id="XhnfgSTpJTT7rWjBiFF4Wu">设置视图在现有 eframe 上下文内（PageStack/egui::Window），无第二个 run_native / 无新线程。</td></tr>
       <tr data-page-node-id="cJJPBEDvsSllcYBpH6EnHY"><td data-page-node-id="xBKnDRMbHBsSxxDdKx8Aos">C13</td><td data-page-node-id="6PS5CkuJDlBFTb3XC6vUZt">字段口径一致</td><td data-page-node-id="mhSeW7mGSztKEAaFgcWmeF">代码审查</td><td data-page-node-id="iL8D9WFLQ64TQ7z9EFDUlh"><code data-page-node-id="GIF5G227C5Pj2nxHBSJ6oN">PanelItem.result_category</code> 为 3.9 计划新增，<code data-page-node-id="WBFStXx9R5eCQl7aaRMCzx">cmdpal-ui-mockups.html</code> 与 <code data-page-node-id="UY3GwWtnE4lEiD2rcB57mA">implementation.md</code> 口径一致；协议层零改动。</td></tr>
     </table>
@@ -1495,6 +1518,31 @@
                   </div>
                 </div>
               </div>
+              <div class="settings-card">
+                <div class="setting-row">
+                  <span class="glyph">&#xE771;</span>
+                  <div class="setting-main">
+                    <div class="setting-name">窗口材质</div>
+                    <div class="setting-desc">窗口背景使用 Windows 11 系统材质；两者互斥，全关为不透明</div>
+                  </div>
+                </div>
+                <div class="setting-row" id="swMicaRow">
+                  <span class="glyph" style="visibility:hidden">&#xE790;</span>
+                  <div class="setting-main">
+                    <div class="setting-name">云母材质</div>
+                    <div class="setting-desc">Mica：随桌面窗口 subtle 染色，性能开销低（默认开启）</div>
+                  </div>
+                  <span class="switch-fn on" id="swMica"></span>
+                </div>
+                <div class="setting-row" id="swAcrylicRow">
+                  <span class="glyph" style="visibility:hidden">&#xE790;</span>
+                  <div class="setting-main">
+                    <div class="setting-name">亚克力材质</div>
+                    <div class="setting-desc">Acrylic：半透明模糊，视觉更通透、GPU 开销略高</div>
+                  </div>
+                  <span class="switch-fn" id="swAcrylic"></span>
+                </div>
+              </div>
             </div>
 
             <!-- 常规 -->
@@ -1589,9 +1637,12 @@
       <tr data-page-node-id="nLIvcaK8Clald2akAIi2GS"><td data-page-node-id="OivS5CYGXP38TdAmxMGeNI">顶行（不变）</td><td data-page-node-id="HQZn8CLYCJPVK7BdeszSxa"><code data-page-node-id="FiAmq73KEeD8j1ww1dZDS9">[返回按钮 28×28] [页标题「设置」16/22·600] [版本徽标 最右]</code>；控件高 40（含 padding 52），与 01 / 07 顶行<b data-page-node-id="vM4smaqwP7Xl0CBfLdcwA">完全同构</b>，切换零位移。</td></tr>
       <tr><td>布局（v4.6 新，D27）</td><td>顶行下方 = <code>[左栏 168px][间距 8][内容区 flex 1]</code> 水平两栏；<b>顶行与左栏固定</b>（四项恒可见、左栏不滚动），<b>内容区独立滚动</b>（ScrollArea）；页脚 = 说明文案 + Esc 返回（现状语义不变，无齿轮）。</td></tr>
       <tr><td>左栏（NavigationView pane 语义，v4.6）</td><td>宽 168；项高 36、圆角 4、内边距 0 12；图标 16px（<code>--text-2</code>）+ 文字 body1 14/20（<code>--text-2</code>）；hover = <code>row-hover</code> 底；<b>选中 = <code>row-selected</code> 实色底 + 左缘 3×16 accent 指示条（radius 2，与列表行选中语言 D9 同构）+ 图标/文字转 <code>--text</code></b>；项间垂直间距 4、左栏顶部起始间距 8；未引入新 token。</td></tr>
-      <tr><td>栏目与内容映射（v4.6）</td><td><b>外观</b> = 主题外观卡（radio-card 三选）；<b>常规</b> = 「打开面板时显示」卡（checkbox「显示所有应用」；持久化 <code>config.json</code> 的 <code>open_view</code>（default/all），变更即时生效——重算 root 空查询可见表）+ 占位卡（全局热键 / 开机自启）；<b>搜索</b> = 「搜索引擎」卡；<b>扩展</b> = 「扩展管理」占位卡（后续扩展配置的预留归组位）。默认选中 = 第一栏「外观」；每次进入设置页重置（与 <code>go_home</code> 复位语义一致）；栏目为纯视图状态<b>不落盘</b>。</td></tr>
+      <tr><td>栏目与内容映射（v4.6）</td><td><b>外观</b> = 主题外观卡（radio-card 三选）+ 「窗口材质」卡（云母/亚克力 ToggleSwitch，v4.7 D30）；<b>常规</b> = 「打开面板时显示」卡（checkbox「显示所有应用」；持久化 <code>config.json</code> 的 <code>open_view</code>（default/all），变更即时生效——重算 root 空查询可见表）+ 占位卡（全局热键 / 开机自启）；<b>搜索</b> = 「搜索引擎」卡；<b>扩展</b> = 「扩展管理」占位卡（后续扩展配置的预留归组位）。默认选中 = 第一栏「外观」；每次进入设置页重置（与 <code>go_home</code> 复位语义一致）；栏目为纯视图状态<b>不落盘</b>。</td></tr>
       <tr data-page-node-id="QrOcEbdAQcXlEOdiHjGnXW"><td data-page-node-id="fC1ReyAuXRWLtPfMVf3xp2">卡片（沿用 v4.2）</td><td data-page-node-id="Xo6vAWiWl06J29CHZSRhQ6">Fluent 9 Card（<b data-page-node-id="o48x3HJxEOgTmNK3KhizrI">有描边 → 不使用阴影</b>，D10）：底 <code data-page-node-id="ZlL7fgbT7LGBb1I0Gj82ah">--card</code>（亮 #fafafa / 暗 #333333）、1px <code data-page-node-id="BEmqxY7HcJHDlCDBvCPTLC">--border</code>（stroke2）描边、圆角 8（radius-x-large）、padding 12、卡片间距 8；设置行 = 图标（16px，<code>--text-2</code>）+ 名称（body1 14/20，<code>--text</code>）+ 描述（caption1 12/16，<code>--text-3</code>）。</td></tr>
       <tr data-page-node-id="RJVgTyMiGBbBLhqhQDobyv"><td data-page-node-id="QYVbZTm5TICx8TYmHPI54Y">主题单选（沿用）</td><td data-page-node-id="kiwLhZrR78HFnLK0aungxJ">三张等宽 radio-card；未选 = 1px <code data-page-node-id="6bL2cDfNZFLogqgOpGFidu">--border-strong</code> + <code data-page-node-id="CEBpW4DvDHvTFXF03Fd0y0">--input-fill</code> 底；选中 = <b data-page-node-id="tyW6EqUcasTQ3PcmhF0QDd">2px accent 边框</b> + <code data-page-node-id="JCc4nYLADVg0S3XAdh0y7J">--accent-soft</code> 底 + 圆点填充 accent；卡内含主题缩略色板（swatch 16px 高）。点击即 <code data-page-node-id="MvMOYGwxH8BU0pnP2ggRpZ">ctx.set_theme</code> + <code data-page-node-id="sAgp6rhZh4RH6ETbLsWD5C">Settings::save</code> 落盘（<code data-page-node-id="grEer3drnuVEt78HlpV2R0">apply_theme_pref</code> 语义不变）。</td></tr>
+      <tr><td>材质开关（v4.7 新，D30）</td><td>外观栏第二张卡「窗口材质」（图标 E771，实施时以真机字形为准）+ 两个 <b>ToggleSwitch 行</b>：云母材质 / 亚克力材质（名称 body1 14/20 + 描述 caption1 12/16 + 尾缀开关）。开关几何沿用占位 Toggle <b>36×18</b>（radius-circular、滑块 12）；<b>开 = accent 填充底 + 白滑块居右；关 = <code>--input-fill</code> 底 + 1px <code>--border-strong</code> 描边 + <code>--text-2</code> 滑块居左</b>（与禁用占位态区分，不使用 text-disabled）。<b>互斥·后开优先</b>：开启某项自动关闭另一项，最后操作者优先；全关 = 无材质；开关状态由单值 <code>backdrop</code>（none/mica/acrylic）派生，与实际效果强一致。点击即生效 + 落盘 <code>config.json</code> 的 <code>backdrop</code>，<b>默认云母</b>（含旧配置升级：字段缺失 → 云母）。</td></tr>
+      <tr><td>材质效果（v4.7 新，D31）</td><td>Win11 22H2（build 22621）+ 系统背景材质：<code>DwmSetWindowAttribute(DWMWA_SYSTEMBACKDROP_TYPE)</code>——云母 = <code>DWMSBT_MAINWINDOW(2)</code>、亚克力 = <code>DWMSBT_TRANSIENTWINDOW(3)</code>、关 = <code>DWMSBT_NONE(1)</code>。材质生效时<b>面板背景透明</b>（egui <code>clear_color</code> + <code>panel_fill</code> 双透明，注册亮/暗两套 Style 同步），<b>页脚同步透明</b>（v4.7 真机反馈修订：否则底部一条不透明带割裂材质），列表行 / 卡片等表面不透明层级不变；材质明暗随主题（<code>DWMWA_USE_IMMERSIVE_DARK_MODE</code>(20) 跟随亮暗设置，无边框窗口同样作用于材质染色）。<b>全关 = DWMSBT_NONE + 面板恢复不透明</b>（透明只跟材质挂钩——DWMSBT_NONE 应用成功 ≠ 透明，否则无材质可透出 = 全透明穿帮，真机反馈 2026-09-05）。协议 v1.0 冻结零新增。</td></tr>
+      <tr><td>材质回退（v4.7，D31）</td><td><code>DwmSetWindowAttribute</code> 失败（Win10 / 22621 以下返回错误码）→ <b>保持不透明面板</b>（不透明填充 + 不透明 clear），记一次日志、不阻断（区别热键 fail-fast）；透明窗口视觉属性恒创建（<code>with_transparent</code>），材质未生效时视觉与 v4.6 完全一致（可用性不受损）。</td></tr>
       <tr><td>搜索引擎卡（v4.6 补稿，代码 2026-09-05 已实现）</td><td>预设 5 引擎 = checkbox 勾选（启用/停用，按名匹配 <code>search_engines</code> 成员关系）；自定义引擎行 = 名称 + 模板截断（monospace mini，<code>--text-3</code>）+ 删除按钮；添加表单 = 名称 + URL 输入 + 添加；校验 = 名称非空/不重名、模板含 <code>{q}</code>、<code>http(s)://</code> 前缀，错误红字（mini，<code>--danger</code>）；变更即落盘 <code>config.json</code> 的 <code>search_engines</code>，经 <code>DD_WEBSEARCH_ENGINES</code> 环境变量传递给 dd-ext-websearch，<b>返回首屏重聚合后生效</b>（协议 v1.0 冻结零新增）。</td></tr>
       <tr data-page-node-id="KmHda6c4ZhhS7v4ErNDGb5"><td data-page-node-id="YkAqcbswSXKB9fQ69VHuxs">占位项（沿用 v4.2）</td><td data-page-node-id="gO0gZ4yOvbE1vcA7DY6uza">全局热键 / 开机自启 / 扩展管理三项：名称·描述·图标统一取 <b data-page-node-id="GxE8SCUCuE833L5NgW8zOv"><code data-page-node-id="RioKCH5LEmdGoDT0BFEz09">--text-disabled</code></b>（不透明度叠加）；尾缀为「即将支持」chip（mini 10/14）或禁用 Toggle（36×18）；<b data-page-node-id="pcceXdGMGW5Buk61btFhYu">不注册任何点击处理、不写入 Settings、不进入验收功能项</b>。</td></tr>
       <tr><td>键盘（v4.6）</td><td>Esc 返回（<code>go_back</code>）；Ctrl+, 打开设置（现行键位不变）；<b>左栏 ↑↓ 切换栏目</b>（左栏焦点态，Tab 可达；可选增强，本期占位）；<b>点击栏目为本期唯一栏目切换交互</b>。</td></tr>
@@ -1790,9 +1841,9 @@
           <span class="gear glyph" title="设置">&#xE713;</span>
           <span>执行</span>
           <span class="keys">
-            <span><b>↑</b> <b>↓</b> 选择</span>
+            <span><b>↑↓</b> 选择</span>
             <span><b>Enter</b> 执行</span>
-            <span><b>Esc</b> 隐藏</span>
+            <span><b>Esc</b> 返回·隐藏</span>
           </span>
         </div>
         <div class="ctx-menu" id="ctxDemoMenu"></div>
@@ -1953,9 +2004,9 @@
               <span class="gear glyph" title="设置">&#xE713;</span>
               <span>执行</span>
               <span class="keys">
-                <span><b>↑</b> <b>↓</b> 选择</span>
+                <span><b>↑↓</b> 选择</span>
                 <span><b>Enter</b> 执行</span>
-                <span><b>Esc</b> 隐藏</span>
+                <span><b>Esc</b> 返回·隐藏</span>
               </span>
             </div>
           </div>
@@ -2169,10 +2220,10 @@
         <td data-page-node-id="odpOuOuViHojfrNDrKHrUt"><code data-page-node-id="luxWUqUorPEzV4ObG7fhZP">PanelItem</code> subtitle → <code data-page-node-id="ghMcSGayCe8AAFe0JftbAR">.desc</code> 样式</td>
       </tr>
       <tr data-page-node-id="cktrSlqwdz8nwCyPeXfnkE">
-        <td data-page-node-id="bcnt612X7BVQBDSmQbFYQd"><b data-page-node-id="O0Sc45lIEB9jHjYod1Ug6A">类型标签 / 自定义 tag</b></td>
-        <td data-page-node-id="X3EI7mpAqMQiPZPNCzk7GG">Text（caption1，fg3）+ Tag</td>
-        <td data-page-node-id="tmHu4UxccbGyrULGqeT6C0">类型标签 12/16 <code data-page-node-id="9IfeetikKEKHLJW2MzhiAc">--text-3</code> 纯文本最右（90px 截断）；Tag = 圆角 4、subtle 底、caption1，<b data-page-node-id="7qFax2iovGqgInReKUtNG3">≤2 +「+N」</b>（D13）</td>
-        <td data-page-node-id="JmfCN9M8pH1edASbzX65Dl"><code data-page-node-id="5dqwHXJHMhR7FIl0jXUgkr">PanelItem.result_category</code>（3.9 计划新增）+ tags 渲染层折叠</td>
+        <td data-page-node-id="bcnt612X7BVQBDSmQbFYQd"><b data-page-node-id="O0Sc45lIEB9jHjYod1Ug6A">类型标签</b>（v4.7：原「/ 自定义 tag」移除）</td>
+        <td data-page-node-id="X3EI7mpAqMQiPZPNCzk7GG">Text（caption1，fg3）</td>
+        <td data-page-node-id="tmHu4UxccbGyrULGqeT6C0">类型标签 12/16 <code data-page-node-id="9IfeetikKEKHLJW2MzhiAc">--text-3</code> 纯文本最右（90px 截断）；<b>Tag 组件废止</b>（v4.7 用户决策，D13——行内 Tag chips 整体移除）</td>
+        <td data-page-node-id="JmfCN9M8pH1edASbzX65Dl"><code data-page-node-id="5dqwHXJHMhR7FIl0jXUgkr">PanelItem.result_category</code>（已实施）；tags 数据字段保留、不渲染</td>
       </tr>
       <tr data-page-node-id="6qTvnX8MWFFvgCtxRKDZPv">
         <td data-page-node-id="jASzCiawaT9DZqAb94druq"><b data-page-node-id="5GdcNbkoTpd09wHyN0Decs">分组标题</b></td>
@@ -2210,10 +2261,10 @@
         <td data-page-node-id="XJQTG6mPBHTXOf0W3P6yi7">现行「正在加载…」文本 → 组件化（占位）</td>
       </tr>
       <tr>
-        <td><b>设置页</b>（08，v4.6 重构）</td>
-        <td>NavigationView（pane）+ Card + RadioGroup（card）+ Checkbox + Switch + Text</td>
-        <td>左栏 = pane 宽 168、项高 36、选中 <code>bg1Selected</code> 实色底 + 3×16 accent 指示条（与列表行 D9 同语言）；右侧卡片 = card 底 + stroke2 描边、<b>无阴影</b>（D10）；radio-card 选中 2px accent + <code>--accent-soft</code>；占位项用 <code>--text-disabled</code>；窗口 640×640（D28）</td>
-        <td><code>draw_settings</code> 重构为左右布局（v4.6 占位，D29）；实际项 = 主题 / 打开面板时显示 / 搜索引擎（占位项不实现）</td>
+        <td><b>设置页</b>（08，v4.6 重构 / v4.7 材质）</td>
+        <td>NavigationView（pane）+ Card + RadioGroup（card）+ Checkbox + ToggleSwitch + Text</td>
+        <td>左栏 = pane 宽 168、项高 36、选中 <code>bg1Selected</code> 实色底 + 3×16 accent 指示条（与列表行 D9 同语言）；右侧卡片 = card 底 + stroke2 描边、<b>无阴影</b>（D10）；radio-card 选中 2px accent + <code>--accent-soft</code>；占位项用 <code>--text-disabled</code>；<b>功能态 ToggleSwitch（v4.7 材质）= 开 accent 底白滑块 / 关 input-fill + border-strong</b>；窗口 640×640（D28）</td>
+        <td><code>draw_settings</code> 左右布局已实施（2026-09-05）；材质开关卡实施留 v4.7 确认后批次（D32，落点 <code>settings.rs</code> / <code>platform.rs</code> / <code>theme.rs</code>）</td>
       </tr>
       <tr data-page-node-id="4pzzkaGJZwm7ZRfBBFim6f">
         <td data-page-node-id="N3mgDwk1xk1PYV9xOCIP49"><b data-page-node-id="PDP0WQd2NUAh8V2ao2nIMp">Toast</b>（09）</td>
@@ -2252,7 +2303,7 @@
   <section class="screen" data-page-node-id="L6iEhCagQTB9C9S6J4ACzC">
     <div class="s-head" data-page-node-id="wcnTV9vWl1qcsB6fExaLir">
       <span class="s-num" data-page-node-id="MDGUYBUj0ASdSN7Sz81Lwv">12</span>
-      <h2 data-page-node-id="MEsJHQAbs6nkiMATdLJcIZ">全界面验收核对表（v4.6）</h2>
+      <h2 data-page-node-id="MEsJHQAbs6nkiMATdLJcIZ">全界面验收核对表（v4.7）</h2>
       <span class="chip" data-page-node-id="oexn91omsB8ODgbbT1O4At">本期强制仅 D 组</span>
     </div>
     <p class="s-desc" data-page-node-id="mFFFhCHq07brlk9Rs1or3g">
@@ -2268,12 +2319,14 @@
       <tr data-page-node-id="nBTeTEvrxSglU3oZxvzAfn"><td data-page-node-id="DEj6xPS5A7lEvMcX5yTrEn">A4</td><td data-page-node-id="fkX4Y0wHtB6HiTVan9V3hE">复用一致性</td><td data-page-node-id="mlTXKg9TDAgcnGr0y3yCFL">子页顶行 / 结果行 / 页脚与主面板逐项一致（40 / 40 / 32）。</td></tr>
       <tr data-page-node-id="lLESh2uZDz75qWHzIxNRW6"><td data-page-node-id="QuIdHzXsAVrA786DGq3Ecg">A5</td><td data-page-node-id="Bo3ALvue1fFl3gmQBX0EpY">零位移切换（D1/D4）</td><td data-page-node-id="cpG6XP4c9Lfx5YQXrX26uU">Root ↔ 子页切换：面板尺寸不变、顶行 y 坐标不变（像素测量两屏一致）、无动画帧出现；<b>设置页为唯一例外</b>（00.1：进入放大 640×640、返回缩回，v4.6 D28），顶行 y 坐标不变。</td></tr>
       <tr data-page-node-id="rawpWyDl7j8VtHFt8XGlIe"><td data-page-node-id="cFpFA1Z9gprPCWlS9rANdN">A6</td><td data-page-node-id="5h42FFbHSriAKi9qZyKHL1">内容区填满（v4.1）</td><td data-page-node-id="ES9rp0roqXy2c9G5Vj0EWh">07/02 短内容场景下，内容区 flex:1 撑满，<b data-page-node-id="ZitJflVDrYv8vFZg4fPOD0">页脚紧贴面板底部</b>、下方无大块空白（像素测量：footer.bottom == panel.bottom - 1px 描边）。</td></tr>
-      <tr data-page-node-id="pADqVJCh9Bw67sZt7Wp9il"><td data-page-node-id="7gN58nwhoOzkJ3DumLrpIe">B1</td><td rowspan="6" data-page-node-id="S2QglOUfhMReq7aMXL4toz"><b data-page-node-id="KqeqVEgGfWtDDJwgZWKiCC">08 设置页</b><br>（v4.6 重构）</td><td data-page-node-id="w8jaBYnObACbhVAUU4bAfR">radio-card 选中态</td><td data-page-node-id="ghb1C04dMCOD5rSfHjyGmA">选中卡 2px accent 边框 + accent-soft 底 + 圆点填充；未选中 1px border-strong；三卡等宽。</td></tr>
+      <tr data-page-node-id="pADqVJCh9Bw67sZt7Wp9il"><td data-page-node-id="7gN58nwhoOzkJ3DumLrpIe">B1</td><td rowspan="8" data-page-node-id="S2QglOUfhMReq7aMXL4toz"><b data-page-node-id="KqeqVEgGfWtDDJwgZWKiCC">08 设置页</b><br>（v4.6 重构<br>v4.7 材质）</td><td data-page-node-id="w8jaBYnObACbhVAUU4bAfR">radio-card 选中态</td><td data-page-node-id="ghb1C04dMCOD5rSfHjyGmA">选中卡 2px accent 边框 + accent-soft 底 + 圆点填充；未选中 1px border-strong；三卡等宽。</td></tr>
       <tr data-page-node-id="ScaGSzB4m0S8qRYRq2hp8m"><td data-page-node-id="gmxGEr3XqHQ6MF9Nlmu7Yj">B2</td><td data-page-node-id="TM0KvK80R3pqE7FQEJzDT1">选择即生效</td><td data-page-node-id="W6xym2ZrDv4qDkhEaiKQEv">点击卡片主题立即切换并持久化（重启后保持）；与现行 apply_theme_pref 行为一致。</td></tr>
       <tr data-page-node-id="MelmR4xAr1pz5juFZD7YTk"><td data-page-node-id="2pehWCYhL4UEvhzS3vnEmM">B3</td><td data-page-node-id="b7NqT4Vin42YTz7WA1l71g">占位项禁用</td><td data-page-node-id="lOGxpMEvt44UCv50yyEUsW">热键/自启/扩展管理三项名称·图标为 <code data-page-node-id="d0WDjbbqzaAXz7WjbUX16H">--text-disabled</code> 色（非透明度叠加）；点击无任何反应、不写配置文件。</td></tr>
       <tr><td>B4</td><td>左栏几何（v4.6，D27）</td><td>左栏宽 168、项高 36、圆角 4、图标 16 + 文字 14/20；选中 = row-selected 实色底 + 左缘 3×16 accent 指示条 + 图标/文字转 text；hover = row-hover 底（像素测量，亮暗双主题）。</td></tr>
       <tr><td>B5</td><td>栏目切换与映射（v4.6）</td><td>四栏与 8.1「栏目与内容映射」逐项一致；点击栏目即时切换右栏内容；默认选中「外观」，每次进入设置页重置；栏目状态不落盘、不改协议。</td></tr>
       <tr><td>B6</td><td>窗口尺寸（v4.6，D28）</td><td>设置页 640×640、返回缩回 560×460（栈顶 is_settings 帧间 diff，无跳动）；顶行 40 高与 01/07 同构；左栏四项恒可见、内容区独立滚动、顶行固定。</td></tr>
+      <tr><td>B7</td><td>材质开关（v4.7，D30）</td><td>外观栏「窗口材质」卡两行 ToggleSwitch（36×18）：开 = accent 底 + 白滑块居右，关 = input-fill 底 + border-strong 描边 + text-2 滑块居左；互斥·后开优先（开云母自动关亚克力，反之亦然；全关 = 无材质）；默认云母（含旧配置字段缺失）；点击即生效并落盘 <code>config.json</code> 的 <code>backdrop</code>，重启保留。</td></tr>
+      <tr><td>B8</td><td>材质效果与回退（v4.7，D31）</td><td>Win11 22H2+：云母/亚克力材质肉眼可辨（面板背景透出系统材质），明暗随主题；全关 = 不透明面板；22621 以下或 API 失败 = 回退不透明、日志一次、启动与设置链路不受阻；材质切换即时生效（无需重启）。</td></tr>
       <tr data-page-node-id="NMw0PNkLEArYDBQLkeZPfW"><td data-page-node-id="mAgYgX0pkpeyy2n852Ioyz">C1</td><td rowspan="3" data-page-node-id="17BS5vSvZ58glwGrUZ5CeK"><b data-page-node-id="cU1yqCXIO6Rjz5L1FCkXJi">09 Toast / 10 Dialog</b></td><td data-page-node-id="ndWLbx0VvHHSrXXHUJIpfU">Toast 几何与时长</td><td data-page-node-id="9cyWjf2esMRdPnByksBhuA">card 表面 + shadow16；底部居中偏移 48px；圆角 8；默认 2s、失败路径 3s 自动消失；同一时刻至多 1 条。</td></tr>
       <tr data-page-node-id="R2db4e3vDdYCg8tHoxN0to"><td data-page-node-id="CVvyURE1AgLn7sPYr720CF">C2</td><td data-page-node-id="v3OfZxHS5krzHbtp510OZM">Toast 意图图标</td><td data-page-node-id="QB1Vqytl2QzaGXU1sbqGl1">success/error/info 图标与语义色逐项正确（未接意图字段前默认 info）。</td></tr>
       <tr data-page-node-id="OY1dzpuGqO4v0IH0uDzkGJ"><td data-page-node-id="6kOi3BgxEqb7OCl2ESiyop">C3</td><td data-page-node-id="0ZFCTEBP0fLWoA8pCrNJyx">Dialog 行为</td><td data-page-node-id="bBKiGyGof7E80yVt08iYS8">宽 420px 居中 + shadow64；遮罩 = blackAlpha .50（暗）/.40（亮）；Enter=确认、Esc=取消、点击遮罩=取消（遮罩实施后）；critical 确认按钮为 danger 底。</td></tr>
@@ -2286,7 +2339,7 @@
       <tr data-page-node-id="k4NycA7gCrFp8nlLXe24VB"><td data-page-node-id="UF4YEjmAbmfrY0ACtOo7Qz">D1</td><td rowspan="4" data-page-node-id="TjcYgNaCwAnoT24imYbL7e"><b data-page-node-id="kjIeRaPFsE0vyz3lNQFyzo">文档一致性</b><br data-page-node-id="1rGxBjM1QrQ4VSYEikFbjT">（本期强制）</td><td data-page-node-id="S2N1OoL1B2ZfcDyVNCZ7CG">token 全覆盖</td><td data-page-node-id="VkaxPBpRGpxTf6EINA8Tui">产品 UI 区域（01–10C 示例面板）全部色值经 CSS 变量引用；旧值清零（46/44 行高·35 页脚·半透明白行态·#4d4d4d 等无残留）。</td></tr>
       <tr data-page-node-id="fC7vsGz12xFzTTe0zIHyu5"><td data-page-node-id="h5Il7uQ4aW1xtUM6SgyNFe">D2</td><td data-page-node-id="e7ronPn5T2nz0dHMX9yyzu">映射表完整</td><td data-page-node-id="W0Y1p5dlHLFMA8AXLrGsh1">11 表覆盖全部界面区域；每个「占位」条目在对应章节规格表中可索引到。</td></tr>
       <tr data-page-node-id="goCNUGdYhTVQUJ6NQEbbVm"><td data-page-node-id="cVudQr1AOKDAYj36B2jDLY">D3</td><td data-page-node-id="JiF5d4gG3FPJUWHXa0AmQm">双主题渲染</td><td data-page-node-id="6hJCakRDrc1526o9Lh0u58">亮/暗两主题下 01–10C 各截图一张，对比度与交互态符合本稿（重点核对：暗色描边 #666666、暗色行态实色、filled-darker 搜索框）。</td></tr>
-      <tr data-page-node-id="RqCuB3cKJzvkCtyYRwa2dS"><td data-page-node-id="ASBaO1UXOE8UdLtKIH2rdi">D4</td><td data-page-node-id="LA6u2xN3myD37vwZFMeirl">与 00 决策一致</td><td data-page-node-id="dlx41WyjhFnbiVOXqAnRyA">逐章对照 00.2 决策清单 D1–D29（含 v4.4 右键菜单决策 D18–D21、v4.5 托盘决策 D22–D26、v4.6 设置页决策 D27–D29）检查：无章节引用已废弃方案（独立 44px 标题栏 / 描述徽标 / ueli auto 搜索框 / 半透明白行态 / 设置页单列布局与 560×640 尺寸等）。</td></tr>
+      <tr data-page-node-id="RqCuB3cKJzvkCtyYRwa2dS"><td data-page-node-id="ASBaO1UXOE8UdLtKIH2rdi">D4</td><td data-page-node-id="LA6u2xN3myD37vwZFMeirl">与 00 决策一致</td><td data-page-node-id="dlx41WyjhFnbiVOXqAnRyA">逐章对照 00.2 决策清单 D1–D32（含 v4.4 右键菜单决策 D18–D21、v4.5 托盘决策 D22–D26、v4.6 设置页决策 D27–D29、v4.7 窗口材质决策 D30–D32）检查：无章节引用已废弃方案（独立 44px 标题栏 / 描述徽标 / ueli auto 搜索框 / 半透明白行态 / 设置页单列布局与 560×640 尺寸等）。</td></tr>
     </table>
     <div class="note" data-page-node-id="F5mG5JIbDYfS2wtp6HIA28">
       <b data-page-node-id="BGVxIQsF02i2uDf9LkKHTD">与 6.4（C1–C13）的关系：</b>6.4 验收「设置按钮 / 类型标签 / 上下文页脚」三项既有优化；
@@ -2539,6 +2592,21 @@
       if (e.key === "ArrowDown") { e.preventDefault(); activate(items[(idx + 1) % items.length]); }
       else if (e.key === "ArrowUp") { e.preventDefault(); activate(items[(idx - 1 + items.length) % items.length]); }
     });
+  })();
+
+  /* ============ 08 交互演示：窗口材质开关（v4.7，D30 互斥·后开优先） ============ */
+  (function () {
+    var swMica = document.getElementById("swMica");
+    var swAcrylic = document.getElementById("swAcrylic");
+    if (!swMica || !swAcrylic) return;
+    function bind(sw, other) {
+      sw.parentElement.addEventListener("click", function () {
+        var on = sw.classList.toggle("on");
+        if (on) other.classList.remove("on"); /* 后开者优先：开启一项自动关闭另一项 */
+      });
+    }
+    bind(swMica, swAcrylic);
+    bind(swAcrylic, swMica);
   })();
 </script>
 

@@ -58,13 +58,9 @@ pub(crate) fn draw_item_row(
                 if let Some(cat) = &item.result_category {
                     right_reserve += text_width(ui, cat, font12.clone()).min(90.0) + 8.0;
                 }
-                // tag chip：文本 + Frame 左右 margin 8×2 + chip 后间距 8（最多 2 + 「+N」）
-                for tag in item.tags.iter().take(2) {
-                    right_reserve += text_width(ui, tag, font12.clone()) + 16.0 + 8.0;
-                }
-                if item.tags.len() > 2 {
-                    right_reserve += text_width(ui, "+N", font12) + 16.0 + 8.0;
-                }
+                // v4.7 修订（用户决策 2026-09-05，D13 废止）：行内 Tag chips 整体
+                // 移除——默认视图中 tags 多余且挤占标题/副标题空间；宽度预留只保留
+                // 类型标签。`PanelItem.tags` 数据字段保留（协议层不改），仅不渲染。
                 // 4px 余量吸收测量舍入（chip 描边/字重差异）
                 let avail = (ui.available_width() - right_reserve - 4.0).max(0.0);
 
@@ -95,9 +91,9 @@ pub(crate) fn draw_item_row(
                         );
                     }
                 }
-                // 类型标签 + Tag chips：均贴右；类型最右，Tags 其左（设计文档 §6.2）。
+                // 类型标签：贴右最右（caption1 12px text-3，最长 90px 截断）。
+                // v4.7 修订（D13 废止）：原其左的 Tag chips 渲染已整体移除。
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    // 类型标签：最右，caption1 12px text-3，最长 90px 截断。
                     if let Some(cat) = &item.result_category {
                         let cat_w = text_width(ui, cat, egui::FontId::proportional(12.0)).min(90.0);
                         if cat_w > 0.0 {
@@ -108,31 +104,7 @@ pub(crate) fn draw_item_row(
                                 )
                                 .truncate(),
                             );
-                            ui.add_space(8.0);
                         }
-                    }
-                    // Tag（D13 组件化：圆角 4、subtle 底、caption1、fg2、不可关闭；
-                    // 最多显示 2 个，超出折叠为「+N」（同为 caption1 12px，与宽度
-                    // 预留口径一致）。构建展示序列后反转适配 right_to_left 布局，
-                    // 保证视觉从左到右 = tags[0], tags[1], +N。
-                    let mut shown: Vec<(String, bool)> = item
-                        .tags
-                        .iter()
-                        .take(2)
-                        .map(|t| (t.clone(), false))
-                        .collect();
-                    if item.tags.len() > 2 {
-                        shown.push((format!("+{}", item.tags.len() - 2), true));
-                    }
-                    for (tag, _) in shown.iter().rev() {
-                        egui::Frame::default()
-                            .fill(p.chip_bg)
-                            .corner_radius(4.0)
-                            .inner_margin(egui::Margin::symmetric(8, 2))
-                            .show(ui, |ui| {
-                                ui.label(egui::RichText::new(tag).size(12.0).color(p.text2));
-                            });
-                        ui.add_space(8.0);
                     }
                 });
             });

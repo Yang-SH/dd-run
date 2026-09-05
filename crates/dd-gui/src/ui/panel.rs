@@ -35,6 +35,13 @@ impl PaletteApp {
         let mut open_settings = false;
         let self_ref: &Self = &*self;
         let p = theme::Palette::of(ui.visuals().dark_mode);
+        // v4.7 D31（真机反馈修订）：材质生效时页脚同样透出系统材质——否则底部
+        // 一条不透明带把材质面板割裂；全关/回退时保持 --panel-2 不透明。
+        let footer_fill = if self.backdrop_active {
+            egui::Color32::TRANSPARENT
+        } else {
+            p.panel_2
+        };
         // 批次 4.0：页脚最左齿轮按钮的点击旗标（闭包内置位，面板结束后消费）。
         let footer =
             egui::containers::Panel::bottom("status_footer")
@@ -44,7 +51,7 @@ impl PaletteApp {
                 // CSS `.panel-footer`：background `--panel-2` + padding 8px 16px。
                 // `Panel` 默认 frame 是 `Frame::side_top_panel`：fill 取 `--panel`
                 // （页脚与列表区同色，失去区隔）且 margin 仅 (8,2)。
-                .frame(egui::Frame::default().fill(p.panel_2).inner_margin(
+                .frame(egui::Frame::default().fill(footer_fill).inner_margin(
                     egui::Margin::symmetric(theme::FOOTER_PAD_X as i8, theme::FOOTER_PAD_Y as i8),
                 ))
                 .show(ui, |ui| {

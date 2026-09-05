@@ -383,6 +383,7 @@ dependencies = [
  "eframe",
  "image",
  "nucleo",
+ "raw-window-handle",
  "serde_json",
  "webbrowser",
  "windows-sys 0.61.2",

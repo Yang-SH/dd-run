@@ -95,6 +95,49 @@ impl OpenView {
     }
 }
 
+/// 窗口材质（v4.7 D30：Win11 DWM 系统背景材质，单值属性——云母/亚克力互斥，
+/// 两开关状态由该值派生）。默认云母（含旧配置升级：字段缺失 → 云母）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Backdrop {
+    /// 无材质（不透明面板）。
+    None,
+    /// 云母（默认）。
+    #[default]
+    Mica,
+    /// 亚克力。
+    Acrylic,
+}
+
+impl Backdrop {
+    /// 设置页显示标签。
+    pub fn label(self) -> &'static str {
+        match self {
+            Backdrop::None => "无材质",
+            Backdrop::Mica => "云母",
+            Backdrop::Acrylic => "亚克力",
+        }
+    }
+
+    /// JSON 序列化值（稳定标识，与显示标签解耦）。
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Backdrop::None => "none",
+            Backdrop::Mica => "mica",
+            Backdrop::Acrylic => "acrylic",
+        }
+    }
+
+    /// JSON 值反解；未知值返回 `None`（调用方回落默认云母）。
+    pub fn parse(s: &str) -> Option<Self> {
+        match s {
+            "none" => Some(Backdrop::None),
+            "mica" => Some(Backdrop::Mica),
+            "acrylic" => Some(Backdrop::Acrylic),
+            _ => None,
+        }
+    }
+}
+
 /// 搜索引擎配置（2026-09-05 新增设置项：可配置搜索引擎）。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SearchEngine {
@@ -138,7 +181,7 @@ pub fn preset_search_engines() -> Vec<SearchEngine> {
     .collect()
 }
 
-/// 宿主本地设置（主题偏好 + 首屏视图 + 搜索引擎；后续字段向后兼容追加）。
+/// 宿主本地设置（主题偏好 + 首屏视图 + 搜索引擎 + 窗口材质；后续字段向后兼容追加）。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Settings {
     pub theme: ThemePref,
@@ -146,6 +189,8 @@ pub struct Settings {
     /// 启用的搜索引擎（面板「网络搜索」分组按此渲染；经
     /// `DD_WEBSEARCH_ENGINES` 环境变量传给 dd-ext-websearch）。
     pub search_engines: Vec<SearchEngine>,
+    /// 窗口材质（v4.7 D30；默认云母，材质不可用场景由渲染层回退不透明）。
+    pub backdrop: Backdrop,
 }
 
 impl Default for Settings {
@@ -154,6 +199,7 @@ impl Default for Settings {
             theme: ThemePref::default(),
             open_view: OpenView::default(),
             search_engines: preset_search_engines(),
+            backdrop: Backdrop::default(),
         }
     }
 }
@@ -173,6 +219,12 @@ impl Settings {
         if let Some(t) = v.get("open_view").and_then(|t| t.as_str()) {
             if let Some(view) = OpenView::parse(t) {
                 s.open_view = view;
+            }
+        }
+        // 窗口材质（v4.7）：字段缺失（旧版本配置）→ 默认云母（D30）；未知值回落云母。
+        if let Some(t) = v.get("backdrop").and_then(|t| t.as_str()) {
+            if let Some(backdrop) = Backdrop::parse(t) {
+                s.backdrop = backdrop;
             }
         }
         // 搜索引擎：字段缺失（旧版本配置）→ 预设 5 引擎；字段存在 → 逐条
@@ -207,6 +259,7 @@ impl Settings {
             "theme": self.theme.as_str(),
             "open_view": self.open_view.as_str(),
             "search_engines": engines,
+            "backdrop": self.backdrop.as_str(),
         })
         .to_string()
     }
@@ -419,5 +472,34 @@ mod tests {
         let e = SearchEngine::new("  Bing  ", " https://a.com/?q={q} ").unwrap();
         assert_eq!(e.name, "Bing");
         assert_eq!(e.template, "https://a.com/?q={q}");
+    }
+
+    #[test]
+    fn backdrop_default_is_mica_and_roundtrips() {
+        // v4.7 D30：默认云母；三值往返一致；未知值回落云母
+        assert_eq!(Settings::default().backdrop, Backdrop::Mica);
+        assert_eq!(Settings::parse_json("{}").backdrop, Backdrop::Mica);
+        // 旧版本配置（无 backdrop 字段）→ 云母，其余字段正常解析
+        let old = Settings::parse_json(r#"{"theme":"dark","open_view":"all"}"#);
+        assert_eq!(old.backdrop, Backdrop::Mica);
+        assert_eq!(old.theme, ThemePref::Dark);
+        assert_eq!(old.open_view, OpenView::All);
+        for b in [Backdrop::None, Backdrop::Mica, Backdrop::Acrylic] {
+            let s = Settings {
+                backdrop: b,
+                ..Settings::default()
+            };
+            let parsed = Settings::parse_json(&s.to_json_string());
+            assert_eq!(parsed.backdrop, b, "{} 往返一致", b.label());
+        }
+        // 未知值 / 类型损坏 → 回落默认云母
+        assert_eq!(
+            Settings::parse_json(r#"{"backdrop":"frosted"}"#).backdrop,
+            Backdrop::Mica
+        );
+        assert_eq!(
+            Settings::parse_json(r#"{"backdrop":42}"#).backdrop,
+            Backdrop::Mica
+        );
     }
 }

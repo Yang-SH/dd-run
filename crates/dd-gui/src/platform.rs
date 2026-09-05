@@ -240,3 +240,83 @@ pub(crate) fn reveal_in_folder(path: &str) -> Result<(), String> {
 pub(crate) fn reveal_in_folder(_path: &str) -> Result<(), String> {
     Err("仅 Windows 支持资源管理器定位".to_string())
 }
+
+/// 窗口系统背景材质（v4.7 D31：Win11 22H2+ `DWMWA_SYSTEMBACKDROP_TYPE`）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SystemBackdrop {
+    /// 无材质（`DWMSBT_NONE`，不透明面板）。
+    None,
+    /// 云母（`DWMSBT_MAINWINDOW`）。
+    Mica,
+    /// 亚克力（`DWMSBT_TRANSIENTWINDOW`）。
+    Acrylic,
+}
+
+/// 应用系统背景材质到主面板窗口（v4.7 D31，设计稿 8.1「材质效果」行）。
+///
+/// 返回 `false` = API 不支持或调用失败（Win10 / Win11 22621 以下返回错误码），
+/// 调用方必须回退不透明面板——降级不阻断（区别热键 fail-fast）。
+#[cfg(windows)]
+pub fn apply_system_backdrop(hwnd: isize, backdrop: SystemBackdrop) -> bool {
+    use windows_sys::Win32::Foundation::HWND;
+    use windows_sys::Win32::Graphics::Dwm::{
+        DwmSetWindowAttribute, DWMSBT_MAINWINDOW, DWMSBT_NONE, DWMSBT_TRANSIENTWINDOW,
+        DWMWA_SYSTEMBACKDROP_TYPE,
+    };
+    let value: i32 = match backdrop {
+        SystemBackdrop::None => DWMSBT_NONE,
+        SystemBackdrop::Mica => DWMSBT_MAINWINDOW,
+        SystemBackdrop::Acrylic => DWMSBT_TRANSIENTWINDOW,
+    };
+    let hr = unsafe {
+        DwmSetWindowAttribute(
+            hwnd as HWND,
+            DWMWA_SYSTEMBACKDROP_TYPE as u32,
+            (&value) as *const i32 as *const core::ffi::c_void,
+            std::mem::size_of::<i32>() as u32,
+        )
+    };
+    if hr != 0 {
+        eprintln!(
+            "[dd-gui] DWMWA_SYSTEMBACKDROP_TYPE 应用失败（hr=0x{:x}）→ 回退不透明面板",
+            hr
+        );
+        return false;
+    }
+    true
+}
+
+#[cfg(not(windows))]
+pub fn apply_system_backdrop(_hwnd: isize, _backdrop: SystemBackdrop) -> bool {
+    false
+}
+
+/// 材质/窗口明暗染色跟随主题（`DWMWA_USE_IMMERSIVE_DARK_MODE` = 20，D31）。
+/// best-effort：失败仅记日志（材质染色回退系统默认，不影响功能）。
+#[cfg(windows)]
+pub fn set_immersive_dark(hwnd: isize, dark: bool) -> bool {
+    use windows_sys::Win32::Foundation::HWND;
+    use windows_sys::Win32::Graphics::Dwm::{DwmSetWindowAttribute, DWMWA_USE_IMMERSIVE_DARK_MODE};
+    let value: i32 = dark as i32;
+    let hr = unsafe {
+        DwmSetWindowAttribute(
+            hwnd as HWND,
+            DWMWA_USE_IMMERSIVE_DARK_MODE as u32,
+            (&value) as *const i32 as *const core::ffi::c_void,
+            std::mem::size_of::<i32>() as u32,
+        )
+    };
+    if hr != 0 {
+        eprintln!(
+            "[dd-gui] DWMWA_USE_IMMERSIVE_DARK_MODE 应用失败（hr=0x{:x}）",
+            hr
+        );
+        return false;
+    }
+    true
+}
+
+#[cfg(not(windows))]
+pub fn set_immersive_dark(_hwnd: isize, _dark: bool) -> bool {
+    false
+}

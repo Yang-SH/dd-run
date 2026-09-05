@@ -180,7 +180,10 @@ impl PaletteApp {
                 .layout(egui::Layout::top_down(egui::Align::Min)),
         );
         egui::ScrollArea::vertical().show(&mut content_ui, |ui| match self.settings_category {
-            SettingsCategory::Appearance => self.draw_appearance_card(ui, &p),
+            SettingsCategory::Appearance => {
+                self.draw_appearance_card(ui, &p);
+                self.draw_material_card(ui, &p, &ctx);
+            }
             SettingsCategory::General => self.draw_general_cards(ui, &p),
             SettingsCategory::Search => self.draw_search_engine_card(ui, &p, &ctx),
             SettingsCategory::Extensions => self.draw_extensions_card(ui, &p),
@@ -277,6 +280,86 @@ impl PaletteApp {
         });
         if let Some(pref) = pick {
             self.apply_theme_pref(ui.ctx(), pref);
+        }
+    }
+
+    /// 外观栏：「窗口材质」卡（v4.7 D30/D31）——云母 / 亚克力两个 ToggleSwitch
+    /// 行，互斥·后开优先：开关状态由单值 `backdrop` 派生（与该值比较），点击
+    /// 已开项 → 关（None），点击未开项 → 开（该项）；变更经 `apply_backdrop`
+    /// 即时生效 + 落盘（默认云母，D30）。
+    fn draw_material_card(&mut self, ui: &mut egui::Ui, p: &theme::Palette, ctx: &egui::Context) {
+        // 开关状态在闭包外读取、闭包内只收集点击结果（避免闭包内 &mut self 冲突）。
+        let mica_on = self.settings.backdrop == dd_gui::settings::Backdrop::Mica;
+        let acrylic_on = self.settings.backdrop == dd_gui::settings::Backdrop::Acrylic;
+        let mut picked: Option<dd_gui::settings::Backdrop> = None;
+        draw_settings_card_frame(ui, p, |card| {
+            // 卡头：图标 + 名称 + 描述（行内 spacing.x 清零，同主题卡口径）
+            card.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = 0.0;
+                let (icon_rect, _) =
+                    ui.allocate_exact_size(egui::vec2(16.0, 16.0), egui::Sense::hover());
+                ui.painter().text(
+                    icon_rect.center(),
+                    egui::Align2::CENTER_CENTER,
+                    '\u{E771}',
+                    egui::FontId::proportional(16.0),
+                    p.text2,
+                );
+                ui.add_space(12.0);
+                ui.vertical(|ui| {
+                    ui.set_min_height(36.0);
+                    ui.label(egui::RichText::new("窗口材质").size(14.0).color(p.text));
+                    ui.label(
+                        egui::RichText::new(
+                            "窗口背景使用 Windows 11 系统材质；两者互斥，全关为不透明",
+                        )
+                        .size(12.0)
+                        .color(p.text3),
+                    );
+                });
+            });
+            // 开关行 ×2：名称 + 描述 + 贴右功能态开关（§08.1 v4.7「材质开关」行）
+            for (backdrop, name, desc, on) in [
+                (
+                    dd_gui::settings::Backdrop::Mica,
+                    "云母材质",
+                    "Mica：随桌面窗口 subtle 染色，性能开销低（默认开启）",
+                    mica_on,
+                ),
+                (
+                    dd_gui::settings::Backdrop::Acrylic,
+                    "亚克力材质",
+                    "Acrylic：半透明模糊，视觉更通透、GPU 开销略高",
+                    acrylic_on,
+                ),
+            ] {
+                let mut clicked = false;
+                card.horizontal(|ui| {
+                    ui.spacing_mut().item_spacing.x = 0.0;
+                    // 与卡头图标对齐的 16px 空槽位（设计稿演示同构）
+                    ui.allocate_exact_size(egui::vec2(16.0, 16.0), egui::Sense::hover());
+                    ui.add_space(12.0);
+                    ui.vertical(|ui| {
+                        ui.set_min_height(36.0);
+                        ui.label(egui::RichText::new(name).size(14.0).color(p.text));
+                        ui.label(egui::RichText::new(desc).size(12.0).color(p.text3));
+                    });
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        clicked = draw_switch_fn(ui, on, p);
+                    });
+                });
+                if clicked {
+                    // 互斥·后开优先（D30）：已开 → 关；未开 → 开（自动挤掉另一项）
+                    picked = Some(if on {
+                        dd_gui::settings::Backdrop::None
+                    } else {
+                        backdrop
+                    });
+                }
+            }
+        });
+        if let Some(backdrop) = picked {
+            self.apply_backdrop(ctx, backdrop);
         }
     }
 
@@ -798,6 +881,39 @@ pub(crate) fn draw_disabled_switch_at(ui: &mut egui::Ui, row: egui::Rect, p: &th
         6.0,
         p.text_disabled,
     );
+}
+
+/// 功能态 ToggleSwitch（§08.1 v4.7「材质开关」行）：36×18（radius-circular、
+/// 滑块 12，与占位 Toggle 同几何）——开 = accent 填充底 + 白滑块居右；关 =
+/// input_fill 底 + 1px border-strong 描边 + text-2 滑块居左（禁用占位态用
+/// text-disabled 滑块，两者明确区分）。返回是否被点击。
+pub(crate) fn draw_switch_fn(ui: &mut egui::Ui, on: bool, p: &theme::Palette) -> bool {
+    let (rect, resp) = ui.allocate_exact_size(egui::vec2(36.0, 18.0), egui::Sense::click());
+    let radius = egui::CornerRadius::same(9);
+    let knob_cx = if on {
+        rect.right() - 2.0 - 6.0
+    } else {
+        rect.left() + 2.0 + 6.0
+    };
+    if on {
+        ui.painter().rect_filled(rect, radius, p.accent);
+        ui.painter().circle_filled(
+            egui::pos2(knob_cx, rect.center().y),
+            6.0,
+            egui::Color32::WHITE,
+        );
+    } else {
+        ui.painter().rect_filled(rect, radius, p.input_fill);
+        ui.painter().rect_stroke(
+            rect,
+            radius,
+            egui::Stroke::new(1.0, p.border_strong),
+            egui::StrokeKind::Inside,
+        );
+        ui.painter()
+            .circle_filled(egui::pos2(knob_cx, rect.center().y), 6.0, p.text2);
+    }
+    resp.clicked()
 }
 
 #[cfg(test)]

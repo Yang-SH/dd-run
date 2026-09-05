@@ -169,6 +169,16 @@ pub struct PaletteApp {
     /// 设置页左栏当前栏目（§08 v4.6 D27）：纯视图状态、不落盘；
     /// `open_settings` 每次进入重置为「外观」（B5）。
     pub(crate) settings_category: SettingsCategory,
+    /// 主面板窗口 Win32 HWND（v4.7 D31：DWM 材质调用句柄；首个 ui 帧捕获一次，
+    /// 非 Win32 平台保持 None → 材质功能静默不可用、回退不透明）。
+    pub(crate) hwnd: Option<isize>,
+    /// 材质当前是否已成功生效（面板背景透明）。驱动 `clear_color` 与
+    /// panel_fill 透明注册；失败回退时保持 false，视觉与 v4.6 一致。
+    pub(crate) backdrop_active: bool,
+    /// 材质切换防闪倒计时（v4.7 真机反馈）：切到「无材质」时置 3，`ui()` 末尾
+    /// 逐帧递减，归零时才向 DWM 清材质——保证清材质发生时窗口已呈现≥2 帧
+    /// 不透明面板，消除「一瞬透明」闪烁。
+    pub(crate) backdrop_clear_countdown: u32,
     /// 当前窗口是否已按设置页尺寸调整（帧间 diff，仅在进/出设置页时发
     /// `InnerSize`，避免每帧塞 ViewportCommand）。
     pub(crate) settings_sized: bool,
@@ -183,6 +193,21 @@ pub struct PaletteApp {
 }
 
 impl PaletteApp {
+    /// 捕获主面板窗口 Win32 HWND（v4.7 D31：DWM 材质调用句柄）。
+    /// 仅在 `hwnd` 尚空时执行（首个 ui 帧）；非 Win32 平台保持 None。
+    pub(crate) fn capture_hwnd(&mut self, frame: &mut eframe::Frame) {
+        if self.hwnd.is_some() {
+            return;
+        }
+        use raw_window_handle::HasWindowHandle;
+        let Ok(handle) = frame.window_handle() else {
+            return;
+        };
+        if let raw_window_handle::RawWindowHandle::Win32(w) = handle.as_raw() {
+            self.hwnd = Some(w.hwnd.get());
+        }
+    }
+
     pub fn new(
         events: Receiver<HotkeyEvent>,
         tray_events: Receiver<TrayEvent>,
@@ -233,6 +258,9 @@ impl PaletteApp {
             engine_url_buf: String::new(),
             engine_add_err: None,
             settings_category: SettingsCategory::default(),
+            hwnd: None,
+            backdrop_active: false,
+            backdrop_clear_countdown: 0,
             settings_sized: false,
             ctx_menu: None,
             want_ctx_menu_for_selected: false,
@@ -242,6 +270,17 @@ impl PaletteApp {
 }
 
 impl eframe::App for PaletteApp {
+    /// v4.7 D31：材质生效时清除色全透明（DWM 系统材质画在窗口表面之后，
+    /// 面板必须留出透明底才可见）；未生效保持 eframe 默认半透明值——窗口虽
+    /// 以透明视觉创建，未生效时面板不透明填充完整覆盖，视觉与既往一致。
+    fn clear_color(&self, _visuals: &egui::Visuals) -> [f32; 4] {
+        if self.backdrop_active {
+            egui::Color32::TRANSPARENT.to_normalized_gamma_f32()
+        } else {
+            egui::Color32::from_rgba_unmultiplied(12, 12, 12, 180).to_normalized_gamma_f32()
+        }
+    }
+
     /// 窗口隐藏时也会被调用（热键线程 `request_repaint` 唤醒）。
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         // 注意：启动期不再有 recenter 逐帧轮询（旧 `recenter_if_needed` 已删）。
@@ -265,7 +304,14 @@ impl eframe::App for PaletteApp {
         }
     }
 
-    fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+    fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
+        // v4.7 D31：首个 ui 帧捕获 HWND 并按已加载设置应用材质（成功 → 面板
+        // 透明化；失败 → 回退不透明，后续帧不再重复调用）。
+        let had_hwnd = self.hwnd.is_some();
+        self.capture_hwnd(frame);
+        if !had_hwnd && self.hwnd.is_some() {
+            self.refresh_backdrop(ui.ctx());
+        }
         if !self.visible {
             // 隐藏当帧：仍绘制一次面板内容（纯色空帧 = 闪黑），不做任何交互处理。
             if !self.paint_hide_frame {
@@ -318,5 +364,18 @@ impl eframe::App for PaletteApp {
         self.draw_toast(&ctx);
         self.draw_confirm(&ctx);
         self.draw_context_menu(&ctx, ui);
+        // v4.7 材质切换防闪：本帧绘制/呈现完毕后递减倒计时，归零时窗口已连续
+        // 呈现多个不透明帧，此时清 DWM 材质不可见（材质在不透明面板后面）。
+        if self.backdrop_clear_countdown > 0 {
+            self.backdrop_clear_countdown -= 1;
+            if self.backdrop_clear_countdown == 0 {
+                if let Some(hwnd) = self.hwnd {
+                    crate::platform::apply_system_backdrop(
+                        hwnd,
+                        crate::platform::SystemBackdrop::None,
+                    );
+                }
+            }
+        }
     }
 }

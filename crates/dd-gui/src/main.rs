@@ -53,6 +53,10 @@ fn main() -> eframe::Result {
     cold.mark_spawn_start();
     let viewport = egui::ViewportBuilder::default()
         .with_inner_size([APP_W, APP_H])
+        // v4.7 D31：透明视觉恒创建——材质生效时 DWM 系统材质从面板透明底后
+        // 透出；未生效（Win10 / 22621 以下回退）时面板不透明填充完整覆盖，
+        // 视觉与既往一致。
+        .with_transparent(true)
         // 启动静默双保险之二（其一为 with_visible(false)）：初始位置屏幕外 +
         // 初始不活跃。屏幕外位置保证 eframe 首帧强制 set_visible(true) 时
         // 用户看不到任何窗口；with_active(false) 防止强制显示瞬间夺取焦点
@@ -77,7 +81,9 @@ fn main() -> eframe::Result {
             // 持久化配置，缺省跟随系统；须在任何绘制前应用，egui 会按
             // 系统亮暗自动在两套 Style 间 re-resolve）。
             let settings = dd_gui::settings::Settings::load();
-            theme::apply(&cc.egui_ctx, theme::theme_preference(settings.theme));
+            // v4.7 D31：启动先按不透明注册（HWND 未捕获、材质成败未知）；
+            // 首个 ui 帧捕获 HWND 后由 refresh_backdrop 按结果切换透明性。
+            theme::apply(&cc.egui_ctx, theme::theme_preference(settings.theme), false);
             // 初始隐藏双保险：`with_visible(false)` 之外显式发 `Visible(false)`，
             // 规避 eframe/egui 0.36 在 Windows 上 `with_visible` 偶发不生效的情况。
             cc.egui_ctx
