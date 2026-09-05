@@ -1,4 +1,4 @@
-//! 设置页视图与设置卡片族（设计稿 12）。
+//! 设置页视图与设置卡片族（设计稿 08，v4.6 左右布局：左栏分组 + 右侧设置项）。
 
 use crate::app::PaletteApp;
 use crate::ui::widgets::draw_back_btn;
@@ -7,17 +7,45 @@ use crate::ui::widgets::PlaceholderSuffix;
 use dd_gui::theme;
 use eframe::egui;
 
+/// 设置页左栏栏目（设计稿 08 v4.6，D27）：**纯视图状态**——不落盘、不改协议；
+/// 每次进入设置页经 `open_settings` 重置到首栏「外观」（B5）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub(crate) enum SettingsCategory {
+    /// 外观：主题三选。
+    #[default]
+    Appearance,
+    /// 常规：打开面板时显示 + 热键/自启占位。
+    General,
+    /// 搜索：搜索引擎配置。
+    Search,
+    /// 扩展：扩展管理占位（后续扩展配置的预留归组位）。
+    Extensions,
+}
+
+/// 左栏栏目表（§08.1 v4.6「栏目与内容映射」）：顺序 = 栏目序（B5 验收），
+/// 图标码位与对应卡片图标一致（外观 E790 / 搜索 E721 / 扩展 E74E）。
+const NAV_CATS: [(SettingsCategory, char, &str); 4] = [
+    (SettingsCategory::Appearance, '\u{E790}', "外观"),
+    (SettingsCategory::General, '\u{E713}', "常规"),
+    (SettingsCategory::Search, '\u{E721}', "搜索"),
+    (SettingsCategory::Extensions, '\u{E74E}', "扩展"),
+];
+
+/// 左栏几何（§08.1 v4.6，B4 像素规格）：宽 168、项高 36、项间距 4、分栏间距 8。
+const NAV_W: f32 = 168.0;
+const NAV_ITEM_H: f32 = 36.0;
+const NAV_GAP: f32 = 4.0;
+const SPLIT_GAP: f32 = 8.0;
+
 impl PaletteApp {
-    /// 设置页（§08 v4.2）：顶行三段式（返回 + 标题 + 版本徽标）+ 两张 settings-card
-    /// （主题三选 + 占位项）。**键位提示由全局页脚统一渲染**（draw_status_footer
-    /// 在 is_settings 时显示"修改主题立即生效并持久化" + Esc 返回）。
-    ///
-    /// 设计稿 §08.1 验收 B1：选中态 = 2px accent + accent_soft 底 + 实心圆点；
-    /// 未选 = 1px border-strong + input_fill 底 + 空心圆点（1.5px stroke）。
-    /// 选择即生效：点击 radio-card → 立即 `apply_theme_pref`（set_theme + save）。
+    /// 设置页（§08 v4.6 左右布局，D27/D28）：顶行三段式（返回 + 标题 + 版本徽标，
+    /// 不变）+ `[左栏 168px][间距 8][内容区 flex 1]` 水平两栏。顶行与左栏固定、
+    /// 内容区独立滚动（B6）；左栏四类栏目（NavigationView pane 语义：选中 =
+    /// row_selected 实色底 + 左缘 3×16 accent 指示条 + 图标/文字转 text，B4）。
+    /// **键位提示由全局页脚统一渲染**（draw_status_footer 在 is_settings 时显示
+    /// "修改主题立即生效并持久化" + Esc 返回）。
     pub(crate) fn draw_settings(&mut self, ui: &mut egui::Ui) {
         let p = theme::Palette::of(ui.visuals().dark_mode);
-        let dark = ui.visuals().dark_mode;
 
         // ── 顶行（D3 + §08.1）：40px 高，与 01 / 07 顶行同构 ──
         // 真机 2026-09-04 修复"标题上面空了很多"：旧实现先 allocate 40px 再另起
@@ -74,299 +102,393 @@ impl PaletteApp {
         }
         ui.add_space(8.0); // 顶行 padding-bottom
 
-        // 2026-09-05：设置内容整体进滚动区——新增「搜索引擎」卡片后总高超出
-        // 640px 设置页窗口；顶行保持固定，卡片滚动，页脚是独立 bottom Panel。
-        // ctx 句柄预克隆：引擎卡片的 |card| 闭包内不能再用外层 `ui`（已被
-        // draw_settings_card_frame 的 &mut 借用），改用克隆的 Context 句柄
-        // （廉价，egui::Context 内部 Arc），避免 ui 借用冲突。
+        // ── 左右分栏（§08 v4.6 D27）：[左栏 168][间距 8][内容区 flex 1] ──
+        // 顶行与左栏固定、内容区独立滚动（B6）；右/下留 12px（.settings-split
+        // padding 口径）。ctx 句柄预克隆：引擎卡片的 |card| 闭包内不能再用外层
+        // `ui`（已被 draw_settings_card_frame 的 &mut 借用），改用克隆的 Context
+        // 句柄（廉价，egui::Context 内部 Arc），避免 ui 借用冲突。
         let ctx = ui.ctx().clone();
-        egui::ScrollArea::vertical().show(ui, |ui| {
-            // ── settings-card #1：主题外观（setting-row 头部 + radio-cards） ──
-            let mut pick: Option<dd_gui::settings::ThemePref> = None;
-            draw_settings_card_frame(ui, &p, |card| {
-                // 主题 icon + 名称 + 描述（16px / 14/20 / 12/16 fg-2 / text / text-3）
-                // item_spacing.x 清零：gap 严格 12px（§08 CSS setting-row gap），不受
-                // egui 默认 8px item_spacing 叠加影响。
-                card.horizontal(|ui| {
-                    ui.spacing_mut().item_spacing.x = 0.0;
-                    let (icon_rect, _) =
-                        ui.allocate_exact_size(egui::vec2(16.0, 16.0), egui::Sense::hover());
-                    ui.painter().text(
-                        icon_rect.center(),
-                        egui::Align2::CENTER_CENTER,
-                        '\u{E790}',
-                        egui::FontId::proportional(16.0),
-                        p.text2,
-                    );
-                    ui.add_space(12.0); // gap 12（§08 CSS line 470 setting-row gap）
-                    ui.vertical(|ui| {
-                        ui.set_min_height(36.0);
-                        ui.label(egui::RichText::new("主题外观").size(14.0).color(p.text));
-                        ui.label(
-                            egui::RichText::new(
-                                "选择亮暗主题；「跟随系统」随 Windows 主题实时切换",
-                            )
+        let split = ui.available_rect_before_wrap();
+        let split_rect = egui::Rect::from_min_max(
+            split.min,
+            egui::pos2(split.right() - 12.0, split.bottom() - 12.0),
+        );
+        let nav_rect = egui::Rect::from_min_size(split.min, egui::vec2(NAV_W, split_rect.height()));
+        let content_rect = egui::Rect::from_min_max(
+            egui::pos2(split.min.x + NAV_W + SPLIT_GAP, split.min.y),
+            split_rect.max,
+        );
+
+        // ── 左栏：四类栏目（NavigationView pane 语义，§08.1 v4.6）──
+        // 项高 36、圆角 4、图标 16 + 文字 14/20（B4）；点击 = 本期唯一栏目切换
+        // 交互（↑↓ 焦点切换为可选增强，本期占位，见 8.1 键盘行）。
+        let mut nav_ui = ui.new_child(
+            egui::UiBuilder::new()
+                .max_rect(nav_rect)
+                .layout(egui::Layout::top_down(egui::Align::Min)),
+        );
+        nav_ui.spacing_mut().item_spacing.y = NAV_GAP;
+        for (cat, icon, label) in NAV_CATS {
+            let selected = self.settings_category == cat;
+            let (item_rect, resp) =
+                nav_ui.allocate_exact_size(egui::vec2(NAV_W, NAV_ITEM_H), egui::Sense::click());
+            let radius = egui::CornerRadius::same(4);
+            if selected {
+                nav_ui
+                    .painter()
+                    .rect_filled(item_rect, radius, p.row_selected);
+            } else if resp.hovered() {
+                nav_ui.painter().rect_filled(item_rect, radius, p.row_hover);
+            }
+            if selected {
+                // 左缘 3×16 accent 指示条（radius 2，垂直居中）——与列表行选中
+                // 语言（D9）同构，未引入新 token。
+                let indicator = egui::Rect::from_min_size(
+                    egui::pos2(item_rect.left(), item_rect.center().y - 8.0),
+                    egui::vec2(3.0, 16.0),
+                );
+                nav_ui
+                    .painter()
+                    .rect_filled(indicator, egui::CornerRadius::same(2), p.accent);
+            }
+            // 图标 16px：内边距 12 + 槽位 16 居中；文字：图标右 12 起（左+40）。
+            let fg = if selected { p.text } else { p.text2 };
+            let cy = item_rect.center().y;
+            nav_ui.painter().text(
+                egui::pos2(item_rect.left() + 20.0, cy),
+                egui::Align2::CENTER_CENTER,
+                icon,
+                egui::FontId::proportional(16.0),
+                fg,
+            );
+            nav_ui.painter().text(
+                egui::pos2(item_rect.left() + 40.0, cy),
+                egui::Align2::LEFT_CENTER,
+                label,
+                egui::FontId::proportional(14.0),
+                fg,
+            );
+            if resp.clicked() {
+                self.settings_category = cat;
+            }
+        }
+
+        // ── 内容区：按栏目分发（独立 ScrollArea；卡片族规格沿用 v4.2）──
+        let mut content_ui = ui.new_child(
+            egui::UiBuilder::new()
+                .max_rect(content_rect)
+                .layout(egui::Layout::top_down(egui::Align::Min)),
+        );
+        egui::ScrollArea::vertical().show(&mut content_ui, |ui| match self.settings_category {
+            SettingsCategory::Appearance => self.draw_appearance_card(ui, &p),
+            SettingsCategory::General => self.draw_general_cards(ui, &p),
+            SettingsCategory::Search => self.draw_search_engine_card(ui, &p, &ctx),
+            SettingsCategory::Extensions => self.draw_extensions_card(ui, &p),
+        });
+    }
+
+    /// 外观栏：主题外观卡（radio-card 三选，§08.1 沿用；验收 B1/B2）。
+    ///
+    /// 选中态 = 2px accent + accent_soft 底 + 实心圆点；未选 = 1px
+    /// border-strong + input_fill 底 + 空心圆点（1.5px stroke）。
+    /// 选择即生效：点击 radio-card 立即 `apply_theme_pref`（set_theme + save）。
+    fn draw_appearance_card(&mut self, ui: &mut egui::Ui, p: &theme::Palette) {
+        let dark = ui.visuals().dark_mode;
+        let mut pick: Option<dd_gui::settings::ThemePref> = None;
+        draw_settings_card_frame(ui, p, |card| {
+            // 主题 icon + 名称 + 描述（16px / 14/20 / 12/16 fg-2 / text / text-3）
+            // item_spacing.x 清零：gap 严格 12px（§08 CSS setting-row gap），不受
+            // egui 默认 8px item_spacing 叠加影响。
+            card.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = 0.0;
+                let (icon_rect, _) =
+                    ui.allocate_exact_size(egui::vec2(16.0, 16.0), egui::Sense::hover());
+                ui.painter().text(
+                    icon_rect.center(),
+                    egui::Align2::CENTER_CENTER,
+                    '\u{E790}',
+                    egui::FontId::proportional(16.0),
+                    p.text2,
+                );
+                ui.add_space(12.0); // gap 12（§08 CSS setting-row gap）
+                ui.vertical(|ui| {
+                    ui.set_min_height(36.0);
+                    ui.label(egui::RichText::new("主题外观").size(14.0).color(p.text));
+                    ui.label(
+                        egui::RichText::new("选择亮暗主题；「跟随系统」随 Windows 主题实时切换")
                             .size(12.0)
                             .color(p.text3),
-                        );
-                    });
-                });
-                card.add_space(8.0);
-                // radio-cards（三张等宽，gap 8px）
-                // 真机 2026-09-04 修复"右边框线被盖/超出"：宽度必须在**卡片内**实测
-                // （外层 total_w 未扣卡片 padding/描边，且 egui item_spacing 8px 会叠加
-                // 在 add_space 之上，导致三卡总宽超卡内宽、盖住右边框）——
-                // 本行 item_spacing.x 清零、间隙全部手动控制，宽度 = (内宽 - 2×gap)/3。
-                let gap = 8.0;
-                card.horizontal(|ui| {
-                    ui.spacing_mut().item_spacing.x = 0.0;
-                    let avail = ui.available_width();
-                    let card_w = ((avail - 2.0 * gap) / 3.0).floor().max(64.0);
-                    let prefs = [
-                        (
-                            dd_gui::settings::ThemePref::System,
-                            "跟随系统",
-                            "System",
-                            // swatch 系统卡显示亮 + 暗双本色
-                            [
-                                egui::Color32::WHITE,
-                                egui::Color32::from_rgb(0x1b, 0x1b, 0x1b),
-                            ],
-                        ),
-                        (
-                            dd_gui::settings::ThemePref::Light,
-                            "亮色",
-                            "Light",
-                            // 亮色主题卡：白 + 浅灰
-                            [
-                                egui::Color32::WHITE,
-                                egui::Color32::from_rgb(0xf4, 0xf4, 0xf4),
-                            ],
-                        ),
-                        (
-                            dd_gui::settings::ThemePref::Dark,
-                            "暗色",
-                            "Dark",
-                            // 暗色主题卡：灰[16] + 灰[12]
-                            [
-                                egui::Color32::from_rgb(0x29, 0x29, 0x29),
-                                egui::Color32::from_rgb(0x1f, 0x1f, 0x1f),
-                            ],
-                        ),
-                    ];
-                    for (i, (pref, zh, en, sw)) in prefs.iter().enumerate() {
-                        if i > 0 {
-                            ui.add_space(gap);
-                        }
-                        let selected = self.settings.theme == *pref;
-                        if draw_radio_card(ui, card_w, zh, en, *sw, selected, &p, dark) {
-                            pick = Some(*pref);
-                        }
-                    }
+                    );
                 });
             });
-            if let Some(pref) = pick {
-                self.apply_theme_pref(ui.ctx(), pref);
-            }
-            ui.add_space(8.0); // 两卡间距 8px（§08.1 line 467 margin-top）
+            card.add_space(8.0);
+            // radio-cards（三张等宽，gap 8px）
+            // 真机 2026-09-04 修复"右边框线被盖/超出"：宽度必须在**卡片内**实测
+            // （外层 total_w 未扣卡片 padding/描边，且 egui item_spacing 8px 会叠加
+            // 在 add_space 之上，导致三卡总宽超卡内宽、盖住右边框）——
+            // 本行 item_spacing.x 清零、间隙全部手动控制，宽度 = (内宽 - 2×gap)/3。
+            let gap = 8.0;
+            card.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = 0.0;
+                let avail = ui.available_width();
+                let card_w = ((avail - 2.0 * gap) / 3.0).floor().max(64.0);
+                let prefs = [
+                    (
+                        dd_gui::settings::ThemePref::System,
+                        "跟随系统",
+                        "System",
+                        // swatch 系统卡显示亮 + 暗双本色
+                        [
+                            egui::Color32::WHITE,
+                            egui::Color32::from_rgb(0x1b, 0x1b, 0x1b),
+                        ],
+                    ),
+                    (
+                        dd_gui::settings::ThemePref::Light,
+                        "亮色",
+                        "Light",
+                        // 亮色主题卡：白 + 浅灰
+                        [
+                            egui::Color32::WHITE,
+                            egui::Color32::from_rgb(0xf4, 0xf4, 0xf4),
+                        ],
+                    ),
+                    (
+                        dd_gui::settings::ThemePref::Dark,
+                        "暗色",
+                        "Dark",
+                        // 暗色主题卡：灰[16] + 灰[12]
+                        [
+                            egui::Color32::from_rgb(0x29, 0x29, 0x29),
+                            egui::Color32::from_rgb(0x1f, 0x1f, 0x1f),
+                        ],
+                    ),
+                ];
+                for (i, (pref, zh, en, sw)) in prefs.iter().enumerate() {
+                    if i > 0 {
+                        ui.add_space(gap);
+                    }
+                    let selected = self.settings.theme == *pref;
+                    if draw_radio_card(ui, card_w, zh, en, *sw, selected, p, dark) {
+                        pick = Some(*pref);
+                    }
+                }
+            });
+        });
+        if let Some(pref) = pick {
+            self.apply_theme_pref(ui.ctx(), pref);
+        }
+    }
 
-            // ── settings-card #1.5：打开面板时的首屏视图（设置项，真机反馈 2026-09-04）──
-            let mut show_all = self.settings.open_view == dd_gui::settings::OpenView::All;
-            let mut view_changed = false;
-            draw_settings_card_frame(ui, &p, |card| {
-                card.horizontal(|ui| {
-                    ui.spacing_mut().item_spacing.x = 0.0;
-                    let (icon_rect, _) =
-                        ui.allocate_exact_size(egui::vec2(16.0, 16.0), egui::Sense::hover());
-                    ui.painter().text(
-                        icon_rect.center(),
-                        egui::Align2::CENTER_CENTER,
-                        '\u{E8A9}', // Fluent "Home" 图标码位
-                        egui::FontId::proportional(16.0),
-                        p.text2,
+    /// 常规栏：「打开面板时显示」卡（真机反馈 2026-09-04）+ 占位卡
+    /// （全局热键 / 开机自启，§08.1 占位规则，B3）。
+    fn draw_general_cards(&mut self, ui: &mut egui::Ui, p: &theme::Palette) {
+        let mut show_all = self.settings.open_view == dd_gui::settings::OpenView::All;
+        let mut view_changed = false;
+        draw_settings_card_frame(ui, p, |card| {
+            card.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = 0.0;
+                let (icon_rect, _) =
+                    ui.allocate_exact_size(egui::vec2(16.0, 16.0), egui::Sense::hover());
+                ui.painter().text(
+                    icon_rect.center(),
+                    egui::Align2::CENTER_CENTER,
+                    '\u{E8A9}', // Fluent "Home" 图标码位
+                    egui::FontId::proportional(16.0),
+                    p.text2,
+                );
+                ui.add_space(12.0);
+                ui.vertical(|ui| {
+                    ui.set_min_height(36.0);
+                    ui.label(
+                        egui::RichText::new("打开面板时显示")
+                            .size(14.0)
+                            .color(p.text),
                     );
-                    ui.add_space(12.0);
-                    ui.vertical(|ui| {
-                        ui.set_min_height(36.0);
-                        ui.label(
-                            egui::RichText::new("打开面板时显示")
-                                .size(14.0)
-                                .color(p.text),
-                        );
-                        ui.label(
+                    ui.label(
                         egui::RichText::new(
                             "「默认功能」只显示计算、网页搜索等入口；输入查询时应用仍会参与匹配",
                         )
                         .size(12.0)
                         .color(p.text3),
                     );
-                    });
-                });
-                card.add_space(4.0);
-                card.horizontal(|ui| {
-                    if ui.checkbox(&mut show_all, "显示所有应用").changed() {
-                        view_changed = true;
-                    }
                 });
             });
-            if view_changed {
-                self.apply_open_view(ui.ctx(), show_all);
-            }
-            ui.add_space(8.0);
-
-            // ── settings-card #1.7：搜索引擎（可配置，2026-09-05）──
-            // 预设引擎 = 勾选项，自定义引擎 = 输入框添加 + 删除；变更立即持久化
-            // （apply_search_engines 置脏标记），**离开设置页**时全量重聚合 →
-            // websearch 进程以新引擎环境重启后生效（协议 v1.0 冻结零字段新增）。
-            draw_settings_card_frame(ui, &p, |card| {
-                card.horizontal(|ui| {
-                    ui.spacing_mut().item_spacing.x = 0.0;
-                    let (icon_rect, _) =
-                        ui.allocate_exact_size(egui::vec2(16.0, 16.0), egui::Sense::hover());
-                    ui.painter().text(
-                        icon_rect.center(),
-                        egui::Align2::CENTER_CENTER,
-                        '\u{E721}', // Fluent "Search"
-                        egui::FontId::proportional(16.0),
-                        p.text2,
-                    );
-                    ui.add_space(12.0);
-                    ui.vertical(|ui| {
-                        ui.set_min_height(36.0);
-                        ui.label(egui::RichText::new("搜索引擎").size(14.0).color(p.text));
-                        ui.label(
-                            egui::RichText::new(
-                                "配置「网络搜索」分组展示的引擎；更改将在返回首屏后生效",
-                            )
-                            .size(12.0)
-                            .color(p.text3),
-                        );
-                    });
-                });
-                card.add_space(4.0);
-                // 常用预设引擎：勾选 = 是否启用（按名在配置表中判定成员关系）
-                for preset in dd_gui::settings::preset_search_engines() {
-                    let mut on = self
-                        .settings
-                        .search_engines
-                        .iter()
-                        .any(|e| e.name == preset.name);
-                    if card.checkbox(&mut on, &preset.name).changed() {
-                        if on {
-                            self.settings.search_engines.push(preset.clone());
-                        } else {
-                            self.settings
-                                .search_engines
-                                .retain(|e| e.name != preset.name);
-                        }
-                        self.apply_search_engines(&ctx);
-                    }
+            card.add_space(4.0);
+            card.horizontal(|ui| {
+                if ui.checkbox(&mut show_all, "显示所有应用").changed() {
+                    view_changed = true;
                 }
-                // 自定义引擎：名称 + 模板（截断展示）+ 删除
-                let customs: Vec<dd_gui::settings::SearchEngine> = self
+            });
+        });
+        if view_changed {
+            self.apply_open_view(ui.ctx(), show_all);
+        }
+        ui.add_space(8.0); // 两卡间距 8px（§08.1 卡片间距）
+        draw_settings_card_frame(ui, p, |card| {
+            draw_setting_row_disabled(
+                card,
+                '\u{E92E}',
+                "全局热键",
+                "自定义唤起快捷键（当前固定 Alt+Space）",
+                PlaceholderSuffix::Soon,
+                p,
+            );
+            draw_setting_row_disabled(
+                card,
+                '\u{E7E8}',
+                "开机自启",
+                "登录 Windows 后自动后台运行",
+                PlaceholderSuffix::DisabledSwitch,
+                p,
+            );
+        });
+    }
+
+    /// 搜索栏：搜索引擎卡（可配置搜索引擎，2026-09-05）。
+    /// 预设引擎 = 勾选项，自定义引擎 = 输入框添加 + 删除；变更立即持久化
+    /// （apply_search_engines 置脏标记），**离开设置页**时全量重聚合 →
+    /// websearch 进程以新引擎环境重启后生效（协议 v1.0 冻结零字段新增）。
+    fn draw_search_engine_card(
+        &mut self,
+        ui: &mut egui::Ui,
+        p: &theme::Palette,
+        ctx: &egui::Context,
+    ) {
+        draw_settings_card_frame(ui, p, |card| {
+            card.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = 0.0;
+                let (icon_rect, _) =
+                    ui.allocate_exact_size(egui::vec2(16.0, 16.0), egui::Sense::hover());
+                ui.painter().text(
+                    icon_rect.center(),
+                    egui::Align2::CENTER_CENTER,
+                    '\u{E721}', // Fluent "Search" 图标码位
+                    egui::FontId::proportional(16.0),
+                    p.text2,
+                );
+                ui.add_space(12.0);
+                ui.vertical(|ui| {
+                    ui.set_min_height(36.0);
+                    ui.label(egui::RichText::new("搜索引擎").size(14.0).color(p.text));
+                    ui.label(
+                        egui::RichText::new(
+                            "配置「网络搜索」分组展示的引擎；更改将在返回首屏后生效",
+                        )
+                        .size(12.0)
+                        .color(p.text3),
+                    );
+                });
+            });
+            card.add_space(4.0);
+            // 常用预设引擎：勾选 = 是否启用（按名在配置表中判定成员关系）
+            for preset in dd_gui::settings::preset_search_engines() {
+                let mut on = self
                     .settings
                     .search_engines
                     .iter()
-                    .filter(|e| {
-                        !dd_gui::settings::preset_search_engines()
-                            .iter()
-                            .any(|pr| pr.name == e.name)
-                    })
-                    .cloned()
-                    .collect();
-                for c in customs {
-                    card.horizontal(|ui| {
-                        ui.spacing_mut().item_spacing.x = 8.0;
-                        ui.label(egui::RichText::new(&c.name).size(12.0).color(p.text));
-                        ui.add(
-                            egui::Label::new(
-                                egui::RichText::new(&c.template).size(10.0).color(p.text3),
-                            )
-                            .truncate(),
-                        );
-                        if ui
-                            .add(egui::Button::new(egui::RichText::new("删除").size(11.0)).small())
-                            .clicked()
-                        {
-                            self.settings
-                                .search_engines
-                                .retain(|e| !(e.name == c.name && e.template == c.template));
-                            self.apply_search_engines(&ctx);
-                        }
-                    });
+                    .any(|e| e.name == preset.name);
+                if card.checkbox(&mut on, &preset.name).changed() {
+                    if on {
+                        self.settings.search_engines.push(preset.clone());
+                    } else {
+                        self.settings
+                            .search_engines
+                            .retain(|e| e.name != preset.name);
+                    }
+                    self.apply_search_engines(ctx);
                 }
-                // 添加表单：名称 + 搜索 URL（含 {q} 占位符）+ 添加
-                card.add_space(4.0);
+            }
+            // 自定义引擎：名称 + 模板（截断展示）+ 删除
+            let customs: Vec<dd_gui::settings::SearchEngine> = self
+                .settings
+                .search_engines
+                .iter()
+                .filter(|e| {
+                    !dd_gui::settings::preset_search_engines()
+                        .iter()
+                        .any(|pr| pr.name == e.name)
+                })
+                .cloned()
+                .collect();
+            for c in customs {
                 card.horizontal(|ui| {
-                    ui.spacing_mut().item_spacing.x = 6.0;
+                    ui.spacing_mut().item_spacing.x = 8.0;
+                    ui.label(egui::RichText::new(&c.name).size(12.0).color(p.text));
                     ui.add(
-                        egui::TextEdit::singleline(&mut self.engine_name_buf)
-                            .desired_width(120.0)
-                            .hint_text("名称"),
-                    );
-                    let url_w = (ui.available_width() - 52.0).max(120.0);
-                    ui.add(
-                        egui::TextEdit::singleline(&mut self.engine_url_buf)
-                            .desired_width(url_w)
-                            .hint_text("https://example.com/search?q={q}"),
+                        egui::Label::new(
+                            egui::RichText::new(&c.template).size(10.0).color(p.text3),
+                        )
+                        .truncate(),
                     );
                     if ui
-                        .add(egui::Button::new(egui::RichText::new("添加").size(11.0)).small())
+                        .add(egui::Button::new(egui::RichText::new("删除").size(11.0)).small())
                         .clicked()
                     {
-                        match try_add_search_engine(
-                            &mut self.settings.search_engines,
-                            &self.engine_name_buf,
-                            &self.engine_url_buf,
-                        ) {
-                            Ok(()) => {
-                                self.engine_name_buf.clear();
-                                self.engine_url_buf.clear();
-                                self.engine_add_err = None;
-                                self.apply_search_engines(&ctx);
-                            }
-                            Err(msg) => self.engine_add_err = Some(msg),
-                        }
+                        self.settings
+                            .search_engines
+                            .retain(|e| !(e.name == c.name && e.template == c.template));
+                        self.apply_search_engines(ctx);
                     }
                 });
-                if let Some(err) = &self.engine_add_err {
-                    card.label(
-                        egui::RichText::new(err.clone())
-                            .size(10.0)
-                            .color(egui::Color32::from_rgb(0xC4, 0x2B, 0x1C)), // Fluent error 红
-                    );
+            }
+            // 添加表单：名称 + 搜索 URL（含 {q} 占位符）+ 添加
+            card.add_space(4.0);
+            card.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = 6.0;
+                ui.add(
+                    egui::TextEdit::singleline(&mut self.engine_name_buf)
+                        .desired_width(120.0)
+                        .hint_text("名称"),
+                );
+                let url_w = (ui.available_width() - 52.0).max(120.0);
+                ui.add(
+                    egui::TextEdit::singleline(&mut self.engine_url_buf)
+                        .desired_width(url_w)
+                        .hint_text("https://example.com/search?q={q}"),
+                );
+                if ui
+                    .add(egui::Button::new(egui::RichText::new("添加").size(11.0)).small())
+                    .clicked()
+                {
+                    match try_add_search_engine(
+                        &mut self.settings.search_engines,
+                        &self.engine_name_buf,
+                        &self.engine_url_buf,
+                    ) {
+                        Ok(()) => {
+                            self.engine_name_buf.clear();
+                            self.engine_url_buf.clear();
+                            self.engine_add_err = None;
+                            self.apply_search_engines(ctx);
+                        }
+                        Err(msg) => self.engine_add_err = Some(msg),
+                    }
                 }
             });
-            ui.add_space(8.0);
+            if let Some(err) = &self.engine_add_err {
+                card.label(
+                    egui::RichText::new(err.clone())
+                        .size(10.0)
+                        .color(egui::Color32::from_rgb(0xC4, 0x2B, 0x1C)), // Fluent error 红
+                );
+            }
+        });
+    }
 
-            // ── settings-card #2：占位项（全局热键 / 开机自启 / 扩展管理，disabled） ──
-            draw_settings_card_frame(ui, &p, |card| {
-                draw_setting_row_disabled(
-                    card,
-                    '\u{E92E}',
-                    "全局热键",
-                    "自定义唤起快捷键（当前固定 Alt+Space）",
-                    PlaceholderSuffix::Soon,
-                    &p,
-                );
-                draw_setting_row_disabled(
-                    card,
-                    '\u{E7E8}',
-                    "开机自启",
-                    "登录 Windows 后自动后台运行",
-                    PlaceholderSuffix::DisabledSwitch,
-                    &p,
-                );
-                draw_setting_row_disabled(
-                    card,
-                    '\u{E74E}',
-                    "扩展管理",
-                    "启用/禁用扩展、查看扩展清单与版本",
-                    PlaceholderSuffix::Soon,
-                    &p,
-                );
-            });
-        }); // ScrollArea::vertical
+    /// 扩展栏：「扩展管理」占位卡（§08.1 占位规则；后续扩展配置的预留归组位，
+    /// D27——新配置按类归入对应栏目，不再纵向挤压版式）。
+    fn draw_extensions_card(&mut self, ui: &mut egui::Ui, p: &theme::Palette) {
+        draw_settings_card_frame(ui, p, |card| {
+            draw_setting_row_disabled(
+                card,
+                '\u{E74E}',
+                "扩展管理",
+                "启用/禁用扩展、查看扩展清单与版本",
+                PlaceholderSuffix::Soon,
+                p,
+            );
+        });
     }
 }
 
@@ -676,4 +798,35 @@ pub(crate) fn draw_disabled_switch_at(ui: &mut egui::Ui, row: egui::Rect, p: &th
         6.0,
         p.text_disabled,
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn settings_category_default_is_appearance() {
+        // §08 v4.6（B5）：默认选中首栏「外观」；open_settings 每次进入重置到
+        // default（与 go_home 复位语义一致），栏目不落盘。
+        assert_eq!(SettingsCategory::default(), SettingsCategory::Appearance);
+    }
+
+    #[test]
+    fn nav_cats_order_labels_unique() {
+        // B5：左栏四栏与 8.1「栏目与内容映射」逐项一致（顺序 = 枚举声明序），
+        // 标签互不重复（渲染按 NAV_CATS 顺序逐项绘制）。
+        let labels: Vec<&str> = NAV_CATS.iter().map(|(_, _, l)| *l).collect();
+        assert_eq!(labels, ["外观", "常规", "搜索", "扩展"]);
+        let cats: Vec<SettingsCategory> = NAV_CATS.iter().map(|(c, _, _)| *c).collect();
+        assert_eq!(
+            cats,
+            [
+                SettingsCategory::Appearance,
+                SettingsCategory::General,
+                SettingsCategory::Search,
+                SettingsCategory::Extensions,
+            ],
+            "栏目不得重复或缺漏"
+        );
+    }
 }

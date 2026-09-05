@@ -28,6 +28,7 @@ use crate::app::pool::LRU_WARM_CAPACITY;
 use crate::app::refresh::RefreshState;
 use crate::app::toast::ConfirmDialog;
 use crate::app::toast::ToastState;
+use crate::ui::settings_view::SettingsCategory;
 use dd_gui::aggregator;
 use dd_gui::hotkey::HotkeyEvent;
 use dd_gui::navigation::PageStack;
@@ -52,9 +53,10 @@ pub const APP_W: f32 = 560.0;
 
 pub const APP_H: f32 = 460.0;
 
-/// 设置页窗口尺寸：设置卡片内容（主题三选 + 首屏视图 + 快捷键/自启占位 +
-/// 页脚）在 460px 高度下截断（真机反馈），设置页允许与启动页尺寸不一致。
-pub(crate) const SETTINGS_W: f32 = 560.0;
+/// 设置页窗口尺寸（§08 v4.6 D28：640×640——左栏分组占 168px 后内容区保持
+/// ~440px，与单列 560 宽时可用宽相当；v4.2 初定 560×640 作废）。根页/子页仍
+/// `APP_W/APP_H`（560×460），进/出设置页按栈顶帧间 diff 放大/缩回。
+pub(crate) const SETTINGS_W: f32 = 640.0;
 
 pub(crate) const SETTINGS_H: f32 = 640.0;
 
@@ -164,6 +166,9 @@ pub struct PaletteApp {
     pub(crate) engine_name_buf: String,
     pub(crate) engine_url_buf: String,
     pub(crate) engine_add_err: Option<String>,
+    /// 设置页左栏当前栏目（§08 v4.6 D27）：纯视图状态、不落盘；
+    /// `open_settings` 每次进入重置为「外观」（B5）。
+    pub(crate) settings_category: SettingsCategory,
     /// 当前窗口是否已按设置页尺寸调整（帧间 diff，仅在进/出设置页时发
     /// `InnerSize`，避免每帧塞 ViewportCommand）。
     pub(crate) settings_sized: bool,
@@ -227,6 +232,7 @@ impl PaletteApp {
             engine_name_buf: String::new(),
             engine_url_buf: String::new(),
             engine_add_err: None,
+            settings_category: SettingsCategory::default(),
             settings_sized: false,
             ctx_menu: None,
             want_ctx_menu_for_selected: false,

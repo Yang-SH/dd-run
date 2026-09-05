@@ -2,6 +2,7 @@
 
 use crate::app::ctx_menu::ctx_entry_count;
 use crate::app::PaletteApp;
+use crate::ui::settings_view::SettingsCategory;
 use dd_gui::navigation::PageState;
 use dd_gui::theme;
 use eframe::egui;
@@ -98,12 +99,14 @@ impl PaletteApp {
     }
 
     /// 打开设置页（批次 4.0）：推入页面栈（复用嵌套页语义，Esc 返回）。
-    /// 已在设置页时幂等（不重复推栈）。
+    /// 已在设置页时幂等（不重复推栈）。每次进入重置左栏栏目到首栏「外观」
+    /// （§08 v4.6 B5：栏目为纯视图状态，与 go_home 复位语义一致）。
     pub(crate) fn open_settings(&mut self) {
         if self.stack.current().is_settings {
             return;
         }
         eprintln!("[dd-gui] 打开设置页（PageStack 推页）");
+        self.settings_category = SettingsCategory::default();
         self.stack.push(PageState::settings());
     }
 
