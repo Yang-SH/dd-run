@@ -27,14 +27,24 @@ pub struct AggregatePayload {
     pub(crate) agg_ms: u64,
 }
 
-/// 后台线程执行首屏收集（不阻塞 UI，A12）：扫描 → M3 分流（frozen 读桩 / fresh spawn）→ 合并 → 回传。
-pub fn spawn_aggregation(tx: mpsc::Sender<AggregatePayload>, cache: Option<FrozenCache>) {
+/// 后台线程执行首屏收集（不阻塞 UI，A12）：扫描 → 注入搜索引擎配置 →
+/// M3 分流（frozen 读桩 / fresh spawn）→ 合并 → 回传。
+///
+/// `engines_json` = `Settings::search_engines_env()`：spawn `dd-ext-websearch`
+/// 前注入其进程环境（可配置搜索引擎，2026-09-05）；回传的 `exts` 已含注入，
+/// 桩复热/后续 spawn 沿用同一环境。
+pub fn spawn_aggregation(
+    tx: mpsc::Sender<AggregatePayload>,
+    cache: Option<FrozenCache>,
+    engines_json: String,
+) {
     thread::spawn(move || {
         // A2 拆分计时的"数据平面"：从 scan 起到聚合完成止（不含 GUI/字体加载）
         let agg_start = Instant::now();
         // note（来源备注）不再进页脚（用户决策 2026-09-04）：丢弃即可，
         // 异常细节已由 load_extension_sources 内部日志输出。
-        let (exts, _note) = aggregator::load_extension_sources();
+        let (mut exts, _note) = aggregator::load_extension_sources();
+        aggregator::inject_websearch_env(&mut exts, &engines_json);
         let result = aggregator::collect_top_level(&exts, cache.as_ref());
         let (items, sources) = aggregator::flatten(&result.per_ext);
 

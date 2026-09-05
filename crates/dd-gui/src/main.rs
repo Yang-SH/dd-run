@@ -30,7 +30,9 @@
 //! dd_gui::{app, ui, platform, text}（业务/绘制/系统副作用/纯函数），
 //! 本文件仅保留进程入口 main()。
 
+use std::sync::atomic::AtomicBool;
 use std::sync::mpsc;
+use std::sync::Arc;
 
 use eframe::egui;
 
@@ -82,20 +84,28 @@ fn main() -> eframe::Result {
                 .send_viewport_cmd(egui::ViewportCommand::Visible(false));
             let hotkey = HotkeyThread::spawn(cc.egui_ctx.clone());
             // 系统托盘（设计稿 10C：常驻图标 + 左键 toggle + 右键原生菜单 +
-            // 唯一退出入口；失败线程内降级，不影响面板）。
-            let tray = TrayThread::spawn(cc.egui_ctx.clone());
+            // 唯一退出入口；失败线程内降级，不影响面板）。click_flag = Toggle
+            // 点击在途旗标（修复失焦隐藏与 Toggle 的「闪黑又展示」竞态）。
+            let tray_click_flag = Arc::new(AtomicBool::new(false));
+            let tray = TrayThread::spawn(cc.egui_ctx.clone(), Arc::clone(&tray_click_flag));
             // M3 磁盘桩缓存（读桩不拉起进程 A6；目录 = 数据根目录/cache）
+            // PaletteApp 持有一份副本：设置页搜索引擎变更触发重聚合时复用。
             let cache = manifest::cache_dir().map(FrozenCache::new);
             // M3 A2 冷启动计时起点：进程就绪即开始（聚合线程随后启动）
             let mut cold = ColdStartTimer::new();
             cold.mark_spawn_start();
+            // 可配置搜索引擎（2026-09-05）：spawn 前把引擎表注入 websearch
+            // 扩展环境（DD_WEBSEARCH_ENGINES），面板「网络搜索」按配置渲染。
+            let engines_env = settings.search_engines_env();
             let (agg_tx, agg_rx) = mpsc::channel();
-            spawn_aggregation(agg_tx, cache);
+            spawn_aggregation(agg_tx, cache.clone(), engines_env);
             Ok(Box::new(PaletteApp::new(
                 hotkey.events,
                 tray.events,
+                tray_click_flag,
                 agg_rx,
                 cold,
+                cache,
                 settings,
             )))
         }),

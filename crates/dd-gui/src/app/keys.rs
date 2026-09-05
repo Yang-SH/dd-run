@@ -5,6 +5,7 @@ use crate::app::PaletteApp;
 use dd_gui::navigation::PageState;
 use dd_gui::theme;
 use eframe::egui;
+use std::sync::mpsc;
 
 impl PaletteApp {
     // ── 键盘 ─────────────────────────────────────────────────
@@ -140,5 +141,28 @@ impl PaletteApp {
         });
         self.settings.save();
         ctx.request_repaint();
+    }
+
+    /// 设置页搜索引擎变更（勾选预设/添加/删除自定义，2026-09-05）：
+    /// 立即持久化 + 置脏标记；**离开设置页时**由 `ui()` 的 size-diff 收口点
+    /// 消费并全量重聚合（websearch 进程须以新环境变量重启才能生效）。
+    pub(crate) fn apply_search_engines(&mut self, ctx: &egui::Context) {
+        eprintln!(
+            "[dd-gui] 搜索引擎配置变更：{} 个引擎已保存（离开设置页后重新聚合生效）",
+            self.settings.search_engines.len()
+        );
+        self.engines_dirty = true;
+        self.settings.save();
+        ctx.request_repaint();
+    }
+
+    /// 搜索引擎配置变更后的全量重聚合：重走 scan → 注入引擎环境 → collect
+    /// → 替换 Root 列表（复用首屏聚合的全部既有机制，含进程替换与 LRU）。
+    pub(crate) fn restart_aggregation(&mut self) {
+        eprintln!("[dd-gui] 搜索引擎配置变更 → 重新聚合首屏");
+        let (tx, rx) = mpsc::channel();
+        crate::app::spawn_aggregation(tx, self.cache.clone(), self.settings.search_engines_env());
+        self.aggregate_rx = Some(rx);
+        self.aggregating = true;
     }
 }

@@ -95,11 +95,67 @@ impl OpenView {
     }
 }
 
-/// 宿主本地设置（当前仅主题偏好 + 首屏视图；后续字段向后兼容追加）。
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
+/// 搜索引擎配置（2026-09-05 新增设置项：可配置搜索引擎）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SearchEngine {
+    /// 展示名（如 `Google`；也用于扩展侧命令 id 的 slug）。
+    pub name: String,
+    /// 搜索 URL 模板，含 `{q}` 占位符——dd-ext-websearch 将其替换为
+    /// RFC 3986 编码后的关键词。
+    pub template: String,
+}
+
+impl SearchEngine {
+    /// 校验并构造：name 非空、template 含 `{q}` 且以 `http(s)://` 开头。
+    pub fn new(name: &str, template: &str) -> Option<Self> {
+        let name = name.trim();
+        let template = template.trim();
+        if name.is_empty()
+            || !template.contains("{q}")
+            || !(template.starts_with("http://") || template.starts_with("https://"))
+        {
+            return None;
+        }
+        Some(Self {
+            name: name.to_string(),
+            template: template.to_string(),
+        })
+    }
+}
+
+/// 常用预设引擎（设置页勾选项；与 `dd-ext-websearch` 内置默认表保持一致——
+/// 两侧各自定义，扩展侧为环境变量缺失时的回落值）。
+pub fn preset_search_engines() -> Vec<SearchEngine> {
+    [
+        ("Google", "https://www.google.com/search?q={q}"),
+        ("Bing", "https://www.bing.com/search?q={q}"),
+        ("Baidu", "https://www.baidu.com/s?wd={q}"),
+        ("DuckDuckGo", "https://duckduckgo.com/?q={q}"),
+        ("GitHub", "https://github.com/search?q={q}"),
+    ]
+    .iter()
+    .map(|(n, t)| SearchEngine::new(n, t).expect("预设引擎模板合法"))
+    .collect()
+}
+
+/// 宿主本地设置（主题偏好 + 首屏视图 + 搜索引擎；后续字段向后兼容追加）。
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Settings {
     pub theme: ThemePref,
     pub open_view: OpenView,
+    /// 启用的搜索引擎（面板「网络搜索」分组按此渲染；经
+    /// `DD_WEBSEARCH_ENGINES` 环境变量传给 dd-ext-websearch）。
+    pub search_engines: Vec<SearchEngine>,
+}
+
+impl Default for Settings {
+    fn default() -> Self {
+        Self {
+            theme: ThemePref::default(),
+            open_view: OpenView::default(),
+            search_engines: preset_search_engines(),
+        }
+    }
 }
 
 impl Settings {
@@ -119,15 +175,53 @@ impl Settings {
                 s.open_view = view;
             }
         }
+        // 搜索引擎：字段缺失（旧版本配置）→ 预设 5 引擎；字段存在 → 逐条
+        // 校验，非法条目跳过（空数组 = 用户全部关闭，尊重其意图）。
+        match v.get("search_engines") {
+            None => s.search_engines = preset_search_engines(),
+            Some(val) => {
+                if let Some(arr) = val.as_array() {
+                    s.search_engines = arr
+                        .iter()
+                        .filter_map(|e| {
+                            SearchEngine::new(
+                                e.get("name").and_then(|x| x.as_str())?,
+                                e.get("template").and_then(|x| x.as_str())?,
+                            )
+                        })
+                        .collect();
+                }
+            }
+        }
         s
     }
 
     /// 序列化为 JSON 文本（单行，便于人查）。
     pub fn to_json_string(&self) -> String {
+        let engines: Vec<serde_json::Value> = self
+            .search_engines
+            .iter()
+            .map(|e| serde_json::json!({ "name": e.name, "template": e.template }))
+            .collect();
         serde_json::json!({
             "theme": self.theme.as_str(),
             "open_view": self.open_view.as_str(),
+            "search_engines": engines,
         })
+        .to_string()
+    }
+
+    /// 引擎表 → `DD_WEBSEARCH_ENGINES` 环境变量值（紧凑 JSON 数组）。
+    ///
+    /// 配置通道 = 进程环境（manifest `entry.env` 既有机制）——协议 v1.0 冻结，
+    /// 零协议字段新增；扩展侧未注入/非法时回落其内置默认表。
+    pub fn search_engines_env(&self) -> String {
+        serde_json::Value::Array(
+            self.search_engines
+                .iter()
+                .map(|e| serde_json::json!({ "name": e.name, "template": e.template }))
+                .collect(),
+        )
         .to_string()
     }
 
@@ -251,5 +345,79 @@ mod tests {
         // 协议 id 由扩展提供（§6.3），约定不含双下划线保留前缀。
         assert!(SETTINGS_PAGE_ID.starts_with("__"));
         assert_eq!(SETTINGS_PAGE_ID, "__settings__");
+    }
+
+    #[test]
+    fn search_engines_default_is_preset_five() {
+        let presets = preset_search_engines();
+        assert_eq!(Settings::default().search_engines, presets);
+        assert_eq!(presets.len(), 5);
+        assert_eq!(Settings::parse_json("{}").search_engines, presets);
+        // 旧版本配置（无 search_engines 字段）→ 回落预设
+        assert_eq!(
+            Settings::parse_json(r#"{"theme":"dark"}"#).search_engines,
+            presets
+        );
+    }
+
+    #[test]
+    fn search_engines_json_roundtrip_with_custom() {
+        let mut s = Settings::default();
+        s.search_engines.retain(|e| e.name == "Baidu");
+        s.search_engines.push(
+            SearchEngine::new("Stack Overflow", "https://stackoverflow.com/search?q={q}").unwrap(),
+        );
+        let parsed = Settings::parse_json(&s.to_json_string());
+        assert_eq!(parsed, s);
+    }
+
+    #[test]
+    fn search_engines_invalid_entries_skipped_and_empty_respected() {
+        // 非法条目（缺字段 / 缺 {q} / 非 http）逐条跳过
+        let parsed = Settings::parse_json(
+            r#"{"search_engines":[
+                {"name":"Good","template":"https://a.com/?q={q}"},
+                {"name":"NoQ","template":"https://b.com/"},
+                {"template":"https://c.com/?q={q}"},
+                {"name":"Ftp","template":"ftp://d.com/?q={q}"}
+            ]}"#,
+        );
+        assert_eq!(parsed.search_engines.len(), 1);
+        assert_eq!(parsed.search_engines[0].name, "Good");
+        // 空数组 = 用户全部关闭（尊重意图，不回落预设）
+        assert!(Settings::parse_json(r#"{"search_engines":[]}"#)
+            .search_engines
+            .is_empty());
+        // 字段类型损坏（非数组）→ 保持默认
+        assert_eq!(
+            Settings::parse_json(r#"{"search_engines":42}"#).search_engines,
+            preset_search_engines()
+        );
+    }
+
+    #[test]
+    fn search_engines_env_is_compact_json_array() {
+        let s = Settings::parse_json(
+            r#"{"search_engines":[{"name":"Bing","template":"https://www.bing.com/search?q={q}"}]}"#,
+        );
+        let env = s.search_engines_env();
+        assert_eq!(
+            env,
+            r#"[{"name":"Bing","template":"https://www.bing.com/search?q={q}"}]"#
+        );
+        assert!(Settings::default().search_engines_env().starts_with('['));
+    }
+
+    #[test]
+    fn search_engine_new_validates() {
+        assert!(SearchEngine::new("", "https://a.com/?q={q}").is_none());
+        assert!(
+            SearchEngine::new("X", "https://a.com/").is_none(),
+            "缺 {{q}}"
+        );
+        assert!(SearchEngine::new("X", "ftp://a.com/?q={q}").is_none());
+        let e = SearchEngine::new("  Bing  ", " https://a.com/?q={q} ").unwrap();
+        assert_eq!(e.name, "Bing");
+        assert_eq!(e.template, "https://a.com/?q={q}");
     }
 }

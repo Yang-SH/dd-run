@@ -11,7 +11,9 @@ use dd_host::process::ExtensionProcess;
 use dd_protocol::model::CommandRef;
 use eframe::egui;
 use std::path::PathBuf;
+use std::sync::atomic::AtomicBool;
 use std::sync::mpsc;
+use std::sync::Arc;
 
 /// 构造指定 ext_id + 命令的列表项。
 pub(crate) fn item_with(ext_id: &str, command: CommandRef) -> PanelItem {
@@ -88,8 +90,10 @@ pub(crate) fn make_app() -> PaletteApp {
     PaletteApp::new(
         events_rx,
         tray_rx,
+        Arc::new(AtomicBool::new(false)),
         agg_rx,
         ColdStartTimer::new(),
+        None,
         dd_gui::settings::Settings::default(),
     )
 }

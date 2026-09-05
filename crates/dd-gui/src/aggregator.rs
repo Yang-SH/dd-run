@@ -120,6 +120,23 @@ impl ExtItems {
     }
 }
 
+/// 把搜索引擎配置注入内置 websearch 扩展的进程环境（`DD_WEBSEARCH_ENGINES`）。
+///
+/// 配置通道 = manifest `entry.env` 既有机制（`ExtensionProcess::spawn` 统一
+/// `envs()` 注入），协议 v1.0 冻结零字段新增；扩展侧未注入/解析失败时回落
+/// 其内置默认引擎表。`engines_json` 格式见 `Settings::search_engines_env`。
+pub fn inject_websearch_env(exts: &mut [LoadedExtension], engines_json: &str) {
+    for ext in exts
+        .iter_mut()
+        .filter(|e| e.manifest.id == "com.ddrun.websearch")
+    {
+        ext.manifest
+            .entry
+            .env
+            .insert("DD_WEBSEARCH_ENGINES".to_string(), engines_json.to_string());
+    }
+}
+
 /// 扫描扩展目录并**合并内置扩展**（M4 P4 `ensure_builtins`）。
 ///
 /// 返回 `(扩展列表, 备注)`。内置 5 个（exe 存在者）**恒注册**，扩展目录中的

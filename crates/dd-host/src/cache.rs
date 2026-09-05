@@ -30,6 +30,7 @@ pub struct FrozenSnapshot {
 ///
 /// 落盘后冷启动可直接读回命令列表而**不拉起子进程**（A6 的"不拉起"判定在
 /// 逻辑层即成立：调用方只需 `load` 而无需 `spawn`）。
+#[derive(Clone)]
 pub struct FrozenCache {
     dir: PathBuf,
 }

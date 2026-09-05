@@ -142,12 +142,15 @@ impl PaletteApp {
 
                 // ── 列表区 ───────────────────────────────────
                 if self.aggregating {
-                    // 用 vertical_centered 而非 centered_and_justified：后者会撑满
-                    // 列表区（与 BottomPanel 分离后这里本身已是剩余高度，但
-                    // centered_and_justified 仍会顶到列表区上下沿视觉上难看）。
-                    ui.vertical_centered(|ui| {
-                        ui.weak("正在加载扩展…");
-                    });
+                    // C 组批次 C2（§07.2）：首屏聚合加载与子页拉取共用同一
+                    // Loading 组件（Spinner 22px accent + 3 条骨架行），替换
+                    // 旧纯文本占位「正在加载扩展…」（2026-09-05 真机核对不一致）。
+                    // 动画驱动：egui 按需重绘，加载期间 ~30fps 轮询重绘。
+                    let dark = ui.visuals().dark_mode;
+                    let time = ui.ctx().time();
+                    draw_loading_state(ui, &p, dark, time);
+                    ui.ctx()
+                        .request_repaint_after(std::time::Duration::from_millis(33));
                 } else {
                     self.draw_list(ui);
                 }
@@ -193,7 +196,7 @@ impl PaletteApp {
             ui.painter().text(
                 egui::pos2(row.min.x, cy),
                 egui::Align2::LEFT_CENTER,
-                "修改主题立即生效并持久化",
+                "设置修改自动保存；搜索引擎更改返回首屏后生效",
                 egui::FontId::proportional(theme::FOOTER_FONT),
                 p.text3,
             );

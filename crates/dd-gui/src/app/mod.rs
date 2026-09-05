@@ -35,13 +35,16 @@ use dd_gui::navigation::PageState;
 use dd_gui::robustness::CrashGuard;
 use dd_gui::tray::TrayEvent;
 use dd_host::cache::ColdStartTimer;
+use dd_host::cache::FrozenCache;
 use dd_host::cache::LruWarmSet;
 use dd_host::manifest::LoadedExtension;
 use dd_host::process::ExtensionProcess;
 use dd_protocol::messages::InvokeParams;
 use eframe::egui;
 use std::collections::{HashMap, HashSet};
+use std::sync::atomic::AtomicBool;
 use std::sync::mpsc::Receiver;
+use std::sync::Arc;
 use std::time::Instant;
 
 /// 面板逻辑尺寸（设计稿 v2：宽 560；高沿用现行 460）。`show()` 居中定位用。
@@ -70,6 +73,21 @@ pub struct PaletteApp {
     pub(crate) events: Receiver<HotkeyEvent>,
     /// 托盘事件接收端（设计稿 10C：Toggle / OpenSettings / Exit）。
     pub(crate) tray_events: Receiver<TrayEvent>,
+    /// 托盘 Toggle 点击在途旗标（tray.rs 置位 / 本模块消费后复位）：
+    /// 失焦自动隐藏遇旗标跳过一次，避免「闪黑又展示」竞态（真机 2026-09-05）。
+    pub(crate) tray_click_flag: Arc<AtomicBool>,
+    /// 隐藏当帧是否仍需绘制面板内容一次。
+    ///
+    /// eframe 0.36 在**应用 `ViewportCommand::Visible(false)` 之前**会先
+    /// `clear(clear_color)` + present 一帧；若此时 `ui()` 空帧返回，present 的
+    /// 就是纯色底（暗色主题下 = 黑）→ 肉眼「先变黑再隐藏」闪一下（真机反馈）。
+    /// `hide()` 置位后，下一帧仍绘制一次真实面板内容（不做交互处理），
+    /// present 完再被隐藏，消除闪黑。
+    pub(crate) paint_hide_frame: bool,
+    /// 最近一次「失焦自动隐藏」的时刻。托盘 Toggle 到达时若面板刚因失焦隐藏
+    /// （<300ms，即本次托盘点击夺焦抢先触发），隐藏意图已由失焦路径完成，
+    /// 维持隐藏不再 show——兜底鼠标按下（夺焦）早于抬起（WM_LBUTTONUP）的时序。
+    pub(crate) last_focus_loss_hide: Option<Instant>,
     /// 窗口是否可见。
     pub(crate) visible: bool,
     /// 下次显示时请求 FilterBox 获得焦点。
@@ -137,6 +155,15 @@ pub struct PaletteApp {
     pub(crate) icon_failed: HashSet<String>,
     /// M5 批次 4.0：宿主本地设置（当前仅主题偏好；启动加载、设置页改选即存）。
     pub(crate) settings: dd_gui::settings::Settings,
+    /// 磁盘桩缓存（聚合用；设置页搜索引擎变更触发重聚合时复用）。
+    pub(crate) cache: Option<FrozenCache>,
+    /// 搜索引擎配置脏标记：设置页改动置位，**离开设置页**时消费并全量重聚合
+    /// （websearch 进程须以新环境变量重启，逐帧开关勾选只聚合一次）。
+    pub(crate) engines_dirty: bool,
+    /// 设置页「添加搜索引擎」输入缓冲与校验错误（绘制层状态跨帧存活）。
+    pub(crate) engine_name_buf: String,
+    pub(crate) engine_url_buf: String,
+    pub(crate) engine_add_err: Option<String>,
     /// 当前窗口是否已按设置页尺寸调整（帧间 diff，仅在进/出设置页时发
     /// `InnerSize`，避免每帧塞 ViewportCommand）。
     pub(crate) settings_sized: bool,
@@ -154,14 +181,19 @@ impl PaletteApp {
     pub fn new(
         events: Receiver<HotkeyEvent>,
         tray_events: Receiver<TrayEvent>,
+        tray_click_flag: Arc<AtomicBool>,
         aggregate_rx: Receiver<AggregatePayload>,
         cold: ColdStartTimer,
+        cache: Option<FrozenCache>,
         settings: dd_gui::settings::Settings,
     ) -> Self {
         Self {
             stack: PageStack::new(PageState::root(Vec::new())),
             events,
             tray_events,
+            tray_click_flag,
+            last_focus_loss_hide: None,
+            paint_hide_frame: false,
             visible: false,
             want_focus: true,
             ever_focused: false,
@@ -190,6 +222,11 @@ impl PaletteApp {
             icon_cache: HashMap::new(),
             icon_failed: HashSet::new(),
             settings,
+            cache,
+            engines_dirty: false,
+            engine_name_buf: String::new(),
+            engine_url_buf: String::new(),
+            engine_add_err: None,
             settings_sized: false,
             ctx_menu: None,
             want_ctx_menu_for_selected: false,
@@ -224,6 +261,12 @@ impl eframe::App for PaletteApp {
 
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         if !self.visible {
+            // 隐藏当帧：仍绘制一次面板内容（纯色空帧 = 闪黑），不做任何交互处理。
+            if !self.paint_hide_frame {
+                return;
+            }
+            self.paint_hide_frame = false;
+            self.draw_panel(ui);
             return;
         }
         let ctx = ui.ctx().clone();
@@ -257,6 +300,13 @@ impl eframe::App for PaletteApp {
                 (APP_W, APP_H)
             };
             ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(egui::vec2(w, h)));
+        }
+        // 搜索引擎配置变更（可配置搜索引擎，2026-09-05）：离开设置页时统一
+        // 消费脏标记并全量重聚合——size-diff 收口点覆盖所有离开路径
+        // （Esc / 返回按钮 / Dismiss / show 复位），逐帧勾选只触发一次。
+        if !want_settings && self.engines_dirty {
+            self.engines_dirty = false;
+            self.restart_aggregation();
         }
         self.draw_panel(ui);
         self.draw_toast(&ctx);

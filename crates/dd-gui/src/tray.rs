@@ -20,7 +20,9 @@
 //! 托盘生命周期 = 进程生命周期：退出直接结束进程，不主动 `NIM_DELETE`
 //! （进程死亡时系统自动移除图标）。
 
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
+use std::sync::Arc;
 use std::thread;
 
 /// 托盘菜单事件（10C.2 菜单项 → 行为映射）。
@@ -92,12 +94,20 @@ pub struct TrayThread {
 
 impl TrayThread {
     /// 启动托盘线程（Windows）。
+    ///
+    /// `click_flag`：左键 / 菜单「显示/隐藏面板」的**点击在途旗标**——发送
+    /// `Toggle` 前置位，主线程消费该事件后复位。用途：面板可见时点击托盘，
+    /// 任务栏会先夺走焦点触发失焦自动隐藏（`handle_focus_loss`），随后
+    /// Toggle 到达时 `visible` 已是 false → 又 show → 「闪黑又展示」竞态
+    /// （真机 2026-09-05 反馈）。失焦隐藏遇旗标跳过一次，让 Toggle 完成唯一
+    /// 一次干净的 hide。旗标与 Toggle 事件严格成对（置位后必 send，消费即清），
+    /// 无陈旧风险。
     #[cfg(windows)]
-    pub fn spawn(ctx: eframe::egui::Context) -> Self {
+    pub fn spawn(ctx: eframe::egui::Context, click_flag: Arc<AtomicBool>) -> Self {
         let (tx, rx) = mpsc::channel::<TrayEvent>();
         let handle = thread::Builder::new()
             .name("dd-tray".into())
-            .spawn(move || message_loop(tx, ctx))
+            .spawn(move || message_loop(tx, ctx, click_flag))
             .expect("failed to spawn tray thread");
         Self {
             events: rx,
@@ -108,7 +118,7 @@ impl TrayThread {
     /// 非 Windows 平台：无托盘，事件通道永远为空（跨平台编译占位，
     /// 策略同 `hotkey`——macOS `NSStatusItem` / Linux `AppIndicator` 留平台轮）。
     #[cfg(not(windows))]
-    pub fn spawn(_ctx: eframe::egui::Context) -> Self {
+    pub fn spawn(_ctx: eframe::egui::Context, _click_flag: Arc<AtomicBool>) -> Self {
         let (_tx, rx) = mpsc::channel::<TrayEvent>();
         Self {
             events: rx,
@@ -125,6 +135,8 @@ impl TrayThread {
 struct TrayState {
     tx: Sender<TrayEvent>,
     ctx: eframe::egui::Context,
+    /// Toggle 点击在途旗标（见 [`TrayThread::spawn`]）。
+    click_flag: Arc<AtomicBool>,
 }
 
 /// 物化内嵌 `.ico` 到 `cache_dir()/app.ico`（内容变化即重写，幂等）。
@@ -150,7 +162,7 @@ fn ensure_icon_file() -> Option<std::path::PathBuf> {
 /// 任何一步失败 → 记一次日志并返回（降级：面板仍可经热键使用；
 /// 「退出」入口缺失可接受，托盘不可用的场景由用户经任务管理器结束）。
 #[cfg(windows)]
-fn message_loop(tx: Sender<TrayEvent>, ctx: eframe::egui::Context) {
+fn message_loop(tx: Sender<TrayEvent>, ctx: eframe::egui::Context, click_flag: Arc<AtomicBool>) {
     use windows_sys::Win32::Graphics::Gdi::{GetDC, GetDeviceCaps, ReleaseDC, LOGPIXELSX};
     use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
     use windows_sys::Win32::UI::Shell::{
@@ -235,7 +247,11 @@ fn message_loop(tx: Sender<TrayEvent>, ctx: eframe::egui::Context) {
             );
             return;
         }
-        let state = Box::into_raw(Box::new(TrayState { tx, ctx }));
+        let state = Box::into_raw(Box::new(TrayState {
+            tx,
+            ctx,
+            click_flag,
+        }));
         SetWindowLongPtrW(
             hwnd,
             windows_sys::Win32::UI::WindowsAndMessaging::GWLP_USERDATA,
@@ -303,7 +319,9 @@ unsafe extern "system" fn tray_wndproc(
             let mouse = lparam as u32; // 经典模式：lParam 低字 = 鼠标消息
             match mouse {
                 WM_LBUTTONUP => {
-                    // D23：左键单击 = 切换面板（与热键同语义）。
+                    // D23：左键单击 = 切换面板（与热键同语义）。先置「点击在途」
+                    // 旗标再发事件（见 spawn 文档：避免失焦隐藏与 Toggle 竞态）。
+                    state.click_flag.store(true, Ordering::Relaxed);
                     let _ = state.tx.send(TrayEvent::Toggle);
                     state.ctx.request_repaint();
                 }
@@ -366,6 +384,10 @@ unsafe fn show_menu(hwnd: windows_sys::Win32::Foundation::HWND, state: &TrayStat
         DestroyMenu(menu);
         PostMessageW(hwnd, WM_NULL, 0, 0);
         if let Some(ev) = menu_event(cmd as u32) {
+            // 菜单「显示/隐藏面板」同样走 Toggle → 前置点击在途旗标（同左键）。
+            if ev == TrayEvent::Toggle {
+                state.click_flag.store(true, Ordering::Relaxed);
+            }
             let _ = state.tx.send(ev);
             state.ctx.request_repaint();
         }
