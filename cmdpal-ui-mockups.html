@@ -3,7 +3,7 @@
 <head data-page-node-id="s3qopa5FNyLjHL5eCuYZs0">
 <meta charset="UTF-8" data-page-node-id="iCtBYFbeT3CyD5jPQ5rxbB">
 <meta name="viewport" content="width=device-width, initial-scale=1.0" data-page-node-id="2ZgnDE6QB4A9RQBpLJBYoZ">
-<title>dd-run CmdPal UI 设计稿 v4.7 — Fluent 2 / Fluent UI 9 token 驱动（亮暗双主题）</title>
+<title>dd-run CmdPal UI 设计稿 v4.9 — Fluent 2 / Fluent UI 9 token 驱动（亮暗双主题）</title>
 <style>
   /* ============================================================
      主题 token（v4：值全部对齐 Fluent 2 alias token，灰阶 grey[N] = N% 亮度）
@@ -485,7 +485,7 @@
   /* 选中：2px brand 边框 + subtle 底（Fluent card 形态 RadioGroup） */
   .radio-card.sel { border: 2px solid var(--accent); padding: 9px 11px; background: var(--accent-soft); }
   .rc-name {
-    font-size: var(--font-caption); line-height: var(--lh-caption); font-weight: 600; color: var(--text);
+    font-size: var(--font-body); line-height: var(--lh-body); font-weight: 600; color: var(--text);
     display: flex; align-items: center; gap: var(--space-6);
   }
   .rc-dot {
@@ -493,16 +493,16 @@
     border: 1.5px solid var(--border-strong); display: inline-block; flex: 0 0 12px;
   }
   .radio-card.sel .rc-dot { border-color: var(--accent); background: radial-gradient(circle, var(--accent) 0 3.5px, transparent 4.5px); }
-  .rc-sub { font-size: var(--font-mini); line-height: var(--lh-mini); color: var(--text-3); margin-top: var(--space-2); }
+  .rc-sub { font-size: 11px; line-height: 14px; color: var(--text-3); margin-top: var(--space-2); }
   .swatch { display: flex; gap: var(--space-4); margin-top: var(--space-8); }
   .swatch i { flex: 1; height: 16px; border-radius: var(--radius-md); border: 1px solid rgba(127, 127, 127, 0.35); }
-  /* 占位项：Switch 用 disabled 语义色（fgDisabled），不做透明度叠加 */
+  /* 占位项：Switch 用 disabled 语义色（fgDisabled），不做透明度叠加（v4.9 几何同步 40×20） */
   .switch {
-    width: 36px; height: 18px; border-radius: var(--radius-circular); flex: 0 0 36px;
+    width: 40px; height: 20px; border-radius: var(--radius-circular); flex: 0 0 40px;
     background: var(--card); border: 1px solid var(--border-strong); position: relative;
   }
   .switch::after {
-    content: ""; position: absolute; top: 2px; left: 2px; width: 12px; height: 12px;
+    content: ""; position: absolute; top: 2px; left: 2px; width: 16px; height: 16px;
     border-radius: var(--radius-circular); background: var(--text-disabled);
   }
   .setting-row.disabled .setting-name { color: var(--text-disabled); }
@@ -534,32 +534,38 @@
   /* 搜索引擎卡（v4.6 补稿）：预设勾选行 / 自定义引擎行 / 添加表单 */
   .engine-row { display: flex; align-items: center; gap: var(--space-8); padding: var(--space-2) var(--space-2); }
   .engine-row .tpl {
-    flex: 1; min-width: 0; font-size: var(--font-mini); line-height: var(--lh-mini); color: var(--text-3);
+    flex: 1; min-width: 0; font-size: var(--font-caption); line-height: var(--lh-caption); color: var(--text-3);
     font-family: "Cascadia Code", Consolas, monospace;
     white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
   }
   .engine-add { display: flex; gap: var(--space-6); margin-top: var(--space-8); }
   .engine-add input {
-    font-size: var(--font-caption); line-height: var(--lh-caption); color: var(--text);
+    height: 32px; font-size: var(--font-caption); line-height: var(--lh-caption); color: var(--text);
     background: var(--input-fill); border: 1px solid transparent; border-radius: var(--radius-md);
-    padding: var(--space-4) var(--space-8); flex: 1; min-width: 0;
+    padding: 0 var(--space-8); flex: 1; min-width: 0;
   }
   .engine-add input::placeholder { color: var(--text-3); }
-  .engine-err { font-size: var(--font-mini); line-height: var(--lh-mini); color: var(--danger); margin-top: var(--space-4); }
+  .engine-err { font-size: var(--font-caption); line-height: var(--lh-caption); color: var(--danger); margin-top: var(--space-4); }
 
   /* ============ 08 窗口材质（v4.7 新增：功能态 ToggleSwitch，D30 互斥·后开优先） ============ */
   /* 与占位 .switch（禁用态）区分：功能态开 = accent 底 + 白滑块居右；关 = input-fill 底 + border-strong 描边 + text-2 滑块居左 */
   .switch-fn {
-    width: 36px; height: 18px; border-radius: var(--radius-circular); flex: 0 0 36px;
+    width: 40px; height: 20px; border-radius: var(--radius-circular); flex: 0 0 40px;
     position: relative; background: var(--input-fill); border: 1px solid var(--border-strong);
     cursor: default;
   }
   .switch-fn::after {
-    content: ""; position: absolute; top: 2px; left: 2px; width: 12px; height: 12px;
+    content: ""; position: absolute; top: 2px; left: 2px; width: 16px; height: 16px;
     border-radius: var(--radius-circular); background: var(--text-2);
   }
   .switch-fn.on { background: var(--accent); border-color: var(--accent); }
   .switch-fn.on::after { left: auto; right: 2px; background: #ffffff; }
+  /* 大号键帽（v4.9，热键「当前组合」值）：mono 12 / 高 24，chip 底 + border-strong，与页脚键帽同语言 */
+  .keycap-lg {
+    display: inline-flex; align-items: center; justify-content: center; height: 24px; padding: 0 var(--space-8);
+    font-family: "Cascadia Code", Consolas, monospace; font-size: var(--font-caption); line-height: 1;
+    color: var(--text); background: var(--card); border: 1px solid var(--border-strong); border-radius: var(--radius-sm);
+  }
 
   /* ============ 10B 右键菜单（Fluent Menu 语义，v4.4 新增） ============ */
   .ctx-stage { position: relative; }
@@ -675,7 +681,7 @@
     <button data-mode="light" data-page-node-id="I0F3kdp2bjXztvBFXivHhW">亮色</button>
     <button data-mode="dark" data-page-node-id="QcDEiiz92pB71IV93qkfmK">暗色</button>
   </div>
-  <p class="eyebrow" data-page-node-id="fpLkL7zs0ObqBBmOVMTlKL">dd-run · CmdPal UI Mockups v4.7</p>
+  <p class="eyebrow" data-page-node-id="fpLkL7zs0ObqBBmOVMTlKL">dd-run · CmdPal UI Mockups v4.9</p>
   <h1 data-page-node-id="9L8F9mN3UyuFLT5dTNiY9z">Fluent 2 设计体系 <em data-page-node-id="UQT9uCqkC6dyICtq0CWQvR">·</em> 全界面详设</h1>
   <p class="sub" data-page-node-id="MX3op44ckD1aHMFNDT6VFJ">
     v4 相对 v3 的实质变化：<b data-page-node-id="0sWPRUFNovWfzUeciNdVZT">从「ueli 像素级复刻 + Fluent 命名」转为「Fluent 2 token 驱动」</b>——
@@ -709,6 +715,12 @@
     ④ 键帽优化：↑↓ 合并单键帽、描边/下边线提为 --border-strong、文案统一「返回·隐藏」；
     <b>v4.7 修订二（同日真机反馈）：</b>⑤ 材质切换防闪——不透明化先绘制呈现、DWM 清材质延迟数帧（消除一瞬透明）；
     ⑥ 键帽下边线统一 1px（原 2px 下边条比三边描边粗，扁平化）。
+    <b>v4.8（2026-09-05，M6 设置页三子页优化，已实施）：</b>
+    ① 常规页排版——复选框独立行带缩进、热键「当前组合」改键帽样式值、按钮与值同行垂直居中；
+    ② 搜索页交互改版（D33）——预设引擎改<b>下拉框添加</b>、自定义引擎改<b>单 URL 输入框</b>（名称自动取域名）+
+    已启用列表带删除，替换「勾选列表 + 双输入表单」；
+    ③ 扩展页排版——名称独占一行，版本并入第二行「v0.1.0 · id」。
+    <b>v4.9（2026-09-06，M6 设置页 Fluent 控件规范化 + 整体字号放大，已实施）：</b>动机（真机截图驱动）：设置页控件整体偏小、且「恢复默认 / 更改」按钮、搜索引擎下拉框、自定义引擎输入框不符合 Fluent 规范。修复 = ① <b>次级按钮 Fluent 规范化</b>——「恢复默认 / 更改 / 删除 / 添加」统一为 Fluent 标准次级按钮（高 32、body1 14、圆角 4、1px border-strong 描边、card 底、hover=row-hover / 按下=row-pressed），此前代码长期漂移为 26px/12px 文字链接，本批代码对齐设计稿 .btn 规范；② <b>ToggleSwitch 几何 36×18 → 40×20</b>（滑块 8，Fluent 标准规格）；③ <b>整体字号放大</b>——设置页标题 16→18、内容区 body 默认 12.5(egui)→14（body1，Fluent 标准，checkbox/ComboBox/TextEdit/弹出菜单项受益）、搜索引擎卡引擎名 12→14 / 模板 10→12 / 错误 10→12、主题单选卡名称 12→14 / 副标题 10→11；④ <b>控件尺寸放大</b>——搜索引擎 ComboBox 180→260（高 32）、自定义引擎输入框高 32 且宽度吃满卡片剩余；⑤ <b>热键「当前组合」改用大号键帽</b>（mono 12 / 高 24，chip 底 + border-strong，与页脚键帽同语言）。决策 D34。
   </p>
 </header>
 
@@ -737,7 +749,7 @@
       <tr data-page-node-id="CA6kApySa8u1bDc989XSE0">
         <td data-page-node-id="5o8Nl6haIcwRc6PLdJq6fF"><b data-page-node-id="Wz6DdXrSB8PrUMxonS3HsA">顶行</b></td>
         <td data-page-node-id="w71vGAb2thxbfwJc3bKFij">40px 控件（含 padding 共 52px）</td>
-        <td data-page-node-id="FBqZwP8wn2OTvGtIsDCc61">Root：<code data-page-node-id="pwr7EfnZVF6UOGZI6xF3R7">[搜索框 flex 1]</code> 占满；子页：<code data-page-node-id="kg6cbHOpylCWB0UGzP1pDk">[返回按钮 28×28] [搜索框 flex 1]</code>；设置页：<code data-page-node-id="BzrN9hEIUmggSOpCHjNSBI">[返回按钮] [页标题 16/22·600] [版本徽标]</code>。<b data-page-node-id="oHoci1ABWlDGnhHXJu2ug4">顶行无齿轮</b>（v4.2：齿轮固定在页脚最左）。</td>
+        <td data-page-node-id="FBqZwP8wn2OTvGtIsDCc61">Root：<code data-page-node-id="pwr7EfnZVF6UOGZI6xF3R7">[搜索框 flex 1]</code> 占满；子页：<code data-page-node-id="kg6cbHOpylCWB0UGzP1pDk">[返回按钮 28×28] [搜索框 flex 1]</code>；设置页：<code data-page-node-id="BzrN9hEIUmggSOpCHjNSBI">[返回按钮] [页标题 18/24·600] [版本徽标]</code>。<b data-page-node-id="oHoci1ABWlDGnhHXJu2ug4">顶行无齿轮</b>（v4.2：齿轮固定在页脚最左）。</td>
       </tr>
       <tr data-page-node-id="Fedn4cCyhRkBGggXANP2cK">
         <td data-page-node-id="ZbY0YAKdYpwDmWPLNoAWe0"><b data-page-node-id="4YQJp5x2Rlh8mCkntmpE2Y">内容区</b></td>
@@ -791,6 +803,7 @@
       <tr><td>D30</td><td>窗口材质模型（v4.7）</td><td>设置持久化单值枚举 <code>backdrop</code>（<code>none / mica / acrylic</code>）；外观栏两个 ToggleSwitch 的状态由该值派生——<b>互斥·后开优先</b>（开启某项自动关闭另一项，最后操作者优先；全关 = 无材质；用户决策 2026-09-05，理由 = DWM 材质为单值属性，开关状态须与实际效果强一致）；<b>默认 = 云母</b>（含旧配置升级：字段缺失 → 云母）；协议 v1.0 冻结零字段新增</td></tr>
       <tr><td>D31</td><td>材质效果与回退（v4.7）</td><td>效果 = Win11 22H2+ <code>DWMWA_SYSTEMBACKDROP_TYPE</code>（云母 = MAINWINDOW、亚克力 = TRANSIENTWINDOW、关 = NONE）+ 材质生效时面板背景双透明（clear_color + panel_fill，亮暗两套 Style 同步注册）；<b>失败回退 = 保持不透明面板</b>（22621 以下 API 报错即降级，记日志一次、不阻断，区别热键 fail-fast）；材质明暗随主题（DWMWA_USE_IMMERSIVE_DARK_MODE 跟随亮暗设置）</td></tr>
       <tr><td>D32</td><td>本批范围（v4.7）</td><td><b>只改设计稿 + HTML 交互演示</b>（用户要求设计确认后再实施）；实施落点：<code>dd-gui/src/settings.rs</code>（backdrop 模型）/ <code>platform.rs</code>（DwmSetWindowAttribute）/ <code>main.rs</code>（with_transparent + HWND 捕获）/ <code>ui/settings_view.rs</code>（材质开关卡）/ <code>theme.rs</code>(双 Style 透明化)</td></tr>
+      <tr><td>D34</td><td>设置页 Fluent 控件规范化 + 字号放大（v4.9）</td><td>真机截图驱动修复：① <b>次级按钮</b>（恢复默认/更改/删除/添加）统一 Fluent 标准次级按钮——高 32、body1 14、圆角 4（--radius-md）、1px --border-strong 描边、--card 底、三态 hover/按下（此前代码漂移为 26px 高 12px 文字，本批对齐设计稿 .btn）；② <b>ToggleSwitch 几何 36×18 → 40×20</b>（滑块半径 8，Fluent ToggleSwitch 标准规格，占位态 .switch 同步）；③ <b>整体字号放大</b>——设置页标题 16→18、内容区 body 12.5(egui 默认)→14（body1，影响 checkbox/ComboBox/TextEdit/弹出菜单项）、搜索卡引擎名 12→14/模板 10→12/错误 10→12、主题单选卡名称 12→14/副标题 10→11；④ <b>控件尺寸</b>——搜索 ComboBox 宽 180→260 且高 32、自定义引擎输入框高 32 吃满剩余；⑤ <b>热键值大号键帽</b>（mono 12 / 高 24，chip 底 + border-strong）。协议 v1.0 冻结零新增；代码落点 <code>ui/settings_view.rs</code>（fluent_button / draw_switch_fn / draw_keycap / 字号与尺寸）。</td></tr>
     </table>
 
     <h3 data-page-node-id="qIjrLO1eIcZw1mWFYlpkAw">00.3 有意偏离清单（P2：明确不改，并记录理由）</h3>
@@ -1580,7 +1593,7 @@
               </div>
             </div>
 
-            <!-- 搜索 -->
+            <!-- 搜索（v4.8：下拉框添加预设 + URL 输入自定义 + 已启用列表） -->
             <div class="settings-view" data-cat="search" style="display:none">
               <div class="settings-card">
                 <div class="setting-row">
@@ -1590,15 +1603,16 @@
                     <div class="setting-desc">配置「网络搜索」分组展示的引擎；更改将在返回首屏后生效</div>
                   </div>
                 </div>
-                <div class="engine-row"><input type="checkbox" checked id="eng1"><label for="eng1" class="setting-name" style="font-size:var(--font-caption)">Google</label><span class="tpl">https://www.google.com/search?q={q}</span></div>
-                <div class="engine-row"><input type="checkbox" checked id="eng2"><label for="eng2" class="setting-name" style="font-size:var(--font-caption)">Bing</label><span class="tpl">https://www.bing.com/search?q={q}</span></div>
-                <div class="engine-row"><input type="checkbox" checked id="eng3"><label for="eng3" class="setting-name" style="font-size:var(--font-caption)">Baidu</label><span class="tpl">https://www.baidu.com/s?wd={q}</span></div>
-                <div class="engine-row"><input type="checkbox" checked id="eng4"><label for="eng4" class="setting-name" style="font-size:var(--font-caption)">DuckDuckGo</label><span class="tpl">https://duckduckgo.com/?q={q}</span></div>
-                <div class="engine-row"><input type="checkbox" checked id="eng5"><label for="eng5" class="setting-name" style="font-size:var(--font-caption)">GitHub</label><span class="tpl">https://github.com/search?q={q}</span></div>
-                <div class="engine-row"><span style="flex:0 0 16px"></span><span class="setting-name" style="font-size:var(--font-caption)">Stack Overflow</span><span class="tpl">https://stackoverflow.com/search?q={q}</span><button class="btn" style="padding:2px 10px;font-size:var(--font-mini)">删除</button></div>
+                <div class="engine-row"><span style="flex:0 0 28px"></span><span class="setting-name" style="font-size:var(--font-body)">Bing</span><span class="tpl">https://www.bing.com/search?q={q}</span><button class="btn" style="height:24px;padding:0 10px;font-size:var(--font-mini)">删除</button></div>
+                <div class="engine-row"><span style="flex:0 0 28px"></span><span class="setting-name" style="font-size:var(--font-body)">Stack Overflow</span><span class="tpl">https://stackoverflow.com/search?q={q}</span><button class="btn" style="height:24px;padding:0 10px;font-size:var(--font-mini)">删除</button></div>
+                <div class="engine-add" style="margin-top:var(--space-8)">
+                  <span style="flex:0 0 28px"></span>
+                  <span class="setting-name" style="font-size:var(--font-caption);flex:0 0 auto">添加引擎</span>
+                  <span class="chip" style="border:1px solid var(--border-strong);border-radius:var(--radius-md);padding:4px 10px;font-size:var(--font-caption);color:var(--text-2);width:260px;display:inline-block">选择预设引擎… ▾</span>
+                </div>
                 <div class="engine-add">
-                  <input type="text" placeholder="名称" style="flex:0 0 110px">
-                  <input type="text" placeholder="https://example.com/search?q={q}">
+                  <span style="flex:0 0 28px"></span>
+                  <input type="text" placeholder="自定义引擎 URL（名称自动取域名）https://example.com/search?q={q}" style="flex:1;height:32px">
                   <button class="btn">添加</button>
                 </div>
               </div>
@@ -1634,17 +1648,18 @@
     <table data-page-node-id="8Nj5zHbeZyYEVbESd8J2lD">
       <tr data-page-node-id="RnkqSG1MdA93JcOuiCrQmH"><th data-page-node-id="CTu5nLGLdWeQWT7sSwZd3r">项</th><th data-page-node-id="RxKyPMiv5fyROL6JR7JEis">规格</th></tr>
       <tr><td>窗口（v4.6 重定，D28）</td><td>设置页 = <b>640×640</b>（v4.2 的 560×640 作废——左栏占 168px 后内容区保持 ~440px，与单列 560 宽时可用宽相当）；根页/子页仍 560×460（00.1）；进入/返回仍按栈顶 <code>is_settings</code> 帧间 diff 放大/缩回，无跳动。</td></tr>
-      <tr data-page-node-id="nLIvcaK8Clald2akAIi2GS"><td data-page-node-id="OivS5CYGXP38TdAmxMGeNI">顶行（不变）</td><td data-page-node-id="HQZn8CLYCJPVK7BdeszSxa"><code data-page-node-id="FiAmq73KEeD8j1ww1dZDS9">[返回按钮 28×28] [页标题「设置」16/22·600] [版本徽标 最右]</code>；控件高 40（含 padding 52），与 01 / 07 顶行<b data-page-node-id="vM4smaqwP7Xl0CBfLdcwA">完全同构</b>，切换零位移。</td></tr>
+      <tr data-page-node-id="nLIvcaK8Clald2akAIi2GS"><td data-page-node-id="OivS5CYGXP38TdAmxMGeNI">顶行（不变）</td><td data-page-node-id="HQZn8CLYCJPVK7BdeszSxa"><code data-page-node-id="FiAmq73KEeD8j1ww1dZDS9">[返回按钮 28×28] [页标题「设置」18/24·600] [版本徽标 最右]</code>；控件高 40（含 padding 52），与 01 / 07 顶行<b data-page-node-id="vM4smaqwP7Xl0CBfLdcwA">完全同构</b>，切换零位移。</td></tr>
       <tr><td>布局（v4.6 新，D27）</td><td>顶行下方 = <code>[左栏 168px][间距 8][内容区 flex 1]</code> 水平两栏；<b>顶行与左栏固定</b>（四项恒可见、左栏不滚动），<b>内容区独立滚动</b>（ScrollArea）；页脚 = 说明文案 + Esc 返回（现状语义不变，无齿轮）。</td></tr>
       <tr><td>左栏（NavigationView pane 语义，v4.6）</td><td>宽 168；项高 36、圆角 4、内边距 0 12；图标 16px（<code>--text-2</code>）+ 文字 body1 14/20（<code>--text-2</code>）；hover = <code>row-hover</code> 底；<b>选中 = <code>row-selected</code> 实色底 + 左缘 3×16 accent 指示条（radius 2，与列表行选中语言 D9 同构）+ 图标/文字转 <code>--text</code></b>；项间垂直间距 4、左栏顶部起始间距 8；未引入新 token。</td></tr>
       <tr><td>栏目与内容映射（v4.6）</td><td><b>外观</b> = 主题外观卡（radio-card 三选）+ 「窗口材质」卡（云母/亚克力 ToggleSwitch，v4.7 D30）；<b>常规</b> = 「打开面板时显示」卡（checkbox「显示所有应用」；持久化 <code>config.json</code> 的 <code>open_view</code>（default/all），变更即时生效——重算 root 空查询可见表）+ 占位卡（全局热键 / 开机自启）；<b>搜索</b> = 「搜索引擎」卡；<b>扩展</b> = 「扩展管理」占位卡（后续扩展配置的预留归组位）。默认选中 = 第一栏「外观」；每次进入设置页重置（与 <code>go_home</code> 复位语义一致）；栏目为纯视图状态<b>不落盘</b>。</td></tr>
-      <tr data-page-node-id="QrOcEbdAQcXlEOdiHjGnXW"><td data-page-node-id="fC1ReyAuXRWLtPfMVf3xp2">卡片（沿用 v4.2）</td><td data-page-node-id="Xo6vAWiWl06J29CHZSRhQ6">Fluent 9 Card（<b data-page-node-id="o48x3HJxEOgTmNK3KhizrI">有描边 → 不使用阴影</b>，D10）：底 <code data-page-node-id="ZlL7fgbT7LGBb1I0Gj82ah">--card</code>（亮 #fafafa / 暗 #333333）、1px <code data-page-node-id="BEmqxY7HcJHDlCDBvCPTLC">--border</code>（stroke2）描边、圆角 8（radius-x-large）、padding 12、卡片间距 8；设置行 = 图标（16px，<code>--text-2</code>）+ 名称（body1 14/20，<code>--text</code>）+ 描述（caption1 12/16，<code>--text-3</code>）。</td></tr>
+            <tr><td>常规/扩展排版（v4.8）</td><td>① 常规：卡内复选框独立行带 28px 缩进（对齐文本）；热键「当前组合」= text-3 标签 + <b>键帽样式值</b>（复用页脚键帽：chip 底 + border-strong + monospace）+ 右侧「恢复默认/更改」双按钮同行垂直居中。② 扩展：<b>名称独占一行</b>（14/text），第二行 = 「v{版本} · {id}」（monospace mini 10/text-3）——版本不再拼在名称后。</td></tr>
+<tr data-page-node-id="QrOcEbdAQcXlEOdiHjGnXW"><td data-page-node-id="fC1ReyAuXRWLtPfMVf3xp2">卡片（沿用 v4.2）</td><td data-page-node-id="Xo6vAWiWl06J29CHZSRhQ6">Fluent 9 Card（<b data-page-node-id="o48x3HJxEOgTmNK3KhizrI">有描边 → 不使用阴影</b>，D10）：底 <code data-page-node-id="ZlL7fgbT7LGBb1I0Gj82ah">--card</code>（亮 #fafafa / 暗 #333333）、1px <code data-page-node-id="BEmqxY7HcJHDlCDBvCPTLC">--border</code>（stroke2）描边、圆角 8（radius-x-large）、padding 12、卡片间距 8；设置行 = 图标（16px，<code>--text-2</code>）+ 名称（body1 14/20，<code>--text</code>）+ 描述（caption1 12/16，<code>--text-3</code>）。</td></tr>
       <tr data-page-node-id="RJVgTyMiGBbBLhqhQDobyv"><td data-page-node-id="QYVbZTm5TICx8TYmHPI54Y">主题单选（沿用）</td><td data-page-node-id="kiwLhZrR78HFnLK0aungxJ">三张等宽 radio-card；未选 = 1px <code data-page-node-id="6bL2cDfNZFLogqgOpGFidu">--border-strong</code> + <code data-page-node-id="CEBpW4DvDHvTFXF03Fd0y0">--input-fill</code> 底；选中 = <b data-page-node-id="tyW6EqUcasTQ3PcmhF0QDd">2px accent 边框</b> + <code data-page-node-id="JCc4nYLADVg0S3XAdh0y7J">--accent-soft</code> 底 + 圆点填充 accent；卡内含主题缩略色板（swatch 16px 高）。点击即 <code data-page-node-id="MvMOYGwxH8BU0pnP2ggRpZ">ctx.set_theme</code> + <code data-page-node-id="sAgp6rhZh4RH6ETbLsWD5C">Settings::save</code> 落盘（<code data-page-node-id="grEer3drnuVEt78HlpV2R0">apply_theme_pref</code> 语义不变）。</td></tr>
-      <tr><td>材质开关（v4.7 新，D30）</td><td>外观栏第二张卡「窗口材质」（图标 E771，实施时以真机字形为准）+ 两个 <b>ToggleSwitch 行</b>：云母材质 / 亚克力材质（名称 body1 14/20 + 描述 caption1 12/16 + 尾缀开关）。开关几何沿用占位 Toggle <b>36×18</b>（radius-circular、滑块 12）；<b>开 = accent 填充底 + 白滑块居右；关 = <code>--input-fill</code> 底 + 1px <code>--border-strong</code> 描边 + <code>--text-2</code> 滑块居左</b>（与禁用占位态区分，不使用 text-disabled）。<b>互斥·后开优先</b>：开启某项自动关闭另一项，最后操作者优先；全关 = 无材质；开关状态由单值 <code>backdrop</code>（none/mica/acrylic）派生，与实际效果强一致。点击即生效 + 落盘 <code>config.json</code> 的 <code>backdrop</code>，<b>默认云母</b>（含旧配置升级：字段缺失 → 云母）。</td></tr>
+      <tr><td>材质开关（v4.7 新，D30）</td><td>外观栏第二张卡「窗口材质」（图标 E771，实施时以真机字形为准）+ 两个 <b>ToggleSwitch 行</b>：云母材质 / 亚克力材质（名称 body1 14/20 + 描述 caption1 12/16 + 尾缀开关）。开关几何 <b>40×20</b>（radius-circular、滑块半径 8，Fluent ToggleSwitch 标准规格；v4.9 由 36×18 规范化）；<b>开 = accent 填充底 + 白滑块居右；关 = <code>--input-fill</code> 底 + 1px <code>--border-strong</code> 描边 + <code>--text-2</code> 滑块居左</b>（与禁用占位态区分，不使用 text-disabled）。<b>互斥·后开优先</b>：开启某项自动关闭另一项，最后操作者优先；全关 = 无材质；开关状态由单值 <code>backdrop</code>（none/mica/acrylic）派生，与实际效果强一致。点击即生效 + 落盘 <code>config.json</code> 的 <code>backdrop</code>，<b>默认云母</b>（含旧配置升级：字段缺失 → 云母）。</td></tr>
       <tr><td>材质效果（v4.7 新，D31）</td><td>Win11 22H2（build 22621）+ 系统背景材质：<code>DwmSetWindowAttribute(DWMWA_SYSTEMBACKDROP_TYPE)</code>——云母 = <code>DWMSBT_MAINWINDOW(2)</code>、亚克力 = <code>DWMSBT_TRANSIENTWINDOW(3)</code>、关 = <code>DWMSBT_NONE(1)</code>。材质生效时<b>面板背景透明</b>（egui <code>clear_color</code> + <code>panel_fill</code> 双透明，注册亮/暗两套 Style 同步），<b>页脚同步透明</b>（v4.7 真机反馈修订：否则底部一条不透明带割裂材质），列表行 / 卡片等表面不透明层级不变；材质明暗随主题（<code>DWMWA_USE_IMMERSIVE_DARK_MODE</code>(20) 跟随亮暗设置，无边框窗口同样作用于材质染色）。<b>全关 = DWMSBT_NONE + 面板恢复不透明</b>（透明只跟材质挂钩——DWMSBT_NONE 应用成功 ≠ 透明，否则无材质可透出 = 全透明穿帮，真机反馈 2026-09-05）。协议 v1.0 冻结零新增。</td></tr>
       <tr><td>材质回退（v4.7，D31）</td><td><code>DwmSetWindowAttribute</code> 失败（Win10 / 22621 以下返回错误码）→ <b>保持不透明面板</b>（不透明填充 + 不透明 clear），记一次日志、不阻断（区别热键 fail-fast）；透明窗口视觉属性恒创建（<code>with_transparent</code>），材质未生效时视觉与 v4.6 完全一致（可用性不受损）。</td></tr>
-      <tr><td>搜索引擎卡（v4.6 补稿，代码 2026-09-05 已实现）</td><td>预设 5 引擎 = checkbox 勾选（启用/停用，按名匹配 <code>search_engines</code> 成员关系）；自定义引擎行 = 名称 + 模板截断（monospace mini，<code>--text-3</code>）+ 删除按钮；添加表单 = 名称 + URL 输入 + 添加；校验 = 名称非空/不重名、模板含 <code>{q}</code>、<code>http(s)://</code> 前缀，错误红字（mini，<code>--danger</code>）；变更即落盘 <code>config.json</code> 的 <code>search_engines</code>，经 <code>DD_WEBSEARCH_ENGINES</code> 环境变量传递给 dd-ext-websearch，<b>返回首屏重聚合后生效</b>（协议 v1.0 冻结零新增）。</td></tr>
-      <tr data-page-node-id="KmHda6c4ZhhS7v4ErNDGb5"><td data-page-node-id="YkAqcbswSXKB9fQ69VHuxs">占位项（沿用 v4.2）</td><td data-page-node-id="gO0gZ4yOvbE1vcA7DY6uza">全局热键 / 开机自启 / 扩展管理三项：名称·描述·图标统一取 <b data-page-node-id="GxE8SCUCuE833L5NgW8zOv"><code data-page-node-id="RioKCH5LEmdGoDT0BFEz09">--text-disabled</code></b>（不透明度叠加）；尾缀为「即将支持」chip（mini 10/14）或禁用 Toggle（36×18）；<b data-page-node-id="pcceXdGMGW5Buk61btFhYu">不注册任何点击处理、不写入 Settings、不进入验收功能项</b>。</td></tr>
+      <tr><td>搜索引擎卡（v4.8 交互改版 D33；v4.9 字号/尺寸规范化 D34）</td><td><b>添加预设引擎 = 下拉框</b>（ComboBox <b>260px、高 32</b>，仅列未启用预设，选中即添加）；<b>自定义引擎 = 单 URL 输入框</b>（<b>高 32、宽度吃满卡片剩余</b>，名称自动取域名，校验同前：非空/不重名/含 {q}/http(s):// 前缀，错误红字 12/16）；<b>已启用引擎列表</b> = 每行 名称（body1 14/20）+ 模板截断（monospace 12/16）+ 删除按钮（Fluent 次级小按钮 24/12，预设/自定义统一，可删后经下拉重加）。变更即落盘 <code>config.json</code> 的 <code>search_engines</code>，经 <code>DD_WEBSEARCH_ENGINES</code> 传递，<b>返回首屏重聚合后生效</b>（协议 v1.0 冻结零新增）。<s>v4.6 原交互：预设勾选列表 + 名称/URL 双输入表单</s>（废止）。</td></tr>
+      <tr data-page-node-id="KmHda6c4ZhhS7v4ErNDGb5"><td data-page-node-id="YkAqcbswSXKB9fQ69VHuxs">占位项（沿用 v4.2）</td><td data-page-node-id="gO0gZ4yOvbE1vcA7DY6uza">全局热键 / 开机自启 / 扩展管理三项：名称·描述·图标统一取 <b data-page-node-id="GxE8SCUCuE833L5NgW8zOv"><code data-page-node-id="RioKCH5LEmdGoDT0BFEz09">--text-disabled</code></b>（不透明度叠加）；尾缀为「即将支持」chip（mini 10/14）或禁用 Toggle（40×20）；<b data-page-node-id="pcceXdGMGW5Buk61btFhYu">不注册任何点击处理、不写入 Settings、不进入验收功能项</b>。</td></tr>
       <tr><td>键盘（v4.6）</td><td>Esc 返回（<code>go_back</code>）；Ctrl+, 打开设置（现行键位不变）；<b>左栏 ↑↓ 切换栏目</b>（左栏焦点态，Tab 可达；可选增强，本期占位）；<b>点击栏目为本期唯一栏目切换交互</b>。</td></tr>
     </table>
   </section>
@@ -2263,8 +2278,8 @@
       <tr>
         <td><b>设置页</b>（08，v4.6 重构 / v4.7 材质）</td>
         <td>NavigationView（pane）+ Card + RadioGroup（card）+ Checkbox + ToggleSwitch + Text</td>
-        <td>左栏 = pane 宽 168、项高 36、选中 <code>bg1Selected</code> 实色底 + 3×16 accent 指示条（与列表行 D9 同语言）；右侧卡片 = card 底 + stroke2 描边、<b>无阴影</b>（D10）；radio-card 选中 2px accent + <code>--accent-soft</code>；占位项用 <code>--text-disabled</code>；<b>功能态 ToggleSwitch（v4.7 材质）= 开 accent 底白滑块 / 关 input-fill + border-strong</b>；窗口 640×640（D28）</td>
-        <td><code>draw_settings</code> 左右布局已实施（2026-09-05）；材质开关卡实施留 v4.7 确认后批次（D32，落点 <code>settings.rs</code> / <code>platform.rs</code> / <code>theme.rs</code>）</td>
+        <td>左栏 = pane 宽 168、项高 36、选中 <code>bg1Selected</code> 实色底 + 3×16 accent 指示条（与列表行 D9 同语言）；右侧卡片 = card 底 + stroke2 描边、<b>无阴影</b>（D10）；radio-card 选中 2px accent + <code>--accent-soft</code>；占位项用 <code>--text-disabled</code>；<b>功能态 ToggleSwitch（v4.7 材质）= 40×20、开 accent 底白滑块 / 关 input-fill + border-strong</b>（v4.9 几何规范化）；<b>次级按钮</b>对齐 .btn（Fluent 标准：高 32 / body1 / 圆角 4 / border-strong 描边）；窗口 640×640（D28）</td>
+        <td><code>draw_settings</code> 左右布局 + 材质开关卡均已实施（2026-09-05，v4.7 批次）；v4.9 对次级按钮 / ToggleSwitch 几何 / 字号做 Fluent 规范化（D34，落点 <code>ui/settings_view.rs</code>）</td>
       </tr>
       <tr data-page-node-id="4pzzkaGJZwm7ZRfBBFim6f">
         <td data-page-node-id="N3mgDwk1xk1PYV9xOCIP49"><b data-page-node-id="PDP0WQd2NUAh8V2ao2nIMp">Toast</b>（09）</td>
@@ -2325,8 +2340,10 @@
       <tr><td>B4</td><td>左栏几何（v4.6，D27）</td><td>左栏宽 168、项高 36、圆角 4、图标 16 + 文字 14/20；选中 = row-selected 实色底 + 左缘 3×16 accent 指示条 + 图标/文字转 text；hover = row-hover 底（像素测量，亮暗双主题）。</td></tr>
       <tr><td>B5</td><td>栏目切换与映射（v4.6）</td><td>四栏与 8.1「栏目与内容映射」逐项一致；点击栏目即时切换右栏内容；默认选中「外观」，每次进入设置页重置；栏目状态不落盘、不改协议。</td></tr>
       <tr><td>B6</td><td>窗口尺寸（v4.6，D28）</td><td>设置页 640×640、返回缩回 560×460（栈顶 is_settings 帧间 diff，无跳动）；顶行 40 高与 01/07 同构；左栏四项恒可见、内容区独立滚动、顶行固定。</td></tr>
-      <tr><td>B7</td><td>材质开关（v4.7，D30）</td><td>外观栏「窗口材质」卡两行 ToggleSwitch（36×18）：开 = accent 底 + 白滑块居右，关 = input-fill 底 + border-strong 描边 + text-2 滑块居左；互斥·后开优先（开云母自动关亚克力，反之亦然；全关 = 无材质）；默认云母（含旧配置字段缺失）；点击即生效并落盘 <code>config.json</code> 的 <code>backdrop</code>，重启保留。</td></tr>
+      <tr><td>B7</td><td>材质开关（v4.7，D30；几何 v4.9 D34）</td><td>外观栏「窗口材质」卡两行 ToggleSwitch（<b>40×20</b>）：开 = accent 底 + 白滑块居右，关 = input-fill 底 + border-strong 描边 + text-2 滑块居左；互斥·后开优先（开云母自动关亚克力，反之亦然；全关 = 无材质）；默认云母（含旧配置字段缺失）；点击即生效并落盘 <code>config.json</code> 的 <code>backdrop</code>，重启保留。</td></tr>
       <tr><td>B8</td><td>材质效果与回退（v4.7，D31）</td><td>Win11 22H2+：云母/亚克力材质肉眼可辨（面板背景透出系统材质），明暗随主题；全关 = 不透明面板；22621 以下或 API 失败 = 回退不透明、日志一次、启动与设置链路不受阻；材质切换即时生效（无需重启）。</td></tr>
+      <tr><td>B9</td><td>次级按钮 Fluent 规范（v4.9，D34）</td><td>设置页「恢复默认 / 更改 / 删除 / 添加」均为 Fluent 标准次级按钮（高 32、body1 14、圆角 4、1px --border-strong 描边、--card 底、hover/按下三态）；点击热区与视觉与截图一致，不再呈文字链接观感；亮色主题下描边清晰可见（#e0e0e0 贴 #fafafa 仍可读）。</td></tr>
+      <tr><td>B10</td><td>控件几何与字号（v4.9，D34）</td><td>ToggleSwitch <b>40×20</b>（滑块半径 8）；设置页标题 18、内容区 body 14（checkbox/ComboBox/TextEdit/弹出菜单项统一受益）、搜索卡引擎名 14 / 模板 12 / 错误 12、主题单选卡名称 14 / 副标题 11；搜索引擎 ComboBox 宽 260 高 32、自定义输入框高 32 吃满剩余；热键「当前组合」大号键帽 mono 12 / 高 24（chip 底 + border-strong）。</td></tr>
       <tr data-page-node-id="NMw0PNkLEArYDBQLkeZPfW"><td data-page-node-id="mAgYgX0pkpeyy2n852Ioyz">C1</td><td rowspan="3" data-page-node-id="17BS5vSvZ58glwGrUZ5CeK"><b data-page-node-id="cU1yqCXIO6Rjz5L1FCkXJi">09 Toast / 10 Dialog</b></td><td data-page-node-id="ndWLbx0VvHHSrXXHUJIpfU">Toast 几何与时长</td><td data-page-node-id="9cyWjf2esMRdPnByksBhuA">card 表面 + shadow16；底部居中偏移 48px；圆角 8；默认 2s、失败路径 3s 自动消失；同一时刻至多 1 条。</td></tr>
       <tr data-page-node-id="R2db4e3vDdYCg8tHoxN0to"><td data-page-node-id="CVvyURE1AgLn7sPYr720CF">C2</td><td data-page-node-id="v3OfZxHS5krzHbtp510OZM">Toast 意图图标</td><td data-page-node-id="QB1Vqytl2QzaGXU1sbqGl1">success/error/info 图标与语义色逐项正确（未接意图字段前默认 info）。</td></tr>
       <tr data-page-node-id="OY1dzpuGqO4v0IH0uDzkGJ"><td data-page-node-id="6kOi3BgxEqb7OCl2ESiyop">C3</td><td data-page-node-id="0ZFCTEBP0fLWoA8pCrNJyx">Dialog 行为</td><td data-page-node-id="bBKiGyGof7E80yVt08iYS8">宽 420px 居中 + shadow64；遮罩 = blackAlpha .50（暗）/.40（亮）；Enter=确认、Esc=取消、点击遮罩=取消（遮罩实施后）；critical 确认按钮为 danger 底。</td></tr>
