@@ -19,7 +19,37 @@ use eframe::egui;
 /// 一带）两代基本兼容；两个都不存在时 glyph 图标显示为方块（记录日志，不致命）。
 /// 追加在字体族**末尾**：egui 字形回退按族内顺序查，CJK/符号字体缺的 PUA 码位
 /// 自然落到图标字体（PUA 区 U+E000+ 两字体均无覆盖，无抢字形问题）。
+///
+/// **M6 批次 6.2（L10）：后台线程加载**——22MB 级字体（msyh.ttc ~19.7MB +
+/// seguisym 2.5MB）的读盘 + 解析是冷启动 GUI 初始化的最大瓶颈（A2 实测
+/// total ~2.8s，其中数据就绪仅 ~2ms）。本函数**立即返回**：首帧用 egui 默认
+/// 字体渲染，字体在后台线程就绪后 `ctx.set_fonts` 原子热替换并请求重绘。
+/// 已知取舍（记档）：若用户在字体就绪前（约 2.5s 内）唤起面板，CJK 文本
+/// 短暂显示方块后自动恢复（字体热替换为原子操作，无半新半旧帧）。
 pub fn setup_cjk_fonts(ctx: &egui::Context) {
+    let ctx = ctx.clone();
+    std::thread::Builder::new()
+        .name("cjk-fonts".into())
+        .spawn(move || {
+            let started = std::time::Instant::now();
+            match load_cjk_font_definitions() {
+                Some(fonts) => {
+                    ctx.set_fonts(fonts);
+                    ctx.request_repaint();
+                    eprintln!(
+                        "[dd-gui] CJK 字体后台加载完成（{} ms），已热替换；首帧为默认字体",
+                        started.elapsed().as_millis()
+                    );
+                }
+                None => eprintln!("[dd-gui] 未找到任何 CJK 字体，中文可能显示为方块"),
+            }
+        })
+        .expect("spawn cjk-fonts thread");
+}
+
+/// 读盘并构建字体定义（纯函数，供 [`setup_cjk_fonts`] 的后台线程调用）；
+/// `None` = 无任何 CJK 字体可用（维持 egui 默认字体）。
+fn load_cjk_font_definitions() -> Option<egui::FontDefinitions> {
     let cjk_candidates = [
         // 优先 msyh.ttc（YaHei，Win7+ 必装且完整含 U+2713 ✓ 与 CJK）
         r"C:\Windows\Fonts\msyh.ttc",
@@ -115,9 +145,9 @@ pub fn setup_cjk_fonts(ctx: &egui::Context) {
 
     if !any_loaded {
         eprintln!("[dd-gui] 未找到任何 CJK 字体，中文可能显示为方块");
-        return;
+        return None;
     }
-    ctx.set_fonts(fonts);
+    Some(fonts)
 }
 
 impl PaletteApp {
@@ -319,4 +349,71 @@ pub fn set_immersive_dark(hwnd: isize, dark: bool) -> bool {
 #[cfg(not(windows))]
 pub fn set_immersive_dark(_hwnd: isize, _dark: bool) -> bool {
     false
+}
+
+/// UTF-16 NUL 结尾宽字符串（windows-sys 0.61 无 wide_string! 宏，本地辅助）。
+#[cfg(windows)]
+fn wide(s: &str) -> Vec<u16> {
+    s.encode_utf16().chain(std::iter::once(0)).collect()
+}
+
+/// 开机自启（M6 批次 6.3）：HKCU `...\CurrentVersion\Run` 写/删 `dd-run` 值。
+/// 值 = 带引号的当前 exe 路径（含空格安全）。返回 Err = 注册表操作失败。
+#[cfg(windows)]
+pub fn set_autostart(enable: bool) -> Result<(), String> {
+    use windows_sys::Win32::System::Registry::{
+        RegCloseKey, RegDeleteValueW, RegOpenKeyExW, RegSetValueExW, HKEY, HKEY_CURRENT_USER,
+        KEY_SET_VALUE, REG_SZ,
+    };
+    let subkey = wide("Software\\Microsoft\\Windows\\CurrentVersion\\Run");
+    let value_name = wide("dd-run");
+    let exe = std::env::current_exe()
+        .map_err(|e| format!("current_exe 失败：{e}"))?
+        .to_string_lossy()
+        .to_string();
+    let data: Vec<u16> = wide(&format!("\"{exe}\""));
+
+    unsafe {
+        let mut hkey: HKEY = std::ptr::null_mut();
+        let open = RegOpenKeyExW(
+            HKEY_CURRENT_USER,
+            subkey.as_ptr(),
+            0,
+            KEY_SET_VALUE,
+            &mut hkey,
+        );
+        if open != 0 {
+            return Err(format!("RegOpenKeyExW = {open}"));
+        }
+        let result = if enable {
+            let hr = RegSetValueExW(
+                hkey,
+                value_name.as_ptr(),
+                0,
+                REG_SZ,
+                data.as_ptr() as *const u8,
+                (data.len() * 2) as u32,
+            );
+            if hr == 0 {
+                Ok(())
+            } else {
+                Err(format!("RegSetValueExW = {hr}"))
+            }
+        } else {
+            // 删除不存在的值（ERROR_FILE_NOT_FOUND = 2）属幂等成功
+            let hr = RegDeleteValueW(hkey, value_name.as_ptr());
+            if hr == 0 || hr == 2 {
+                Ok(())
+            } else {
+                Err(format!("RegDeleteValueW = {hr}"))
+            }
+        };
+        RegCloseKey(hkey);
+        result
+    }
+}
+
+#[cfg(not(windows))]
+pub fn set_autostart(_enable: bool) -> Result<(), String> {
+    Err("仅 Windows 支持开机自启".to_string())
 }

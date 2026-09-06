@@ -65,13 +65,27 @@ impl PaletteApp {
     }
 
     pub(crate) fn poll_hotkey(&mut self, ctx: &egui::Context) {
-        while let Ok(ev) = self.events.try_recv() {
+        while let Ok(ev) = self.hotkey.events.try_recv() {
             match ev {
                 HotkeyEvent::Toggle => {
                     if self.visible {
                         self.hide(ctx);
                     } else {
                         self.show(ctx);
+                    }
+                }
+                HotkeyEvent::ReRegistered(ok) => {
+                    // M6 批次 6.3：重注册结果。成功 → 提示并清回滚备份；失败
+                    //（组合键被占用）→ 还原设置为旧键 + 命令线程回滚旧热键。
+                    if ok {
+                        self.hotkey_prev = None;
+                        self.show_toast("全局热键已更新", None);
+                    } else if let Some(old) = self.hotkey_prev.take() {
+                        self.settings.hotkey_mods = old.0;
+                        self.settings.hotkey_vk = old.1;
+                        self.settings.save();
+                        self.hotkey.re_register(old.0, old.1);
+                        self.show_toast("新热键注册失败（可能被占用），已恢复原热键", None);
                     }
                 }
             }

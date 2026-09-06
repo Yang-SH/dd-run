@@ -418,6 +418,8 @@ pub fn to_panel_item(cmd: &CommandItem, ext_id: &str, fallback_section: &str) ->
         icon: cmd.icon.clone(),
         tags: cmd.tags.clone().unwrap_or_default(),
         result_category: Some(category_label_for(ext_id).to_string()),
+        // M6 批次 6.1（L4）：预计算拼音匹配索引（全拼+首字母），协议层零改动
+        pinyin: crate::state::pinyin_haystack(&cmd.title),
         command: cmd.command.clone(),
     }
 }

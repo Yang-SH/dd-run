@@ -2,7 +2,6 @@
 
 use crate::app::aggregate::AggregatePayload;
 use crate::app::PaletteApp;
-use dd_gui::hotkey::HotkeyEvent;
 use dd_gui::state::PanelItem;
 use dd_gui::tray::TrayEvent;
 use dd_host::cache::ColdStartTimer;
@@ -84,11 +83,10 @@ pub(crate) fn dying_process(id: &str) -> ExtensionProcess {
 
 /// 不依赖真实扩展 / 聚合的 PaletteApp（空 channel 注入）。
 pub(crate) fn make_app() -> PaletteApp {
-    let (_etx, events_rx) = mpsc::channel::<HotkeyEvent>();
     let (_ttx, tray_rx) = mpsc::channel::<TrayEvent>();
     let (_atx, agg_rx) = mpsc::channel::<AggregatePayload>();
     PaletteApp::new(
-        events_rx,
+        dd_gui::hotkey::HotkeyThread::dummy(),
         tray_rx,
         Arc::new(AtomicBool::new(false)),
         agg_rx,

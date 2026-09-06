@@ -15,6 +15,11 @@ impl PaletteApp {
     /// → 输入光标不动）。设计文档 §4.3：`↑/↓` **或** `Tab/Shift+Tab` 移动、
     /// `Enter` 执行、`Esc` 关闭或返回上一级。
     pub(crate) fn handle_keys(&mut self, ctx: &egui::Context) {
+        // M6 批次 6.3：热键捕获模式优先拦截全部按键（Esc 取消；组合键生效）。
+        if self.hotkey_capturing {
+            self.handle_hotkey_capture(ctx);
+            return;
+        }
         let (esc, down, up, enter, tab, shift_tab) = ctx.input_mut(|i| {
             (
                 i.consume_key(egui::Modifiers::NONE, egui::Key::Escape),
@@ -96,6 +101,156 @@ impl PaletteApp {
         if ctrl_comma {
             self.open_settings();
         }
+    }
+
+    /// 热键捕获候选键 → 虚拟键码（M6 批次 6.3：字母/数字 = ASCII，
+    /// F1–F12 = 0x70–0x7B，Space = 0x20；其余键不作为热键主键）。
+    fn capture_vk(key: egui::Key) -> Option<u32> {
+        use egui::Key;
+        Some(match key {
+            Key::A => 0x41,
+            Key::B => 0x42,
+            Key::C => 0x43,
+            Key::D => 0x44,
+            Key::E => 0x45,
+            Key::F => 0x46,
+            Key::G => 0x47,
+            Key::H => 0x48,
+            Key::I => 0x49,
+            Key::J => 0x4A,
+            Key::K => 0x4B,
+            Key::L => 0x4C,
+            Key::M => 0x4D,
+            Key::N => 0x4E,
+            Key::O => 0x4F,
+            Key::P => 0x50,
+            Key::Q => 0x51,
+            Key::R => 0x52,
+            Key::S => 0x53,
+            Key::T => 0x54,
+            Key::U => 0x55,
+            Key::V => 0x56,
+            Key::W => 0x57,
+            Key::X => 0x58,
+            Key::Y => 0x59,
+            Key::Z => 0x5A,
+            Key::Num0 => 0x30,
+            Key::Num1 => 0x31,
+            Key::Num2 => 0x32,
+            Key::Num3 => 0x33,
+            Key::Num4 => 0x34,
+            Key::Num5 => 0x35,
+            Key::Num6 => 0x36,
+            Key::Num7 => 0x37,
+            Key::Num8 => 0x38,
+            Key::Num9 => 0x39,
+            Key::F1 => 0x70,
+            Key::F2 => 0x71,
+            Key::F3 => 0x72,
+            Key::F4 => 0x73,
+            Key::F5 => 0x74,
+            Key::F6 => 0x75,
+            Key::F7 => 0x76,
+            Key::F8 => 0x77,
+            Key::F9 => 0x78,
+            Key::F10 => 0x79,
+            Key::F11 => 0x7A,
+            Key::F12 => 0x7B,
+            Key::Space => 0x20,
+            _ => return None,
+        })
+    }
+
+    /// 热键捕获（M6 批次 6.3）：捕获模式下的按键裁决——Esc 取消；带 Ctrl/Alt
+    /// 修饰的候选键生效（纯 Shift/无修饰忽略，避免误捕获单键）；其余键吞掉。
+    ///
+    /// **逐事件检查**（v4.7 真机反馈修订）：组合键的按下/释放常在同一事件批次
+    /// 内完成，`i.modifiers` 快照已是释放后的状态（合成注入必现、极快击键
+    /// 同样可能）——改读 `Event::Key` 自带的按下时刻 modifiers，精确可靠。
+    fn handle_hotkey_capture(&mut self, ctx: &egui::Context) {
+        let events: Vec<egui::Event> = ctx.input(|i| i.events.clone());
+        for ev in &events {
+            let egui::Event::Key {
+                key,
+                pressed: true,
+                repeat: false,
+                modifiers,
+                ..
+            } = ev
+            else {
+                continue;
+            };
+            if *key == egui::Key::Escape {
+                self.hotkey_capturing = false;
+                return;
+            }
+            let Some(vk) = Self::capture_vk(*key) else {
+                continue;
+            };
+            let mods = ((modifiers.ctrl as u32) << 1)
+                | (modifiers.alt as u32)
+                | ((modifiers.shift as u32) << 2);
+            if mods & 0b0011 == 0 {
+                continue; // 需含 Ctrl/Alt：忽略本次按键，继续等待
+            }
+            self.hotkey_prev = Some((self.settings.hotkey_mods, self.settings.hotkey_vk));
+            self.settings.hotkey_mods = mods;
+            self.settings.hotkey_vk = vk;
+            self.settings.save();
+            self.hotkey.re_register(mods, vk);
+            self.hotkey_capturing = false;
+            return;
+        }
+    }
+
+    /// 设置页「更改热键」：进入捕获模式（下一组合键生效，Esc 取消）。
+    pub(crate) fn start_hotkey_capture(&mut self) {
+        self.hotkey_capturing = true;
+    }
+
+    /// 设置页「恢复默认热键」（M6 批次 6.3）：捕获 UI 不支持 Win 修饰
+    ///（egui 在 Windows 不暴露 Win 键 modifiers），默认组合经此按钮一键还原。
+    pub(crate) fn apply_hotkey_default(&mut self) {
+        self.hotkey_prev = Some((self.settings.hotkey_mods, self.settings.hotkey_vk));
+        self.settings.hotkey_mods = dd_gui::settings::HOTKEY_MODS_DEFAULT;
+        self.settings.hotkey_vk = dd_gui::settings::HOTKEY_VK_DEFAULT;
+        self.settings.save();
+        self.hotkey.re_register(
+            dd_gui::settings::HOTKEY_MODS_DEFAULT,
+            dd_gui::settings::HOTKEY_VK_DEFAULT,
+        );
+    }
+
+    /// 设置页开机自启开关（M6 批次 6.3）：注册表先落，成功才持久化；
+    /// 失败 Toast 错误并保持原状态。
+    pub(crate) fn apply_autostart(&mut self, on: bool) {
+        if self.settings.autostart == on {
+            return;
+        }
+        match crate::platform::set_autostart(on) {
+            Ok(()) => {
+                self.settings.autostart = on;
+                self.settings.save();
+            }
+            Err(e) => self.show_toast(format!("开机自启设置失败：{e}"), None),
+        }
+    }
+
+    /// 设置页扩展启停（M6 批次 6.3）：更新停用表 + 落盘 + 置脏标记
+    /// （离开设置页时重聚合，见 mod.rs 收口点）；幂等调用无副作用。
+    pub(crate) fn apply_extension_enabled(&mut self, id: &str, enabled: bool) {
+        let mut next = self.settings.disabled_extensions.clone();
+        if enabled {
+            next.retain(|x| x != id);
+        } else if !next.iter().any(|x| x == id) {
+            next.push(id.to_string());
+        }
+        if next == self.settings.disabled_extensions {
+            return; // 幂等
+        }
+        self.settings.disabled_extensions = next;
+        self.settings.save();
+        self.exts_dirty = true;
     }
 
     /// 打开设置页（批次 4.0）：推入页面栈（复用嵌套页语义，Esc 返回）。
@@ -231,7 +386,12 @@ impl PaletteApp {
     pub(crate) fn restart_aggregation(&mut self) {
         eprintln!("[dd-gui] 搜索引擎配置变更 → 重新聚合首屏");
         let (tx, rx) = mpsc::channel();
-        crate::app::spawn_aggregation(tx, self.cache.clone(), self.settings.search_engines_env());
+        crate::app::spawn_aggregation(
+            tx,
+            self.cache.clone(),
+            self.settings.search_engines_env(),
+            self.settings.disabled_extensions.clone(),
+        );
         self.aggregate_rx = Some(rx);
         self.aggregating = true;
     }

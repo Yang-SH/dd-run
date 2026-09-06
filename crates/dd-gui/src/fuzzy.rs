@@ -38,12 +38,15 @@ impl FuzzyMatcher {
 
     /// 该项得分（各字段最高分；空白查询 → `Some(0)`；无一命中 → `None`）。
     /// 匹配判定 = `score(...).is_some()`（任一字段子序列命中）。
+    ///
+    /// M6 批次 6.1（L4）：`item.pinyin`（全拼 + 首字母混合串）作为独立字段
+    /// 参与打分——输入 `jsq` / `jisuanqi` 均可命中「计算器」。
     pub(crate) fn score(&mut self, item: &PanelItem) -> Option<u32> {
         if self.blank {
             return Some(0);
         }
         let mut best = self.field_score(&item.title);
-        for hay in [&item.subtitle, &item.section] {
+        for hay in [&item.subtitle, &item.section, &item.pinyin] {
             best = best.max(self.field_score(hay));
         }
         for tag in &item.tags {
@@ -77,6 +80,7 @@ mod tests {
             icon: None,
             tags: tags.iter().map(|s| s.to_string()).collect(),
             result_category: None,
+            pinyin: crate::state::pinyin_haystack(title),
             command: CommandRef::Invoke,
         }
     }
@@ -114,5 +118,21 @@ mod tests {
         let prefix = fm.score(&item("Open Settings", "", "", &[])).unwrap();
         let middle = fm.score(&item("Reopen File", "", "", &[])).unwrap();
         assert!(prefix > middle, "前缀 {prefix} 应 > 中间 {middle}");
+    }
+
+    #[test]
+    fn pinyin_full_and_initials_match() {
+        // M6 批次 6.1（L4）：拼音索引参与匹配——全拼与首字母缩写均可命中
+        let calc = item("计算器", "", "计算", &[]);
+        assert_eq!(calc.pinyin, "jisuanqi jsq", "拼音索引 = 全拼 + 首字母");
+        let mut fm = FuzzyMatcher::new("jsq");
+        assert!(fm.score(&calc).is_some(), "首字母缩写 jsq 命中");
+        let mut fm2 = FuzzyMatcher::new("jisuanqi");
+        assert!(fm2.score(&calc).is_some(), "全拼 jisuanqi 命中");
+        // 非拼音输入仍走原字段；纯英文标题拼音索引为空串
+        let en = item("Open Settings", "", "", &[]);
+        assert_eq!(en.pinyin, "", "纯英文标题无拼音索引");
+        let mut fm3 = FuzzyMatcher::new("jsq");
+        assert!(fm3.score(&en).is_none(), "jsq 不命中英文项");
     }
 }

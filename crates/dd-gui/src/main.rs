@@ -45,10 +45,9 @@ use dd_host::cache::{ColdStartTimer, FrozenCache};
 use dd_host::manifest;
 
 fn main() -> eframe::Result {
-    // A2 冷启动计时起点：**进程进入 main 即开始**，覆盖 eframe/wgpu 窗口创建 +
-    // 字体加载（msyh.ttc ~19.7MB + seguisym 2.5MB）+ 聚合全过程。
-    // 之前放在 setup 闭包内、且位于 setup_cjk_fonts 之后，把最重的字体加载整段漏掉了
-    // （实测只剩 4~6 ms，测的几乎什么都不是）。
+    // A2 冷启动计时起点：**进程进入 main 即开始**，覆盖 eframe 窗口创建 +
+    // 聚合全过程（M6 批次 6.2 起 CJK 字体改为后台线程加载，不在主路径上——
+    // 旧注释"覆盖字体加载 22MB"已随异步化失效，首帧用 egui 默认字体）。
     let mut cold = ColdStartTimer::new();
     cold.mark_spawn_start();
     let viewport = egui::ViewportBuilder::default()
@@ -88,7 +87,11 @@ fn main() -> eframe::Result {
             // 规避 eframe/egui 0.36 在 Windows 上 `with_visible` 偶发不生效的情况。
             cc.egui_ctx
                 .send_viewport_cmd(egui::ViewportCommand::Visible(false));
-            let hotkey = HotkeyThread::spawn(cc.egui_ctx.clone());
+            let hotkey = HotkeyThread::spawn(
+                cc.egui_ctx.clone(),
+                settings.hotkey_mods,
+                settings.hotkey_vk,
+            );
             // 系统托盘（设计稿 10C：常驻图标 + 左键 toggle + 右键原生菜单 +
             // 唯一退出入口；失败线程内降级，不影响面板）。click_flag = Toggle
             // 点击在途旗标（修复失焦隐藏与 Toggle 的「闪黑又展示」竞态）。
@@ -103,10 +106,11 @@ fn main() -> eframe::Result {
             // 可配置搜索引擎（2026-09-05）：spawn 前把引擎表注入 websearch
             // 扩展环境（DD_WEBSEARCH_ENGINES），面板「网络搜索」按配置渲染。
             let engines_env = settings.search_engines_env();
+            let disabled = settings.disabled_extensions.clone();
             let (agg_tx, agg_rx) = mpsc::channel();
-            spawn_aggregation(agg_tx, cache.clone(), engines_env);
+            spawn_aggregation(agg_tx, cache.clone(), engines_env, disabled);
             Ok(Box::new(PaletteApp::new(
-                hotkey.events,
+                hotkey,
                 tray.events,
                 tray_click_flag,
                 agg_rx,

@@ -181,7 +181,8 @@ pub fn preset_search_engines() -> Vec<SearchEngine> {
     .collect()
 }
 
-/// 宿主本地设置（主题偏好 + 首屏视图 + 搜索引擎 + 窗口材质；后续字段向后兼容追加）。
+/// 宿主本地设置（主题偏好 + 首屏视图 + 搜索引擎 + 窗口材质 + 热键/自启/扩展；
+/// 后续字段向后兼容追加）。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Settings {
     pub theme: ThemePref,
@@ -191,7 +192,25 @@ pub struct Settings {
     pub search_engines: Vec<SearchEngine>,
     /// 窗口材质（v4.7 D30；默认云母，材质不可用场景由渲染层回退不透明）。
     pub backdrop: Backdrop,
+    /// 全局热键修饰键位掩码（M6 批次 6.3：MOD_ALT=1/CONTROL=2/SHIFT=4/WIN=8，
+    /// 不含 NOREPEAT——注册时由热键线程统一补）。默认 Win+Alt。
+    pub hotkey_mods: u32,
+    /// 全局热键主键虚拟键码（默认 VK_SPACE = 0x20）。
+    pub hotkey_vk: u32,
+    /// 开机自启（M6 批次 6.3：HKCU Run 键；默认关）。
+    pub autostart: bool,
+    /// 已停用扩展的清单 id 列表（M6 批次 6.3：聚合时跳过；默认空 = 全启用）。
+    pub disabled_extensions: Vec<String>,
 }
+
+/// 全局热键默认修饰键：Win + Alt（MOD_* 值：ALT=1/CONTROL=2/SHIFT=4/WIN=8，
+/// 与 hotkey.rs 的 windows-sys 常量一致；本 crate 纯逻辑不依赖 windows-sys，
+/// 用字面量 + 单测锚定）。不含 NOREPEAT——注册时由热键线程统一补。
+pub const HOTKEY_MODS_DEFAULT: u32 = 0b1000 | 0b0001;
+/// 全局热键默认主键：VK_SPACE。
+pub const HOTKEY_VK_DEFAULT: u32 = 0x20;
+/// 修饰键合法位掩码（Ctrl/Alt/Shift/Win），解析时剔除其余位。
+pub const HOTKEY_MODS_MASK: u32 = 0b1111;
 
 impl Default for Settings {
     fn default() -> Self {
@@ -200,7 +219,53 @@ impl Default for Settings {
             open_view: OpenView::default(),
             search_engines: preset_search_engines(),
             backdrop: Backdrop::default(),
+            hotkey_mods: HOTKEY_MODS_DEFAULT,
+            hotkey_vk: HOTKEY_VK_DEFAULT,
+            autostart: false,
+            disabled_extensions: Vec::new(),
         }
+    }
+}
+
+/// 修饰键掩码 → 显示标签（固定顺序 Ctrl+Alt+Shift+Win，Windows 惯例）。
+pub fn hotkey_mods_label(mods: u32) -> String {
+    let mut parts: Vec<&str> = Vec::new();
+    if mods & 0b0010 != 0 {
+        parts.push("Ctrl");
+    }
+    if mods & 0b0001 != 0 {
+        parts.push("Alt");
+    }
+    if mods & 0b0100 != 0 {
+        parts.push("Shift");
+    }
+    if mods & 0b1000 != 0 {
+        parts.push("Win");
+    }
+    parts.join("+")
+}
+
+/// 虚拟键码 → 显示名（覆盖设置页可捕获的键集，M6 批次 6.3）。
+pub fn hotkey_vk_label(vk: u32) -> String {
+    match vk {
+        0x20 => "Space".to_string(),
+        0x21 => "PgUp".to_string(),
+        0x22 => "PgDn".to_string(),
+        0x2D => "Insert".to_string(),
+        0x70..=0x7B => format!("F{}", vk - 0x6F),
+        0x30..=0x39 | 0x41..=0x5A => (vk as u8 as char).to_string(),
+        0xBA => ";".into(),
+        0xBB => "=".into(),
+        0xBC => ",".into(),
+        0xBD => "-".into(),
+        0xBE => ".".into(),
+        0xBF => "/".into(),
+        0xC0 => "`".into(),
+        0xDB => "[".into(),
+        0xDC => "\\".into(),
+        0xDD => "]".into(),
+        0xDE => "'".into(),
+        _ => format!("VK_{vk:02X}"),
     }
 }
 
@@ -226,6 +291,28 @@ impl Settings {
             if let Some(backdrop) = Backdrop::parse(t) {
                 s.backdrop = backdrop;
             }
+        }
+        // 全局热键（M6 批次 6.3）：掩码先剔除非法位；剔除后无任何修饰键或字段
+        // 缺失/类型损坏 → 回落默认 Win+Alt + Space。
+        if let Some(m) = v.get("hotkey_mods").and_then(|m| m.as_u64()) {
+            let masked = (m as u32) & HOTKEY_MODS_MASK;
+            if masked & 0b1011 != 0 {
+                // 至少含 Ctrl/Alt/Win 之一（纯 Shift 不作为热键修饰）
+                s.hotkey_mods = masked;
+            }
+        }
+        if let Some(k) = v.get("hotkey_vk").and_then(|k| k.as_u64()) {
+            s.hotkey_vk = k as u32;
+        }
+        // 开机自启 / 停用扩展（M6 批次 6.3）
+        if let Some(b) = v.get("autostart").and_then(|b| b.as_bool()) {
+            s.autostart = b;
+        }
+        if let Some(arr) = v.get("disabled_extensions").and_then(|a| a.as_array()) {
+            s.disabled_extensions = arr
+                .iter()
+                .filter_map(|e| e.as_str().map(str::to_string))
+                .collect();
         }
         // 搜索引擎：字段缺失（旧版本配置）→ 预设 5 引擎；字段存在 → 逐条
         // 校验，非法条目跳过（空数组 = 用户全部关闭，尊重其意图）。
@@ -260,6 +347,10 @@ impl Settings {
             "open_view": self.open_view.as_str(),
             "search_engines": engines,
             "backdrop": self.backdrop.as_str(),
+            "hotkey_mods": self.hotkey_mods,
+            "hotkey_vk": self.hotkey_vk,
+            "autostart": self.autostart,
+            "disabled_extensions": self.disabled_extensions,
         })
         .to_string()
     }
@@ -501,5 +592,57 @@ mod tests {
             Settings::parse_json(r#"{"backdrop":42}"#).backdrop,
             Backdrop::Mica
         );
+    }
+
+    #[test]
+    fn hotkey_fields_default_sanitize_and_roundtrip() {
+        // M6 批次 6.3：默认 Win+Alt + Space；掩码剔除非法位；纯 Shift 无效回落
+        let s = Settings::parse_json(
+            r#"{"hotkey_mods":10,"hotkey_vk":80}"#, // Ctrl(2)+Win(8) + 'P'
+        );
+        assert_eq!(s.hotkey_mods, 0b1010);
+        assert_eq!(s.hotkey_vk, 80);
+        assert_eq!(hotkey_mods_label(s.hotkey_mods), "Ctrl+Win");
+        assert_eq!(hotkey_vk_label(80), "P");
+        // 纯 Shift（4）→ 无 Ctrl/Alt/Win → 回落默认；字段缺失 → 默认
+        assert_eq!(
+            Settings::parse_json(r#"{"hotkey_mods":4}"#).hotkey_mods,
+            HOTKEY_MODS_DEFAULT
+        );
+        assert_eq!(Settings::parse_json("{}").hotkey_mods, HOTKEY_MODS_DEFAULT);
+        assert_eq!(Settings::parse_json("{}").hotkey_vk, HOTKEY_VK_DEFAULT);
+        // 往返 + 非法位剔除
+        let s2 = Settings {
+            hotkey_mods: 0b1010 | 0b0100_0000, // 含非法位 64
+            ..Settings::default()
+        };
+        let parsed = Settings::parse_json(&s2.to_json_string());
+        assert_eq!(parsed.hotkey_mods, 0b1010, "非法位被剔除");
+        // Space 标签 + F 键标签
+        assert_eq!(hotkey_vk_label(0x20), "Space");
+        assert_eq!(hotkey_vk_label(0x70), "F1");
+    }
+
+    #[test]
+    fn autostart_and_disabled_extensions_roundtrip() {
+        // M6 批次 6.3：开机自启默认关、停用扩展默认空；往返一致；类型损坏回落
+        assert!(!Settings::default().autostart);
+        assert!(Settings::default().disabled_extensions.is_empty());
+        let s = Settings {
+            autostart: true,
+            disabled_extensions: vec!["com.ddrun.calc".into()],
+            ..Settings::default()
+        };
+        let parsed = Settings::parse_json(&s.to_json_string());
+        assert!(parsed.autostart);
+        assert_eq!(parsed.disabled_extensions, vec!["com.ddrun.calc"]);
+        // 字段缺失 → 默认；类型损坏 → 默认
+        let old = Settings::parse_json(r#"{"theme":"dark"}"#);
+        assert!(!old.autostart);
+        assert!(old.disabled_extensions.is_empty());
+        assert!(!Settings::parse_json(r#"{"autostart":"yes"}"#).autostart);
+        assert!(Settings::parse_json(r#"{"disabled_extensions":42}"#)
+            .disabled_extensions
+            .is_empty());
     }
 }

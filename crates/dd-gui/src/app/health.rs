@@ -55,14 +55,14 @@ impl PaletteApp {
         let n = guard.consecutive();
         if just_tripped {
             eprintln!(
-                "[dd-gui] 扩展 {ext_id} 连续崩溃 {n} 次 ≥ {MAX_CONSECUTIVE_CRASHES}，标记暂时不可用（重启宿主或手动重试后恢复）"
+                "[dd-gui] 扩展 {ext_id} 连续崩溃 {n} 次 ≥ {MAX_CONSECUTIVE_CRASHES}，标记暂时不可用（设置→扩展管理可手动重试）"
             );
             self.show_error_toast(format!(
-                "扩展 {ext_id} 暂时不可用（连续崩溃 {n} 次），重启后恢复"
+                "扩展 {ext_id} 暂时不可用（连续崩溃 {n} 次），可在设置→扩展管理重试"
             ));
             if let Some(s) = self.sources.iter_mut().find(|s| s.id == ext_id) {
                 s.status = SourceStatus::Failed {
-                    error: format!("暂时不可用（连续崩溃 {n} 次，重启宿主恢复）"),
+                    error: format!("暂时不可用（连续崩溃 {n} 次），可在设置→扩展管理重试"),
                 };
             }
         } else {
@@ -154,5 +154,30 @@ mod tests {
         );
         let s = app.sources.iter().find(|s| s.id == ext_id).unwrap();
         assert!(s.status.is_failed(), "熔断后源状态应为 Failed");
+    }
+
+    /// L2（M6.4）：熔断后 `reset_crash` 解除熔断态，使扩展管理页「重试」按钮
+    /// 可恢复该扩展（解除后重聚合会重新 spawn，成功则 Warm、失败则再次熔断）。
+    #[test]
+    fn reset_crash_clears_trip() {
+        let mut app = make_app();
+        let ext_id = "com.example.dying";
+        let mut g = CrashGuard::new(ext_id);
+        for _ in 0..MAX_CONSECUTIVE_CRASHES {
+            g.record_crash();
+        }
+        app.crash_guards.insert(ext_id.to_string(), g);
+        assert!(app.is_crash_tripped(ext_id), "应先处于熔断态");
+
+        app.reset_crash(ext_id);
+        assert!(!app.is_crash_tripped(ext_id), "reset_crash 应解除熔断");
+        assert_eq!(
+            app.crash_guards
+                .get(ext_id)
+                .map(|g| g.consecutive())
+                .unwrap_or(0),
+            0,
+            "reset_crash 应清零连续崩溃计数"
+        );
     }
 }

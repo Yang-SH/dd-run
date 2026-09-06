@@ -32,14 +32,45 @@ pub struct PanelItem {
     /// 结果类别显示标签（设计文档 §6.2：按 `ext_id` 推导，如「应用/命令/设置/网页」）。
     /// 协议层无此字段（`CommandItem` 无 kind），由 GUI 聚合器本地填充。
     pub result_category: Option<String>,
+    /// 拼音匹配索引（M6 批次 6.1，L4）：`title` 汉字部分生成的
+    /// 「全拼 + 首字母」混合串（如 计算器 → `"jisuanqi jsq"`），供模糊匹配
+    /// 命中拼音输入；非汉字字符跳过，纯英文标题为空串。宿主侧预计算
+    /// （协议 v1.0 冻结零新增），由 [`pinyin_haystack`] 生成。
+    pub pinyin: String,
     /// 选中这一项会发生什么（§8.2：直接执行 / 进入嵌套页）。
     pub command: CommandRef,
+}
+
+/// 生成拼音匹配索引：逐字取无声调全拼拼接，再附首字母缩写（M6 批次 6.1）。
+///
+/// 例：`"计算器"` → `"jisuanqi jsq"`；无汉字（纯英文/数字）→ 空串（原字符
+/// 本就是 title 匹配字段，无需重复）。多音字取 pinyin crate 的默认读音。
+pub(crate) fn pinyin_haystack(s: &str) -> String {
+    use pinyin::ToPinyin;
+    let mut full = String::new();
+    let mut initials = String::new();
+    let mut any = false;
+    for p in s.to_pinyin().flatten() {
+        any = true;
+        full.push_str(p.plain());
+        if let Some(c) = p.plain().chars().next() {
+            initials.push(c);
+        }
+    }
+    if any {
+        full.push(' ');
+        full.push_str(&initials);
+        full
+    } else {
+        String::new()
+    }
 }
 
 impl PanelItem {
     /// 仅凭标题构造（id 缺省与标题相同，命令缺省为直接执行，无扩展来源）。
     pub fn new(title: impl Into<String>) -> Self {
         let title = title.into();
+        let pinyin = pinyin_haystack(&title);
         Self {
             id: title.clone(),
             ext_id: String::new(),
@@ -49,6 +80,7 @@ impl PanelItem {
             icon: None,
             tags: Vec::new(),
             result_category: None,
+            pinyin,
             command: CommandRef::Invoke,
         }
     }
@@ -350,6 +382,7 @@ mod tests {
                 icon: None,
                 tags: vec!["config".into()],
                 result_category: None,
+                pinyin: String::new(),
                 command: CommandRef::Invoke,
             },
             PanelItem {
@@ -361,6 +394,7 @@ mod tests {
                 icon: None,
                 tags: vec!["browse".into()],
                 result_category: None,
+                pinyin: String::new(),
                 command: CommandRef::Invoke,
             },
             PanelItem {
@@ -372,6 +406,7 @@ mod tests {
                 icon: None,
                 tags: vec!["clipboard".into()],
                 result_category: None,
+                pinyin: String::new(),
                 command: CommandRef::Invoke,
             },
         ]
@@ -641,6 +676,7 @@ mod tests {
             icon: None,
             tags: Vec::new(),
             result_category: Some("命令".to_string()),
+            pinyin: String::new(),
             command: CommandRef::Invoke,
         }
     }

@@ -3,7 +3,6 @@
 use crate::app::PaletteApp;
 use crate::ui::widgets::draw_back_btn;
 use crate::ui::widgets::text_width;
-use crate::ui::widgets::PlaceholderSuffix;
 use dd_gui::theme;
 use eframe::egui;
 
@@ -70,13 +69,13 @@ impl PaletteApp {
         );
         let back_clicked = draw_back_btn(&mut back_ui, &p);
 
-        // 页标题：painter 直绘锚定 cy（body 16px；与返回按钮间距 = `.toprow`
-        // gap 8px，与嵌套页 back→searchbar 间距同口径）
+        // 页标题：painter 直绘锚定 cy（v4.9：16 → 18，真机反馈"整体文字偏小"；
+        // Fluent subtitle 档，40px 顶行内仍居中）
         ui.painter().text(
             egui::pos2(back_rect.right() + 8.0, cy),
             egui::Align2::LEFT_CENTER,
             "设置",
-            egui::FontId::proportional(16.0),
+            egui::FontId::proportional(18.0),
             p.text,
         );
 
@@ -179,6 +178,18 @@ impl PaletteApp {
                 .max_rect(content_rect)
                 .layout(egui::Layout::top_down(egui::Align::Min)),
         );
+        // v4.9（真机反馈"整体文字偏小"）：设置页内**未显式指定字号**的控件文本
+        // （checkbox / ComboBox / TextEdit / 弹出菜单项等 egui 默认 12.5）统一提到
+        // 14（Fluent body 档）；显式 `.size()` 的标题/描述不受影响。
+        {
+            let styles = content_ui.style_mut();
+            styles
+                .text_styles
+                .insert(egui::TextStyle::Body, egui::FontId::proportional(14.0));
+            styles
+                .text_styles
+                .insert(egui::TextStyle::Button, egui::FontId::proportional(14.0));
+        }
         egui::ScrollArea::vertical().show(&mut content_ui, |ui| match self.settings_category {
             SettingsCategory::Appearance => {
                 self.draw_appearance_card(ui, &p);
@@ -363,9 +374,11 @@ impl PaletteApp {
         }
     }
 
-    /// 常规栏：「打开面板时显示」卡（真机反馈 2026-09-04）+ 占位卡
-    /// （全局热键 / 开机自启，§08.1 占位规则，B3）。
+    /// 常规栏（v4.8 功能态 + v4.9 Fluent 控件化）：「打开面板时显示」+
+    /// 「全局热键」（可改：更改 = 捕获模式、恢复默认 = Win+Alt+Space 一键还原）+
+    /// 「开机自启」（功能态开关）。动作入口在 `app/keys.rs`（M6 批次 6.3）。
     fn draw_general_cards(&mut self, ui: &mut egui::Ui, p: &theme::Palette) {
+        // ── 卡 1：打开面板时显示 ──
         let mut show_all = self.settings.open_view == dd_gui::settings::OpenView::All;
         let mut view_changed = false;
         draw_settings_card_frame(ui, p, |card| {
@@ -376,7 +389,7 @@ impl PaletteApp {
                 ui.painter().text(
                     icon_rect.center(),
                     egui::Align2::CENTER_CENTER,
-                    '\u{E8A9}', // Fluent "Home" 图标码位
+                    '\u{E8A9}',
                     egui::FontId::proportional(16.0),
                     p.text2,
                 );
@@ -397,8 +410,9 @@ impl PaletteApp {
                     );
                 });
             });
-            card.add_space(4.0);
+            card.add_space(8.0);
             card.horizontal(|ui| {
+                ui.add_space(28.0);
                 if ui.checkbox(&mut show_all, "显示所有应用").changed() {
                     view_changed = true;
                 }
@@ -408,36 +422,16 @@ impl PaletteApp {
             self.apply_open_view(ui.ctx(), show_all);
         }
         ui.add_space(8.0); // 两卡间距 8px（§08.1 卡片间距）
-        draw_settings_card_frame(ui, p, |card| {
-            draw_setting_row_disabled(
-                card,
-                '\u{E92E}',
-                "全局热键",
-                "自定义唤起快捷键（当前固定 Alt+Space）",
-                PlaceholderSuffix::Soon,
-                p,
-            );
-            draw_setting_row_disabled(
-                card,
-                '\u{E7E8}',
-                "开机自启",
-                "登录 Windows 后自动后台运行",
-                PlaceholderSuffix::DisabledSwitch,
-                p,
-            );
-        });
-    }
 
-    /// 搜索栏：搜索引擎卡（可配置搜索引擎，2026-09-05）。
-    /// 预设引擎 = 勾选项，自定义引擎 = 输入框添加 + 删除；变更立即持久化
-    /// （apply_search_engines 置脏标记），**离开设置页**时全量重聚合 →
-    /// websearch 进程以新引擎环境重启后生效（协议 v1.0 冻结零字段新增）。
-    fn draw_search_engine_card(
-        &mut self,
-        ui: &mut egui::Ui,
-        p: &theme::Palette,
-        ctx: &egui::Context,
-    ) {
+        // ── 卡 2：全局热键 ──
+        // 闭包外快照（闭包内只收集点击结果）；键帽标签拆分 modifiers 与主键。
+        let capturing = self.hotkey_capturing;
+        let mods_label = dd_gui::settings::hotkey_mods_label(self.settings.hotkey_mods);
+        let vk_label = dd_gui::settings::hotkey_vk_label(self.settings.hotkey_vk);
+        let mut caps: Vec<&str> = mods_label.split('+').collect();
+        caps.push(vk_label.as_str());
+        let mut capture_clicked = false;
+        let mut default_clicked = false;
         draw_settings_card_frame(ui, p, |card| {
             card.horizontal(|ui| {
                 ui.spacing_mut().item_spacing.x = 0.0;
@@ -446,7 +440,142 @@ impl PaletteApp {
                 ui.painter().text(
                     icon_rect.center(),
                     egui::Align2::CENTER_CENTER,
-                    '\u{E721}', // Fluent "Search" 图标码位
+                    '\u{E92E}',
+                    egui::FontId::proportional(16.0),
+                    p.text2,
+                );
+                ui.add_space(12.0);
+                ui.vertical(|ui| {
+                    ui.set_min_height(36.0);
+                    ui.label(egui::RichText::new("全局热键").size(14.0).color(p.text));
+                    ui.label(
+                        egui::RichText::new("自定义唤起/隐藏面板的组合键")
+                            .size(12.0)
+                            .color(p.text3),
+                    );
+                });
+            });
+            card.add_space(4.0);
+            // 当前组合行：「当前组合」+ 大号键帽 …… 右侧 [恢复默认][更改]
+            card.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = 0.0;
+                ui.add_space(28.0);
+                ui.set_min_height(36.0);
+                ui.label(egui::RichText::new("当前组合").size(14.0).color(p.text2));
+                ui.add_space(12.0);
+                if capturing {
+                    ui.label(
+                        egui::RichText::new("请按下新的组合键（Esc 取消）…")
+                            .size(14.0)
+                            .color(p.accent),
+                    );
+                } else {
+                    for (i, cap) in caps.iter().enumerate() {
+                        if i > 0 {
+                            ui.add_space(4.0);
+                            ui.label(egui::RichText::new("+").size(12.0).color(p.text3));
+                            ui.add_space(4.0);
+                        }
+                        draw_keycap(ui, cap, p);
+                    }
+                }
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    ui.add_space(4.0);
+                    // v4.9：Fluent 标准次级按钮（32px/文字 14）——旧 26px/12px
+                    // 纯文字样式不符合 Fluent 控件规范（真机 2026-09-06 反馈
+                    // "恢复默认/更改不像按钮"）。
+                    if fluent_button(ui, if capturing { "捕获中…" } else { "更改" }, p) {
+                        capture_clicked = true;
+                    }
+                    // Win 修饰不在可捕获集（egui Windows 不暴露 Win 键 modifiers），
+                    // 默认组合 Win+Alt+Space 经此按钮一键还原。
+                    if !capturing && fluent_button(ui, "恢复默认", p) {
+                        default_clicked = true;
+                    }
+                });
+            });
+        });
+        if capture_clicked {
+            self.start_hotkey_capture();
+        }
+        if default_clicked {
+            self.apply_hotkey_default();
+        }
+        ui.add_space(8.0);
+
+        // ── 卡 3：开机自启（功能态开关）──
+        let autostart_on = self.settings.autostart;
+        let mut autostart_toggled = false;
+        draw_settings_card_frame(ui, p, |card| {
+            card.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = 0.0;
+                let (icon_rect, _) =
+                    ui.allocate_exact_size(egui::vec2(16.0, 16.0), egui::Sense::hover());
+                ui.painter().text(
+                    icon_rect.center(),
+                    egui::Align2::CENTER_CENTER,
+                    '\u{E7E8}',
+                    egui::FontId::proportional(16.0),
+                    p.text2,
+                );
+                ui.add_space(12.0);
+                ui.vertical(|ui| {
+                    ui.set_min_height(36.0);
+                    ui.label(egui::RichText::new("开机自启").size(14.0).color(p.text));
+                    ui.add_space(2.0);
+                    ui.label(
+                        egui::RichText::new("登录 Windows 后自动后台运行（当前用户注册表）")
+                            .size(12.0)
+                            .color(p.text3),
+                    );
+                });
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    autostart_toggled = draw_switch_fn(ui, autostart_on, p);
+                });
+            });
+        });
+        if autostart_toggled {
+            self.apply_autostart(!autostart_on);
+        }
+    }
+
+    /// 搜索栏（v4.8 交互改版，用户决策）：预设引擎改**下拉框添加**、自定义
+    /// 引擎改**单 URL 输入框**（名称自动取域名）+ 已启用引擎列表带删除；
+    /// 替换 v4.6 的「预设勾选列表 + 名称/URL 双输入表单」。变更落盘 +
+    /// engines_dirty（离开设置页重聚合，协议 v1.0 冻结零新增）。
+    fn draw_search_engine_card(
+        &mut self,
+        ui: &mut egui::Ui,
+        p: &theme::Palette,
+        ctx: &egui::Context,
+    ) {
+        // 闭包外快照（闭包内只改 settings + 收集待删项）
+        let presets = dd_gui::settings::preset_search_engines();
+        let addable: Vec<dd_gui::settings::SearchEngine> = presets
+            .iter()
+            .filter(|pr| {
+                !self
+                    .settings
+                    .search_engines
+                    .iter()
+                    .any(|e| e.name == pr.name)
+            })
+            .cloned()
+            .collect();
+        let enabled: Vec<dd_gui::settings::SearchEngine> = self.settings.search_engines.clone();
+        let mut remove_name: Option<String> = None;
+        let mut preset_picked: Option<String> = None;
+        let mut add_custom_url: Option<String> = None;
+
+        draw_settings_card_frame(ui, p, |card| {
+            card.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = 0.0;
+                let (icon_rect, _) =
+                    ui.allocate_exact_size(egui::vec2(16.0, 16.0), egui::Sense::hover());
+                ui.painter().text(
+                    icon_rect.center(),
+                    egui::Align2::CENTER_CENTER,
+                    '\u{E721}',
                     egui::FontId::proportional(16.0),
                     p.text2,
                 );
@@ -454,6 +583,7 @@ impl PaletteApp {
                 ui.vertical(|ui| {
                     ui.set_min_height(36.0);
                     ui.label(egui::RichText::new("搜索引擎").size(14.0).color(p.text));
+                    ui.add_space(2.0);
                     ui.label(
                         egui::RichText::new(
                             "配置「网络搜索」分组展示的引擎；更改将在返回首屏后生效",
@@ -463,150 +593,262 @@ impl PaletteApp {
                     );
                 });
             });
-            card.add_space(4.0);
-            // 常用预设引擎：勾选 = 是否启用（按名在配置表中判定成员关系）
-            for preset in dd_gui::settings::preset_search_engines() {
-                let mut on = self
-                    .settings
-                    .search_engines
-                    .iter()
-                    .any(|e| e.name == preset.name);
-                if card.checkbox(&mut on, &preset.name).changed() {
-                    if on {
-                        self.settings.search_engines.push(preset.clone());
-                    } else {
-                        self.settings
-                            .search_engines
-                            .retain(|e| e.name != preset.name);
-                    }
-                    self.apply_search_engines(ctx);
-                }
-            }
-            // 自定义引擎：名称 + 模板（截断展示）+ 删除
-            let customs: Vec<dd_gui::settings::SearchEngine> = self
-                .settings
-                .search_engines
-                .iter()
-                .filter(|e| {
-                    !dd_gui::settings::preset_search_engines()
-                        .iter()
-                        .any(|pr| pr.name == e.name)
-                })
-                .cloned()
-                .collect();
-            for c in customs {
+            card.add_space(8.0);
+            // ── 已启用引擎列表：名称 + 模板截断 + 删除（v4.9：名称 14 / 模板 12、
+            // 行高 32——旧 12/10 过小；删除改 Fluent 小按钮）──
+            for e in &enabled {
                 card.horizontal(|ui| {
-                    ui.spacing_mut().item_spacing.x = 8.0;
-                    ui.label(egui::RichText::new(&c.name).size(12.0).color(p.text));
+                    ui.spacing_mut().item_spacing.x = 0.0;
+                    ui.add_space(28.0);
+                    ui.set_min_height(32.0);
+                    ui.label(egui::RichText::new(&e.name).size(14.0).color(p.text));
+                    ui.add_space(12.0);
                     ui.add(
                         egui::Label::new(
-                            egui::RichText::new(&c.template).size(10.0).color(p.text3),
+                            egui::RichText::new(&e.template)
+                                .size(12.0)
+                                .color(p.text3)
+                                .monospace(),
                         )
                         .truncate(),
                     );
-                    if ui
-                        .add(egui::Button::new(egui::RichText::new("删除").size(11.0)).small())
-                        .clicked()
-                    {
-                        self.settings
-                            .search_engines
-                            .retain(|e| !(e.name == c.name && e.template == c.template));
-                        self.apply_search_engines(ctx);
-                    }
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        ui.add_space(4.0);
+                        if fluent_button_small(ui, "删除", p) {
+                            remove_name = Some(e.name.clone());
+                        }
+                    });
                 });
             }
-            // 添加表单：名称 + 搜索 URL（含 {q} 占位符）+ 添加
-            card.add_space(4.0);
+            if enabled.is_empty() {
+                card.horizontal(|ui| {
+                    ui.add_space(28.0);
+                    ui.label(
+                        egui::RichText::new("未启用任何引擎（「网络搜索」分组为空）")
+                            .size(12.0)
+                            .color(p.text3),
+                    );
+                });
+            }
+            card.add_space(8.0);
+            // ── 添加预设引擎：下拉框（v4.9：Fluent ComboBox 高 32 / 宽 260——
+            // 旧 180×~18 过窄过矮，真机反馈"下拉框太短"）──
             card.horizontal(|ui| {
-                ui.spacing_mut().item_spacing.x = 6.0;
-                ui.add(
-                    egui::TextEdit::singleline(&mut self.engine_name_buf)
-                        .desired_width(120.0)
-                        .hint_text("名称"),
-                );
-                let url_w = (ui.available_width() - 52.0).max(120.0);
+                ui.spacing_mut().item_spacing.x = 0.0;
+                ui.add_space(28.0);
+                ui.set_min_height(32.0);
+                ui.label(egui::RichText::new("添加引擎").size(14.0).color(p.text2));
+                ui.add_space(12.0);
+                ui.spacing_mut().interact_size.y = 32.0; // Fluent 控件高 32
+                let sel_text = if addable.is_empty() {
+                    "预设引擎已全部启用".to_string()
+                } else {
+                    "选择预设引擎…".to_string()
+                };
+                egui::ComboBox::from_id_salt("dd-preset-engine")
+                    .width(260.0)
+                    .selected_text(sel_text)
+                    .show_ui(ui, |ui| {
+                        for pr in &addable {
+                            if ui.selectable_label(false, &pr.name).clicked() {
+                                preset_picked = Some(pr.name.clone());
+                            }
+                        }
+                    });
+            });
+            card.add_space(8.0);
+            // ── 添加自定义引擎：单 URL 输入框（v4.9：Fluent TextBox 高 32、宽度
+            // 吃满剩余空间——旧实现被压到 ~170px，真机反馈"输入框太短"）+ 标准
+            // 32px「添加」按钮 ──
+            card.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = 8.0;
+                ui.add_space(28.0);
+                let btn_w = text_width(ui, "添加", egui::FontId::proportional(14.0)) + 24.0;
+                let url_w = (ui.available_width() - btn_w).max(160.0);
                 ui.add(
                     egui::TextEdit::singleline(&mut self.engine_url_buf)
                         .desired_width(url_w)
-                        .hint_text("https://example.com/search?q={q}"),
+                        .min_size(egui::vec2(url_w, 32.0))
+                        .hint_text(
+                            "自定义引擎 URL（名称自动取域名）https://example.com/search?q={q}",
+                        ),
                 );
-                if ui
-                    .add(egui::Button::new(egui::RichText::new("添加").size(11.0)).small())
-                    .clicked()
-                {
-                    match try_add_search_engine(
-                        &mut self.settings.search_engines,
-                        &self.engine_name_buf,
-                        &self.engine_url_buf,
-                    ) {
-                        Ok(()) => {
-                            self.engine_name_buf.clear();
-                            self.engine_url_buf.clear();
-                            self.engine_add_err = None;
-                            self.apply_search_engines(ctx);
-                        }
-                        Err(msg) => self.engine_add_err = Some(msg),
-                    }
+                if fluent_button(ui, "添加", p) {
+                    add_custom_url = Some(self.engine_url_buf.clone());
                 }
             });
             if let Some(err) = &self.engine_add_err {
-                card.label(
-                    egui::RichText::new(err.clone())
-                        .size(10.0)
-                        .color(egui::Color32::from_rgb(0xC4, 0x2B, 0x1C)), // Fluent error 红
-                );
+                card.horizontal(|ui| {
+                    ui.add_space(28.0);
+                    ui.label(
+                        egui::RichText::new(err.clone())
+                            .size(12.0)
+                            .color(egui::Color32::from_rgb(0xC4, 0x2B, 0x1C)),
+                    );
+                });
             }
         });
-    }
 
-    /// 扩展栏：「扩展管理」占位卡（§08.1 占位规则；后续扩展配置的预留归组位，
-    /// D27——新配置按类归入对应栏目，不再纵向挤压版式）。
-    fn draw_extensions_card(&mut self, ui: &mut egui::Ui, p: &theme::Palette) {
-        draw_settings_card_frame(ui, p, |card| {
-            draw_setting_row_disabled(
-                card,
-                '\u{E74E}',
-                "扩展管理",
-                "启用/禁用扩展、查看扩展清单与版本",
-                PlaceholderSuffix::Soon,
-                p,
-            );
-        });
-    }
-}
-
-/// 添加自定义搜索引擎的输入校验（2026-09-05）：
-/// 名称非空且不与既有引擎重名；模板含 `{q}` 占位符且以 `http(s)://` 开头
-/// （与 `SearchEngine::new` 同口径，此处给出人话错误提示）。
-fn try_add_search_engine(
-    engines: &mut Vec<dd_gui::settings::SearchEngine>,
-    name: &str,
-    template: &str,
-) -> Result<(), String> {
-    let name = name.trim();
-    let template = template.trim();
-    if name.is_empty() {
-        return Err("名称不能为空".to_string());
-    }
-    if engines.iter().any(|e| e.name == name) {
-        return Err(format!("已存在同名引擎「{name}」"));
-    }
-    let Some(engine) = dd_gui::settings::SearchEngine::new(name, template) else {
-        if !(template.starts_with("http://") || template.starts_with("https://")) {
-            return Err("搜索 URL 须以 http(s):// 开头".to_string());
+        // ── 闭包外应用交互结果 ──
+        if let Some(name) = remove_name {
+            self.settings.search_engines.retain(|e| e.name != name);
+            self.engine_add_err = None;
+            self.apply_search_engines(ctx);
         }
-        return Err("搜索 URL 须包含 {q} 占位符（关键词替换位置）".to_string());
-    };
-    engines.push(engine);
-    Ok(())
+        if let Some(name) = preset_picked {
+            if let Some(pr) = presets.iter().find(|x| x.name == name) {
+                self.settings.search_engines.push(pr.clone());
+                self.engine_add_err = None;
+                self.apply_search_engines(ctx);
+            }
+        }
+        if let Some(url) = add_custom_url {
+            let name = url
+                .strip_prefix("https://")
+                .or_else(|| url.strip_prefix("http://"))
+                .map(|rest| rest.split(['/', '?', '#']).next().unwrap_or(rest))
+                .unwrap_or("")
+                .to_string();
+            match dd_gui::settings::SearchEngine::new(&name, url.trim()) {
+                Some(engine) => {
+                    if self
+                        .settings
+                        .search_engines
+                        .iter()
+                        .any(|e| e.name == engine.name)
+                    {
+                        self.engine_add_err = Some(format!("已存在同名引擎「{}」", engine.name));
+                    } else {
+                        self.settings.search_engines.push(engine);
+                        self.engine_url_buf.clear();
+                        self.engine_add_err = None;
+                        self.apply_search_engines(ctx);
+                    }
+                }
+                None => {
+                    self.engine_add_err =
+                        Some("URL 须以 http(s):// 开头且包含 {q} 占位符".to_string());
+                }
+            }
+        }
+    }
+    /// 扩展栏：扩展管理（v4.8 排版优化：名称独占一行，版本并入第二行
+    /// 「v0.1.0 · com.ddrun.apps」，不再挤在名称后）。
+    fn draw_extensions_card(&mut self, ui: &mut egui::Ui, p: &theme::Palette) {
+        // 闭包外拷贝数据（闭包内只收集交互结果）。运行时状态（是否熔断 Failed）
+        // 一并收集，驱动「重试」按钮（协议 §11 用户手动重试，M6.4 L2）。
+        let rows: Vec<(String, String, String, bool, bool)> = self
+            .exts
+            .iter()
+            .map(|e| {
+                let enabled = !self
+                    .settings
+                    .disabled_extensions
+                    .iter()
+                    .any(|x| x == &e.manifest.id);
+                let failed = self
+                    .sources
+                    .iter()
+                    .any(|s| s.id == e.manifest.id && s.status.is_failed());
+                (
+                    e.manifest.id.clone(),
+                    e.manifest.name.clone(),
+                    e.manifest.version.clone(),
+                    enabled,
+                    failed,
+                )
+            })
+            .collect();
+        let mut changed: Option<(String, bool)> = None;
+        let mut retry_id: Option<String> = None;
+
+        draw_settings_card_frame(ui, p, |card| {
+            card.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = 0.0;
+                let (icon_rect, _) =
+                    ui.allocate_exact_size(egui::vec2(16.0, 16.0), egui::Sense::hover());
+                ui.painter().text(
+                    icon_rect.center(),
+                    egui::Align2::CENTER_CENTER,
+                    '\u{E74E}',
+                    egui::FontId::proportional(16.0),
+                    p.text2,
+                );
+                ui.add_space(12.0);
+                ui.vertical(|ui| {
+                    ui.set_min_height(36.0);
+                    ui.label(egui::RichText::new("扩展管理").size(14.0).color(p.text));
+                    ui.add_space(2.0);
+                    ui.label(
+                        egui::RichText::new("停用的扩展不再出现在面板中；更改在返回首屏后生效")
+                            .size(12.0)
+                            .color(p.text3),
+                    );
+                });
+            });
+            card.add_space(4.0);
+            if rows.is_empty() {
+                card.label(
+                    egui::RichText::new("未发现扩展（检查 extensions.d 清单目录）")
+                        .size(12.0)
+                        .color(p.text3),
+                );
+            }
+            for (id, name, version, enabled, failed) in &rows {
+                let mut clicked = false;
+                let mut retry_clicked = false;
+                card.horizontal(|ui| {
+                    ui.spacing_mut().item_spacing.x = 0.0;
+                    ui.allocate_exact_size(egui::vec2(16.0, 16.0), egui::Sense::hover());
+                    ui.add_space(12.0);
+                    ui.vertical(|ui| {
+                        ui.set_min_height(36.0);
+                        // 名称独占一行（v4.8：版本不再拼在名称后）
+                        ui.label(egui::RichText::new(name).size(14.0).color(p.text));
+                        ui.add_space(2.0);
+                        // 第二行 = 版本 · id（monospace mini，text-3）
+                        ui.label(
+                            egui::RichText::new(format!("v{} · {}", version, id))
+                                .size(10.0)
+                                .color(p.text3)
+                                .monospace(),
+                        );
+                    });
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        clicked = draw_switch_fn(ui, *enabled, p);
+                        // §11 用户手动重试：熔断（连续崩溃 Failed）的扩展显示「重试」
+                        // 按钮（Fluent 小按钮，贴开关左侧）→ 解除熔断并重聚合（见循环外）。
+                        if *failed {
+                            ui.add_space(8.0);
+                            if fluent_button_small(ui, "重试", p) {
+                                retry_clicked = true;
+                            }
+                        }
+                    });
+                });
+                if clicked {
+                    changed = Some((id.clone(), !enabled));
+                }
+                if retry_clicked {
+                    retry_id = Some(id.clone());
+                }
+            }
+        });
+        if let Some((id, enabled)) = changed {
+            self.apply_extension_enabled(&id, enabled);
+        }
+        if let Some(id) = retry_id {
+            // 解除熔断（清零连续崩溃计数）+ 全量重聚合拉起该扩展：reset 后重聚合
+            // 会重新 spawn active 扩展（含刚解除熔断者）；成功则状态恢复 Warm、重试
+            // 按钮消失，仍崩溃则再次熔断、按钮复现（语义正确）。取舍：全量重聚合而非
+            // 单扩展复热——复用首屏聚合机制最稳，扩展管理页操作频率低可接受（记档）。
+            self.reset_crash(&id);
+            self.restart_aggregation();
+            self.show_toast(format!("正在重试扩展 {id}"), Some(2_000));
+        }
+    }
 }
 
-/// 徽标 chip（设计稿 CSS `.ext-chip` line 243 + §08 mockup）：文字 +
-/// 1px border 描边 + 胶囊圆角（radius-circular）+ 1px/8px padding，
-/// mini 10px monospace + fg3 + chip 底 + 高度 16px。返回实测矩形。
-///
-/// 用途：设置页顶行版本徽标（`v{version}`）、嵌套页页脚右端 `ext_id`
-/// 徽标（§07.1，C 组批次 C1）。
 pub(crate) fn draw_ext_chip(ui: &mut egui::Ui, text: &str, p: &theme::Palette) -> egui::Rect {
     let text_w = text_width(ui, text, egui::FontId::monospace(10.0));
     let w = text_w + 16.0;
@@ -742,22 +984,22 @@ pub(crate) fn draw_radio_card(
             egui::Stroke::new(1.5, p.border_strong),
         );
     }
-    // 名称（caption1 12/16、text 色）
+    // 名称（v4.9：12 → 14 body，text 色）
     let name_x = dot_cx + 12.0; // 圆点右 6 + 文字前内 padding 6
     let name_y = rect.top() + 12.0;
     ui.painter().text(
         egui::pos2(name_x, name_y),
         egui::Align2::LEFT_TOP,
         label,
-        egui::FontId::proportional(12.0),
+        egui::FontId::proportional(14.0),
         p.text,
     );
-    // 副标题（mini 10/14、text-3）
+    // 副标题（v4.9：10 → 11、text-3）
     ui.painter().text(
-        egui::pos2(name_x, name_y + 16.0),
+        egui::pos2(name_x, name_y + 20.0),
         egui::Align2::LEFT_TOP,
         sub,
-        egui::FontId::proportional(10.0),
+        egui::FontId::proportional(11.0),
         p.text3,
     );
     // swatch 两色色板（16px 高 + gap 4 + 各自 1px stroke）
@@ -779,127 +1021,22 @@ pub(crate) fn draw_radio_card(
     resp.clicked()
 }
 
-/// 占位设置行（§08.1 line 1238 "占位项"）：图标 16px (fg-disabled) +
-/// 名称 (body1 14/20 fg-disabled) + 描述 (caption1 12/16 fg-disabled) +
-/// 尾缀（Soon chip 或 Disabled Toggle）。
-///
-/// **不注册任何点击处理**——占位项不绑定行为，仅做视觉占位。
-pub(crate) fn draw_setting_row_disabled(
-    ui: &mut egui::Ui,
-    icon: char,
-    name: &str,
-    desc: &str,
-    suffix: PlaceholderSuffix,
-    p: &theme::Palette,
-) {
-    let h = 48.0;
-    // 注意：必须用 `allocate_exact_size` 返回的 rect 作为行矩形。
-    // 之前误用 `ui.min_rect()`——它是 Ui 创建以来的**累计**包围盒，随每行
-    // 递增膨胀，导致三行文字全部绘制到第一行位置（真机 2026-09-04 重叠）。
-    let (row, _) =
-        ui.allocate_exact_size(egui::vec2(ui.available_width(), h), egui::Sense::hover());
-
-    // 图标 16px（fg-disabled）
-    ui.painter().text(
-        egui::pos2(row.left() + 4.0, row.center().y),
-        egui::Align2::LEFT_CENTER,
-        icon,
-        egui::FontId::proportional(16.0),
-        p.text_disabled,
-    );
-    // 名称 + 描述
-    let main_x = row.left() + 28.0; // 4 left pad + 16 icon + 8 gap
-    let main_y = row.top() + 8.0;
-    ui.painter().text(
-        egui::pos2(main_x, main_y),
-        egui::Align2::LEFT_TOP,
-        name,
-        egui::FontId::proportional(14.0),
-        p.text_disabled,
-    );
-    ui.painter().text(
-        egui::pos2(main_x, main_y + 20.0),
-        egui::Align2::LEFT_TOP,
-        desc,
-        egui::FontId::proportional(12.0),
-        p.text_disabled,
-    );
-
-    match suffix {
-        PlaceholderSuffix::Soon => draw_soon_chip_at(ui, row, p),
-        PlaceholderSuffix::DisabledSwitch => draw_disabled_switch_at(ui, row, p),
-    }
-}
-
-/// 「即将支持」chip（mini 10/14 + text-3 + 1px border + 胶囊 + padding 1px 8px），
-/// 贴给定 row 的右内边缘绘制。
-pub(crate) fn draw_soon_chip_at(ui: &mut egui::Ui, row: egui::Rect, p: &theme::Palette) {
-    let text = "即将支持";
-    let text_w = text_width(ui, text, egui::FontId::proportional(10.0));
-    let w = text_w + 16.0;
-    let h = 16.0;
-    let rect = egui::Rect::from_min_size(
-        egui::pos2(row.right() - 4.0 - w, row.center().y - h / 2.0),
-        egui::vec2(w, h),
-    );
-    ui.painter()
-        .rect_filled(rect, egui::CornerRadius::same(8), p.card);
-    ui.painter().rect_stroke(
-        rect,
-        egui::CornerRadius::same(8),
-        egui::Stroke::new(1.0, p.border),
-        egui::StrokeKind::Inside,
-    );
-    ui.painter().text(
-        rect.center(),
-        egui::Align2::CENTER_CENTER,
-        text,
-        egui::FontId::proportional(10.0),
-        p.text3,
-    );
-}
-
-/// 禁用 Toggle（36×18 + 1px border-strong + 12×12 fg-disabled 内圆），
-/// 贴右绘制。
-pub(crate) fn draw_disabled_switch_at(ui: &mut egui::Ui, row: egui::Rect, p: &theme::Palette) {
-    let w = 36.0;
-    let h = 18.0;
-    let rect = egui::Rect::from_min_size(
-        egui::pos2(row.right() - 4.0 - w, row.center().y - h / 2.0),
-        egui::vec2(w, h),
-    );
-    ui.painter()
-        .rect_filled(rect, egui::CornerRadius::same(9), p.card);
-    ui.painter().rect_stroke(
-        rect,
-        egui::CornerRadius::same(9),
-        egui::Stroke::new(1.0, p.border_strong),
-        egui::StrokeKind::Inside,
-    );
-    ui.painter().circle_filled(
-        egui::pos2(rect.left() + 8.0, rect.center().y),
-        6.0,
-        p.text_disabled,
-    );
-}
-
-/// 功能态 ToggleSwitch（§08.1 v4.7「材质开关」行）：36×18（radius-circular、
-/// 滑块 12，与占位 Toggle 同几何）——开 = accent 填充底 + 白滑块居右；关 =
-/// input_fill 底 + 1px border-strong 描边 + text-2 滑块居左（禁用占位态用
-/// text-disabled 滑块，两者明确区分）。返回是否被点击。
+/// 功能态 ToggleSwitch（§08.1 v4.7「材质开关」行；v4.9 放大到 Fluent 规格
+/// 40×20、滑块 16）：开 = accent 填充底 + 白滑块居右；关 = input_fill 底 +
+/// 1px border-strong 描边 + text-2 滑块居左。返回是否被点击。
 pub(crate) fn draw_switch_fn(ui: &mut egui::Ui, on: bool, p: &theme::Palette) -> bool {
-    let (rect, resp) = ui.allocate_exact_size(egui::vec2(36.0, 18.0), egui::Sense::click());
-    let radius = egui::CornerRadius::same(9);
+    let (rect, resp) = ui.allocate_exact_size(egui::vec2(40.0, 20.0), egui::Sense::click());
+    let radius = egui::CornerRadius::same(10);
     let knob_cx = if on {
-        rect.right() - 2.0 - 6.0
+        rect.right() - 2.0 - 8.0
     } else {
-        rect.left() + 2.0 + 6.0
+        rect.left() + 2.0 + 8.0
     };
     if on {
         ui.painter().rect_filled(rect, radius, p.accent);
         ui.painter().circle_filled(
             egui::pos2(knob_cx, rect.center().y),
-            6.0,
+            8.0,
             egui::Color32::WHITE,
         );
     } else {
@@ -911,9 +1048,83 @@ pub(crate) fn draw_switch_fn(ui: &mut egui::Ui, on: bool, p: &theme::Palette) ->
             egui::StrokeKind::Inside,
         );
         ui.painter()
-            .circle_filled(egui::pos2(knob_cx, rect.center().y), 6.0, p.text2);
+            .circle_filled(egui::pos2(knob_cx, rect.center().y), 8.0, p.text2);
     }
     resp.clicked()
+}
+
+/// Fluent 2 标准次级按钮（v4.9，真机 2026-09-06 反馈"恢复默认/更改不像按钮"）：
+/// 高 32 / 文字 14（body）/ 左右 padding 12 / 圆角 4（radius-m）/ 1px
+/// `--border-strong` 描边 / card 底；hover = bg1Hover、按下 = bg1Pressed
+/// （Fluent 控件态三段）。返回是否被点击。
+pub(crate) fn fluent_button(ui: &mut egui::Ui, text: &str, p: &theme::Palette) -> bool {
+    fluent_button_sized(ui, text, p, 32.0, 14.0, 12.0)
+}
+
+/// Fluent 2 小按钮（列表行内动作，如引擎「删除」）：高 24 / 文字 12 / padding 8。
+pub(crate) fn fluent_button_small(ui: &mut egui::Ui, text: &str, p: &theme::Palette) -> bool {
+    fluent_button_sized(ui, text, p, 24.0, 12.0, 8.0)
+}
+
+/// [`fluent_button`] / [`fluent_button_small`] 共用绘制核心。
+fn fluent_button_sized(
+    ui: &mut egui::Ui,
+    text: &str,
+    p: &theme::Palette,
+    h: f32,
+    font_size: f32,
+    pad_x: f32,
+) -> bool {
+    let font = egui::FontId::proportional(font_size);
+    let w = (text_width(ui, text, font.clone()) + 2.0 * pad_x).max(h + 8.0);
+    let (rect, resp) = ui.allocate_exact_size(egui::vec2(w, h), egui::Sense::click());
+    let radius = egui::CornerRadius::same(4);
+    let fill = if resp.is_pointer_button_down_on() {
+        p.row_pressed
+    } else if resp.hovered() {
+        p.row_hover
+    } else {
+        p.card
+    };
+    ui.painter().rect_filled(rect, radius, fill);
+    ui.painter().rect_stroke(
+        rect,
+        radius,
+        egui::Stroke::new(1.0, p.border_strong),
+        egui::StrokeKind::Inside,
+    );
+    ui.painter().text(
+        rect.center(),
+        egui::Align2::CENTER_CENTER,
+        text,
+        font,
+        p.text,
+    );
+    resp.clicked()
+}
+
+/// 设置页大号键帽（v4.9：热键组合展示专用）——monospace 12 / 24px 高 / 左右
+/// 8px padding / chip 底 + 1px border-strong 描边 + 圆角 4。页脚键帽
+/// （10px/16px 高）在设置页正文中过小（真机反馈"文字偏小"），放大一档。
+fn draw_keycap(ui: &mut egui::Ui, cap: &str, p: &theme::Palette) {
+    let font = egui::FontId::monospace(12.0);
+    let w = text_width(ui, cap, font.clone()) + 16.0;
+    let (rect, _) = ui.allocate_exact_size(egui::vec2(w, 24.0), egui::Sense::hover());
+    let radius = egui::CornerRadius::same(4);
+    ui.painter().rect_filled(rect, radius, p.chip_bg);
+    ui.painter().rect_stroke(
+        rect,
+        radius,
+        egui::Stroke::new(1.0, p.border_strong),
+        egui::StrokeKind::Inside,
+    );
+    ui.painter().text(
+        rect.center(),
+        egui::Align2::CENTER_CENTER,
+        cap,
+        font,
+        p.text2,
+    );
 }
 
 #[cfg(test)]

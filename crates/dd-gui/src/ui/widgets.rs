@@ -109,12 +109,6 @@ pub(crate) fn draw_back_btn(ui: &mut egui::Ui, p: &theme::Palette) -> bool {
     resp.clicked()
 }
 
-/// 占位行尾缀类型（§08.1 占位项规格表）。
-pub(crate) enum PlaceholderSuffix {
-    Soon,
-    DisabledSwitch,
-}
-
 // ── 现有页脚键位区 ────────────────────────────────────────────────
 
 /// 在 `(x, cy)` 起点向右**手绘**完整键位图例（[`KEY_GROUPS`]），所有键帽与

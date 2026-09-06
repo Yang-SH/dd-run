@@ -124,7 +124,7 @@ impl PaletteApp {
             eprintln!("[dd-gui] invoke 拒绝：ext={ext_id} 暂时不可用（连续崩溃熔断）");
             self.show_toast_kind(
                 ToastKind::Error,
-                format!("扩展 {ext_id} 暂时不可用，重启宿主后恢复"),
+                format!("扩展 {ext_id} 暂时不可用，可在设置→扩展管理点击重试"),
                 Some(2_500),
             );
             return;

@@ -30,7 +30,7 @@ use crate::app::toast::ConfirmDialog;
 use crate::app::toast::ToastState;
 use crate::ui::settings_view::SettingsCategory;
 use dd_gui::aggregator;
-use dd_gui::hotkey::HotkeyEvent;
+use dd_gui::hotkey::HotkeyThread;
 use dd_gui::navigation::PageStack;
 use dd_gui::navigation::PageState;
 use dd_gui::robustness::CrashGuard;
@@ -72,7 +72,14 @@ pub struct PaletteApp {
     /// 页面栈：栈底为 Root（首屏聚合），其上为嵌套页。
     pub(crate) stack: PageStack,
     /// 热键事件接收端。
-    pub(crate) events: Receiver<HotkeyEvent>,
+    /// 热键线程句柄（M6 批次 6.3：事件接收 + 设置页更改热键后经它重注册）。
+    pub(crate) hotkey: HotkeyThread,
+    /// 重注册失败回滚用的旧组合（Ok 时清空；Err 时还原设置并回滚热键）。
+    pub(crate) hotkey_prev: Option<(u32, u32)>,
+    /// 热键捕获模式（设置页「更改」后开启：下一组合键被拦截为新热键）。
+    pub(crate) hotkey_capturing: bool,
+    /// 扩展启停脏标记：离开设置页时与 engines_dirty 一起触发重聚合。
+    pub(crate) exts_dirty: bool,
     /// 托盘事件接收端（设计稿 10C：Toggle / OpenSettings / Exit）。
     pub(crate) tray_events: Receiver<TrayEvent>,
     /// 托盘 Toggle 点击在途旗标（tray.rs 置位 / 本模块消费后复位）：
@@ -163,7 +170,6 @@ pub struct PaletteApp {
     /// （websearch 进程须以新环境变量重启，逐帧开关勾选只聚合一次）。
     pub(crate) engines_dirty: bool,
     /// 设置页「添加搜索引擎」输入缓冲与校验错误（绘制层状态跨帧存活）。
-    pub(crate) engine_name_buf: String,
     pub(crate) engine_url_buf: String,
     pub(crate) engine_add_err: Option<String>,
     /// 设置页左栏当前栏目（§08 v4.6 D27）：纯视图状态、不落盘；
@@ -209,7 +215,7 @@ impl PaletteApp {
     }
 
     pub fn new(
-        events: Receiver<HotkeyEvent>,
+        hotkey: HotkeyThread,
         tray_events: Receiver<TrayEvent>,
         tray_click_flag: Arc<AtomicBool>,
         aggregate_rx: Receiver<AggregatePayload>,
@@ -219,7 +225,10 @@ impl PaletteApp {
     ) -> Self {
         Self {
             stack: PageStack::new(PageState::root(Vec::new())),
-            events,
+            hotkey,
+            hotkey_prev: None,
+            hotkey_capturing: false,
+            exts_dirty: false,
             tray_events,
             tray_click_flag,
             last_focus_loss_hide: None,
@@ -254,7 +263,6 @@ impl PaletteApp {
             settings,
             cache,
             engines_dirty: false,
-            engine_name_buf: String::new(),
             engine_url_buf: String::new(),
             engine_add_err: None,
             settings_category: SettingsCategory::default(),
@@ -353,11 +361,12 @@ impl eframe::App for PaletteApp {
             };
             ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(egui::vec2(w, h)));
         }
-        // 搜索引擎配置变更（可配置搜索引擎，2026-09-05）：离开设置页时统一
-        // 消费脏标记并全量重聚合——size-diff 收口点覆盖所有离开路径
+        // 搜索引擎（2026-09-05）与扩展启停（M6 批次 6.3）配置变更：离开设置页时
+        // 统一消费脏标记并全量重聚合——size-diff 收口点覆盖所有离开路径
         // （Esc / 返回按钮 / Dismiss / show 复位），逐帧勾选只触发一次。
-        if !want_settings && self.engines_dirty {
+        if !want_settings && (self.engines_dirty || self.exts_dirty) {
             self.engines_dirty = false;
+            self.exts_dirty = false;
             self.restart_aggregation();
         }
         self.draw_panel(ui);

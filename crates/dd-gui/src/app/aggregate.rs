@@ -37,15 +37,24 @@ pub fn spawn_aggregation(
     tx: mpsc::Sender<AggregatePayload>,
     cache: Option<FrozenCache>,
     engines_json: String,
+    disabled: Vec<String>,
 ) {
     thread::spawn(move || {
         // A2 拆分计时的"数据平面"：从 scan 起到聚合完成止（不含 GUI/字体加载）
         let agg_start = Instant::now();
         // note（来源备注）不再进页脚（用户决策 2026-09-04）：丢弃即可，
         // 异常细节已由 load_extension_sources 内部日志输出。
-        let (mut exts, _note) = aggregator::load_extension_sources();
-        aggregator::inject_websearch_env(&mut exts, &engines_json);
-        let result = aggregator::collect_top_level(&exts, cache.as_ref());
+        let (exts, _note) = aggregator::load_extension_sources();
+        // M6 批次 6.3：停用扩展只从**聚合采集**中剔除——payload.exts 必须保留
+        // 全集（self.exts 驱动设置页「扩展管理」列表，过滤掉会让已停用扩展从
+        // 列表消失、无法再从 UI 启用，真机反馈 2026-09-05）。
+        let mut active: Vec<LoadedExtension> = exts
+            .iter()
+            .filter(|e| !disabled.contains(&e.manifest.id))
+            .cloned()
+            .collect();
+        aggregator::inject_websearch_env(&mut active, &engines_json);
+        let result = aggregator::collect_top_level(&active, cache.as_ref());
         let (items, sources) = aggregator::flatten(&result.per_ext);
 
         // 进程与 `ExtItems::Ready` 一一对应（collect 时按序 push）；Stub（读桩）无进程

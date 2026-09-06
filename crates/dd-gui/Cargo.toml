@@ -32,9 +32,15 @@ windows-sys = { version = "0.61", features = [
     "Win32_UI_Shell",
     # v4.5 托盘 10C：GetModuleHandleW（托盘窗口类注册）
     "Win32_System_LibraryLoader",
+    # M6 批次 6.3：开机自启（HKCU Run 键 RegSetValueExW/RegDeleteValueW）
+    "Win32_System_Registry",
+    # M6 批次 6.3：全局热键重注册（PostThreadMessageW/GetCurrentThreadId）
+    "Win32_System_Threading",
 ] }
 # v4.7 窗口材质（D31）：eframe::Frame 经 HasWindowHandle 取 Win32 HWND
 raw-window-handle = "0.6"
+# M6 批次 6.1（L4）：汉字→拼音（无声调 plain + 首字母），宿主侧预计算拼音索引
+pinyin = "0.10"
 # M4 P2（host/* 执行端）：写剪贴板（host/set_clipboard）+ 打开系统浏览器（host/open_url）
 arboard = "3"
 webbrowser = "1"
