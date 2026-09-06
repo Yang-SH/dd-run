@@ -271,16 +271,16 @@
 
 | # | 项 | 来源 | 说明 / 归属 |
 |---|---|---|---|
-| L1 | 启动一帧闪屏 | m1-record §4.6 | 视觉瑕疵，未排期 |
+| L1 | 启动一帧闪屏 | m1-record §4.6 | ✅ 已销项（2026-09-06 用户真机确认：`with_visible(false)` + `Visible(false)` 双保险下启动无闪屏；m1-record 候选② opacity 0→1 过渡未实施，原闪屏问题不再复现） |
 | L2 | 熔断后手动重试入口 | m4-record §5 | 协议 §11「用户手动重试」需 UI 入口，当前仅重启宿主恢复 |
 | L3 | 顶层 `items_changed` 不重聚合 | m3-record §5 / m4-record §5 | 扩展通知 ItemsChanged 后 Root 全量重拉未接（100ms 合并逻辑已有，A9 路径待接顶层） |
-| L4 | 拼音匹配 | m4-record D12-B | nucleo 原生不支持，需 pinyin 转换 crate，独立后续项 |
+| L4 | 拼音匹配 | m4-record D12-B / fuzzy.rs / state.rs | ✅ 已销项（M6 批次，`a007656`）：引入 `pinyin = "0.10"`，`state::pinyin_haystack` 生成「全拼+首字母」混合索引串（`计算器`→`jisuanqi jsq`，多音字取默认读音），`fuzzy.rs` 增 `item.pinyin` 独立匹配字段 + 单测 `pinyin_full_and_initials_match`；nucleo 子序列打分跨 title/subtitle/section/pinyin 四字段取最高 |
 | L5 | LRU 驱逐后 fallback 复热失败 | m4-record §3.6 / §5 | 第三方多扩展场景（内置 5 < LRU 8 不触发），复热走 `get_command` 不回 fallback 模板 |
 | L6 | 上游 PowerToys 引用边界复核 | §6 R4 | MIT 许可证已定（根 LICENSE + 各 crate），文档引用边界专项一轮 |
 | L7 | `dd-ext/apps.rs` clippy 风格警告 1 条 | 2026-09-03 批次记录 | ✅ 已销项（2026-09-04 `004b652` 顺手修，`chunks_exact_to_as_chunks` 不再存在；本会话 `grep chunks_exact` 零命中，基线 clippy 0 告警） |
 | L8 | 设计稿 v4 C 组占位实施 | 设计稿 v4.3 §12 | ✅ 代码完成（2026-09-04，C1–C3 三批次，未 commit）：C1 嵌套页顶行统一（返回 28×28 + 页标题进 placeholder + ext_id 徽标落页脚右端）/ C2 Loading 骨架（Spinner 22px + 3 骨架行）/ C3 Dialog 遮罩（全屏 Area 捕获层 + 点击取消 + 420px 面板 shadow64）+ Toast 意图接口（ToastKind Success/Error/Info）。**焦点态留档**：D9 列表行无焦点环已满足；返回按钮键盘可达 = Esc（Tab 保持列表导航语义，批次 4.0 既定决策），不实现返回按钮 Tab 焦点环。**真机验收待做**（A1–A5 / C1–C3） |
 | L9 | IME 交互中文输入环境人工复验 | 2026-09-03 记录 | legacy_visuals=false + 选中态修复后，真实 IME 组合需人工确认（SendInput 无法模拟） |
-| L10 | A2 冷启动 GUI 瓶颈 | §6 R2 | 数据就绪 ~2ms 达标；total ~2.8s 瓶颈在 wgpu + msyh 22MB 字体加载（记录不调目标，优化属候选 M6） |
+| L10 | A2 冷启动 GUI 瓶颈 | §6 R2 / platform.rs | ✅ 已销项（M6 批次 6.2 L10）：`setup_cjk_fonts` 改为**后台线程**加载 msyh.ttc(~19.7MB)+Segoe UI Symbol 后援，加载完 `FontDefinitions` 热替换（不在主路径），首帧如用户在约 2.5s 内唤起则 CJK 暂用回退字体；`total` 瓶颈记录不调目标（R2 要求记录而非优化） |
 
 ---
 
@@ -317,6 +317,8 @@
 **当前状态（2026-09-06 12:00）**：**v4.11 拖拽二次修正**（用户真机反馈：上轮 `allocate_rect` 全屏 drag widget 导致「能拖窗但其他全点不动」）。根因定位：精读 egui 0.36 `interaction.rs`——全屏 `Sense::drag()` widget 在指针一移动即变 `dragged`，`is_decidedly_dragging()` 为真，释放时抑制其上前台控件 click（interaction.rs:174-182）。修正：`chrome_begin` **不再注册任何占屏交互 widget**，改为按帧手动检测——仅当主键按下落点不在缩放热区且不在上一帧 `interactive_rects_last_pass()` 任一 click/drag 控件矩形内时记 `drag_candidate`，移动超 4px 再 `StartDrag`；前台控件 click 完全不受干扰。`app/mod.rs` 增 `drag_candidate: Option<Pos2>` 字段、`ui/chrome.rs` 重写 `chrome_begin` + 加 `DRAG_THRESHOLD`。`fmt/clippy/test` 全绿（246 passed）；release 重编，`dist/dd-run.exe` 单文件覆盖（12:00）。**真机验收待做**：空白区拖拽 + 齿轮/列表/输入框/开关点击均正常、右键菜单正常、四边四角缩放正常。
 
 **当前状态（2026-09-06 13:40）**：**文档滞后校正**（代码已超前于文档）。经核对：① `M6.3 设置占位落地`（全局热键自定义/开机自启/扩展管理）三项在代码层**已全部实现**（`settings.rs` + `hotkey.rs::re_register` + `app/keys.rs` + `ui/settings_view.rs` 卡2/卡3 + `platform.rs::set_autostart`），此前本表误标「待做」；② `托盘 10C`（D22–D26）**代码已实现并接线**（`tray.rs` 内嵌 `app.ico` + 左键 toggle(D23) + 右键原生菜单 4 项含退出(D24) + `SetForegroundWindow`/`WM_NULL` 防外点不关；`main.rs` 已 `TrayThread::spawn`）——设计稿 10C 章仍标注「仅设计、代码留后续批次」已过时；③ 设计稿 B3「热键/自启/扩展管理为禁用占位、点击无反应」与功能代码矛盾（代码已做成功能态）。本表 6.3/6.4 行已更新为 ✅ 并补实施记档；设计稿 B3/10C 状态同步修正见 `cmdpal-ui-mockups.html`。**下一步**：代码层无显式待做主功能（仅台账 L5 LRU 复热 fallback 低优先、L1 闪屏未排期、L9 IME 真机复验）；当前最大未提交工作树为 v4.10/v4.11 chrome 批次（待用户真机验收 → 手动提交）。
+
+**当前状态（2026-09-06 14:10）**：**台账二次滞后校正 + L1 用户真机销项（14:1x）**。grep 代码确认：`pinyin = "0.10"` + `state::pinyin_haystack`（全拼+首字母）+ `fuzzy.rs item.pinyin` 字段 + 单测 `pinyin_full_and_initials_match`（L4）、`platform::setup_cjk_fonts` 后台线程加载（L10）均在 `a007656`（M6 批次 6.1/6.2）已实现，台账 L4/L10 仍标开放为旧快照——本次 §6.1 台账 L4/L10 行改为 ✅ 销项并补实施记档。L1 启动闪屏经用户真机确认（`with_visible(false)`+`Visible(false)` 双保险下无闪屏），标记 ✅ 销项，m1-record 候选② opacity 过渡未实施。至此台账**仅剩 L5（LRU 复热 fallback，内置 5 < LRU 8 不触发）/ L9（IME 真机复验）** 两项开放，均低优先或依赖真机。代码层已无任何待做主功能，所有里程碑主功能 + 遗留清扫均关闭。
 
 ### M5 后续批次：设置入口 / 类型标签 / 上下文页脚
 
