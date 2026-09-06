@@ -121,7 +121,7 @@
     --h-toprow: 40px;  /* 顶行：返回按钮 + 搜索框 / 页标题 */
     --h-searchbar: 40px;
     --h-row: 40px;
-    --h-footer: 32px;
+    --h-footer: 36px;
   }
 
   * { box-sizing: border-box; }
@@ -327,13 +327,14 @@
   .panel-footer .dot.ok { background: var(--success); }
   .panel-footer .dot.stub { background: var(--text-4); }
   .panel-footer .dot.err { background: var(--danger); }
-  .panel-footer .keys { display: flex; gap: var(--space-12); margin-left: auto; flex: 0 0 auto; }
+  .panel-footer .keys { display: flex; gap: var(--space-16); margin-left: auto; flex: 0 0 auto; }
+  /* v4.10（D35）：键帽对齐真机截图——说明文本在前、键帽在后；键帽 12/18（盒高
+     20）+ card 白底 + 1px border-strong + 圆角 5 + 左右 8px，弃 mono/mini 灰底 */
   .panel-footer b, .keycap {
-    font-weight: 500; color: var(--text-2); background: var(--chip-bg);
+    font-weight: 500; color: var(--text-2); background: var(--card);
     border: 1px solid var(--border-strong);
-    border-radius: var(--radius-md); padding: 0 var(--space-6);
-    font-family: "Cascadia Code", Consolas, monospace;
-    font-size: var(--font-mini); line-height: var(--lh-mini);
+    border-radius: 5px; padding: 0 var(--space-8);
+    font-size: var(--font-caption); line-height: 18px;
   }
   /* v4.7 修订（真机反馈两轮）：① 描边/下边线 --border → --border-strong（浅色对比不足）；
      ② ↑↓ 合并单键帽；③ 文案统一「返回·隐藏」（D15 文字规格）；
@@ -681,7 +682,7 @@
     <button data-mode="light" data-page-node-id="I0F3kdp2bjXztvBFXivHhW">亮色</button>
     <button data-mode="dark" data-page-node-id="QcDEiiz92pB71IV93qkfmK">暗色</button>
   </div>
-  <p class="eyebrow" data-page-node-id="fpLkL7zs0ObqBBmOVMTlKL">dd-run · CmdPal UI Mockups v4.9</p>
+  <p class="eyebrow" data-page-node-id="fpLkL7zs0ObqBBmOVMTlKL">dd-run · CmdPal UI Mockups v4.10</p>
   <h1 data-page-node-id="9L8F9mN3UyuFLT5dTNiY9z">Fluent 2 设计体系 <em data-page-node-id="UQT9uCqkC6dyICtq0CWQvR">·</em> 全界面详设</h1>
   <p class="sub" data-page-node-id="MX3op44ckD1aHMFNDT6VFJ">
     v4 相对 v3 的实质变化：<b data-page-node-id="0sWPRUFNovWfzUeciNdVZT">从「ueli 像素级复刻 + Fluent 命名」转为「Fluent 2 token 驱动」</b>——
@@ -721,6 +722,12 @@
     已启用列表带删除，替换「勾选列表 + 双输入表单」；
     ③ 扩展页排版——名称独占一行，版本并入第二行「v0.1.0 · id」。
     <b>v4.9（2026-09-06，M6 设置页 Fluent 控件规范化 + 整体字号放大，已实施）：</b>动机（真机截图驱动）：设置页控件整体偏小、且「恢复默认 / 更改」按钮、搜索引擎下拉框、自定义引擎输入框不符合 Fluent 规范。修复 = ① <b>次级按钮 Fluent 规范化</b>——「恢复默认 / 更改 / 删除 / 添加」统一为 Fluent 标准次级按钮（高 32、body1 14、圆角 4、1px border-strong 描边、card 底、hover=row-hover / 按下=row-pressed），此前代码长期漂移为 26px/12px 文字链接，本批代码对齐设计稿 .btn 规范；② <b>ToggleSwitch 几何 36×18 → 40×20</b>（滑块 8，Fluent 标准规格）；③ <b>整体字号放大</b>——设置页标题 16→18、内容区 body 默认 12.5(egui)→14（body1，Fluent 标准，checkbox/ComboBox/TextEdit/弹出菜单项受益）、搜索引擎卡引擎名 12→14 / 模板 10→12 / 错误 10→12、主题单选卡名称 12→14 / 副标题 10→11；④ <b>控件尺寸放大</b>——搜索引擎 ComboBox 180→260（高 32）、自定义引擎输入框高 32 且宽度吃满卡片剩余；⑤ <b>热键「当前组合」改用大号键帽</b>（mono 12 / 高 24，chip 底 + border-strong，与页脚键帽同语言）。决策 D34。
+    <b>v4.10（2026-09-06，页脚键帽样式 + 无边框窗口 chrome，已实施）：</b>动机（真机截图驱动）：
+    ① <b>页脚键帽对齐截图</b>——说明文本在前、键帽在后（原键帽在前废止）；键帽由 mono 10/16 灰底（chip）升级为
+    <b>12/18（盒高 20）+ card 白底 + 1px border-strong + 圆角 5 + 左右 8px</b>，组内帽-文距 6、同组帽距 4、组距 16，
+    页脚总高 32→36；设置页页脚同步「返回 [Esc]」。决策 D35。
+    ② <b>无边框窗口 chrome（D36，v4.11 二次修正）</b>——面板与设置页支持<b>全窗拖拽</b>：<b>不注册任何占屏交互 widget</b>（egui 0.36 全屏 `Sense::drag()` widget 会在指针移动后变 `dragged` 致 `is_decidedly_dragging()` 为真、释放时抑制前台控件 click）；改为按帧手动检测——主键按下落点不在缩放热区且不在上一帧 `interactive_rects_last_pass()` 任一 click/drag 控件矩形内时记候选起点，移动超 4px 发 `StartDrag`。与 <b>8 方向边缘缩放</b>（4 边 6px + 4 角 12px 热区，光标随向，BeginResize 原生循环）共存；
+    手动缩放尺寸<b>仅本显示周期有效</b>（唤起仍居中光标屏并回栈顶页默认尺寸，grill 决策：保持 palette 语义）；最小 460×400；不做双击最大化。
   </p>
 </header>
 
@@ -759,7 +766,7 @@
       <tr data-page-node-id="qMFKHedPiDCYY5zElQGmds">
         <td data-page-node-id="3IlUsYHcQNQ0FXrQ7EDhgF"><b data-page-node-id="wVz2bwi9ebuxBH81TkR7CC">页脚</b></td>
         <td data-page-node-id="GJpUabVBVmy4z3OwavgmuY">32px 单行，bg2 底 + 顶部 1px stroke2</td>
-        <td data-page-node-id="d8DId6v5PM8bbznEytRFy4"><b data-page-node-id="YCguvCmM3Qw1f7dJmDStnm">最左 = 设置齿轮 24×24</b>（v4.2，面板左下角；Root / 子页 / 空态恒定，设置页除外），其后 = 上下文提示，右 = 完整键位图例 + ext_id 徽标（子页）。<b data-page-node-id="AeyOoFSxaAgeA19EOiNVEy">v4.3 修订（2026-09-04 用户决策）：</b>源状态诊断<b data-page-node-id="CusMHBiobIRPWikLRjB5tP">整体移除</b>——stub/err 状态点与聚合 note 不再进页脚；键位图例恒定完整显示（↑↓ 选择 / Enter 执行 / Esc 返回·隐藏）。</td>
+        <td data-page-node-id="d8DId6v5PM8bbznEytRFy4"><b data-page-node-id="YCguvCmM3Qw1f7dJmDStnm">最左 = 设置齿轮 24×24</b>（v4.2，面板左下角；Root / 子页 / 空态恒定，设置页除外），其后 = 上下文提示，右 = 完整键位图例 + ext_id 徽标（子页）。<b data-page-node-id="AeyOoFSxaAgeA19EOiNVEy">v4.3 修订（2026-09-04 用户决策）：</b>源状态诊断<b data-page-node-id="CusMHBiobIRPWikLRjB5tP">整体移除</b>——stub/err 状态点与聚合 note 不再进页脚；键位图例恒定完整显示（Enter 执行 / Esc 返回·隐藏）。<b>v4.11 修订（2026-09-06 用户决策）：</b>移除「↑↓ 选择」提示，减少底部信息冗余。</td>
       </tr>
       <tr data-page-node-id="wPZRdnBzW12JNQmCdaknjL">
         <td data-page-node-id="ipPk9We73RUsDs7bzYSRcf"><b data-page-node-id="tTrQHJiutHDL2Lu5XPJMti">页面切换</b></td>
@@ -785,7 +792,7 @@
       <tr data-page-node-id="DIoxnAFy90Nq3VFB1hxZSE"><td data-page-node-id="U07D1fUeKclxIXVOO0gTGy">D12</td><td data-page-node-id="skotccMArns3PRS0boGC7x">结果行架构</td><td data-page-node-id="yo1VtuKbsuItTiWkCfqIPK">描述改<b data-page-node-id="MCX9VIK6wc4JA8UqeUciFf">纯文本次级文本</b>（caption1/fg3，无徽标底）；类型标签最右（caption1/fg3）</td></tr>
       <tr data-page-node-id="ZoZ1YbdlL7p7dSSsbC6hwa"><td data-page-node-id="kvA5hm5af9wSHjlF5cp5H2">D13</td><td data-page-node-id="LfTFFHocTWMNKH2ebFBM6B">Tag chips（v4.7 废止）</td><td data-page-node-id="9MapxP50DxOOwMn6GZHCZl">原规格：Tag 组件化（圆角 4、subtle 底、caption1、最多 2 个 + 折叠「+N」）。<b>v4.7 废止（2026-09-05 用户决策）：</b>行内 Tag chips 整体移除——默认视图 tags 多余且挤占标题/副标题空间；行右端只保留类型标签，<code>PanelItem.tags</code> 数据字段保留仅不渲染（协议层不改）。</td></tr>
       <tr data-page-node-id="Gbn39rAJHsq1NL1IzSIIPS"><td data-page-node-id="5g8RQVXB1tAieOA0Lv5dvs">D14</td><td data-page-node-id="RlK9omB4um5W7PidhvvZ9l">分组标题</td><td data-page-node-id="iy0mH3pKEYwhwb6ig39tYW">保留，<b data-page-node-id="lmwD9SFWHmYNqxdFWhdHmm">caption1Strong</b> + 上方留白 12；组间用留白、无分隔线</td></tr>
-      <tr data-page-node-id="BRakXlNXeQwHgljSgkMBXp"><td data-page-node-id="lQiuozrStOZAkPEjVAb8fg">D15</td><td data-page-node-id="4ux5nBoeuXN8SP25MQsBQT">页脚规则（v4.3 修订）</td><td data-page-node-id="Tp3fJTlxejaOQ5jKYIj4xX"><b data-page-node-id="EzuUR57sNjcAlC3oh9bwA4">最左 = 设置齿轮</b>（面板左下角，Root/子页/空态恒定，设置页除外）；其后左 = 上下文提示，右 = <b data-page-node-id="ssFOBaJBSdJcBQzb1zftmM">完整键位图例恒定</b>（↑↓ 选择 / Enter 执行 / Esc 返回·隐藏）。<b data-page-node-id="246rLW85N4CIWV6GVGrwTF">v4.3（2026-09-04 用户决策）：</b>状态点/源状态诊断整体移除；键位图例不再随选中态退化为单键帽。</td></tr>
+      <tr data-page-node-id="BRakXlNXeQwHgljSgkMBXp"><td data-page-node-id="lQiuozrStOZAkPEjVAb8fg">D15</td><td data-page-node-id="4ux5nBoeuXN8SP25MQsBQT">页脚规则（v4.3 修订）</td><td data-page-node-id="Tp3fJTlxejaOQ5jKYIj4xX"><b data-page-node-id="EzuUR57sNjcAlC3oh9bwA4">最左 = 设置齿轮</b>（面板左下角，Root/子页/空态恒定，设置页除外）；其后左 = 上下文提示，右 = <b data-page-node-id="ssFOBaJBSdJcBQzb1zftmM">完整键位图例恒定</b>（Enter 执行 / Esc 返回·隐藏）。<b data-page-node-id="246rLW85N4CIWV6GVGrwTF">v4.3（2026-09-04 用户决策）：</b>状态点/源状态诊断整体移除；键位图例不再随选中态退化为单键帽。<b>v4.11（2026-09-06 用户决策）：</b>移除「↑↓ 选择」，底部信息降噪。</td></tr>
       <tr data-page-node-id="BAslV7XXZQld3nAUMP5B4t"><td data-page-node-id="lrVC8PTmHn2bmfWh0JhkU1">D16</td><td data-page-node-id="KtoegdIMHZvqRw5vqYUBbk">本批交付范围</td><td data-page-node-id="m5UajEA3IpvkHmbH1rbBlq"><b data-page-node-id="LwpcUwzo6x5Weg5xGZdugm">只改设计稿</b>，代码与测试留后续批次</td></tr>
       <tr data-page-node-id="qtIzsCTLL9pPqtdI0TwKW8"><td data-page-node-id="RCZVXzOzVnfOeMWVyPG8Ee">D17</td><td data-page-node-id="GftBxJVDLGwQdT8bNcRuAo">搜索框外观</td><td data-page-node-id="D3CG90DpULeSYZGruEixh2"><b data-page-node-id="ihxLF5XAXN7CL8bKpf7GdM">filled-darker</b>：bg3 底、无边框、圆角 4、聚焦时底部 2px brand 下划线</td></tr>
       <tr><td>D18</td><td>菜单项来源（v4.4）</td><td>GUI 层按 <code>result_category</code> <b>静态硬编码映射</b>（10B.2）；<b>零协议字段新增</b>（协议 v1.0 冻结不变），与页脚动作 <code>com.ddrun.</code> 前缀硬编码同口径；第一项恒为默认动作（= 页脚 / Enter 同款）</td></tr>
@@ -796,7 +803,7 @@
       <tr><td>D23</td><td>左键行为（v4.5）</td><td><b>单击 = 切换面板显示/隐藏</b>——与全局热键 Win+Alt+Space 走同一 toggle 入口（行为一致性）；<b>不区分单击/双击</b>（无 500ms 延迟）</td></tr>
       <tr><td>D24</td><td>右键菜单（v4.5）</td><td><b>系统原生菜单</b>（Win32 <code>TrackPopupMenu</code>，Windows 11 系统自渲染）——不自绘 Fluent：托盘菜单宿主是 shell 而非 dd-run 面板，自绘需独立置顶窗口与外点关闭逻辑（成本高收益低）；固定 4 项（10C.2）；<b>退出 = 唯一显式退出入口、不二次确认</b>（低危）；视觉不在本稿 token 治理域（有意偏离记档）；<b>零协议字段新增</b></td></tr>
       <tr><td>D25</td><td>Tooltip（v4.5）</td><td>静态字符串「dd-run — Win+Alt+Space 呼出」；热键可配置化后跟随配置拼接，不做动态查询</td></tr>
-      <tr><td>D26</td><td>本批范围（v4.5）</td><td><b>只改设计稿 + HTML 交互演示</b>；Win32 <code>Shell_NotifyIconW</code> 实施留后续批次（平台层落点，对齐 refactor-layering-plan 的 <code>platform.rs</code> 分层，建议独立 <code>tray.rs</code>）</td></tr>
+      <tr><td>D26</td><td>本批范围（v4.5）</td><td><b data-page-node-id="trayImpl">设计稿已完成（v4.5）；代码于 2026-09-05–06 已实现并接线</b>：新增 <code>crates/dd-gui/src/tray.rs</code>（独立线程 + 隐藏窗口 + <code>Shell_NotifyIconW</code> + 左键 toggle(D23) / 右键 <code>TrackPopupMenu</code> 原生菜单 4 项含退出(D24) + <code>SetForegroundWindow</code>/<code>WM_NULL</code> 防外点不关 + 内嵌 <code>app.ico</code> DPI 档）；<code>main.rs</code> 已 <code>TrayThread::spawn</code> 接线；<code>app/lifecycle.rs::poll_tray</code> 消费 Toggle/OpenSettings/Exit（Exit = <code>ViewportCommand::Close</code>）；左键点击在途旗标消除失焦隐藏与 Toggle 竞态（真机 2026-09-05 反馈）。本行原始「代码留后续批次」已过时，落点即 D26 预期。</td></tr>
       <tr><td>D27</td><td>设置页信息架构（v4.6）</td><td>单列卡片页 → <b>左栏分组导航 + 右侧设置项</b>（Fluent NavigationView 语义）：左栏固定四类「外观 / 常规 / 搜索 / 扩展」，右栏沿用 settings-card 规格。动机：设置项随功能增加持续增多，单列滚动页过长；分组为后续新增配置预留归组位（新配置按类归组即可，不再挤压版式）；栏目 = 纯视图状态，<b>不落盘、不改协议</b>（协议 v1.0 冻结不变）</td></tr>
       <tr><td>D28</td><td>设置页窗口尺寸（v4.6）</td><td><b>640×640</b>——左栏占 168px 后内容区保持 ~440px，与单列 560 宽时的可用宽相当；<b>替换 v4.2 的 560×640</b>（真机反馈 2026-09-04 初定）；根页/子页仍 560×460；进入/返回仍按栈顶 <code>is_settings</code> 帧间 diff 放大/缩回（00.1）</td></tr>
       <tr><td>D29</td><td>本批范围（v4.6）</td><td><b>只改设计稿 + HTML 交互演示</b>；egui <code>draw_settings</code> 左右布局实施留后续批次（落点 <code>crates/dd-gui/src/ui/settings_view.rs</code>）；同批补齐「搜索引擎」卡片的演示与规格（代码 2026-09-05 已实现、此前未进稿）</td></tr>
@@ -804,6 +811,8 @@
       <tr><td>D31</td><td>材质效果与回退（v4.7）</td><td>效果 = Win11 22H2+ <code>DWMWA_SYSTEMBACKDROP_TYPE</code>（云母 = MAINWINDOW、亚克力 = TRANSIENTWINDOW、关 = NONE）+ 材质生效时面板背景双透明（clear_color + panel_fill，亮暗两套 Style 同步注册）；<b>失败回退 = 保持不透明面板</b>（22621 以下 API 报错即降级，记日志一次、不阻断，区别热键 fail-fast）；材质明暗随主题（DWMWA_USE_IMMERSIVE_DARK_MODE 跟随亮暗设置）</td></tr>
       <tr><td>D32</td><td>本批范围（v4.7）</td><td><b>只改设计稿 + HTML 交互演示</b>（用户要求设计确认后再实施）；实施落点：<code>dd-gui/src/settings.rs</code>（backdrop 模型）/ <code>platform.rs</code>（DwmSetWindowAttribute）/ <code>main.rs</code>（with_transparent + HWND 捕获）/ <code>ui/settings_view.rs</code>（材质开关卡）/ <code>theme.rs</code>(双 Style 透明化)</td></tr>
       <tr><td>D34</td><td>设置页 Fluent 控件规范化 + 字号放大（v4.9）</td><td>真机截图驱动修复：① <b>次级按钮</b>（恢复默认/更改/删除/添加）统一 Fluent 标准次级按钮——高 32、body1 14、圆角 4（--radius-md）、1px --border-strong 描边、--card 底、三态 hover/按下（此前代码漂移为 26px 高 12px 文字，本批对齐设计稿 .btn）；② <b>ToggleSwitch 几何 36×18 → 40×20</b>（滑块半径 8，Fluent ToggleSwitch 标准规格，占位态 .switch 同步）；③ <b>整体字号放大</b>——设置页标题 16→18、内容区 body 12.5(egui 默认)→14（body1，影响 checkbox/ComboBox/TextEdit/弹出菜单项）、搜索卡引擎名 12→14/模板 10→12/错误 10→12、主题单选卡名称 12→14/副标题 10→11；④ <b>控件尺寸</b>——搜索 ComboBox 宽 180→260 且高 32、自定义引擎输入框高 32 吃满剩余；⑤ <b>热键值大号键帽</b>（mono 12 / 高 24，chip 底 + border-strong）。协议 v1.0 冻结零新增；代码落点 <code>ui/settings_view.rs</code>（fluent_button / draw_switch_fn / draw_keycap / 字号与尺寸）。</td></tr>
+      <tr><td>D35</td><td>页脚键帽样式（v4.10）</td><td>真机截图（ueli 风格页脚）驱动：<b>组内顺序 = 说明文本在前、键帽在后</b>（原「键帽在前」废止，全部页脚实例与 egui 实现同步翻转）；键帽规格 mono 10/16 chip 灰底圆角 4 → <b>proportional 12/18（盒高 20）、card 白底、1px --border-strong 描边、圆角 5、左右 padding 8</b>；说明文字色 text-3 → text-2；同组帽距 2→4、帽-文距 4→6、组距 12→16；页脚总高 32→36（--h-footer）。<b>内容口径 v4.11 修订</b>：移除「↑↓ 选择」，仅保留 Enter 执行 / Esc 返回·隐藏（用户决策：减少底部信息冗余）。代码落点 <code>theme.rs</code>（KEYCAP_* 常量）/ <code>ui/widgets.rs</code>（paint_keycap / paint_keys_at）/ <code>ui/panel.rs</code>。</td></tr>
+      <tr><td>D36</td><td>无边框窗口 chrome（v4.10，v4.11 二次修正）</td><td><code>with_decorations(false) + with_resizable(false)</code> 导致面板/设置页<b>不可拖动、不可缩放</b>。修复：① <b>全窗拖拽</b>——<b>不注册任何占屏交互 widget</b>（egui 0.36 全屏 <code>Sense::drag()</code> widget 会在指针移动后变 <code>dragged</code> 致 <code>is_decidedly_dragging()</code> 为真、释放时抑制前台控件 click，表现为「能拖窗但其他全点不动」）；改为<b>按帧手动检测</b>：主键按下落点不在缩放热区且不在上一帧 <code>interactive_rects_last_pass()</code> 任一 click/drag 控件矩形内时记候选起点，移动超 4px 发 <code>ViewportCommand::StartDrag</code>（<code>app.drag_candidate: Option&lt;Pos2&gt;</code> + <code>DRAG_THRESHOLD</code>）；② <b>8 方向缩放</b>——<code>with_resizable(true)</code> + 纯函数 hit-test（4 边 6px + 4 角 12px 八分区）hover 换光标（↔/↕/⤡/⤢）、按下发 <code>ViewportCommand::BeginResize(dir)</code>（egui 0.36 已核支持，winit Windows 无边框可用）；③ <b>守卫</b>——原生模态循环标志（BeginResize 后至 <code>primary_down()==false</code> 才清除）防重复触发，循环期间拖拽一并禁用；④ <b>尺寸语义（grill 决策）</b>——手动缩放仅本显示周期有效，<code>show()</code> 唤起重置栈顶页默认尺寸并仍居中光标屏；最小 460×400（<code>with_min_inner_size</code>）；⑤ 不做双击最大化。代码落点 <code>ui/chrome.rs</code>（新）/ <code>main.rs</code> / <code>app/lifecycle.rs</code> / <code>app/mod.rs</code>。</td></tr>
     </table>
 
     <h3 data-page-node-id="qIjrLO1eIcZw1mWFYlpkAw">00.3 有意偏离清单（P2：明确不改，并记录理由）</h3>
@@ -926,9 +935,9 @@
           <span class="gear glyph" title="设置" data-page-node-id="pOuu5i0A32OSjm65ymhmW4">&#xE713;</span>
           <span data-page-node-id="CA6MgsHtagqi7s9R3t1mik">执行</span>
           <span class="keys" data-page-node-id="nSpl1xaDu9nsaigadIhfhd">
-            <span data-page-node-id="8j9aUO2BLqrjCjOMdtSDow"><b data-page-node-id="5YNs1pkbl0i2afVYVpOJ6i">↑↓</b> 选择</span>
-            <span data-page-node-id="5hzLhKpgp03SNfJD5EDn5T"><b data-page-node-id="YNR7BzBSvTChlYb7TJxDIJ">Enter</b> 执行</span>
-            <span data-page-node-id="xhBfsR2zJbBJAbBO9S80am"><b data-page-node-id="vNuI3EVJnW8iZP1WDMclZz">Esc</b> 返回·隐藏</span>
+            <span data-page-node-id="8j9aUO2BLqrjCjOMdtSDow">选择 <b data-page-node-id="5YNs1pkbl0i2afVYVpOJ6i">↑↓</b></span>
+            <span data-page-node-id="5hzLhKpgp03SNfJD5EDn5T">执行 <b data-page-node-id="YNR7BzBSvTChlYb7TJxDIJ">Enter</b></span>
+            <span data-page-node-id="xhBfsR2zJbBJAbBO9S80am">返回·隐藏 <b data-page-node-id="vNuI3EVJnW8iZP1WDMclZz">Esc</b></span>
           </span>
         </div>
       </div>
@@ -1039,9 +1048,9 @@
           <span class="gear glyph" title="设置" data-page-node-id="vNFYkKCiyAGT34yzLDveGe">&#xE713;</span>
           <span data-page-node-id="qKtrixyRmvVtKjmSNxuvIR">打开应用</span>
           <span class="keys" data-page-node-id="aZt3BXSSTcGv7L7WfnKSh8">
-            <span data-page-node-id="wmD8ZWyOCNrLVds3nNzEQU"><b data-page-node-id="SVgHkuvEfis0y8Pt1jBStk">↑↓</b> 选择</span>
-            <span data-page-node-id="8SG4f094fRNsxNA8Uut78y"><b data-page-node-id="QmK0SRG93gU4KibVPJqzru">Enter</b> 执行</span>
-            <span data-page-node-id="lOsK0a46d3xNMFwYee4KO8"><b data-page-node-id="NCCjVj0FP9dD24hBydDAF5">Esc</b> 返回·隐藏</span>
+            <span data-page-node-id="wmD8ZWyOCNrLVds3nNzEQU">选择 <b data-page-node-id="SVgHkuvEfis0y8Pt1jBStk">↑↓</b></span>
+            <span data-page-node-id="8SG4f094fRNsxNA8Uut78y">执行 <b data-page-node-id="QmK0SRG93gU4KibVPJqzru">Enter</b></span>
+            <span data-page-node-id="lOsK0a46d3xNMFwYee4KO8">返回·隐藏 <b data-page-node-id="NCCjVj0FP9dD24hBydDAF5">Esc</b></span>
           </span>
         </div>
       </div>
@@ -1056,7 +1065,7 @@
       <tr data-page-node-id="G4lGO8EBfsMAeNYIaeUxNr"><td data-page-node-id="zcoL5fGsFIKOLEHzRvL05C">类型标签</td><td data-page-node-id="34V4yB3T0BGYEGM4EXAeQT"><code data-page-node-id="OV0hx7M2afkQHIaGe1KsZi">result_category = 应用</code>（聚合器按 ext_id 去前缀推导，§6.2）。</td></tr>
       <tr data-page-node-id="tgcupzlU2mZbmD2cZ7aLcq"><td data-page-node-id="nbdB035YZIaLinDPsBaim7">过滤</td><td data-page-node-id="4D9SmjUkp4sv8CorWAxgfs">输入即过滤（名称前缀/子串匹配，现行 <code data-page-node-id="TXACHRPofGU2huRgGY5lhV">PanelState</code> 过滤语义）；无匹配时走 02 章兜底/空态。</td></tr>
       <tr data-page-node-id="CvW45vrR3PDiW9eKKHcQcu"><td data-page-node-id="tYpRclCSq5ZCyDuRievwMA">页脚</td><td data-page-node-id="YHC9TSTL03oLtOuzDYJGxH">左 = 齿轮 + 「打开应用」（选中项动作，§6.3 映射表）；右 = 完整键位图例；<b data-page-node-id="Pt4GUU8X9CxysLEC4gQ6yS">v4.3 修订：无源状态诊断</b>（stub 状态点/note 已移除，见 D15 修订）。</td></tr>
-      <tr data-page-node-id="p2uCwAh9Rm91JWnvXwdv1Y"><td data-page-node-id="Q4245538RytDTYBKOTTZVB">键帽渲染（v4.3 补 / v4.7 修订）</td><td data-page-node-id="TGFB8Ag3I7HKCrYmbO59Jj">页脚所有元素<b data-page-node-id="i5VM9TCO2Wl1yNWFwx47Y6">手动锚定行中心线</b>（egui 自动居中在 24px 齿轮 / 16px 键帽 / 文本混合高度下逐项漂移，真机 2026-09-04 修复）；键帽下边 2px 画在边框盒<b data-page-node-id="Gw9a0ts1lFvMSzPPnsSZ9X">内部</b>（旧实现多出 0.5px 悬空线视觉上像阴影，已修）。<b>v4.7 修订（2026-09-05 用户反馈）：</b>① <code>↑</code><code>↓</code> 合并为<b>单枚键帽「↑↓」</b>（两枚窄键帽各自四边描边视觉碎裂成「|||」）；② 键帽描边与下边线 <code>--border</code> → <b><code>--border-strong</code></b>（浅色主题下 #e0e0e0 贴 #fafafa 页脚几乎不可见）；③ 文案统一 D15 文字规格「Esc 返回·隐藏」（原「返回 / 隐藏」「隐藏」并存）；④ <b>下边线统一 1px</b>——原 2px 下边条在 16px 小键帽上明显重于三边描边（用户反馈"下划线比其他方向粗"），扁平化为四边等宽（原"下边 2px 画入边框盒内部"的悬空线修复随之失效删除）。</td></tr>
+      <tr data-page-node-id="p2uCwAh9Rm91JWnvXwdv1Y"><td data-page-node-id="Q4245538RytDTYBKOTTZVB">键帽渲染（v4.3 补 / v4.7 修订）</td><td data-page-node-id="TGFB8Ag3I7HKCrYmbO59Jj">页脚所有元素<b data-page-node-id="i5VM9TCO2Wl1yNWFwx47Y6">手动锚定行中心线</b>（egui 自动居中在 24px 齿轮 / 16px 键帽 / 文本混合高度下逐项漂移，真机 2026-09-04 修复）；键帽下边 2px 画在边框盒<b data-page-node-id="Gw9a0ts1lFvMSzPPnsSZ9X">内部</b>（旧实现多出 0.5px 悬空线视觉上像阴影，已修）。<b>v4.7 修订（2026-09-05 用户反馈）：</b>① <code>↑</code><code>↓</code> 合并为<b>单枚键帽「↑↓」</b>（两枚窄键帽各自四边描边视觉碎裂成「|||」）；② 键帽描边与下边线 <code>--border</code> → <b><code>--border-strong</code></b>（浅色主题下 #e0e0e0 贴 #fafafa 页脚几乎不可见）；③ 文案统一 D15 文字规格「Esc 返回·隐藏」（原「返回 / 隐藏」「隐藏」并存）；④ <b>下边线统一 1px</b>——原 2px 下边条在 16px 小键帽上明显重于三边描边（用户反馈"下划线比其他方向粗"），扁平化为四边等宽（原"下边 2px 画入边框盒内部"的悬空线修复随之失效删除）。<b>v4.10 修订（D35）：</b>键帽升级为 proportional 12/18（盒高 20）、card 白底、圆角 5、左右 8px，<b>组内顺序翻转 = 说明在前、键帽在后</b>；页脚总高 32→36（16px 键帽表述随之更新为 20px 盒高）。</td></tr>
     </table>
   </section>
 
@@ -1099,7 +1108,7 @@
         <div class="panel-footer" data-page-node-id="TcU0wd6B5HXZhPANzQAVTn">
           <span class="gear glyph" title="设置" data-page-node-id="EaWWk5dZ1zDincqnZ33Eyk">&#xE713;</span>
           <span data-page-node-id="4RjD37TnoNTGzk6OpMVQpx">打开网页</span>
-          <span class="keys" data-page-node-id="SSFkv0r1JX21DNmjB7wfxa"><span data-page-node-id="LhZRUbIklBUp5CFASkZxQi"><b data-page-node-id="VtfdfrJhyFQFFtGmCbLmz4">Enter</b> 执行</span><span data-page-node-id="geFIn8nAxyqs6BvH8H86Fc"><b data-page-node-id="IJa3buUdudWzSgODcZ12HR">Esc</b> 返回·隐藏</span></span>
+          <span class="keys" data-page-node-id="SSFkv0r1JX21DNmjB7wfxa"><span data-page-node-id="LhZRUbIklBUp5CFASkZxQi">执行 <b data-page-node-id="VtfdfrJhyFQFFtGmCbLmz4">Enter</b></span><span data-page-node-id="geFIn8nAxyqs6BvH8H86Fc">返回·隐藏 <b data-page-node-id="IJa3buUdudWzSgODcZ12HR">Esc</b></span></span>
         </div>
       </div>
       <div class="panel" data-page-node-id="IjHz8GtD2yiYsBjUwEV3eh">
@@ -1116,7 +1125,7 @@
         </div>
         <div class="panel-footer" data-page-node-id="pm2jvKJXgVcI4JgnfySPlv">
           <span class="gear glyph" title="设置" data-page-node-id="nhuF3J03qiCv1HvN6UgwOd">&#xE713;</span>
-          <span class="keys" style="margin-left:0" data-page-node-id="kiDTbUYIxhJxdXoR5frwnm"><span data-page-node-id="PEmiYpFyWU8eNLCVmOcous"><b data-page-node-id="gTkRUkhEuBLSV0kOSQ42Z7">Esc</b> 返回·隐藏</span></span>
+          <span class="keys" style="margin-left:0" data-page-node-id="kiDTbUYIxhJxdXoR5frwnm"><span data-page-node-id="PEmiYpFyWU8eNLCVmOcous">返回·隐藏 <b data-page-node-id="gTkRUkhEuBLSV0kOSQ42Z7">Esc</b></span></span>
         </div>
       </div>
       <div class="caption" data-page-node-id="LfKUjJk4I74brIzSdO8eHH">左：自动兜底列表（常态） ｜ 右：纯空态（无兜底可用时）</div>
@@ -1323,8 +1332,8 @@
     <table data-page-node-id="v7JGEpPR4KcaQAQfpgMgFL">
       <tr data-page-node-id="6QdSRq2GhoS3ipPLcJsnbz"><th data-page-node-id="dKItCZLnphIdVCFRql2zBZ">项</th><th data-page-node-id="aLYP7j4PXBOZLXE5mRFEab">规格</th></tr>
       <tr data-page-node-id="G88cETsoePnXUlh2c2z41F"><td data-page-node-id="gt89h1IPgrSYC5ga3eOrJe">常态</td><td data-page-node-id="sXMY5vJHvmy3FlQFR42yjC">列表有选中项时，页脚左侧显示当前选中项的默认动作文本；右侧<b data-page-node-id="RD2d40chpzf3wE8hWh2ADg">恒定完整键位图例</b>（v4.3 修订，不再退化为单键帽）。</td></tr>
-      <tr data-page-node-id="YF20dr6tFBCTjxKQCx5KH0"><td data-page-node-id="lmI4kWKfqSLHKAnw1VcDru">示例</td><td data-page-node-id="27MDqXcGrC676kDSg22D4O">apps 项 → 左侧 <b data-page-node-id="HAr9CgEpCedAGY4fSpPvEf">打开应用</b>；websearch 项 → <b data-page-node-id="p4Oq2BTkBGUqpYEN0lWhSJ">打开网页</b>；calc 项 → <b data-page-node-id="x1Yq3X7CtMvxW1svBbbBtG">计算</b>；<code data-page-node-id="YqPpmbnHE00lWN0zDMViCY">CommandRef::Page</code> 项 → <b data-page-node-id="FdQHwrsuUgKhzl9iUZGFod">进入</b>；右侧恒为 ↑↓ 选择 / Enter 执行 / Esc 返回·隐藏。</td></tr>
-      <tr data-page-node-id="JvCLBWlYi2X9sf7YIVqKXd"><td data-page-node-id="PdapUobR1vhsB6Cp2QeS0b">无选中 / 空态</td><td data-page-node-id="KX47BVeouCSqUaVWvvihi3">显示全局键位图例（↑↓ 选择 / Enter 执行 / Esc 返回/隐藏）。<b data-page-node-id="swcqz0Hp9lXeNfVJVFCl0M">v4.3 修订（2026-09-04 用户决策）：</b>源健康诊断整体移除——stub/err 状态点与聚合 note 不再进页脚（原 C8 的"仅异常时显示"规格废止）。</td></tr>
+      <tr data-page-node-id="YF20dr6tFBCTjxKQCx5KH0"><td data-page-node-id="lmI4kWKfqSLHKAnw1VcDru">示例</td><td data-page-node-id="27MDqXcGrC676kDSg22D4O">apps 项 → 左侧 <b data-page-node-id="HAr9CgEpCedAGY4fSpPvEf">打开应用</b>；websearch 项 → <b data-page-node-id="p4Oq2BTkBGUqpYEN0lWhSJ">打开网页</b>；calc 项 → <b data-page-node-id="x1Yq3X7CtMvxW1svBbbBtG">计算</b>；<code data-page-node-id="YqPpmbnHE00lWN0zDMViCY">CommandRef::Page</code> 项 → <b data-page-node-id="FdQHwrsuUgKhzl9iUZGFod">进入</b>；右侧恒为 Enter 执行 / Esc 返回·隐藏。</td></tr>
+      <tr data-page-node-id="JvCLBWlYi2X9sf7YIVqKXd"><td data-page-node-id="PdapUobR1vhsB6Cp2QeS0b">无选中 / 空态</td><td data-page-node-id="KX47BVeouCSqUaVWvvihi3">显示全局键位图例（Enter 执行 / Esc 返回/隐藏）。<b data-page-node-id="swcqz0Hp9lXeNfVJVFCl0M">v4.3 修订（2026-09-04 用户决策）：</b>源健康诊断整体移除——stub/err 状态点与聚合 note 不再进页脚（原 C8 的"仅异常时显示"规格废止）。</td></tr>
       <tr data-page-node-id="vaZ6NkABvU5tuPmKBOecV3"><td data-page-node-id="44NmcJCCF0FrzsUrSXvKsH">动作来源</td><td data-page-node-id="zMMbpZHTHRslPqOl7jFL8K">动词由 <code data-page-node-id="ElxTO3IIUdWdpuPyBwkRGD">CommandRef</code> 决定（<code data-page-node-id="ZJ4ADs40MhPXxLSeZZSUE6">Invoke</code>→执行类、<code data-page-node-id="frzqqBOejqEj1RwOqT4HEn">Page</code>→进入类），宾语由 <code data-page-node-id="74xZIvxRAsWgtlz91GCLbS">ext_id</code> 决定，<b data-page-node-id="9B4HWlE4SHzVF6UgRpteq6">GUI 层硬编码映射表</b>：<code data-page-node-id="o0VI9F8O03hCIesSdA1QSe">apps</code>→打开应用、<code data-page-node-id="9C8LfRhvJFIMJfllgDl9iM">system</code>→打开设置、<code data-page-node-id="DyKqDCOkQYytib7XvGg6Tc">shell</code>→运行命令、<code data-page-node-id="Ns8B1bbuHRI1yKZQitMVOr">websearch</code>→打开网页、<code data-page-node-id="5UK6TuJ1j4PuVFvfP9xxaH">calc</code>→计算；第三方未命中→执行。映射表需单测覆盖（C7）。</td></tr>
       <tr data-page-node-id="iHtYJCF5gKWvk7nzjBr2mV"><td data-page-node-id="sbrNb4aN51FS3gFmJ6Swju">高度（v4）</td><td data-page-node-id="cg0QIX2VLGzt1SEw3Kib0D">严格 <b data-page-node-id="c1aFkOEvcqZH9TOzISG2PC">32px</b>，padding <b data-page-node-id="mmB1xXrPqFED6xlF0XWMvG">8px 16px</b>，字号 caption1 12/16。<b data-page-node-id="4g5loBVAd10fEdHkj1L6S5">绘制约束</b>：必须用 <code data-page-node-id="wBufsonn2Ov36cJKkApMnL">ui.horizontal</code> 强制单行 + <code data-page-node-id="meNy8Aw6wh2oehdMJTbs3l">ui.set_min_height(32)</code>，<b data-page-node-id="kI6PLIwOApbp31x4G6CWbZ">禁止</b> <code data-page-node-id="zwnF0LOVsWwt0SaPjB3YWd">horizontal_wrapped</code>（否则 5 源会撑回 72px）。无选中时仅显示键位图例，高度不变。</td></tr>
       <tr data-page-node-id="REJtbL456ifMivymeuq33N"><td data-page-node-id="BrEcIqZyrBP1pwC0dDAOKc">底 / 边</td><td data-page-node-id="aNgsZK4If6OBs51PlyrUUO">背景 <code data-page-node-id="NYeuVb7QKoAZEcl9H8W9M4">--panel-2</code>（bg2），顶部 1px <code data-page-node-id="s5QOGD8JRzP86AnEh462VP">--border</code>（stroke2）；三页统一（00.1）。</td></tr>
@@ -1406,7 +1415,7 @@
           <span class="gear glyph" title="设置" data-page-node-id="JAt6sHhDC8FGt7m6g2Adc2">&#xE713;</span>
           <span data-page-node-id="WAlH3EBoN8QcW82tCRdPOS">打开应用</span>
           <span class="keys" data-page-node-id="igojyZEDFwbr4etGnIQN52">
-            <span data-page-node-id="mWZHGOKqJx7xV1huDQ4NAr"><b class="keycap" data-page-node-id="UVBCIHRGF3DkLJI99XhUmC">Esc</b> 返回上级</span>
+            <span data-page-node-id="mWZHGOKqJx7xV1huDQ4NAr">返回上级 <b class="keycap" data-page-node-id="UVBCIHRGF3DkLJI99XhUmC">Esc</b></span>
             <span class="ext-chip" style="margin-left:0" data-page-node-id="pU5QGM9gS3Bk3enZb45PUp">com.ddrun.apps</span>
           </span>
         </div>
@@ -1432,7 +1441,7 @@
           <span class="gear glyph" title="设置" data-page-node-id="aUA9KkEAyh4EVIkgEmQnZO">&#xE713;</span>
           <span data-page-node-id="we9tHf3HGFETIIBABE3pPG">正在加载…</span>
           <span class="keys" data-page-node-id="ac2gE8mwdDluOZ4cdJm785">
-            <span data-page-node-id="uIBuLxCHiNXMi0CjEzsIvd"><b class="keycap" data-page-node-id="ORh9YGRruLkY9jhF6lMuMl">Esc</b> 返回上级</span>
+            <span data-page-node-id="uIBuLxCHiNXMi0CjEzsIvd">返回上级 <b class="keycap" data-page-node-id="ORh9YGRruLkY9jhF6lMuMl">Esc</b></span>
             <span class="ext-chip" style="margin-left:0" data-page-node-id="yhfKflRHC1CpJXezpWBPwT">com.ddrun.apps</span>
           </span>
         </div>
@@ -1639,7 +1648,7 @@
         </div>
         <div class="panel-footer" data-page-node-id="K0QcZP2bS755CBpF1z4qsJ">
           <span data-page-node-id="RVku8unOnYqaKjvuB0zHlu">修改主题立即生效并持久化</span>
-          <span class="keys" data-page-node-id="uT0cEgNZ25MTKBSHyXDAoK"><span data-page-node-id="dJfqf0ITAEghK3jJ4LnEFh"><b class="keycap" data-page-node-id="Nj5DGYe0ktpWKR0oEyxKEY">Esc</b> 返回</span></span>
+          <span class="keys" data-page-node-id="uT0cEgNZ25MTKBSHyXDAoK"><span data-page-node-id="dJfqf0ITAEghK3jJ4LnEFh">返回 <b class="keycap" data-page-node-id="Nj5DGYe0ktpWKR0oEyxKEY">Esc</b></span></span>
         </div>
       </div>
     </div>
@@ -1856,9 +1865,9 @@
           <span class="gear glyph" title="设置">&#xE713;</span>
           <span>执行</span>
           <span class="keys">
-            <span><b>↑↓</b> 选择</span>
-            <span><b>Enter</b> 执行</span>
-            <span><b>Esc</b> 返回·隐藏</span>
+            <span>选择 <b>↑↓</b></span>
+            <span>执行 <b>Enter</b></span>
+            <span>返回·隐藏 <b>Esc</b></span>
           </span>
         </div>
         <div class="ctx-menu" id="ctxDemoMenu"></div>
@@ -2019,9 +2028,9 @@
               <span class="gear glyph" title="设置">&#xE713;</span>
               <span>执行</span>
               <span class="keys">
-                <span><b>↑↓</b> 选择</span>
-                <span><b>Enter</b> 执行</span>
-                <span><b>Esc</b> 返回·隐藏</span>
+                <span>选择 <b>↑↓</b></span>
+                <span>执行 <b>Enter</b></span>
+                <span>返回·隐藏 <b>Esc</b></span>
               </span>
             </div>
           </div>
@@ -2049,7 +2058,7 @@
             </div>
             <div class="panel-footer">
               <span>设置</span>
-              <span class="keys"><span><b>Esc</b> 返回</span></span>
+              <span class="keys"><span>返回 <b>Esc</b></span></span>
             </div>
           </div>
         </div>
@@ -2336,7 +2345,7 @@
       <tr data-page-node-id="rawpWyDl7j8VtHFt8XGlIe"><td data-page-node-id="cFpFA1Z9gprPCWlS9rANdN">A6</td><td data-page-node-id="5h42FFbHSriAKi9qZyKHL1">内容区填满（v4.1）</td><td data-page-node-id="ES9rp0roqXy2c9G5Vj0EWh">07/02 短内容场景下，内容区 flex:1 撑满，<b data-page-node-id="ZitJflVDrYv8vFZg4fPOD0">页脚紧贴面板底部</b>、下方无大块空白（像素测量：footer.bottom == panel.bottom - 1px 描边）。</td></tr>
       <tr data-page-node-id="pADqVJCh9Bw67sZt7Wp9il"><td data-page-node-id="7gN58nwhoOzkJ3DumLrpIe">B1</td><td rowspan="8" data-page-node-id="S2QglOUfhMReq7aMXL4toz"><b data-page-node-id="KqeqVEgGfWtDDJwgZWKiCC">08 设置页</b><br>（v4.6 重构<br>v4.7 材质）</td><td data-page-node-id="w8jaBYnObACbhVAUU4bAfR">radio-card 选中态</td><td data-page-node-id="ghb1C04dMCOD5rSfHjyGmA">选中卡 2px accent 边框 + accent-soft 底 + 圆点填充；未选中 1px border-strong；三卡等宽。</td></tr>
       <tr data-page-node-id="ScaGSzB4m0S8qRYRq2hp8m"><td data-page-node-id="gmxGEr3XqHQ6MF9Nlmu7Yj">B2</td><td data-page-node-id="TM0KvK80R3pqE7FQEJzDT1">选择即生效</td><td data-page-node-id="W6xym2ZrDv4qDkhEaiKQEv">点击卡片主题立即切换并持久化（重启后保持）；与现行 apply_theme_pref 行为一致。</td></tr>
-      <tr data-page-node-id="MelmR4xAr1pz5juFZD7YTk"><td data-page-node-id="2pehWCYhL4UEvhzS3vnEmM">B3</td><td data-page-node-id="b7NqT4Vin42YTz7WA1l71g">占位项禁用</td><td data-page-node-id="lOGxpMEvt44UCv50yyEUsW">热键/自启/扩展管理三项名称·图标为 <code data-page-node-id="d0WDjbbqzaAXz7WjbUX16H">--text-disabled</code> 色（非透明度叠加）；点击无任何反应、不写配置文件。</td></tr>
+      <tr data-page-node-id="MelmR4xAr1pz5juFZD7YTk"><td data-page-node-id="2pehWCYhL4UEvhzS3vnEmM">B3</td><td data-page-node-id="b7NqT4Vin42YTz7WA1l71g">占位项禁用</td><td data-page-node-id="lOGxpMEvt44UCv50yyEUsW"><b data-page-node-id="c0DEm0ck1tray">已废止（2026-09-06 代码核实）</b>：原设计 v4.6 将此三项设为 <code data-page-node-id="d0WDjbbqzaAXz7WjbUX16H">--text-disabled</code> 禁用占位、点击无反应；<b>实际实现已超越该占位 spec</b>——`ui/settings_view.rs` 卡2/卡3 做成功能态（全局热键「更改/恢复默认」捕获、开机自启功能开关、扩展启停），且即时生效 + 落盘（见 `implementation.md` 6.3 实施记档）。本行保留为设计演进历史，不再作为验收阻塞项。</td></tr>
       <tr><td>B4</td><td>左栏几何（v4.6，D27）</td><td>左栏宽 168、项高 36、圆角 4、图标 16 + 文字 14/20；选中 = row-selected 实色底 + 左缘 3×16 accent 指示条 + 图标/文字转 text；hover = row-hover 底（像素测量，亮暗双主题）。</td></tr>
       <tr><td>B5</td><td>栏目切换与映射（v4.6）</td><td>四栏与 8.1「栏目与内容映射」逐项一致；点击栏目即时切换右栏内容；默认选中「外观」，每次进入设置页重置；栏目状态不落盘、不改协议。</td></tr>
       <tr><td>B6</td><td>窗口尺寸（v4.6，D28）</td><td>设置页 640×640、返回缩回 560×460（栈顶 is_settings 帧间 diff，无跳动）；顶行 40 高与 01/07 同构；左栏四项恒可见、内容区独立滚动、顶行固定。</td></tr>
@@ -2344,6 +2353,8 @@
       <tr><td>B8</td><td>材质效果与回退（v4.7，D31）</td><td>Win11 22H2+：云母/亚克力材质肉眼可辨（面板背景透出系统材质），明暗随主题；全关 = 不透明面板；22621 以下或 API 失败 = 回退不透明、日志一次、启动与设置链路不受阻；材质切换即时生效（无需重启）。</td></tr>
       <tr><td>B9</td><td>次级按钮 Fluent 规范（v4.9，D34）</td><td>设置页「恢复默认 / 更改 / 删除 / 添加」均为 Fluent 标准次级按钮（高 32、body1 14、圆角 4、1px --border-strong 描边、--card 底、hover/按下三态）；点击热区与视觉与截图一致，不再呈文字链接观感；亮色主题下描边清晰可见（#e0e0e0 贴 #fafafa 仍可读）。</td></tr>
       <tr><td>B10</td><td>控件几何与字号（v4.9，D34）</td><td>ToggleSwitch <b>40×20</b>（滑块半径 8）；设置页标题 18、内容区 body 14（checkbox/ComboBox/TextEdit/弹出菜单项统一受益）、搜索卡引擎名 14 / 模板 12 / 错误 12、主题单选卡名称 14 / 副标题 11；搜索引擎 ComboBox 宽 260 高 32、自定义输入框高 32 吃满剩余；热键「当前组合」大号键帽 mono 12 / 高 24（chip 底 + border-strong）。</td></tr>
+      <tr><td>B11</td><td>页脚键帽（v4.10，D35）</td><td>全部页脚（Root / 空态 / fallback / 子页 / 设置页）键帽 = proportional 12、盒高 20、card 白底 + 1px border-strong + 圆角 5、左右 8px；<b>说明在前、键帽在后</b>；组距 16 / 帽-文距 6 / 帽距 4；说明文字 text-2；页脚总高 36（亮暗双主题）；键位内容与语义不变。</td></tr>
+      <tr><td>B12</td><td>窗口拖拽与缩放（v4.10，D36，v4.11 修正）</td><td>面板与设置页任意非交互空白按住左键可拖动窗口（齿轮/列表行/输入框/开关/按钮点击与滚动零回归——v4.11 修正：按帧手动检测空白区，不再用全屏 drag widget，前台控件 click 完全不受干扰）；8 方向边缘热区（边 6px / 角 12px）光标随向切换，拖拽缩放平滑生效，最小 460×400；设置页进出尺寸切换不与缩放互锁报错；Esc 隐藏、热键唤起（居中光标屏 + 回默认尺寸）零回归；失焦隐藏、托盘、材质链路零回归。</td></tr>
       <tr data-page-node-id="NMw0PNkLEArYDBQLkeZPfW"><td data-page-node-id="mAgYgX0pkpeyy2n852Ioyz">C1</td><td rowspan="3" data-page-node-id="17BS5vSvZ58glwGrUZ5CeK"><b data-page-node-id="cU1yqCXIO6Rjz5L1FCkXJi">09 Toast / 10 Dialog</b></td><td data-page-node-id="ndWLbx0VvHHSrXXHUJIpfU">Toast 几何与时长</td><td data-page-node-id="9cyWjf2esMRdPnByksBhuA">card 表面 + shadow16；底部居中偏移 48px；圆角 8；默认 2s、失败路径 3s 自动消失；同一时刻至多 1 条。</td></tr>
       <tr data-page-node-id="R2db4e3vDdYCg8tHoxN0to"><td data-page-node-id="CVvyURE1AgLn7sPYr720CF">C2</td><td data-page-node-id="v3OfZxHS5krzHbtp510OZM">Toast 意图图标</td><td data-page-node-id="QB1Vqytl2QzaGXU1sbqGl1">success/error/info 图标与语义色逐项正确（未接意图字段前默认 info）。</td></tr>
       <tr data-page-node-id="OY1dzpuGqO4v0IH0uDzkGJ"><td data-page-node-id="6kOi3BgxEqb7OCl2ESiyop">C3</td><td data-page-node-id="0ZFCTEBP0fLWoA8pCrNJyx">Dialog 行为</td><td data-page-node-id="bBKiGyGof7E80yVt08iYS8">宽 420px 居中 + shadow64；遮罩 = blackAlpha .50（暗）/.40（亮）；Enter=确认、Esc=取消、点击遮罩=取消（遮罩实施后）；critical 确认按钮为 danger 底。</td></tr>

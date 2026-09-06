@@ -123,7 +123,7 @@ mod tests {
     fn tick_refresh_top_triggers_restart_aggregation() {
         let mut app = make_app();
         app.aggregating = false; // 明确初始态，验证顶层分支确实触发重聚合
-        // 模拟已收到顶层 items_changed 且合并窗口已到期
+                                 // 模拟已收到顶层 items_changed 且合并窗口已到期
         app.refresh = Some(RefreshState {
             page_id: String::new(),
             ready_at: Instant::now(),

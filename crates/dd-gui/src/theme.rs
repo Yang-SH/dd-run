@@ -26,11 +26,15 @@ pub const SEARCHBAR_RADIUS: u8 = 4; // 搜索框圆角（radius-m，filled-darke
 pub const FOOTER_PAD_X: f32 = 16.0; // `.panel-footer` padding: 8px 16px
 pub const FOOTER_PAD_Y: f32 = 8.0;
 pub const FOOTER_FONT: f32 = 12.0; // caption1（05.1 base200）
-pub const FOOTER_GAP: f32 = 12.0; // `.panel-footer` gap（spacing ramp）
-pub const KEYCAP_FONT: f32 = 10.0; // `.panel-footer b`（base100 mini）
-pub const KEYCAP_H: f32 = 16.0; // 键帽盒高（mini 10/14 + 1px 描边 + 2px 下边 → 页脚 8+16+8=32）
-pub const KEYCAP_PAD_X: f32 = 6.0; // `.panel-footer b` padding: 0 6px
-pub const KEYCAP_GAP: f32 = 2.0; // 同组键帽之间的间隙（`↑` `↓`）
+pub const FOOTER_GAP: f32 = 16.0; // `.panel-footer` gap（v4.10 D35：12→16，对齐截图组距）
+pub const KEYCAP_FONT: f32 = 12.0; // v4.10 D35：proportional 12（原 mono mini 10）
+pub const KEYCAP_H: f32 = 20.0; // 键帽盒高（12/18 文本行 + 上下描边 → 页脚 8+20+8=36）
+pub const KEYCAP_PAD_X: f32 = 8.0; // v4.10 D35：6→8（对齐截图）
+pub const KEYCAP_GAP: f32 = 4.0; // 同组键帽之间的间隙（v4.10 D35：2→4）
+/// 键帽圆角（v4.10 D35：radius-md 4 → 5，对齐截图）。
+pub const KEYCAP_RADIUS: u8 = 5;
+/// 说明文本与键帽间距（v4.10 D35：4→6；组内顺序 = 说明在前、键帽在后）。
+pub const KEYCAP_DESC_GAP: f32 = 6.0;
 pub const DOT_SIZE: f32 = 6.0; // `.dot` 6×6
 pub const DOT_GAP: f32 = 5.0; // `.dot` margin-right 5px
 
@@ -560,18 +564,21 @@ mod tests {
         assert_eq!(CTX_ANCHOR_OFFSET, 2.0, "指针锚点偏移 2,2（D20）");
     }
 
-    /// 几何常量与设计稿 v4 一致（D8：搜索栏 40 / 行 40 / 页脚 32）。
+    /// 几何常量与设计稿一致（D8：搜索栏 40 / 行 40；v4.10 D35：页脚 36）。
     #[test]
     fn geometry_matches_design_v4() {
         assert_eq!(ROW_H, 40.0, "行高 40（D8）");
         assert_eq!(SEARCHBAR_H, 40.0, "搜索栏高 40（Fluent Input large）");
         assert_eq!(
             FOOTER_PAD_Y * 2.0 + KEYCAP_H,
-            32.0,
-            "页脚总高 = 8 + 16 + 8 = 32（D8）"
+            36.0,
+            "页脚总高 = 8 + 20 + 8 = 36（v4.10 D35）"
         );
         assert_eq!(FOOTER_FONT, 12.0, "页脚字号 = caption1 base200");
-        assert_eq!(KEYCAP_FONT, 10.0, "键帽字号 = base100 mini");
+        assert_eq!(KEYCAP_FONT, 12.0, "键帽字号 = caption1（v4.10 D35）");
+        assert_eq!(KEYCAP_RADIUS, 5, "键帽圆角 5（v4.10 D35）");
+        assert_eq!(KEYCAP_DESC_GAP, 6.0, "帽-文距 6（v4.10 D35）");
+        assert_eq!(KEYCAP_PAD_X, 8.0, "键帽左右 padding 8（v4.10 D35）");
     }
 
     #[test]

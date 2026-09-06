@@ -168,14 +168,15 @@ impl PaletteApp {
     /// （批次 4.1，§6.3）+ 键位图例。
     ///
     /// 布局（§6.3 + C6 + **D15 v4.3 修订**）：
-    /// - **严格单行 32px**（`FOOTER_PAD_Y 8 + KEYCAP_H 16 + FOOTER_PAD_Y 8`，D8）：
+    /// - **严格单行**（`FOOTER_PAD_Y 8 + KEYCAP_H + FOOTER_PAD_Y 8`；v4.10 D35：
+    ///   KEYCAP_H 16→20 ⇒ 页脚总高 32→36，D8 原值 32）：
     ///   `allocate_exact_size` 锁一行 + 手动锚定行中心线（混合高度内容下
     ///   egui 自动居中逐项漂移，真机 2026-09-04 修复），**禁止 `horizontal_wrapped`**。
     /// - **有选中项**：左侧 = 齿轮 + 选中项默认动作文本（[`footer_action_text`]
     ///   实时推导，C7）；**无选中 / 空态**：左侧仅齿轮；拉取中显示「正在加载…」
     ///   （§07 loading mockup）。
-    /// - **右侧键位图例恒定完整**（v4.3 修订：↑↓ 选择 / Enter 执行 / Esc
-    ///   返回·隐藏，不再随选中态退化为单键帽）；嵌套页右端追加 `ext_id` 徽标
+    /// - **右侧键位图例恒定完整**（v4.11 修订：Enter 执行 / Esc 返回·隐藏，
+    ///   移除 ↑↓ 选择；不再随选中态退化为单键帽）；嵌套页右端追加 `ext_id` 徽标
     ///   （§07.1，C 组批次 C1）。
     /// - **源健康诊断整体移除**（v4.3 修订，2026-09-04 用户决策）：stub/err
     ///   状态点与聚合 note 不再进页脚（原 C8"仅异常时显示"规格废止）。
@@ -207,21 +208,21 @@ impl PaletteApp {
                 egui::FontId::proportional(theme::FOOTER_FONT),
                 p.text3,
             );
-            // 右：`[Esc] 返回`——「返回」贴右缘，Esc 键帽在其左 4px
-            let back_w = text_width(ui, "返回", egui::FontId::proportional(theme::FOOTER_FONT));
+            // 右：`返回 [Esc]`——v4.10 D35 组内顺序 = 说明在前、键帽在后；
+            // Esc 键帽贴右缘，「返回」右对齐其左 KEYCAP_DESC_GAP 处。
             let esc_w = keycap_width(ui, "Esc");
-            let text_left = row.right() - back_w;
+            let esc_left = row.right() - esc_w;
             let krect = egui::Rect::from_min_size(
-                egui::pos2(text_left - 4.0 - esc_w, cy - theme::KEYCAP_H / 2.0),
+                egui::pos2(esc_left, cy - theme::KEYCAP_H / 2.0),
                 egui::vec2(esc_w, theme::KEYCAP_H),
             );
             paint_keycap(ui, krect, "Esc", &p);
             ui.painter().text(
-                egui::pos2(text_left, cy),
-                egui::Align2::LEFT_CENTER,
+                egui::pos2(esc_left - theme::KEYCAP_DESC_GAP, cy),
+                egui::Align2::RIGHT_CENTER,
                 "返回",
                 egui::FontId::proportional(theme::FOOTER_FONT),
-                p.text3,
+                p.text2,
             );
             return false;
         }
@@ -229,7 +230,7 @@ impl PaletteApp {
         // C7：动作文本随选中项实时变化（含 fallback 模式——filtered() 覆盖兜底集）。
         // 用户决策（2026-09-04）：页脚不再显示源状态诊断（stub 状态点 / failed
         // 报错 / 聚合 note）——左块 = 齿轮 + 上下文动作，右块 = 完整键位图例
-        // （↑↓ 选择 / Enter 执行 / Esc 返回·隐藏，用户要求补全）。
+        // （Enter 执行 / Esc 返回·隐藏，v4.11 移除 ↑↓ 选择）。
         // C 组批次 C1（§07.1）：嵌套页页脚右端常驻 ext_id 徽标——键位图例
         // 整体左移 chip 宽 + 间距让位。
         let page = self.stack.current();
@@ -296,7 +297,7 @@ impl PaletteApp {
             }
         }
 
-        // 右：完整键位图例，全部手绘锚定 cy（↑↓ 选择 / Enter 执行 / Esc 返回·隐藏）
+        // 右：完整键位图例，全部手绘锚定 cy（Enter 执行 / Esc 返回·隐藏）
         paint_keys_at(ui, egui::pos2(split_x, cy), &p);
         // 嵌套页：ext_id 徽标贴右缘垂直居中（draw_ext_chip 恰好填满其子区）
         if ext_chip_w > 0.0 {

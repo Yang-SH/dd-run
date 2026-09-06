@@ -188,6 +188,15 @@ pub struct PaletteApp {
     /// 当前窗口是否已按设置页尺寸调整（帧间 diff，仅在进/出设置页时发
     /// `InnerSize`，避免每帧塞 ViewportCommand）。
     pub(crate) settings_sized: bool,
+    /// v4.10 D36：原生缩放模态循环在途（`BeginResize` 后 winit 捕获事件
+    /// 循环，egui 收不到输入；`primary_down()==false` 首帧清除，见
+    /// `ui/chrome.rs`）。
+    pub(crate) native_resize: bool,
+    /// v4.11 修正：拖拽候选起点。在「空白区」按下主键时记录起点，指针移动
+    /// 超过阈值后发 `StartDrag`；落在前台交互控件或缩放热区时不记录，从而
+    /// 不与控件 click 争夺 press（避免全屏 drag widget 抢占导致 click 被
+    /// `is_decidedly_dragging` 抑制）。`None` = 当前无待定拖拽。
+    pub(crate) drag_candidate: Option<egui::Pos2>,
     /// 打开中的右键菜单（设计稿 10B，v4.4；`None` = 关闭）。
     pub(crate) ctx_menu: Option<CtxMenuState>,
     /// 键盘触发旗标：Shift+F10 请求对选中行开菜单（D19）。行矩形只在绘制期
@@ -270,6 +279,8 @@ impl PaletteApp {
             backdrop_active: false,
             backdrop_clear_countdown: 0,
             settings_sized: false,
+            native_resize: false,
+            drag_candidate: None,
             ctx_menu: None,
             want_ctx_menu_for_selected: false,
             ctx_row_rects: Vec::new(),
@@ -369,10 +380,18 @@ impl eframe::App for PaletteApp {
             self.exts_dirty = false;
             self.restart_aggregation();
         }
+        // v4.11 修正：帧首判定空白区拖拽候选（不再注册占屏拖拽 widget——
+        // 全屏 drag widget 会令前台控件 click 被 is_decidedly_dragging 抑制）。
+        // 仅当指针落在非交互空白区才记候选，移动超阈值发 StartDrag，前台
+        // 控件点击零干扰；缩放热区内则不发起拖拽（缩放优先，见 chrome_end）。
+        crate::ui::chrome::chrome_begin(self, &ctx);
         self.draw_panel(ui);
         self.draw_toast(&ctx);
         self.draw_confirm(&ctx);
         self.draw_context_menu(&ctx, ui);
+        // v4.10 D36：帧尾缩放热区光标覆盖 + 按下发起 BeginResize（帧尾调用
+        // 让光标图标覆盖任何控件 hover 光标，如输入框 Text）。
+        crate::ui::chrome::chrome_end(self, &ctx);
         // v4.7 材质切换防闪：本帧绘制/呈现完毕后递减倒计时，归零时窗口已连续
         // 呈现多个不透明帧，此时清 DWM 材质不可见（材质在不透明面板后面）。
         if self.backdrop_clear_countdown > 0 {

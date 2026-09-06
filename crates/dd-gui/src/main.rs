@@ -65,7 +65,10 @@ fn main() -> eframe::Result {
         .with_decorations(false)
         .with_always_on_top()
         .with_taskbar(false)
-        .with_resizable(false)
+        // v4.10 D36：程序化允许缩放（原生边框仍隐藏，缩放由 ui/chrome.rs 的
+        // 8 方向边缘热区接管，BeginResize 原生循环）；下限防缩破布局。
+        .with_resizable(true)
+        .with_min_inner_size([460.0, 400.0])
         .with_visible(false); // 初始隐藏，热键唤起
     let options = eframe::NativeOptions {
         viewport,

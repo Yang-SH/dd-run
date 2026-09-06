@@ -2,6 +2,7 @@
 //!
 //! 拆分自原 main.rs（docs/refactor-layering-plan.md 方案 1），方法体逐字未改。
 
+pub(crate) mod chrome;
 pub(crate) mod confirm;
 pub(crate) mod context_menu;
 pub(crate) mod icons;

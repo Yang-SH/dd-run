@@ -257,10 +257,25 @@ pub(crate) fn run_as_admin(_path: &str) -> Result<(), String> {
 }
 
 /// 在资源管理器中定位文件（`explorer /select,<path>`，10B.2）。
+///
+/// 若目标路径不存在，fallback 到其父目录；父目录也不存在则返回错误，避免
+/// Windows 在 `/select` 失效时随机打开「文档」等默认位置。
 #[cfg(windows)]
 pub(crate) fn reveal_in_folder(path: &str) -> Result<(), String> {
+    use std::path::Path;
+
+    let p = Path::new(path);
+    let arg = if p.exists() {
+        format!("/select,{path}")
+    } else if let Some(parent) = p.parent().filter(|d| d.exists()) {
+        // 目标已不存在/被卸载：至少打开其原本所在目录（定位到目录本身）。
+        format!("/open,{}", parent.display())
+    } else {
+        return Err(format!("路径不存在：{path}"));
+    };
+
     std::process::Command::new("explorer")
-        .arg(format!("/select,{path}"))
+        .arg(arg)
         .spawn()
         .map(|_| ())
         .map_err(|e| e.to_string())

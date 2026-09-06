@@ -1,6 +1,7 @@
 //! 窗口生命周期：显示/隐藏/失焦、热键与托盘事件轮询。
 
 use crate::app::PaletteApp;
+use crate::app::{APP_H, APP_W, SETTINGS_H, SETTINGS_W};
 use dd_gui::hotkey::HotkeyEvent;
 use dd_gui::tray::TrayEvent;
 use eframe::egui;
@@ -30,6 +31,17 @@ impl PaletteApp {
         // 而启动期窗口被放到屏幕外（OFFSCREEN）→ 会取错屏居中到负象限。
         // 这里用 Win32 `GetCursorPos + MonitorFromPoint` 自算目标屏工作区。
         self.send_center_on_cursor(ctx);
+        // v4.10 D36：手动缩放仅本显示周期有效——唤起即回栈顶页默认尺寸。
+        // 与 `ui()` 末尾 settings_sized diff 收口同口径：先同步旗标防重复发送。
+        // （grill 决策：保持 palette「跟随光标」语义，尺寸不落盘。）
+        let want_settings = self.stack.current().is_settings;
+        self.settings_sized = want_settings;
+        let (w, h) = if want_settings {
+            (SETTINGS_W, SETTINGS_H)
+        } else {
+            (APP_W, APP_H)
+        };
+        ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(egui::vec2(w, h)));
         ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
         ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
     }
