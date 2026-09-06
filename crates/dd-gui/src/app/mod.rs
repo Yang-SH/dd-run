@@ -48,15 +48,19 @@ use std::sync::mpsc::Receiver;
 use std::sync::Arc;
 use std::time::Instant;
 
-/// 面板逻辑尺寸（设计稿 v2：宽 560；高沿用现行 460）。`show()` 居中定位用。
-pub const APP_W: f32 = 560.0;
+/// 面板逻辑尺寸**基准**（v4.12 D37：宽 650；高 440——初定 420，真机反馈
+/// 2026-09-06 用户要求 +20；原 560×460 作废）。
+/// 实际有效尺寸 = 基准或记忆值（`settings.panel_size`）按光标所在屏工作区
+/// clamp（[`root_panel_size`]）；`show()` 居中定位与启动 `with_inner_size` 用。
+pub const APP_W: f32 = 650.0;
 
-pub const APP_H: f32 = 460.0;
+pub const APP_H: f32 = 440.0;
 
-/// 设置页窗口尺寸（§08 v4.6 D28：640×640——左栏分组占 168px 后内容区保持
-/// ~440px，与单列 560 宽时可用宽相当；v4.2 初定 560×640 作废）。根页/子页仍
-/// `APP_W/APP_H`（560×460），进/出设置页按栈顶帧间 diff 放大/缩回。
-pub(crate) const SETTINGS_W: f32 = 640.0;
+/// 设置页窗口尺寸**基准**（§08 v4.12 D37 修订：650×640——宽度与根页基准
+/// 对齐，高度沿用 D28 论证的 640；原 640×640 作废）。有效尺寸 =
+/// max(基准, 根页有效尺寸) 逐轴取大再按工作区 clamp（[`settings_panel_size`]）；
+/// 进/出设置页仍按栈顶帧间 diff 放大/缩回。
+pub(crate) const SETTINGS_W: f32 = 650.0;
 
 pub(crate) const SETTINGS_H: f32 = 640.0;
 
@@ -67,6 +71,58 @@ pub(crate) const SETTINGS_H: f32 = 640.0;
 pub const OFFSCREEN_X: f32 = -20_000.0;
 
 pub const OFFSCREEN_Y: f32 = -20_000.0;
+
+/// 面板最小逻辑尺寸（v4.10 D36 `with_min_inner_size`；v4.12 D37 记忆/自适应
+/// 的 clamp **下限，恒成立**——极小工作区时允许窗口超出工作区）。
+pub(crate) const PANEL_MIN_W: f32 = 460.0;
+
+pub(crate) const PANEL_MIN_H: f32 = 400.0;
+
+/// 工作区安全边距（v4.12 D37：clamp 上限 = 工作区每轴减 16 逻辑点，四周各留 8）。
+pub(crate) const WORKAREA_MARGIN: f32 = 16.0;
+
+/// 尺寸相等判定阈值（逻辑点）：小于该值的差异视为未变化（浮点/取整噪声）。
+pub(crate) const SIZE_EPSILON: f32 = 0.5;
+
+/// v4.12 D37 ①：把期望尺寸按目标屏工作区（逻辑点）clamp——工作区充裕时
+/// 原样返回；不足时先**等比收缩**到可用区（每轴减 [`WORKAREA_MARGIN`]），
+/// 再 clamp 到 [`PANEL_MIN_W/H`] 下限（下限恒成立）。
+pub(crate) fn clamp_to_workarea(w: f32, h: f32, work_w: f32, work_h: f32) -> (f32, f32) {
+    let avail_w = (work_w - WORKAREA_MARGIN).max(0.0);
+    let avail_h = (work_h - WORKAREA_MARGIN).max(0.0);
+    let scale = 1.0f32.min(avail_w / w).min(avail_h / h);
+    ((w * scale).max(PANEL_MIN_W), (h * scale).max(PANEL_MIN_H))
+}
+
+/// v4.12 D37 ③：根页有效尺寸 = 记忆值（`settings.panel_size`；`None` =
+/// 从未手动拉伸，用基准 `APP_W/APP_H`），再按光标所在屏工作区 clamp。
+/// `work` 为 `None`（取不到显示器信息）时不 clamp，原样返回。
+pub(crate) fn root_panel_size(
+    work: Option<(f32, f32)>,
+    remembered: Option<(u32, u32)>,
+) -> (f32, f32) {
+    let (w, h) = remembered
+        .map(|(w, h)| (w as f32, h as f32))
+        .unwrap_or((APP_W, APP_H));
+    match work {
+        Some((ww, wh)) => clamp_to_workarea(w, h, ww, wh),
+        None => (w, h),
+    }
+}
+
+/// v4.12 D37 ④：设置页有效尺寸 = max(`SETTINGS_W/H`, 根页有效尺寸) 逐轴取大
+/// （根页拉伸超过基准时设置页不缩小），再按工作区 clamp。
+pub(crate) fn settings_panel_size(
+    work: Option<(f32, f32)>,
+    remembered: Option<(u32, u32)>,
+) -> (f32, f32) {
+    let (rw, rh) = root_panel_size(work, remembered);
+    let (w, h) = (rw.max(SETTINGS_W), rh.max(SETTINGS_H));
+    match work {
+        Some((ww, wh)) => clamp_to_workarea(w, h, ww, wh),
+        None => (w, h),
+    }
+}
 
 pub struct PaletteApp {
     /// 页面栈：栈底为 Root（首屏聚合），其上为嵌套页。
@@ -169,6 +225,10 @@ pub struct PaletteApp {
     /// 搜索引擎配置脏标记：设置页改动置位，**离开设置页**时消费并全量重聚合
     /// （websearch 进程须以新环境变量重启，逐帧开关勾选只聚合一次）。
     pub(crate) engines_dirty: bool,
+    /// 生效语言脏标记（批次 D，2026-09-06）：设置页切换语言置位，**离开设置页**时
+    /// 消费并全量重聚合——扩展进程须以新 `DDRUN_LANG` 环境变量重启才能生效
+    /// （GUI 文字当帧即变，扩展文案随下次进程重生生效，语义一致）。
+    pub(crate) lang_dirty: bool,
     /// 设置页「添加搜索引擎」输入缓冲与校验错误（绘制层状态跨帧存活）。
     pub(crate) engine_url_buf: String,
     pub(crate) engine_add_err: Option<String>,
@@ -205,6 +265,23 @@ pub struct PaletteApp {
     /// 本帧各列表行矩形（`draw_list` 每帧重建）：菜单开着时右键另一行，全屏
     /// 捕获层会吞掉该行的 `secondary_clicked`（D19 修正），据此命中行就地重开。
     pub(crate) ctx_row_rects: Vec<(usize, egui::Rect)>,
+    /// v4.12 D37：最近一次 `show()` 时程序设定的窗口逻辑尺寸（根页或设置页，
+    /// 随栈顶而定）。`persist_panel_size` 以此判定「用户真拉伸了」——只有当前
+    /// 尺寸偏离它（> [`SIZE_EPSILON`]）才把偏离值落盘为记忆，防止小屏 clamp 的
+    /// 程序尺寸被误存为用户记忆。
+    pub(crate) shown_size: Option<(f32, f32)>,
+    /// v4.12 D37：最近一次 `show()` 取到的光标所在屏工作区尺寸（逻辑点；
+    /// 取不到为 `None`）。`ui()` 的 settings_sized diff 收口点按它动态计算
+    /// 根页/设置页目标尺寸（不再用固定常量）。
+    pub(crate) last_work_area: Option<(f32, f32)>,
+    /// v4.12 D37 补强：面板可见期间尺寸偏离程序设定值的起始时刻（去抖）。
+    /// 持续偏离 ≥500ms 即落盘（拖拽缩放期间原生模态循环无 egui 帧，松手
+    /// 后才开始计时——天然去抖）。兜底强杀进程不走 hide() 的丢档场景。
+    pub(crate) resize_pending_since: Option<Instant>,
+    /// v4.13 D38：当前生效语言（`settings.lang` 为 FollowSystem 时已按系统
+    /// UI 语言解析为具体语言，见 [`Self::resolve_lang`]）。设置页切换经
+    /// `apply_lang` 更新——egui immediate mode 下一帧全量重绘即生效。
+    pub(crate) lang_effective: dd_gui::settings::Lang,
 }
 
 impl PaletteApp {
@@ -232,6 +309,8 @@ impl PaletteApp {
         cache: Option<FrozenCache>,
         settings: dd_gui::settings::Settings,
     ) -> Self {
+        // FollowSystem 在此一次性解析为具体语言（每帧取用零探测开销）。
+        let lang_effective = Self::resolve_lang(&settings);
         Self {
             stack: PageStack::new(PageState::root(Vec::new())),
             hotkey,
@@ -272,6 +351,7 @@ impl PaletteApp {
             settings,
             cache,
             engines_dirty: false,
+            lang_dirty: false,
             engine_url_buf: String::new(),
             engine_add_err: None,
             settings_category: SettingsCategory::default(),
@@ -284,7 +364,28 @@ impl PaletteApp {
             ctx_menu: None,
             want_ctx_menu_for_selected: false,
             ctx_row_rects: Vec::new(),
+            shown_size: None,
+            last_work_area: None,
+            resize_pending_since: None,
+            lang_effective,
         }
+    }
+
+    /// 解析生效语言（v4.13 D38）：偏好为 FollowSystem → 平台探测系统 UI
+    /// 语言；用户已显式选择 → 原样。`new()` 与 `apply_lang` 共用。
+    pub(crate) fn resolve_lang(settings: &dd_gui::settings::Settings) -> dd_gui::settings::Lang {
+        match settings.lang {
+            dd_gui::settings::Lang::FollowSystem => crate::platform::system_ui_lang(),
+            l => l,
+        }
+    }
+
+    /// 按当前生效语言取文案（v4.13 D38）：`self.tr("key")` —
+    /// 大多数绘制/动作方法持有 `&self`，比逐处写 `t(self.lang_effective, _)`
+    /// 更省样板。后台线程闭包请先 `let lang = self.lang_effective;` 再捕获
+    /// （`Lang: Copy`），线程内直接 `t(lang, key)`。
+    pub(crate) fn tr(&self, key: &'static str) -> &'static str {
+        crate::text::t(self.lang_effective, key)
     }
 }
 
@@ -304,7 +405,7 @@ impl eframe::App for PaletteApp {
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         // 注意：启动期不再有 recenter 逐帧轮询（旧 `recenter_if_needed` 已删）。
         // 窗口初始在屏幕外物理不可见（OFFSCREEN_*），首次及每次唤起由
-        // `show() → send_center_on_cursor` 一次性定位到光标屏——隐藏期间
+        // `show() → center_on_cursor` 一次性定位到光标屏——隐藏期间
         // 不发任何位置命令（设计稿 03 验收：窗口隐藏期间不发送位置命令）。
         self.poll_hotkey(ctx);
         self.poll_tray(ctx);
@@ -359,25 +460,63 @@ impl eframe::App for PaletteApp {
         }
 
         self.handle_keys(&ctx);
-        // 设置页与启动页窗口尺寸不同：按当前栈顶页帧间 diff 同步 `InnerSize`。
+        // 设置页与根页窗口尺寸不同：按当前栈顶页帧间 diff 同步 `InnerSize`。
         // 进设置页放大、返回/出栈/清栈缩回——所有路径（Esc/Dismiss/show 复位）
         // 都经此处收口，不依赖各转换点逐一接线。
+        // v4.12 D37：目标尺寸不再用固定常量——根页 = 基准/记忆值按工作区
+        // clamp；设置页 = max(650×640, 根页有效尺寸) 再 clamp（work area 缺失
+        // 时不 clamp）。
         let want_settings = self.stack.current().is_settings;
         if want_settings != self.settings_sized {
             self.settings_sized = want_settings;
             let (w, h) = if want_settings {
-                (SETTINGS_W, SETTINGS_H)
+                settings_panel_size(self.last_work_area, self.settings.panel_size)
             } else {
-                (APP_W, APP_H)
+                root_panel_size(self.last_work_area, self.settings.panel_size)
             };
             ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(egui::vec2(w, h)));
+            // v4.15 真机反馈修（2026-09-06）：程序性尺寸变化（进/出设置页）
+            // 同时**重新居中**——否则移动过的窗口按原左上角缩放，移动设置页
+            // 后退回再进，面板出现在移动后的位置而非默认居中位置。隐藏态
+            // 不发（下次 show() 会统一居中）。
+            if self.visible {
+                self.center_on_cursor(&ctx, (w, h));
+            }
+        }
+        // v4.12 D37 补强：面板可见期间，尺寸偏离程序设定值（shown_size）持续
+        // ≥500ms 即落盘。拖拽缩放由 BeginResize 原生模态循环接管、期间 egui
+        // 无帧，松手后才有下一帧——计时天然从松手开始，去抖无需额外逻辑。
+        // 兜底「进程被强杀（不走 hide()/托盘退出）」场景：最多丢最后 500ms
+        // 的调整。设置页尺寸不参与（persist_panel_size 内部同样跳过）。
+        if !want_settings {
+            let cur = ctx.input(|i| i.viewport().inner_rect.map(|r| (r.width(), r.height())));
+            if let Some((w, h)) = cur {
+                let drifted = match self.shown_size {
+                    Some((sw, sh)) => {
+                        (w - sw).abs() > SIZE_EPSILON || (h - sh).abs() > SIZE_EPSILON
+                    }
+                    None => false,
+                };
+                if drifted {
+                    let since = *self.resize_pending_since.get_or_insert(Instant::now());
+                    if since.elapsed() >= std::time::Duration::from_millis(500) {
+                        self.persist_panel_size(&ctx);
+                        // 重新对齐参照：已落盘的尺寸即新的「程序已知值」，防重复触发
+                        self.shown_size = Some((w, h));
+                        self.resize_pending_since = None;
+                    }
+                } else {
+                    self.resize_pending_since = None;
+                }
+            }
         }
         // 搜索引擎（2026-09-05）与扩展启停（M6 批次 6.3）配置变更：离开设置页时
         // 统一消费脏标记并全量重聚合——size-diff 收口点覆盖所有离开路径
         // （Esc / 返回按钮 / Dismiss / show 复位），逐帧勾选只触发一次。
-        if !want_settings && (self.engines_dirty || self.exts_dirty) {
+        if !want_settings && (self.engines_dirty || self.exts_dirty || self.lang_dirty) {
             self.engines_dirty = false;
             self.exts_dirty = false;
+            self.lang_dirty = false;
             self.restart_aggregation();
         }
         // v4.11 修正：帧首判定空白区拖拽候选（不再注册占屏拖拽 widget——
@@ -405,5 +544,103 @@ impl eframe::App for PaletteApp {
                 }
             }
         }
+    }
+}
+
+/// v4.12 D37 尺寸纯函数单测（设计稿 G1–G4 的可量化口径）。
+#[cfg(test)]
+mod size_tests {
+    use super::*;
+
+    fn assert_close(a: (f32, f32), b: (f32, f32)) {
+        assert!(
+            (a.0 - b.0).abs() < 0.01 && (a.1 - b.1).abs() < 0.01,
+            "{a:?} != {b:?}"
+        );
+    }
+
+    #[test]
+    fn baseline_used_when_workarea_plentiful() {
+        // G1：工作区充裕（1080p / 4K / 2K）→ 基准 650×440 原样使用
+        for (ww, wh) in [(1920.0, 1040.0), (3840.0, 2160.0), (2560.0, 1440.0)] {
+            assert_close(root_panel_size(Some((ww, wh)), None), (APP_W, APP_H));
+        }
+        // 800×600 小本屏：可用区 (784, 584) 仍容得下基准
+        assert_close(root_panel_size(Some((800.0, 600.0)), None), (APP_W, APP_H));
+    }
+
+    #[test]
+    fn remembered_used_over_baseline() {
+        // G2：有记忆值且工作区充裕 → 用记忆值
+        assert_close(
+            root_panel_size(Some((2560.0, 1440.0)), Some((900, 700))),
+            (900.0, 700.0),
+        );
+        // 无 work area 信息（取不到显示器）→ 不 clamp 原样返回
+        assert_close(root_panel_size(None, Some((900, 700))), (900.0, 700.0));
+        assert_close(root_panel_size(None, None), (APP_W, APP_H));
+    }
+
+    #[test]
+    fn workarea_insufficient_shrinks_proportionally() {
+        // G1：工作区不足 → 等比收缩（每轴留 16 边距）
+        // work (660, 470)：可用 (644, 454)；scale = min(644/650=0.99077, 454/440=1.0318)
+        //   = 0.99077 → (644.0, 435.94)（宽先触界）
+        assert_close(
+            root_panel_size(Some((660.0, 470.0)), None),
+            (644.0, 440.0 * 644.0 / 650.0),
+        );
+        // 换高度先触界的 (700, 470)：可用 (684, 454)；scale = min(684/650=1.0523, 454/440=1.0318)
+        //   = 1.0318 → 未缩（684≥650 且 454≥440 → scale 用 1.0？不：min(>1,>1)=1 → 原样）
+        assert_close(root_panel_size(Some((700.0, 470.0)), None), (APP_W, APP_H));
+        // 真高度触界 (660, 456)：可用 (644, 440)；scale = min(0.99077, 1.0) = 0.99077
+        assert_close(
+            root_panel_size(Some((660.0, 456.0)), None),
+            (644.0, 440.0 * 644.0 / 650.0),
+        );
+        // 记忆值超屏同样等比收缩：work (800,800)，记忆 (900,700)
+        // 可用 (784,784)；scale = 784/900 = 0.87111 → (784, 609.78)
+        assert_close(
+            root_panel_size(Some((800.0, 800.0)), Some((900, 700))),
+            (784.0, 700.0 * 784.0 / 900.0),
+        );
+    }
+
+    #[test]
+    fn min_size_wins_on_tiny_workarea() {
+        // G3：极小工作区 → 下限 460×400 恒成立（允许超出工作区）
+        assert_close(root_panel_size(Some((470.0, 410.0)), None), (460.0, 400.0));
+        assert_close(root_panel_size(Some((100.0, 100.0)), None), (460.0, 400.0));
+    }
+
+    #[test]
+    fn settings_size_is_max_of_baseline_and_root() {
+        // G4：未拉伸 → 设置页 = 650×640
+        assert_close(
+            settings_panel_size(Some((2560.0, 1440.0)), None),
+            (650.0, 640.0),
+        );
+        // 根页拉伸 (900,700) → max(650×640, 900×700) = 900×700（不缩小）
+        assert_close(
+            settings_panel_size(Some((2560.0, 1440.0)), Some((900, 700))),
+            (900.0, 700.0),
+        );
+        // 设置页超屏等比收缩 + 下限成立
+        assert_close(
+            settings_panel_size(Some((600.0, 700.0)), None),
+            (584.0, 640.0 * 584.0 / 650.0),
+        );
+        assert_close(
+            settings_panel_size(Some((100.0, 100.0)), None),
+            (460.0, 400.0),
+        );
+    }
+
+    #[test]
+    fn clamp_baseline_itself_is_noop_on_plentiful() {
+        assert_close(
+            clamp_to_workarea(650.0, 420.0, 1920.0, 1040.0),
+            (650.0, 420.0),
+        );
     }
 }

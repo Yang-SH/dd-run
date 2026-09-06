@@ -122,9 +122,9 @@ impl PaletteApp {
                 }
                 let mut query = self.stack.current().list.query().to_owned();
                 let placeholder = if is_nested {
-                    nested_search_placeholder(&page_title)
+                    nested_search_placeholder(self.lang_effective, &page_title)
                 } else {
-                    "搜索命令…".to_string()
+                    crate::text::t(self.lang_effective, "ph.root").to_string()
                 };
                 let search_ui = &mut ui.new_child(
                     egui::UiBuilder::new()
@@ -155,7 +155,7 @@ impl PaletteApp {
                     // 动画驱动：egui 按需重绘，加载期间 ~30fps 轮询重绘。
                     let dark = ui.visuals().dark_mode;
                     let time = ui.ctx().time();
-                    draw_loading_state(ui, &p, dark, time);
+                    draw_loading_state(ui, self.lang_effective, &p, dark, time);
                     ui.ctx()
                         .request_repaint_after(std::time::Duration::from_millis(33));
                 } else {
@@ -204,7 +204,7 @@ impl PaletteApp {
             ui.painter().text(
                 egui::pos2(row.min.x, cy),
                 egui::Align2::LEFT_CENTER,
-                "设置修改自动保存；搜索引擎更改返回首屏后生效",
+                crate::text::t(self.lang_effective, "footer.settings_hint"),
                 egui::FontId::proportional(theme::FOOTER_FONT),
                 p.text3,
             );
@@ -220,7 +220,7 @@ impl PaletteApp {
             ui.painter().text(
                 egui::pos2(esc_left - theme::KEYCAP_DESC_GAP, cy),
                 egui::Align2::RIGHT_CENTER,
-                "返回",
+                crate::text::t(self.lang_effective, "footer.back"),
                 egui::FontId::proportional(theme::FOOTER_FONT),
                 p.text2,
             );
@@ -244,9 +244,12 @@ impl PaletteApp {
         let action = page
             .list
             .selected_item()
-            .map(footer_action_text)
-            .or_else(|| page.is_loading.then(|| "正在加载…".to_string()));
-        let keys_w = keys_width(ui)
+            .map(|item| footer_action_text(self.lang_effective, item))
+            .or_else(|| {
+                page.is_loading
+                    .then(|| crate::text::t(self.lang_effective, "panel.loading").to_string())
+            });
+        let keys_w = keys_width(ui, self.lang_effective)
             + if ext_chip_w > 0.0 {
                 theme::FOOTER_GAP + ext_chip_w
             } else {
@@ -298,7 +301,7 @@ impl PaletteApp {
         }
 
         // 右：完整键位图例，全部手绘锚定 cy（Enter 执行 / Esc 返回·隐藏）
-        paint_keys_at(ui, egui::pos2(split_x, cy), &p);
+        paint_keys_at(ui, self.lang_effective, egui::pos2(split_x, cy), &p);
         // 嵌套页：ext_id 徽标贴右缘垂直居中（draw_ext_chip 恰好填满其子区）
         if ext_chip_w > 0.0 {
             let chip_rect = egui::Rect::from_min_size(
@@ -353,7 +356,7 @@ impl PaletteApp {
             // 动画驱动：egui 按需重绘，加载期间 ~30fps 轮询重绘。
             let dark = ui.visuals().dark_mode;
             let time = ui.ctx().time();
-            draw_loading_state(ui, &p, dark, time);
+            draw_loading_state(ui, self.lang_effective, &p, dark, time);
             ui.ctx()
                 .request_repaint_after(std::time::Duration::from_millis(33));
             return;
@@ -365,9 +368,19 @@ impl PaletteApp {
         if items.is_empty() {
             if query_empty {
                 // 设计稿 02 屏纯空态：图标 + 标题 + 描述
-                draw_empty_state(ui, &p, "未发现命令", Some("检查扩展清单或扩展运行状态"));
+                draw_empty_state(
+                    ui,
+                    &p,
+                    self.tr("empty.no_commands"),
+                    Some(self.tr("empty.no_commands_hint")),
+                );
             } else {
-                draw_empty_state(ui, &p, "未找到匹配的命令", Some("试试其他关键词。"));
+                draw_empty_state(
+                    ui,
+                    &p,
+                    self.tr("empty.no_match"),
+                    Some(self.tr("empty.no_match_hint")),
+                );
             }
             return;
         }

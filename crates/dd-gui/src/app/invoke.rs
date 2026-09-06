@@ -73,7 +73,7 @@ impl PaletteApp {
                             }
                         }
                         eprintln!("[dd-gui] invoke 失败：{e}");
-                        self.show_error_toast(format!("命令执行失败：{e}"));
+                        self.show_error_toast(self.tr("toast.invoke_fail").replace("{e}", &e));
                     }
                 }
             }
@@ -113,18 +113,14 @@ impl PaletteApp {
     pub(crate) fn dispatch_invoke(&mut self, ext_id: &str, params: InvokeParams) {
         if self.invoke_rx.is_some() || self.inflight.contains(ext_id) {
             eprintln!("[dd-gui] invoke 失败：ext={ext_id} 上一请求仍在处理");
-            self.show_toast_kind(
-                ToastKind::Error,
-                "扩展进程不可用（可能正在处理上一个请求）",
-                Some(2_000),
-            );
+            self.show_toast_kind(ToastKind::Error, self.tr("toast.ext_busy"), Some(2_000));
             return;
         }
         if self.is_crash_tripped(ext_id) {
             eprintln!("[dd-gui] invoke 拒绝：ext={ext_id} 暂时不可用（连续崩溃熔断）");
             self.show_toast_kind(
                 ToastKind::Error,
-                format!("扩展 {ext_id} 暂时不可用，可在设置→扩展管理点击重试"),
+                self.tr("toast.ext_unavailable").replace("{id}", ext_id),
                 Some(2_500),
             );
             return;
@@ -135,7 +131,7 @@ impl PaletteApp {
             self.start_invoke_reheat(&ext, params); // 桩复热
         } else {
             eprintln!("[dd-gui] invoke 失败：ext={ext_id} 无扩展信息");
-            self.show_error_toast("扩展信息缺失，无法执行");
+            self.show_error_toast(self.tr("toast.ext_missing"));
         }
     }
 
@@ -146,7 +142,7 @@ impl PaletteApp {
         eprintln!("[dd-gui] invoke 发起：ext={ext_id} cmd={}", params.id);
         let Some(idx) = self.processes.iter().position(|(id, _)| id == ext_id) else {
             eprintln!("[dd-gui] invoke 失败：ext={ext_id} 进程不可用（可能 in-flight）");
-            self.show_error_toast("扩展进程不可用（可能正在处理上一个请求）");
+            self.show_error_toast(self.tr("toast.ext_busy"));
             return;
         };
         let (_, mut proc) = self.processes.remove(idx);
@@ -178,6 +174,7 @@ impl PaletteApp {
         let ext = ext.clone();
         let ext_id = ext.manifest.id.clone();
         let (tx, rx) = mpsc::channel();
+        let lang = self.lang_effective; // 线程闭包无法借 self：按值捕获生效语言
         thread::spawn(move || {
             let mut proc = match aggregator::spawn_and_initialize(&ext) {
                 Ok(p) => p,
@@ -196,9 +193,7 @@ impl PaletteApp {
                 match proc.get_command(&params.id).map_err(|e| e.to_string()) {
                     // §6.4：取回真实命令后再执行
                     Ok(Some(_)) => invoke_on(&mut proc, &params),
-                    Ok(None) => {
-                        Err("命令已失效：扩展未找到该命令（get_command 返回 null）".to_string())
-                    }
+                    Ok(None) => Err(crate::text::t(lang, "page.cmd_stale").to_string()),
                     Err(e) => Err(e),
                 };
             let _ = tx.send(InvokeOutcome {

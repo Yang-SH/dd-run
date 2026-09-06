@@ -31,6 +31,8 @@ use dd_protocol::messages::InitializeResult;
 use dd_protocol::model::CommandItem;
 
 use crate::state::PanelItem;
+use crate::text;
+use dd_gui::settings::Lang;
 
 /// 协议版本（protocol.md §13：`MAJOR.MINOR` 两段）。
 pub const PROTOCOL_VERSION: &str = "1.0";
@@ -346,7 +348,9 @@ fn load_one(ext: LoadedExtension, cache: Option<&FrozenCache>) -> ExtOutcome {
 }
 
 /// 把各扩展结果合并为可渲染列表 + 源状态汇总（纯函数，可单测）。
-pub fn flatten(per_ext: &[ExtItems]) -> (Vec<PanelItem>, Vec<SourceSummary>) {
+/// `lang` 传入为渲染时的生效语言（v4.14 D40：类别徽标随 GUI 语言切换），
+/// `lang_dirty` 离开设置页触发的重聚合会随之更新徽标。
+pub fn flatten(per_ext: &[ExtItems], lang: Lang) -> (Vec<PanelItem>, Vec<SourceSummary>) {
     let mut items = Vec::new();
     let mut sources = Vec::with_capacity(per_ext.len());
     for ext in per_ext {
@@ -364,7 +368,7 @@ pub fn flatten(per_ext: &[ExtItems]) -> (Vec<PanelItem>, Vec<SourceSummary>) {
                     },
                 });
                 for cmd in cmds {
-                    items.push(to_panel_item(cmd, id, name));
+                    items.push(to_panel_item(cmd, id, name, lang));
                 }
             }
             ExtItems::Stub {
@@ -380,7 +384,7 @@ pub fn flatten(per_ext: &[ExtItems]) -> (Vec<PanelItem>, Vec<SourceSummary>) {
                     },
                 });
                 for cmd in cmds {
-                    items.push(to_panel_item(cmd, id, name));
+                    items.push(to_panel_item(cmd, id, name, lang));
                 }
             }
             ExtItems::Failed { id, name, error } => {
@@ -405,7 +409,14 @@ pub fn flatten(per_ext: &[ExtItems]) -> (Vec<PanelItem>, Vec<SourceSummary>) {
 ///
 /// M5 批次 3.9：按 `ext_id` 去 `com.ddrun.` 前缀推导通用类别标签（设计文档 §6.2），
 /// 内置扩展映射为「应用/命令/设置/网页」，第三方回退「命令」。
-pub fn to_panel_item(cmd: &CommandItem, ext_id: &str, fallback_section: &str) -> PanelItem {
+/// 语言按当前生效语言解析（v4.14 D40，与 GUI 其他徽标/页脚口径一致）——
+/// `lang_dirty` 离开设置页触发的重聚合会随之更新类别标签。
+pub fn to_panel_item(
+    cmd: &CommandItem,
+    ext_id: &str,
+    fallback_section: &str,
+    lang: Lang,
+) -> PanelItem {
     PanelItem {
         id: cmd.id.clone(),
         ext_id: ext_id.to_string(),
@@ -417,7 +428,7 @@ pub fn to_panel_item(cmd: &CommandItem, ext_id: &str, fallback_section: &str) ->
             .unwrap_or_else(|| fallback_section.to_string()),
         icon: cmd.icon.clone(),
         tags: cmd.tags.clone().unwrap_or_default(),
-        result_category: Some(category_label_for(ext_id).to_string()),
+        result_category: Some(category_label_for(ext_id, lang).to_string()),
         // M6 批次 6.1（L4）：预计算拼音匹配索引（全拼+首字母），协议层零改动
         pinyin: crate::state::pinyin_haystack(&cmd.title),
         command: cmd.command.clone(),
@@ -427,15 +438,17 @@ pub fn to_panel_item(cmd: &CommandItem, ext_id: &str, fallback_section: &str) ->
 /// 按扩展清单 id 推导结果类别显示标签（设计文档 §6.2 映射表）。
 ///
 /// 内置扩展使用全限定 id，去 `com.ddrun.` 前缀后匹配；未知第三方统一回退「命令」。
-fn category_label_for(ext_id: &str) -> &'static str {
+/// 文案经 `text::t` 按生效语言解析（v4.14 D40）。
+fn category_label_for(ext_id: &str, lang: Lang) -> &'static str {
     let short = ext_id.strip_prefix("com.ddrun.").unwrap_or(ext_id);
-    match short {
-        "apps" => "应用",
-        "system" => "设置",
-        "websearch" => "网页",
+    let key = match short {
+        "apps" => "cat.apps",
+        "system" => "cat.system",
+        "websearch" => "cat.websearch",
         // calc / shell / 第三方统一归为「命令」
-        _ => "命令",
-    }
+        _ => "cat.command",
+    };
+    text::t(lang, key)
 }
 
 #[cfg(test)]
@@ -469,7 +482,7 @@ mod tests {
     #[test]
     fn maps_command_item_fields_and_fallback_section() {
         let item = cmd("a.1", "Hello", None);
-        let panel = to_panel_item(&item, "com.example.a", "ExtA");
+        let panel = to_panel_item(&item, "com.example.a", "ExtA", Lang::ZhCn);
         assert_eq!(panel.id, "a.1", "id 透传");
         assert_eq!(panel.ext_id, "com.example.a", "来源扩展 id 透传");
         assert_eq!(panel.title, "Hello");
@@ -477,14 +490,15 @@ mod tests {
         assert_eq!(panel.command, CommandRef::Invoke, "command 透传");
 
         let with_section = cmd("a.2", "Bye", Some("系统"));
-        let panel = to_panel_item(&with_section, "com.example.a", "ExtA");
+        let panel = to_panel_item(&with_section, "com.example.a", "ExtA", Lang::ZhCn);
         assert_eq!(panel.section, "系统", "扩展返回的 section 优先");
     }
 
     #[test]
     fn category_label_is_derived_from_ext_id() {
         // M5 批次 3.9：内置扩展按去前缀映射，第三方回退「命令」。
-        let cases = [
+        // v4.14 D40：类别徽标按生效语言解析（zh/en 双口径都覆盖）。
+        let zh_cases = [
             ("com.ddrun.apps", "应用"),
             ("com.ddrun.calc", "命令"),
             ("com.ddrun.system", "设置"),
@@ -492,12 +506,28 @@ mod tests {
             ("com.ddrun.shell", "命令"),
             ("com.example.unknown", "命令"),
         ];
-        for (ext_id, expected) in cases {
-            let panel = to_panel_item(&cmd("x", "X", None), ext_id, "Sec");
+        for (ext_id, expected) in zh_cases {
+            let panel = to_panel_item(&cmd("x", "X", None), ext_id, "Sec", Lang::ZhCn);
             assert_eq!(
                 panel.result_category.as_deref(),
                 Some(expected),
-                "{ext_id} 应映射为 {expected}"
+                "{ext_id} zh 应映射为 {expected}"
+            );
+        }
+        let en_cases = [
+            ("com.ddrun.apps", "Apps"),
+            ("com.ddrun.calc", "Command"),
+            ("com.ddrun.system", "Settings"),
+            ("com.ddrun.websearch", "Web"),
+            ("com.ddrun.shell", "Command"),
+            ("com.example.unknown", "Command"),
+        ];
+        for (ext_id, expected) in en_cases {
+            let panel = to_panel_item(&cmd("x", "X", None), ext_id, "Sec", Lang::EnUs);
+            assert_eq!(
+                panel.result_category.as_deref(),
+                Some(expected),
+                "{ext_id} en 应映射为 {expected}"
             );
         }
     }
@@ -518,11 +548,16 @@ mod tests {
             };
             let mut item = cmd("a.icon", "Iconed", None);
             item.icon = Some(icon.clone());
-            let panel = to_panel_item(&item, "com.example.a", "ExtA");
+            let panel = to_panel_item(&item, "com.example.a", "ExtA", Lang::ZhCn);
             assert_eq!(panel.icon, Some(icon), "{kind:?} 应透传");
         }
         // 无 icon → None（渲染空列，不 panic）
-        let plain = to_panel_item(&cmd("b", "NoIcon", None), "com.example.a", "ExtA");
+        let plain = to_panel_item(
+            &cmd("b", "NoIcon", None),
+            "com.example.a",
+            "ExtA",
+            Lang::ZhCn,
+        );
         assert_eq!(plain.icon, None);
     }
 
@@ -548,7 +583,7 @@ mod tests {
             ready("com.example.d", "Ext D", vec![]),
         ];
 
-        let (items, sources) = flatten(&per_ext);
+        let (items, sources) = flatten(&per_ext, Lang::ZhCn);
 
         // 合并 2 条(warm) + 1 条(stub) = 3；C 的失败不影响 A/B/D
         assert_eq!(items.len(), 3);
@@ -573,7 +608,7 @@ mod tests {
 
     #[test]
     fn flatten_empty_input() {
-        let (items, sources) = flatten(&[]);
+        let (items, sources) = flatten(&[], Lang::ZhCn);
         assert!(items.is_empty());
         assert!(sources.is_empty());
     }

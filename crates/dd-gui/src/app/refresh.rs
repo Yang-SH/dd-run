@@ -55,7 +55,7 @@ impl PaletteApp {
             } else if let Some(r) = self.refresh.as_mut() {
                 r.top = true;
             }
-            self.show_toast("扩展命令已更新", Some(1_500));
+            self.show_toast(self.tr("toast.cmd_updated"), Some(1_500));
         }
         if let Some(pid) = hit {
             eprintln!(

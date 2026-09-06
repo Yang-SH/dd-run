@@ -17,7 +17,7 @@
 //! 编码为手写 RFC 3986 percent-encode（UTF-8），无第三方依赖。
 //! 参考实现：[`docs/m4-record.md`](../../docs/m4-record.md) P4 决策（扩展侧先行）。
 
-use dd_ext::{run, Effect, ExtensionSpec};
+use dd_ext::{i18n::tr, run, Effect, ExtensionSpec};
 use dd_protocol::messages::InvokeParams;
 use dd_protocol::model::{CommandItem, CommandRef, CommandResult, Icon, IconKind};
 
@@ -169,8 +169,11 @@ fn main() {
 fn spec() -> ExtensionSpec {
     ExtensionSpec {
         id: "com.ddrun.websearch",
-        display_name: "Web Search",
-        description: "在配置的搜索引擎（默认 Google / Bing / Baidu / DuckDuckGo / GitHub）中搜索",
+        display_name: tr("网络搜索", "Web Search"),
+        description: tr(
+            "在配置的搜索引擎（默认 Google / Bing / Baidu / DuckDuckGo / GitHub）中搜索",
+            "Search with the configured engines (defaults: Google / Bing / Baidu / DuckDuckGo / GitHub)",
+        ),
         frozen: true,
         has_fallback: true,
         capabilities: &["host/open_url"],
@@ -188,15 +191,18 @@ fn top_level_commands() -> Vec<CommandItem> {
         .map(|e| CommandItem {
             id: format!("websearch.{}", e.suffix),
             title: format!("Search with {}", e.name),
-            subtitle: Some(format!(
-                "打开 {}（输入关键词后选「在 {} 搜索 …」结果项）",
-                e.name, e.name
-            )),
+            subtitle: Some(
+                tr(
+                    "打开 {name}（输入关键词后选「在 {name} 搜索 …」结果项）",
+                    "Open {name} (type a query, then pick “Search in {name} …”)",
+                )
+                .replace("{name}", &e.name),
+            ),
             icon: Some(Icon {
                 kind: IconKind::Glyph,
                 value: "\u{E721}".to_string(), // Search
             }),
-            section: Some("网络搜索".to_string()),
+            section: Some(tr("网络搜索", "Web Search").to_string()),
             tags: Some(vec!["search".to_string(), e.suffix.clone()]),
             details: None,
             text_to_suggest: None,
@@ -212,13 +218,14 @@ fn fallback_commands() -> Vec<CommandItem> {
         .iter()
         .map(|e| CommandItem {
             id: format!("websearch.{}.query", e.suffix),
-            title: format!("在 {} 搜索 {{query}}", e.name),
-            subtitle: Some(format!("{} 搜索", e.name)),
+            title: tr("在 {name} 搜索 {query}", "Search {name} for {query}")
+                .replace("{name}", &e.name),
+            subtitle: Some(tr("{name} 搜索", "{name} Search").replace("{name}", &e.name)),
             icon: Some(Icon {
                 kind: IconKind::Glyph,
                 value: "\u{E721}".to_string(),
             }),
-            section: Some("网络搜索".to_string()),
+            section: Some(tr("网络搜索", "Web Search").to_string()),
             tags: None,
             details: None,
             text_to_suggest: None,
@@ -247,7 +254,8 @@ fn handle_invoke(params: &InvokeParams) -> (CommandResult, Vec<Effect>) {
     let Some(engine) = engine else {
         return (
             CommandResult::ShowToast {
-                message: format!("未知搜索命令：{id}"),
+                message: tr("未知搜索命令：{id}", "Unknown search command: {id}")
+                    .replace("{id}", id),
                 duration_ms: Some(2_500),
             },
             Vec::new(),

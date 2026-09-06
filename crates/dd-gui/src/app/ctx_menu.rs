@@ -11,6 +11,7 @@ use crate::text::CTX_GLYPH_ADMIN;
 use crate::text::CTX_GLYPH_COPY;
 use crate::text::CTX_GLYPH_FOLDER;
 use crate::text::CTX_GLYPH_LINK;
+use dd_gui::settings::Lang;
 use dd_gui::state::PanelItem;
 use dd_gui::theme;
 use eframe::egui;
@@ -70,7 +71,7 @@ impl PaletteApp {
         item: &PanelItem,
         anchor: egui::Pos2,
     ) {
-        let rows = context_menu_rows(item);
+        let rows = context_menu_rows(self.lang_effective, item);
         eprintln!(
             "[dd-gui] 右键菜单：item={} category={:?}（{} 项）",
             item.id,
@@ -164,15 +165,15 @@ impl PaletteApp {
             }
             CtxAction::RunAsAdmin { path } => match run_as_admin(path) {
                 Ok(()) => eprintln!("[dd-gui] 以管理员身份运行请求已发起：{path}"),
-                Err(e) => self.show_error_toast(format!("以管理员身份运行失败：{e}")),
+                Err(e) => self.show_error_toast(self.tr("ctx.admin_fail").replace("{e}", &e)),
             },
             CtxAction::RevealInFolder { path } => match reveal_in_folder(path) {
                 Ok(()) => eprintln!("[dd-gui] 已在资源管理器中定位：{path}"),
-                Err(e) => self.show_error_toast(format!("打开所在位置失败：{e}")),
+                Err(e) => self.show_error_toast(self.tr("ctx.locate_fail").replace("{e}", &e)),
             },
             CtxAction::CopyText { text } => {
                 ctx.copy_text(text.clone());
-                self.show_toast("已复制到剪贴板", None);
+                self.show_toast(self.tr("ctx.copied"), None);
             }
         }
     }
@@ -202,10 +203,12 @@ pub(crate) fn ctx_entry_count(state: Option<&CtxMenuState>) -> usize {
 /// - 「复制链接」要求 subtitle 为 http(s) URL；
 ///
 /// 数据不可得时该项**不出现**（而非禁用）——不渲染无法兑现的动作。
-pub(crate) fn context_menu_rows(item: &PanelItem) -> Vec<CtxRow> {
+/// 菜单标签按 `lang` 走 i18n 表（v4.13 D38）；`result_category` 的中文值是
+/// 协议侧数据（比对用），不翻译。
+pub(crate) fn context_menu_rows(lang: Lang, item: &PanelItem) -> Vec<CtxRow> {
     let mut rows = vec![CtxRow::Entry(CtxEntry {
         glyph: default_action_glyph(item),
-        label: footer_action_text(item),
+        label: footer_action_text(lang, item),
         shortcut: "↵ Enter",
         action: CtxAction::Default,
     })];
@@ -217,21 +220,21 @@ pub(crate) fn context_menu_rows(item: &PanelItem) -> Vec<CtxRow> {
             if item.result_category.as_deref() == Some("应用") {
                 rows.push(CtxRow::Entry(CtxEntry {
                     glyph: CTX_GLYPH_ADMIN,
-                    label: "以管理员身份运行".to_string(),
+                    label: crate::text::t(lang, "ctx.admin").to_string(),
                     shortcut: "Ctrl+↵",
                     action: CtxAction::RunAsAdmin { path: path.clone() },
                 }));
             }
             rows.push(CtxRow::Entry(CtxEntry {
                 glyph: CTX_GLYPH_FOLDER,
-                label: "打开所在位置".to_string(),
+                label: crate::text::t(lang, "ctx.locate").to_string(),
                 shortcut: "",
                 action: CtxAction::RevealInFolder { path: path.clone() },
             }));
             rows.push(CtxRow::Separator);
             rows.push(CtxRow::Entry(CtxEntry {
                 glyph: CTX_GLYPH_COPY,
-                label: "复制路径".to_string(),
+                label: crate::text::t(lang, "ctx.copy_path").to_string(),
                 shortcut: "Ctrl+Shift+C",
                 action: CtxAction::CopyText { text: path },
             }));
@@ -241,7 +244,7 @@ pub(crate) fn context_menu_rows(item: &PanelItem) -> Vec<CtxRow> {
                 rows.push(CtxRow::Separator);
                 rows.push(CtxRow::Entry(CtxEntry {
                     glyph: CTX_GLYPH_LINK,
-                    label: "复制链接".to_string(),
+                    label: crate::text::t(lang, "ctx.copy_link").to_string(),
                     shortcut: "Ctrl+Shift+C",
                     action: CtxAction::CopyText { text: url },
                 }));
@@ -283,7 +286,7 @@ mod tests {
     fn ctx_menu_app_with_path_gets_full_mapping() {
         // 10B.2 应用：打开 / 以管理员身份运行 / 打开所在位置 / ─ / 复制路径
         let item = ctx_item("应用", r"C:\WINDOWS\system32\AgentService.exe");
-        let rows = context_menu_rows(&item);
+        let rows = context_menu_rows(Lang::ZhCn, &item);
         assert_eq!(
             entry_labels(&rows),
             vec!["打开应用", "以管理员身份运行", "打开所在位置", "复制路径"]
@@ -307,9 +310,15 @@ mod tests {
     fn ctx_menu_gates_secondary_actions_on_data_availability() {
         // subtitle 无路径形态（如无目标路径的项）→ 仅默认动作，不渲染无法兑现的项
         let item = ctx_item("应用", "");
-        assert_eq!(entry_labels(&context_menu_rows(&item)), vec!["打开应用"]);
+        assert_eq!(
+            entry_labels(&context_menu_rows(Lang::ZhCn, &item)),
+            vec!["打开应用"]
+        );
         let item = ctx_item("应用", "快捷方式");
-        assert_eq!(entry_labels(&context_menu_rows(&item)), vec!["打开应用"]);
+        assert_eq!(
+            entry_labels(&context_menu_rows(Lang::ZhCn, &item)),
+            vec!["打开应用"]
+        );
     }
 
     #[test]
@@ -317,7 +326,7 @@ mod tests {
         // 10B.2 文件：无管理员运行项（非可执行语义）
         let item = ctx_item("文件", r"G:\AI\dd-run\Cargo.toml");
         assert_eq!(
-            entry_labels(&context_menu_rows(&item)),
+            entry_labels(&context_menu_rows(Lang::ZhCn, &item)),
             vec!["打开应用", "打开所在位置", "复制路径"]
         );
     }
@@ -328,12 +337,15 @@ mod tests {
         // 顶层项）不含 URL → 仅默认动作（门控规则，偏离记档见函数 doc）
         let mut item = ctx_item("网页", "https://example.com/search?q=dd");
         item.ext_id = "com.ddrun.websearch".to_string();
-        let rows = context_menu_rows(&item);
+        let rows = context_menu_rows(Lang::ZhCn, &item);
         assert_eq!(entry_labels(&rows), vec!["打开网页", "复制链接"]);
         assert!(matches!(rows[rows.len() - 2], CtxRow::Separator));
         let mut item = ctx_item("网页", "输入关键词后在浏览器中搜索");
         item.ext_id = "com.ddrun.websearch".to_string();
-        assert_eq!(entry_labels(&context_menu_rows(&item)), vec!["打开网页"]);
+        assert_eq!(
+            entry_labels(&context_menu_rows(Lang::ZhCn, &item)),
+            vec!["打开网页"]
+        );
     }
 
     #[test]
@@ -342,7 +354,7 @@ mod tests {
         for category in ["命令", "设置"] {
             let item = ctx_item(category, "任意副标题");
             assert_eq!(
-                entry_labels(&context_menu_rows(&item)),
+                entry_labels(&context_menu_rows(Lang::ZhCn, &item)),
                 vec!["打开应用"],
                 "{category} 仅默认动作"
             );
@@ -353,7 +365,7 @@ mod tests {
     fn ctx_menu_focus_count_skips_separators() {
         // 键盘焦点循环只在动作项上进行（Separator 不占焦点位）
         let item = ctx_item("应用", r"C:\x\y.exe");
-        let rows = context_menu_rows(&item);
+        let rows = context_menu_rows(Lang::ZhCn, &item);
         let state = CtxMenuState {
             visible_idx: 0,
             item_id: "app.1".to_string(),

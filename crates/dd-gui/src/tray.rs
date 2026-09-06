@@ -20,10 +20,33 @@
 //! 托盘生命周期 = 进程生命周期：退出直接结束进程，不主动 `NIM_DELETE`
 //! （进程死亡时系统自动移除图标）。
 
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::Arc;
 use std::thread;
+
+/// 托盘菜单语言（v4.13 D38）：原子量跨线程共享生效语言——菜单**每次右键
+/// 即席创建**（`show_menu`），读此值即可随设置页切换，无需重建托盘。
+/// 编码：0 = ZhCn（默认），1 = EnUs（FollowSystem 不会传入，主线程已解析）。
+static TRAY_LANG: AtomicU8 = AtomicU8::new(0);
+
+/// 主线程在启动时与设置页切换语言时调用（`apply_lang`）。
+pub fn set_tray_lang(lang: dd_gui::settings::Lang) {
+    let code = match lang {
+        dd_gui::settings::Lang::EnUs => 1,
+        _ => 0,
+    };
+    TRAY_LANG.store(code, Ordering::Relaxed);
+}
+
+/// 托盘线程侧读取当前生效语言（`t()` 查表用）。
+fn tray_lang() -> dd_gui::settings::Lang {
+    if TRAY_LANG.load(Ordering::Relaxed) == 1 {
+        dd_gui::settings::Lang::EnUs
+    } else {
+        dd_gui::settings::Lang::ZhCn
+    }
+}
 
 /// 托盘菜单事件（10C.2 菜单项 → 行为映射）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -37,8 +60,11 @@ pub enum TrayEvent {
 }
 
 /// 托盘 Tooltip（D25：静态字符串，热键可配置化后跟随拼接）。
+/// v4.13 D38：改为**语言中立**文案（去掉中文动词）——Tooltip 在 NIM_ADD 时
+/// 一次写入，随语言切换需跨线程 NIM_MODIFY，复杂度不成比例；菜单文案已随
+/// 语言，Tooltip 中立化后整体无残留。
 #[cfg(windows)]
-const TOOLTIP: &str = "dd-run — Win+Alt+Space 呼出";
+const TOOLTIP: &str = "dd-run — Win+Alt+Space";
 
 /// 托盘逻辑尺寸（D22：逻辑 16×16，物理随 DPI 取档）。
 #[cfg(windows)]
@@ -356,10 +382,11 @@ unsafe fn show_menu(hwnd: windows_sys::Win32::Foundation::HWND, state: &TrayStat
         if menu.is_null() {
             return;
         }
-        // accel 列经 `\t` 呈现（原生菜单惯例）。
-        let toggle = to_wide("显示/隐藏面板\tWin+Alt+Space");
-        let settings = to_wide("设置");
-        let exit = to_wide("退出");
+        // accel 列经 `\t` 呈现（原生菜单惯例）；文案按当前生效语言（D38）。
+        let lang = tray_lang();
+        let toggle = to_wide(crate::text::t(lang, "tray.toggle"));
+        let settings = to_wide(crate::text::t(lang, "tray.settings"));
+        let exit = to_wide(crate::text::t(lang, "tray.exit"));
         AppendMenuW(menu, MF_STRING, menu_id::TOGGLE as usize, toggle.as_ptr());
         AppendMenuW(
             menu,

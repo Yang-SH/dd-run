@@ -1,7 +1,7 @@
 //! 窗口生命周期：显示/隐藏/失焦、热键与托盘事件轮询。
 
 use crate::app::PaletteApp;
-use crate::app::{APP_H, APP_W, SETTINGS_H, SETTINGS_W};
+use crate::app::{root_panel_size, settings_panel_size, APP_H, APP_W, SIZE_EPSILON};
 use dd_gui::hotkey::HotkeyEvent;
 use dd_gui::tray::TrayEvent;
 use eframe::egui;
@@ -30,23 +30,36 @@ impl PaletteApp {
         // 不能复用 egui `center_on_screen`：它按窗口**当前所在 monitor** 居中，
         // 而启动期窗口被放到屏幕外（OFFSCREEN）→ 会取错屏居中到负象限。
         // 这里用 Win32 `GetCursorPos + MonitorFromPoint` 自算目标屏工作区。
-        self.send_center_on_cursor(ctx);
-        // v4.10 D36：手动缩放仅本显示周期有效——唤起即回栈顶页默认尺寸。
-        // 与 `ui()` 末尾 settings_sized diff 收口同口径：先同步旗标防重复发送。
-        // （grill 决策：保持 palette「跟随光标」语义，尺寸不落盘。）
+        // v4.12 D37：先取光标屏工作区（逻辑点）驱动本屏自适应尺寸 clamp；
+        // 单帧内指针不动，与下方居中取同一屏（见 `platform::cursor_work_area`）。
+        let work = self.cursor_work_area(ctx);
+        self.last_work_area = work;
+        // v4.12 D37（推翻 v4.10 D36④「唤起即回默认尺寸」半条）：唤起尺寸 =
+        // 基准 650×420 或记忆值（`settings.panel_size`，拉伸落盘）按目标屏
+        // 工作区 clamp；设置页打开态隐藏后再唤起（Hide 保留状态）仍按
+        // 设置页有效尺寸。与 `ui()` 的 settings_sized diff 收口同口径：
+        // 先同步旗标防重复发送。
         let want_settings = self.stack.current().is_settings;
         self.settings_sized = want_settings;
         let (w, h) = if want_settings {
-            (SETTINGS_W, SETTINGS_H)
+            settings_panel_size(self.last_work_area, self.settings.panel_size)
         } else {
-            (APP_W, APP_H)
+            root_panel_size(self.last_work_area, self.settings.panel_size)
         };
+        self.shown_size = Some((w, h));
+        // 按**目标尺寸**居中（不再读 stale `inner_rect`）：重开设置页后回到根页
+        // 时，用根页尺寸定位而非残留的设置页大尺寸，消除位置跳动（issue：
+        // 「切换设置项后关闭重开面板位置变化」）。
+        self.center_on_cursor(ctx, (w, h));
         ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(egui::vec2(w, h)));
         ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
         ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
     }
 
     pub(crate) fn hide(&mut self, ctx: &egui::Context) {
+        // v4.12 D37：隐藏前落盘本显示周期的拉伸尺寸（best-effort，见
+        // `persist_panel_size`）——此时窗口尺寸即本周期最终尺寸。
+        self.persist_panel_size(ctx);
         // 隐藏当帧继续绘制真实内容一次，避免 present 纯色空帧的「闪黑」
         // （见 `paint_hide_frame` 字段注释）。
         self.paint_hide_frame = true;
@@ -57,6 +70,53 @@ impl PaletteApp {
         self.ctx_menu = None;
         self.want_ctx_menu_for_selected = false;
         ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
+    }
+
+    /// v4.12 D37 ②：把当前窗口尺寸落盘为记忆值（`settings.panel_size`）。
+    ///
+    /// 判定口径：仅当当前尺寸**偏离 `show()` 时程序设定的 `shown_size`**
+    /// （> [`SIZE_EPSILON`]）才落盘——该偏离只可能来自用户 8 向缩放（D36），
+    /// 小屏 clamp 的程序尺寸不会被误存为用户记忆。当前尺寸等于基准
+    /// `APP_W/APP_H` 时存 `None`（「从未拉伸」语义：用户缩回基准后，日后
+    /// 基准调整不残留旧记录）。
+    ///
+    /// 仅根页/子页态落盘；设置页态的窗口尺寸属设置页，不入根页记忆。
+    /// 落盘时机 = `hide()` / 托盘退出——拖拽缩放期间不逐帧写盘（防高频
+    /// IO；取舍记档 D37：进程被强杀时丢最后一次拉伸）。
+    pub(crate) fn persist_panel_size(&mut self, ctx: &egui::Context) {
+        if self.stack.current().is_settings {
+            return;
+        }
+        let Some(shown) = self.shown_size else {
+            return; // 本进程尚未 show() 过：无参照，不落盘
+        };
+        let cur = ctx.input(|i| i.viewport().inner_rect.map(|r| (r.width(), r.height())));
+        let Some((w, h)) = cur else {
+            return; // inner_rect 不可得（无头/早期帧）：跳过
+        };
+        if (w - shown.0).abs() <= SIZE_EPSILON && (h - shown.1).abs() <= SIZE_EPSILON {
+            return; // 未偏离程序设定值 = 用户未拉伸
+        }
+        let rounded = (w.round().max(1.0) as u32, h.round().max(1.0) as u32);
+        let baseline = (APP_W.round() as u32, APP_H.round() as u32);
+        let next = if rounded == baseline {
+            None
+        } else {
+            Some(rounded)
+        };
+        if next != self.settings.panel_size {
+            eprintln!(
+                "[dd-gui] 面板尺寸落盘：{w:.0}×{h:.0}（记忆 {}）",
+                {
+                    match next {
+                        Some((sw, sh)) => format!("{sw}×{sh}"),
+                        None => "清除".to_string(),
+                    }
+                }
+            );
+            self.settings.panel_size = next;
+            self.settings.save();
+        }
     }
 
     /// 扩展请求 `Dismiss`（协议 §8.3：关闭面板）：清空页面栈回 Root 再隐藏，
@@ -134,6 +194,9 @@ impl PaletteApp {
                 // → main 返回 → 进程结束（托盘图标由系统随进程死亡移除）。
                 TrayEvent::Exit => {
                     eprintln!("[dd-gui] 托盘菜单：退出（结束进程）");
+                    // v4.12 D37：退出前兜底落盘拉伸尺寸（面板可见时直接退出
+                    // 不经 hide()——hide 落盘会漏掉这一路径）。
+                    self.persist_panel_size(ctx);
                     ctx.send_viewport_cmd(egui::ViewportCommand::Close);
                 }
             }

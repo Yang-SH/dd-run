@@ -83,6 +83,13 @@ fn main() -> eframe::Result {
             // 持久化配置，缺省跟随系统；须在任何绘制前应用，egui 会按
             // 系统亮暗自动在两套 Style 间 re-resolve）。
             let settings = dd_gui::settings::Settings::load();
+            // v4.13 D38：托盘菜单语言与生效语言同步（菜单每次右键即席创建，
+            // 读共享原子量；此处设初值，设置页切换经 apply_lang 更新）。
+            let resolved_lang = match settings.lang {
+                dd_gui::settings::Lang::FollowSystem => dd_gui::platform::system_ui_lang(),
+                l => l,
+            };
+            dd_gui::tray::set_tray_lang(resolved_lang);
             // v4.7 D31：启动先按不透明注册（HWND 未捕获、材质成败未知）；
             // 首个 ui 帧捕获 HWND 后由 refresh_backdrop 按结果切换透明性。
             theme::apply(&cc.egui_ctx, theme::theme_preference(settings.theme), false);
@@ -111,7 +118,7 @@ fn main() -> eframe::Result {
             let engines_env = settings.search_engines_env();
             let disabled = settings.disabled_extensions.clone();
             let (agg_tx, agg_rx) = mpsc::channel();
-            spawn_aggregation(agg_tx, cache.clone(), engines_env, disabled);
+            spawn_aggregation(agg_tx, cache.clone(), engines_env, disabled, resolved_lang);
             Ok(Box::new(PaletteApp::new(
                 hotkey,
                 tray.events,

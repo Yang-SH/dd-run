@@ -44,6 +44,7 @@ impl PaletteApp {
 
     /// M4/§11：记录一次崩溃，连续 [`MAX_CONSECUTIVE_CRASHES`] 次 → 熔断（暂时不可用）。
     pub(crate) fn record_crash(&mut self, ext_id: &str) {
+        let lang = self.lang_effective; // 预捕获：sources.iter_mut() 借用期内不能调 self.tr
         let guard = self
             .crash_guards
             .entry(ext_id.to_string())
@@ -57,12 +58,16 @@ impl PaletteApp {
             eprintln!(
                 "[dd-gui] 扩展 {ext_id} 连续崩溃 {n} 次 ≥ {MAX_CONSECUTIVE_CRASHES}，标记暂时不可用（设置→扩展管理可手动重试）"
             );
-            self.show_error_toast(format!(
-                "扩展 {ext_id} 暂时不可用（连续崩溃 {n} 次），可在设置→扩展管理重试"
-            ));
+            self.show_error_toast(
+                self.tr("toast.ext_unavailable_crash")
+                    .replace("{id}", ext_id)
+                    .replace("{n}", &n.to_string()),
+            );
             if let Some(s) = self.sources.iter_mut().find(|s| s.id == ext_id) {
                 s.status = SourceStatus::Failed {
-                    error: format!("暂时不可用（连续崩溃 {n} 次），可在设置→扩展管理重试"),
+                    error: crate::text::t(lang, "toast.ext_unavailable_crash")
+                        .replace("{id}", ext_id)
+                        .replace("{n}", &n.to_string()),
                 };
             }
         } else {

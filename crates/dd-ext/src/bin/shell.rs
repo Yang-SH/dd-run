@@ -14,7 +14,7 @@
 //! （`sh`/`$SHELL`）为**编译恒成立占位**，待对应平台轮实现。
 //! 参考实现：[`docs/m4-record.md`](../../docs/m4-record.md) P4 决策。
 
-use dd_ext::{run, ExtensionSpec};
+use dd_ext::{i18n::tr, run, ExtensionSpec};
 use dd_protocol::messages::InvokeParams;
 use dd_protocol::model::{CommandItem, CommandRef, CommandResult, Icon, IconKind};
 
@@ -31,8 +31,11 @@ fn main() {
 fn spec() -> ExtensionSpec {
     ExtensionSpec {
         id: "com.ddrun.shell",
-        display_name: "Shell",
-        description: "打开终端 / 在面板中执行 shell 命令（Windows cmd）",
+        display_name: tr("Shell", "Shell"),
+        description: tr(
+            "打开终端 / 在面板中执行 shell 命令（Windows cmd）",
+            "Open a terminal / run shell commands in the panel (Windows cmd)",
+        ),
         frozen: true,
         has_fallback: true,
         capabilities: &[],
@@ -47,13 +50,19 @@ fn spec() -> ExtensionSpec {
 fn fallback_commands() -> Vec<CommandItem> {
     vec![CommandItem {
         id: "shell.run.query".to_string(),
-        title: "运行 {query}".to_string(),
-        subtitle: Some("在面板中执行（cmd，无头捕获输出，3s 超时）".to_string()),
+        title: tr("运行 {query}", "Run {query}").to_string(),
+        subtitle: Some(
+            tr(
+                "在面板中执行（cmd，无头捕获输出，3s 超时）",
+                "Run in the panel (cmd, headless output capture, 3s timeout)",
+            )
+            .to_string(),
+        ),
         icon: Some(Icon {
             kind: IconKind::Glyph,
             value: "\u{E756}".to_string(), // CommandPrompt
         }),
-        section: Some("Shell".to_string()),
+        section: Some(tr("Shell", "Shell").to_string()),
         tags: None,
         details: None,
         text_to_suggest: None,
@@ -73,13 +82,13 @@ mod sys {
     pub fn top_level_commands() -> Vec<CommandItem> {
         vec![CommandItem {
             id: "shell.open_terminal".to_string(),
-            title: "Open Terminal".to_string(),
-            subtitle: Some("打开新的 cmd 窗口".to_string()),
+            title: tr("打开终端", "Open Terminal").to_string(),
+            subtitle: Some(tr("打开新的 cmd 窗口", "Open a new cmd window").to_string()),
             icon: Some(Icon {
                 kind: IconKind::Glyph,
                 value: "\u{E756}".to_string(),
             }),
-            section: Some("Shell".to_string()),
+            section: Some(tr("Shell", "Shell").to_string()),
             tags: Some(vec!["shell".to_string(), "terminal".to_string()]),
             details: None,
             text_to_suggest: None,
@@ -101,7 +110,8 @@ mod sys {
                     Ok(_) => (CommandResult::Dismiss, Vec::new()),
                     Err(e) => (
                         CommandResult::ShowToast {
-                            message: format!("打开终端失败：{e}"),
+                            message: tr("打开终端失败：{e}", "Failed to open terminal: {e}")
+                                .replace("{e}", &e.to_string()),
                             duration_ms: Some(3_000),
                         },
                         Vec::new(),
@@ -118,8 +128,11 @@ mod sys {
                 if query.is_empty() {
                     return (
                         CommandResult::ShowToast {
-                            message: "输入要执行的命令后选择「运行 …」项，例如 echo hello"
-                                .to_string(),
+                            message: tr(
+                                "输入要执行的命令后选择「运行 …」项，例如 echo hello",
+                                "Type a command to run, then pick the “Run …” item, e.g. echo hello",
+                            )
+                            .to_string(),
                             duration_ms: Some(2_500),
                         },
                         Vec::new(),
@@ -138,7 +151,8 @@ mod sys {
                     }
                     Err(e) => (
                         CommandResult::ShowToast {
-                            message: format!("执行失败：{e}"),
+                            message: tr("执行失败：{e}", "Execution failed: {e}")
+                                .replace("{e}", &e.to_string()),
                             duration_ms: Some(3_000),
                         },
                         Vec::new(),
@@ -147,7 +161,8 @@ mod sys {
             }
             other => (
                 CommandResult::ShowToast {
-                    message: format!("未知 shell 命令：{other}"),
+                    message: tr("未知 shell 命令：{other}", "Unknown shell command: {other}")
+                        .replace("{other}", other),
                     duration_ms: Some(2_500),
                 },
                 Vec::new(),
@@ -332,7 +347,11 @@ mod sys {
     pub fn handle_invoke(_params: &InvokeParams) -> (CommandResult, Vec<Effect>) {
         (
             CommandResult::ShowToast {
-                message: "Shell 命令：当前平台尚未实现（P4 Windows 优先）".to_string(),
+                message: tr(
+                    "Shell 命令：当前平台尚未实现（P4 Windows 优先）",
+                    "Shell commands: not implemented on this platform yet (P4: Windows first)",
+                )
+                .to_string(),
                 duration_ms: Some(2_500),
             },
             Vec::new(),

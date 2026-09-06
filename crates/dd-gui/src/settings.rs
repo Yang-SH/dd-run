@@ -138,6 +138,42 @@ impl Backdrop {
     }
 }
 
+/// 界面语言（v4.13 D38）。`FollowSystem`（默认）在运行时经平台探测解析为
+/// 具体语言（`crate::platform::system_ui_lang`：zh 系 → ZhCn，其余 → EnUs）。
+/// 显示文案不走固定中文 `label()`——语言卡经 `text::t()` 按**当前生效语言**
+/// 取文案；「简体中文」/「English」两选项恒为自称原文（语言选择惯例）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Lang {
+    /// 跟随系统 UI 语言（默认）。
+    #[default]
+    FollowSystem,
+    /// 简体中文。
+    ZhCn,
+    /// English。
+    EnUs,
+}
+
+impl Lang {
+    /// JSON 序列化值（稳定标识，与显示文案解耦）。
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Lang::FollowSystem => "follow_system",
+            Lang::ZhCn => "zh_cn",
+            Lang::EnUs => "en_us",
+        }
+    }
+
+    /// JSON 值反解；未知值返回 `None`（调用方回落默认 FollowSystem）。
+    pub fn parse(s: &str) -> Option<Self> {
+        match s {
+            "follow_system" => Some(Lang::FollowSystem),
+            "zh_cn" => Some(Lang::ZhCn),
+            "en_us" => Some(Lang::EnUs),
+            _ => None,
+        }
+    }
+}
+
 /// 搜索引擎配置（2026-09-05 新增设置项：可配置搜索引擎）。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SearchEngine {
@@ -201,6 +237,13 @@ pub struct Settings {
     pub autostart: bool,
     /// 已停用扩展的清单 id 列表（M6 批次 6.3：聚合时跳过；默认空 = 全启用）。
     pub disabled_extensions: Vec<String>,
+    /// 面板记忆尺寸（v4.12 D37：手动拉伸后的逻辑宽高，取整存储；
+    /// `None` = 从未手动拉伸，唤起用自适应基准 `APP_W/APP_H`）。
+    /// 唤起时仍按光标所在屏工作区 clamp（小屏收缩），见 `app::root_panel_size`。
+    pub panel_size: Option<(u32, u32)>,
+    /// 界面语言偏好（v4.13 D38：默认 FollowSystem；只存用户偏好——
+    /// 运行时解析后的生效语言存 `PaletteApp.lang_effective`）。
+    pub lang: Lang,
 }
 
 /// 全局热键默认修饰键：Win + Alt（MOD_* 值：ALT=1/CONTROL=2/SHIFT=4/WIN=8，
@@ -223,6 +266,8 @@ impl Default for Settings {
             hotkey_vk: HOTKEY_VK_DEFAULT,
             autostart: false,
             disabled_extensions: Vec::new(),
+            panel_size: None,
+            lang: Lang::default(),
         }
     }
 }
@@ -314,6 +359,26 @@ impl Settings {
                 .filter_map(|e| e.as_str().map(str::to_string))
                 .collect();
         }
+        // 面板记忆尺寸（v4.12 D37）：[宽, 高] 逻辑点取整；字段缺失（旧版本
+        // 配置）/ 类型损坏 / 数值不合法 → None（= 从未拉伸，用自适应基准）。
+        s.panel_size = v
+            .get("panel_size")
+            .and_then(|p| p.as_array())
+            .and_then(|a| {
+                let w = a.first()?.as_u64()?;
+                let h = a.get(1)?.as_u64()?;
+                if (1..=100_000).contains(&w) && (1..=100_000).contains(&h) {
+                    Some((w as u32, h as u32))
+                } else {
+                    None
+                }
+            });
+        // 界面语言（v4.13 D38）：字段缺失（旧版本配置）/ 未知值 → 默认跟随系统。
+        if let Some(t) = v.get("lang").and_then(|t| t.as_str()) {
+            if let Some(lang) = Lang::parse(t) {
+                s.lang = lang;
+            }
+        }
         // 搜索引擎：字段缺失（旧版本配置）→ 预设 5 引擎；字段存在 → 逐条
         // 校验，非法条目跳过（空数组 = 用户全部关闭，尊重其意图）。
         match v.get("search_engines") {
@@ -351,6 +416,11 @@ impl Settings {
             "hotkey_vk": self.hotkey_vk,
             "autostart": self.autostart,
             "disabled_extensions": self.disabled_extensions,
+            "panel_size": match self.panel_size {
+                Some((w, h)) => serde_json::json!([w, h]),
+                None => serde_json::Value::Null,
+            },
+            "lang": self.lang.as_str(),
         })
         .to_string()
     }
@@ -644,5 +714,72 @@ mod tests {
         assert!(Settings::parse_json(r#"{"disabled_extensions":42}"#)
             .disabled_extensions
             .is_empty());
+    }
+
+    #[test]
+    fn lang_roundtrip_and_unknown_fallback() {
+        // v4.13 D38：默认跟随系统；往返一致；未知值/旧配置缺字段 → 默认
+        assert_eq!(Settings::default().lang, Lang::FollowSystem);
+        let s = Settings {
+            lang: Lang::EnUs,
+            ..Settings::default()
+        };
+        let parsed = Settings::parse_json(&s.to_json_string());
+        assert_eq!(parsed.lang, Lang::EnUs, "lang 往返保留");
+        assert_eq!(
+            Settings::parse_json(r#"{"lang":"fr_fr"}"#).lang,
+            Lang::FollowSystem,
+            "未知值回落跟随系统"
+        );
+        assert_eq!(Settings::parse_json("{}").lang, Lang::FollowSystem);
+        assert_eq!(Lang::parse("zh_cn"), Some(Lang::ZhCn));
+        assert_eq!(Lang::parse("follow_system"), Some(Lang::FollowSystem));
+        assert_eq!(Lang::parse("nope"), None);
+        assert_eq!(Lang::ZhCn.as_str(), "zh_cn");
+        assert_eq!(Lang::EnUs.as_str(), "en_us");
+    }
+
+    #[test]
+    fn panel_size_default_missing_and_roundtrip() {
+        // v4.12 D37：默认 / 字段缺失（旧版本配置）/ 类型损坏 / 越界值 → None
+        assert_eq!(Settings::default().panel_size, None);
+        assert_eq!(Settings::parse_json("{}").panel_size, None);
+        assert_eq!(
+            Settings::parse_json(r#"{"theme":"dark"}"#).panel_size,
+            None,
+            "旧版本配置无该字段"
+        );
+        assert_eq!(
+            Settings::parse_json(r#"{"panel_size":42}"#).panel_size,
+            None
+        );
+        assert_eq!(
+            Settings::parse_json(r#"{"panel_size":[1]}"#).panel_size,
+            None,
+            "缺高度"
+        );
+        assert_eq!(
+            Settings::parse_json(r#"{"panel_size":[0,400]}"#).panel_size,
+            None,
+            "非法宽度"
+        );
+        assert_eq!(
+            Settings::parse_json(r#"{"panel_size":[999999,400]}"#).panel_size,
+            None,
+            "越界尺寸"
+        );
+        // 往返一致（含 None 与 Some 两态）
+        let s = Settings {
+            panel_size: Some((900, 700)),
+            ..Settings::default()
+        };
+        let parsed = Settings::parse_json(&s.to_json_string());
+        assert_eq!(parsed.panel_size, Some((900, 700)), "Some 往返一致");
+        assert!(
+            Settings::default()
+                .to_json_string()
+                .contains("\"panel_size\":null"),
+            "None 序列化为 null"
+        );
     }
 }

@@ -27,6 +27,7 @@ pub(crate) struct PageOutcome {
 impl PaletteApp {
     /// `get_items` 结果：归还/取舍进程（M3 按是否桩复热）→ 更新对应页（页已退栈则作废）。
     pub(crate) fn poll_page(&mut self) {
+        let lang = self.lang_effective; // 预捕获：current_mut() 借用期内不能调 self.tr
         let Some(rx) = &self.page_rx else {
             return;
         };
@@ -56,7 +57,7 @@ impl PaletteApp {
                             let is_loading = res.is_loading;
                             let items: Vec<PanelItem> = items_raw
                                 .iter()
-                                .map(|cmd| aggregator::to_panel_item(cmd, &ext_id, ""))
+                                .map(|cmd| aggregator::to_panel_item(cmd, &ext_id, "", lang))
                                 .collect();
                             eprintln!(
                                 "[dd-gui] get_items 成功：page={page_id} items={}",
@@ -65,7 +66,7 @@ impl PaletteApp {
                             let page = self.stack.current_mut();
                             page.is_loading = false;
                             page.empty = if items.is_empty() && !is_loading {
-                                Some("该页暂无内容".to_string())
+                                Some(crate::text::t(lang, "page.empty").to_string())
                             } else {
                                 None
                             };
@@ -91,7 +92,8 @@ impl PaletteApp {
                             eprintln!("[dd-gui] get_items 失败：page={page_id}：{e}");
                             let page = self.stack.current_mut();
                             page.is_loading = false;
-                            page.empty = Some(format!("拉取失败：{e}"));
+                            page.empty =
+                                Some(crate::text::t(lang, "page.fetch_fail").replace("{e}", &e));
                             page.list = PanelState::new(Vec::new());
                         }
                     }
@@ -143,18 +145,20 @@ impl PaletteApp {
         search: Option<String>,
         command_id: Option<String>,
     ) {
+        let lang = self.lang_effective; // 预捕获：current_mut() 借用期内不能调 self.tr
         if self.page_rx.is_some() || self.inflight.contains(ext_id) {
             eprintln!("[dd-gui] get_items 失败：ext={ext_id} 上一请求仍在处理");
             let page = self.stack.current_mut();
             page.is_loading = false;
-            page.empty = Some("扩展进程不可用（可能正在处理上一个请求）".to_string());
+            page.empty = Some(crate::text::t(lang, "toast.ext_busy").to_string());
             return;
         }
         if self.is_crash_tripped(ext_id) {
             eprintln!("[dd-gui] get_items 拒绝：ext={ext_id} 暂时不可用（连续崩溃熔断）");
             let page = self.stack.current_mut();
             page.is_loading = false;
-            page.empty = Some(format!("扩展 {ext_id} 暂时不可用，重启宿主后恢复"));
+            page.empty =
+                Some(crate::text::t(lang, "page.ext_unavailable_restart").replace("{id}", ext_id));
             return;
         }
         if self.processes.iter().any(|(id, _)| id == ext_id) {
@@ -164,17 +168,18 @@ impl PaletteApp {
         } else {
             let page = self.stack.current_mut();
             page.is_loading = false;
-            page.empty = Some("扩展信息缺失，无法打开页面".to_string());
+            page.empty = Some(crate::text::t(lang, "page.ext_missing").to_string());
         }
     }
 
     /// 后台 `get_items`（warm：take 进程 → 线程调用 → 结果经 channel 归还）。
     pub(crate) fn fetch_page_warm(&mut self, ext_id: &str, page_id: &str, search: Option<String>) {
+        let lang = self.lang_effective;
         let Some(idx) = self.processes.iter().position(|(id, _)| id == ext_id) else {
             eprintln!("[dd-gui] get_items 失败：ext={ext_id} 进程不可用（可能 in-flight）");
             let page = self.stack.current_mut();
             page.is_loading = false;
-            page.empty = Some("扩展进程不可用".to_string());
+            page.empty = Some(crate::text::t(lang, "toast.ext_busy").to_string());
             return;
         };
         let (_, mut proc) = self.processes.remove(idx);
@@ -213,6 +218,7 @@ impl PaletteApp {
         let ext_id = ext.manifest.id.clone();
         let page_id = page_id.to_string();
         let (tx, rx) = mpsc::channel();
+        let lang = self.lang_effective; // 线程闭包无法借 self：按值捕获生效语言
         thread::spawn(move || {
             let mut proc = match aggregator::spawn_and_initialize(&ext) {
                 Ok(p) => p,
@@ -231,9 +237,7 @@ impl PaletteApp {
             let result: Result<GetItemsResult, String> = match &command_id {
                 Some(cid) => match proc.get_command(cid).map_err(|e| e.to_string()) {
                     Ok(Some(_)) => get_items_on(&mut proc, &page_id, search),
-                    Ok(None) => {
-                        Err("命令已失效：扩展未找到该命令（get_command 返回 null）".to_string())
-                    }
+                    Ok(None) => Err(crate::text::t(lang, "page.cmd_stale").to_string()),
                     Err(e) => Err(e),
                 },
                 None => get_items_on(&mut proc, &page_id, search),

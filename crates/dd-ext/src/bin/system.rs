@@ -12,7 +12,7 @@
 //! （macOS `pmset`/`osascript`；Linux `systemctl`，见设计文档 §7 平台列）。
 //! 参考实现：[`docs/m4-record.md`](../../docs/m4-record.md) P4 决策。
 
-use dd_ext::{run, ExtensionSpec};
+use dd_ext::{i18n::tr, run, ExtensionSpec};
 use dd_protocol::messages::InvokeParams;
 use dd_protocol::model::{CommandItem, CommandRef, CommandResult, Icon, IconKind};
 
@@ -23,8 +23,11 @@ fn main() {
 fn spec() -> ExtensionSpec {
     ExtensionSpec {
         id: "com.ddrun.system",
-        display_name: "System",
-        description: "锁屏 / 睡眠 / 关机 / 重启 / 注销",
+        display_name: tr("系统", "System"),
+        description: tr(
+            "锁屏 / 睡眠 / 关机 / 重启 / 注销",
+            "Lock / Sleep / Shut down / Restart / Sign out",
+        ),
         frozen: true,
         has_fallback: false,
         capabilities: &[],
@@ -54,56 +57,88 @@ mod sys {
         pub args: &'static [&'static str],
     }
 
-    pub const COMMANDS: &[SystemCommand] = &[
-        SystemCommand {
-            id: "system.lock",
-            title: "Lock Screen",
-            subtitle: "立即锁定工作站（rundll32 LockWorkStation）",
-            confirm_description: "",
-            dangerous: false,
-            program: "rundll32.exe",
-            args: &["user32.dll,LockWorkStation"],
-        },
-        SystemCommand {
-            id: "system.sleep",
-            title: "Sleep",
-            subtitle: "使计算机进入睡眠（可唤醒）",
-            confirm_description: "",
-            dangerous: false,
-            program: "rundll32.exe",
-            args: &["powrprof.dll,SetSuspendState", "0,1,0"],
-        },
-        SystemCommand {
-            id: "system.shutdown",
-            title: "Shut Down",
-            subtitle: "关闭计算机（⚠ 危险，需二次确认）",
-            confirm_description: "计算机会立即关闭，未保存的工作将丢失。",
-            dangerous: true,
-            program: "shutdown.exe",
-            args: &["/s", "/t", "0"],
-        },
-        SystemCommand {
-            id: "system.restart",
-            title: "Restart",
-            subtitle: "重启计算机（⚠ 危险，需二次确认）",
-            confirm_description: "计算机会立即重启，未保存的工作将丢失。",
-            dangerous: true,
-            program: "shutdown.exe",
-            args: &["/r", "/t", "0"],
-        },
-        SystemCommand {
-            id: "system.logoff",
-            title: "Sign Out",
-            subtitle: "注销当前用户（⚠ 危险，需二次确认）",
-            confirm_description: "当前会话将结束，未保存的工作可能丢失。",
-            dangerous: true,
-            program: "shutdown.exe",
-            args: &["/l"],
-        },
-    ];
+    /// 系统命令表（批次 D：文案经 `tr` 按生效语言选 zh/en）。用函数 + `OnceLock`
+    /// 而非 `const`，因 `tr` 是运行时函数调用、`const` 上下文不允许。
+    pub fn commands() -> &'static [SystemCommand] {
+        static CELL: std::sync::OnceLock<Vec<SystemCommand>> = std::sync::OnceLock::new();
+        CELL.get_or_init(|| {
+            vec![
+                SystemCommand {
+                    id: "system.lock",
+                    title: tr("锁屏", "Lock Screen"),
+                    subtitle: tr(
+                        "立即锁定工作站（rundll32 LockWorkStation）",
+                        "Lock the workstation immediately (rundll32 LockWorkStation)",
+                    ),
+                    confirm_description: "",
+                    dangerous: false,
+                    program: "rundll32.exe",
+                    args: &["user32.dll,LockWorkStation"],
+                },
+                SystemCommand {
+                    id: "system.sleep",
+                    title: tr("睡眠", "Sleep"),
+                    subtitle: tr(
+                        "使计算机进入睡眠（可唤醒）",
+                        "Put the computer to sleep (wakeable)",
+                    ),
+                    confirm_description: "",
+                    dangerous: false,
+                    program: "rundll32.exe",
+                    args: &["powrprof.dll,SetSuspendState", "0,1,0"],
+                },
+                SystemCommand {
+                    id: "system.shutdown",
+                    title: tr("关机", "Shut Down"),
+                    subtitle: tr(
+                        "关闭计算机（⚠ 危险，需二次确认）",
+                        "Shut down the computer (⚠ dangerous, needs confirmation)",
+                    ),
+                    confirm_description: tr(
+                        "计算机会立即关闭，未保存的工作将丢失。",
+                        "The computer will shut down immediately; unsaved work will be lost.",
+                    ),
+                    dangerous: true,
+                    program: "shutdown.exe",
+                    args: &["/s", "/t", "0"],
+                },
+                SystemCommand {
+                    id: "system.restart",
+                    title: tr("重启", "Restart"),
+                    subtitle: tr(
+                        "重启计算机（⚠ 危险，需二次确认）",
+                        "Restart the computer (⚠ dangerous, needs confirmation)",
+                    ),
+                    confirm_description: tr(
+                        "计算机会立即重启，未保存的工作将丢失。",
+                        "The computer will restart immediately; unsaved work will be lost.",
+                    ),
+                    dangerous: true,
+                    program: "shutdown.exe",
+                    args: &["/r", "/t", "0"],
+                },
+                SystemCommand {
+                    id: "system.logoff",
+                    title: tr("注销", "Sign Out"),
+                    subtitle: tr(
+                        "注销当前用户（⚠ 危险，需二次确认）",
+                        "Sign out the current user (⚠ dangerous, needs confirmation)",
+                    ),
+                    confirm_description: tr(
+                        "当前会话将结束，未保存的工作可能丢失。",
+                        "The current session will end; unsaved work may be lost.",
+                    ),
+                    dangerous: true,
+                    program: "shutdown.exe",
+                    args: &["/l"],
+                },
+            ]
+        })
+        .as_slice()
+    }
 
     pub fn top_level_commands() -> Vec<CommandItem> {
-        COMMANDS
+        commands()
             .iter()
             .map(|c| CommandItem {
                 id: c.id.to_string(),
@@ -113,7 +148,7 @@ mod sys {
                     kind: IconKind::Glyph,
                     value: "\u{E7E8}".to_string(), // PowerButton
                 }),
-                section: Some("系统".to_string()),
+                section: Some(tr("系统", "System").to_string()),
                 tags: Some(if c.dangerous {
                     vec!["system".to_string(), "danger".to_string()]
                 } else {
@@ -136,18 +171,23 @@ mod sys {
             .as_ref()
             .and_then(|c| c.confirmed)
             .unwrap_or(false);
-        let Some(cmd) = COMMANDS.iter().find(|c| c.id == params.id) else {
+        let Some(cmd) = commands().iter().find(|c| c.id == params.id) else {
             return Err(CommandResult::ShowToast {
-                message: format!("未知系统命令：{}", params.id),
+                message: tr("未知系统命令：{}", "Unknown system command: {}")
+                    .replace("{}", &params.id),
                 duration_ms: Some(2_500),
             });
         };
         // §8.3：确认后宿主带 confirmed=true 重发 invoke
         if cmd.dangerous && !confirmed {
             return Err(CommandResult::Confirm {
-                title: format!("确认{}？", cmd.title),
-                description: format!("{}该操作无法撤销，确认要执行吗？", cmd.confirm_description),
-                confirm_label: format!("执行{}", cmd.title),
+                title: tr("确认{}？", "Confirm {}?").replace("{}", cmd.title),
+                description: tr(
+                    "{}该操作无法撤销，确认要执行吗？",
+                    "{} This action cannot be undone. Continue?",
+                )
+                .replace("{}", cmd.confirm_description),
+                confirm_label: tr("执行{}", "Execute {}").replace("{}", cmd.title),
                 is_critical: true,
             });
         }
@@ -163,7 +203,9 @@ mod sys {
             Ok(()) => (CommandResult::Dismiss, Vec::new()),
             Err(e) => (
                 CommandResult::ShowToast {
-                    message: format!("执行 {} 失败：{e}", cmd.program),
+                    message: tr("执行 {} 失败：{e}", "Failed to run {}: {e}")
+                        .replace("{e}", &e.to_string())
+                        .replace("{}", cmd.program),
                     duration_ms: Some(3_000),
                 },
                 Vec::new(),
@@ -187,8 +229,8 @@ mod sys {
 
         #[test]
         fn catalog_has_five_known_commands() {
-            assert_eq!(COMMANDS.len(), 5);
-            let ids: Vec<&str> = COMMANDS.iter().map(|c| c.id).collect();
+            assert_eq!(commands().len(), 5);
+            let ids: Vec<&str> = commands().iter().map(|c| c.id).collect();
             assert_eq!(
                 ids,
                 vec![
@@ -200,7 +242,7 @@ mod sys {
                 ]
             );
             // 危险项恰好三项
-            assert_eq!(COMMANDS.iter().filter(|c| c.dangerous).count(), 3);
+            assert_eq!(commands().iter().filter(|c| c.dangerous).count(), 3);
         }
 
         #[test]

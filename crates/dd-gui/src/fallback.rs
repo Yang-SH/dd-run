@@ -115,12 +115,13 @@ impl FallbackStore {
 
     /// 按当前查询渲染全部 Ready 模板为 [`PanelItem`]（`title` 中 `{query}` →
     /// 真实搜索词）。空查询不调用（调用方保证 query 非空时才展示兜底）。
-    pub fn render(&self, query: &str) -> Vec<PanelItem> {
+    /// `lang` 传入为当前生效语言（v4.14 D40：类别徽标随 GUI 语言切换）。
+    pub fn render(&self, query: &str, lang: dd_gui::settings::Lang) -> Vec<PanelItem> {
         let mut out = Vec::new();
         for (ext_id, state) in &self.exts {
             if let ExtState::Ready { name, templates } = state {
                 for tmpl in templates {
-                    let mut item = aggregator::to_panel_item(tmpl, ext_id, name);
+                    let mut item = aggregator::to_panel_item(tmpl, ext_id, name, lang);
                     item.title = render_title(&item.title, query);
                     out.push(item);
                 }
@@ -169,6 +170,7 @@ pub fn fetch_fallback_commands(proc: &mut ExtensionProcess) -> Result<Vec<Comman
 #[cfg(test)]
 mod tests {
     use super::*;
+    use dd_gui::settings::Lang;
     use dd_protocol::model::CommandRef;
 
     fn template(id: &str, title: &str) -> CommandItem {
@@ -199,7 +201,7 @@ mod tests {
             ],
         );
         assert!(!store.is_empty());
-        let items = store.render("1+1");
+        let items = store.render("1+1", Lang::ZhCn);
         assert_eq!(items.len(), 2);
         assert_eq!(items[0].title, "= 1+1", "占位符替换为真实查询");
         assert_eq!(items[0].ext_id, "com.ddrun.calc");
@@ -217,7 +219,7 @@ mod tests {
         store.store("com.ddrun.system", "System", Vec::new());
         assert!(store.is_empty(), "空结果 → 无兜底项");
         assert!(!store.wants("com.ddrun.system"), "已确认无兜底 → 不再拉取");
-        assert!(store.render("x").is_empty());
+        assert!(store.render("x", Lang::ZhCn).is_empty());
     }
 
     #[test]
@@ -251,7 +253,7 @@ mod tests {
             "Calculator",
             vec![template("t2", "x {query}")],
         );
-        assert_eq!(store.render("q").len(), 1, "同扩展覆盖而非追加");
+        assert_eq!(store.render("q", Lang::ZhCn).len(), 1, "同扩展覆盖而非追加");
     }
 
     #[test]
@@ -281,7 +283,7 @@ mod tests {
             "Shell",
             vec![template("c", "跑 {query}")],
         );
-        let items = store.render("hi");
+        let items = store.render("hi", Lang::ZhCn);
         let ids: Vec<&str> = items.iter().map(|i| i.id.as_str()).collect();
         assert_eq!(ids, vec!["a", "b", "c"], "渲染顺序 = 登记顺序");
     }

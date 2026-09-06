@@ -1,5 +1,6 @@
 //! 通用绘制原语：键帽、键位组、齿轮、返回键等。
 
+use dd_gui::settings::Lang;
 use dd_gui::theme;
 use eframe::egui;
 
@@ -11,14 +12,15 @@ pub(crate) struct KeyGroup {
 
 /// `<b>Enter</b> 执行` ｜ `<b>Esc</b> 返回·隐藏`
 /// （v4.11 修订：用户反馈底部栏信息冗余，移除「↑↓ 选择」提示）。
+/// `desc` 存 i18n key（v4.13 D38），绘制/量宽时经 `text::t(lang, …)` 解析。
 pub(crate) const KEY_GROUPS: [KeyGroup; 2] = [
     KeyGroup {
         caps: &["Enter"],
-        desc: "执行",
+        desc: "footer.key_execute",
     },
     KeyGroup {
         caps: &["Esc"],
-        desc: "返回·隐藏",
+        desc: "footer.key_hide",
     },
 ];
 
@@ -38,21 +40,22 @@ pub(crate) fn keycap_width(ui: &egui::Ui, cap: &str) -> f32 {
 }
 
 /// 键位组宽度 = 说明文本 + 帽-文距 6 + 各键帽 + 帽间 4px（v4.10 D35：说明在前）。
-pub(crate) fn key_group_width(ui: &egui::Ui, group: &KeyGroup) -> f32 {
+pub(crate) fn key_group_width(ui: &egui::Ui, lang: Lang, group: &KeyGroup) -> f32 {
+    let desc = crate::text::t(lang, group.desc);
     let caps: f32 = group.caps.iter().map(|c| keycap_width(ui, c)).sum();
     let gaps = theme::KEYCAP_GAP * group.caps.len().saturating_sub(1) as f32;
-    text_width(
-        ui,
-        group.desc,
-        egui::FontId::proportional(theme::FOOTER_FONT),
-    ) + theme::KEYCAP_DESC_GAP
+    text_width(ui, desc, egui::FontId::proportional(theme::FOOTER_FONT))
+        + theme::KEYCAP_DESC_GAP
         + caps
         + gaps
 }
 
 /// 键位区总宽（组间 `FOOTER_GAP` 14px）。
-pub(crate) fn keys_width(ui: &egui::Ui) -> f32 {
-    let sum: f32 = KEY_GROUPS.iter().map(|g| key_group_width(ui, g)).sum();
+pub(crate) fn keys_width(ui: &egui::Ui, lang: Lang) -> f32 {
+    let sum: f32 = KEY_GROUPS
+        .iter()
+        .map(|g| key_group_width(ui, lang, g))
+        .sum();
     sum + theme::FOOTER_GAP * (KEY_GROUPS.len() - 1) as f32
 }
 
@@ -114,7 +117,7 @@ pub(crate) fn draw_back_btn(ui: &mut egui::Ui, p: &theme::Palette) -> bool {
 /// 宽度推进与 [`keys_width`] / [`key_group_width`] 的口径完全一致
 /// （组间 `FOOTER_GAP`、说明与键帽间 `KEYCAP_DESC_GAP`、键帽间 `KEYCAP_GAP`），
 /// 保证 `split_x = row.right() - keys_width()` 后恰好从 `split_x` 起排。
-pub(crate) fn paint_keys_at(ui: &mut egui::Ui, origin: egui::Pos2, p: &theme::Palette) {
+pub(crate) fn paint_keys_at(ui: &mut egui::Ui, lang: Lang, origin: egui::Pos2, p: &theme::Palette) {
     let font = egui::FontId::proportional(theme::FOOTER_FONT);
     let mut x = origin.x;
     for (i, group) in KEY_GROUPS.iter().enumerate() {
@@ -122,14 +125,15 @@ pub(crate) fn paint_keys_at(ui: &mut egui::Ui, origin: egui::Pos2, p: &theme::Pa
             x += theme::FOOTER_GAP;
         }
         // 说明文本在前（v4.10 D35），色 text-2（较页脚默认 text-3 强调一级）
+        let desc = crate::text::t(lang, group.desc);
         ui.painter().text(
             egui::pos2(x, origin.y),
             egui::Align2::LEFT_CENTER,
-            group.desc,
+            desc,
             font.clone(),
             p.text2,
         );
-        x += text_width(ui, group.desc, font.clone()) + theme::KEYCAP_DESC_GAP;
+        x += text_width(ui, desc, font.clone()) + theme::KEYCAP_DESC_GAP;
         for (j, cap) in group.caps.iter().enumerate() {
             if j > 0 {
                 x += theme::KEYCAP_GAP;

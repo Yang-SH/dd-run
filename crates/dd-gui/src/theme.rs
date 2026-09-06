@@ -67,9 +67,13 @@ pub struct Palette {
     pub text4: Color32,
     /// 禁用态文本：设置页占位项（05 `colorNeutralForegroundDisabled`）
     pub text_disabled: Color32,
-    /// 卡片表面：设置卡片/Toast/按钮底（05 `colorNeutralCardBackground`）
+    /// 卡片表面：设置卡片/Toast/按钮底（05 `colorNeutralCardBackground`；
+    /// 暗 grey[20] #333333 / 亮 grey[98] #fafafa，Fluent 2 卡面比画布
+    /// 亮一档（暗）或灰一档（亮）以与 `--panel` 区分）
     pub card: Color32,
-    /// 卡片 hover（05 `colorNeutralCardBackgroundHover`）
+    /// 卡片 hover（05 `colorNeutralCardBackgroundHover`：卡面同族内偏移一档、
+    /// 方向同 hover 语义——暗比卡面更亮 grey[24]、亮比卡面更灰 grey[96]，
+    /// 非纯白/纯黑跳变；当前为预留 token，绘制层按需引用）
     pub card_hover: Color32,
     /// 强调色：选中指示条/聚焦下划线/主按钮（05 `colorBrandBackground`）
     pub accent: Color32,
@@ -126,7 +130,7 @@ impl Palette {
             text4: rgb(0x70_70_70),
             text_disabled: rgb(0xbd_bd_bd),
             card: rgb(0xfa_fa_fa),
-            card_hover: rgb(0xff_ff_ff),
+            card_hover: rgb(0xf5_f5_f5), // 亮卡面 grey[98] → hover grey[96]（Fluent 卡面 hover 同族偏移）
             accent: rgb(0x0f_6c_bd),
             success: rgb(0x0e_70_0e), // green[shade10] · colorStatusSuccessForeground1（亮；#107c10 实为 primary）
             danger: rgb(0xb1_0e_1c), // cranberry[shade10] · colorStatusDangerForeground1（亮；#c50f1f 实为 primary）
@@ -329,6 +333,11 @@ mod tests {
             "--card 暗 = cardBackground grey[20]"
         );
         assert_eq!(
+            p.card_hover,
+            rgb(0x3d_3d_3d),
+            "--card-hover 暗 = cardHover grey[24]（卡面 grey[20] 同族更亮一档）"
+        );
+        assert_eq!(
             p.accent,
             rgb(0x11_5e_a3),
             "--accent 暗 = brand[70]（colorBrandBackground）"
@@ -382,6 +391,11 @@ mod tests {
             p.card,
             rgb(0xfa_fa_fa),
             "--card 亮 = cardBackground grey[98]"
+        );
+        assert_eq!(
+            p.card_hover,
+            rgb(0xf5_f5_f5),
+            "--card-hover 亮 = cardHover grey[96]（卡面 grey[98] 同族更灰一档）"
         );
         assert_eq!(p.accent, rgb(0x0f_6c_bd), "--accent 亮 = brand[80]");
         assert_eq!(p.success, rgb(0x0e_70_0e), "--success 亮 = green[shade10]");

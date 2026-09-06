@@ -38,6 +38,7 @@ pub fn spawn_aggregation(
     cache: Option<FrozenCache>,
     engines_json: String,
     disabled: Vec<String>,
+    lang: dd_gui::settings::Lang,
 ) {
     thread::spawn(move || {
         // A2 拆分计时的"数据平面"：从 scan 起到聚合完成止（不含 GUI/字体加载）
@@ -54,8 +55,18 @@ pub fn spawn_aggregation(
             .cloned()
             .collect();
         aggregator::inject_websearch_env(&mut active, &engines_json);
+        // 批次 D（2026-09-06）：注入生效语言到各扩展进程环境——扩展侧经
+        // `DDRUN_LANG` 选 zh/en 文案。`lang` 已是 FollowSystem 解析后的具体语言
+        // （zh_cn / en_us）；扩展解析未知值回落 zh_cn。
+        let lang_str = lang.as_str().to_string();
+        for ext in &mut active {
+            ext.manifest
+                .entry
+                .env
+                .insert("DDRUN_LANG".to_string(), lang_str.clone());
+        }
         let result = aggregator::collect_top_level(&active, cache.as_ref());
-        let (items, sources) = aggregator::flatten(&result.per_ext);
+        let (items, sources) = aggregator::flatten(&result.per_ext, lang);
 
         // 进程与 `ExtItems::Ready` 一一对应（collect 时按序 push）；Stub（读桩）无进程
         let mut procs = result.processes.into_iter();

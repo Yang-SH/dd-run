@@ -36,7 +36,8 @@ impl PaletteApp {
             return;
         }
         // 无匹配：渲染缓存模板（缓存空 → 空集，列表区回落"没有匹配项"）
-        let rendered = self.fallback_store.render(&query);
+        let lang = self.lang_effective;
+        let rendered = self.fallback_store.render(&query, lang);
         self.stack.current_mut().list.set_fallback(rendered);
         // 若还有扩展未拉取模板且当前无在途请求 → 链式发起（每轮 1 个）
         self.start_fallback_fetch_chain();
@@ -149,7 +150,8 @@ impl PaletteApp {
         if query.is_empty() {
             return;
         }
-        let rendered = self.fallback_store.render(&query);
+        let lang = self.lang_effective;
+        let rendered = self.fallback_store.render(&query, lang);
         self.stack.current_mut().list.set_fallback(rendered);
     }
 }

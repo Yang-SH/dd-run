@@ -25,7 +25,7 @@ impl PaletteApp {
         let title = dialog.title.clone();
         let description = dialog.description.clone();
         let confirm_label = if dialog.confirm_label.is_empty() {
-            "确认".to_string()
+            self.tr("dialog.confirm").to_string()
         } else {
             dialog.confirm_label.clone()
         };
@@ -74,8 +74,9 @@ impl PaletteApp {
                             ui.allocate_exact_size(egui::vec2(row_w, 32.0), egui::Sense::hover());
                         let confirm_w =
                             text_width(ui, &confirm_label, egui::FontId::proportional(14.0)) + 24.0;
+                        let cancel_label = self.tr("dialog.cancel");
                         let cancel_w =
-                            text_width(ui, "取消", egui::FontId::proportional(14.0)) + 24.0;
+                            text_width(ui, cancel_label, egui::FontId::proportional(14.0)) + 24.0;
                         let confirm_rect = egui::Rect::from_min_size(
                             egui::pos2(row.right() - confirm_w, row.min.y),
                             egui::vec2(confirm_w, 32.0),
@@ -90,8 +91,12 @@ impl PaletteApp {
                         // §10.1 键帽行「↵ Enter 确认 / Esc 取消」：↵ 入键帽
                         let enter_cap = "↵ Enter";
                         let enter_kw = keycap_width(ui, enter_cap);
-                        let que_w = text_width(ui, "确认", egui::FontId::proportional(12.0));
-                        let qux_w = text_width(ui, "取消", egui::FontId::proportional(12.0));
+                        let que_w = text_width(
+                            ui,
+                            self.tr("dialog.confirm"),
+                            egui::FontId::proportional(12.0),
+                        );
+                        let qux_w = text_width(ui, cancel_label, egui::FontId::proportional(12.0));
                         let hint_w = enter_kw + 4.0 + que_w + 12.0 + esc_kw + 4.0 + qux_w;
                         let cy = row.center().y;
                         if cancel_rect.left() - row.min.x > hint_w + 12.0 {
@@ -109,7 +114,7 @@ impl PaletteApp {
                             ui.painter().text(
                                 egui::pos2(x, cy),
                                 egui::Align2::LEFT_CENTER,
-                                "确认",
+                                self.tr("dialog.confirm"),
                                 egui::FontId::proportional(12.0),
                                 p.text3,
                             );
@@ -127,7 +132,7 @@ impl PaletteApp {
                             ui.painter().text(
                                 egui::pos2(x, cy),
                                 egui::Align2::LEFT_CENTER,
-                                "取消",
+                                cancel_label,
                                 egui::FontId::proportional(12.0),
                                 p.text3,
                             );
@@ -142,7 +147,7 @@ impl PaletteApp {
                             confirmed = true;
                         }
                         // 取消按钮：secondary 形态（card 底 + border-strong 描边）
-                        if draw_dialog_button(ui, cancel_rect, "取消", p.card, p.text, true) {
+                        if draw_dialog_button(ui, cancel_rect, cancel_label, p.card, p.text, true) {
                             cancelled = true;
                         }
                     });

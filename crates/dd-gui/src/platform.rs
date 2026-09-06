@@ -3,16 +3,21 @@
 //! 拆分自原 main.rs（docs/refactor-layering-plan.md 方案 1），方法体逐字未改。
 
 use crate::app::PaletteApp;
-use crate::app::APP_H;
-use crate::app::APP_W;
 use eframe::egui;
 
-/// 加载本地字体栈：CJK 主字（msyh / SimHei / Deng）+ Segoe UI Symbol 符号后援
-/// + Segoe Fluent/MDL2 图标字体（§8.6 glyph 图标，M5 UI 批次 2）。
+/// 加载本地字体栈：CJK 主字（msyh / SimHei / Deng）、Segoe UI Symbol 符号后援、
+/// Segoe UI 拉丁/符号扩展后援、Segoe Fluent/MDL2 图标字体（§8.6 glyph 图标，M5 UI 批次 2）。
 ///
 /// msyh.ttc 覆盖 CJK 与 ✓/✗（Dingbats 区），但**缺** Geometric Shapes 的 ◌ (U+25CC)
 /// ——M3 桩态页脚会渲染成方框。seguisym.ttf（Win 7+ 必装）补 Geometric Shapes /
 /// Misc Symbols，把 ◌/○/· 等符号路由到它去渲染。
+///
+/// **segoeui.ttf（v4.12 真机修复 2026-09-06）**：AMD Software 等应用的
+/// AppsFolder 显示名含 U+A78B（MODIFIER LETTER COLON「꞉」，AMD 用它规避
+/// Windows 文件名非法字符 `:`）——msyh/seguisym 的 cmap 均无此码位（已用
+/// fonttools 核验），egui 渲染为缺字方块「AMD Software□ Adrenalin」。
+/// Segoe UI 覆盖该码位（开始菜单即用 Segoe UI 渲染正常），补为拉丁后援；
+/// 其 cmap **零 PUA 码位**（已核验），插在图标字体之前不会抢 §8.6 glyph 字形。
 ///
 /// 图标字体按两代兼容顺序加载：Win11 的 `SegoeIcons.ttf`（Segoe Fluent Icons）优先，
 /// Win10 无此文件时回落 `segmdl2.ttf`（Segoe MDL2 Assets）——码位（U+E700–U+E8FF
@@ -112,6 +117,35 @@ fn load_cjk_font_definitions() -> Option<egui::FontDefinitions> {
     } else {
         eprintln!("[dd-gui] 未找到 {sym_candidate}（符号字体）；M3 桩态 ◌ 等符号可能仍显示为方块");
     }
+    // Segoe UI 拉丁/符号扩展后援（v4.12 真机修复）：U+A78B 等 msyh/seguisym
+    // 缺失的拉丁修饰符码位落到这里（见函数 doc 注释的取证记录）。零 PUA
+    // 码位，插在图标字体之前无抢字形风险；缺文件（< Vista）仅记日志。
+    let latin_candidate = r"C:\Windows\Fonts\segoeui.ttf";
+    if std::path::Path::new(latin_candidate).is_file() {
+        let path = latin_candidate;
+        match std::fs::read(path) {
+            Ok(bytes) => {
+                fonts.font_data.insert(
+                    "segoe".to_owned(),
+                    std::sync::Arc::new(egui::FontData::from_owned(bytes)),
+                );
+                // 插在 sym 之后、icons 之前：普通拉丁/符号优先用 Segoe UI，
+                // PUA 图标码位继续落到后面的图标字体。
+                fonts
+                    .families
+                    .entry(egui::FontFamily::Proportional)
+                    .or_default()
+                    .push("segoe".to_owned());
+                fonts
+                    .families
+                    .entry(egui::FontFamily::Monospace)
+                    .or_default()
+                    .push("segoe".to_owned());
+                eprintln!("[dd-gui] 已加载拉丁后援字体：{path}");
+            }
+            Err(e) => eprintln!("[dd-gui] 读拉丁后援字体 {path} 失败：{e}"),
+        }
+    }
     if let Some(path) = icon_candidates
         .into_iter()
         .find(|p| std::path::Path::new(p).is_file())
@@ -151,19 +185,62 @@ fn load_cjk_font_definitions() -> Option<egui::FontDefinitions> {
 }
 
 impl PaletteApp {
-    /// 计算"光标所在显示器工作区"内使面板居中的 `OuterPosition` 并发送。
+    /// 取"光标所在显示器工作区"的**逻辑尺寸**（物理像素 ÷ `pixels_per_point`），
+    /// 供 v4.12 D37 唤起尺寸自适应（`root_panel_size`/`settings_panel_size`）clamp
+    /// 使用；返回 `None` = 取不到（指针/显示器信息失败），调用方按无 clamp 路径回落。
     ///
-    /// 坐标换算：显示器（`rcWork`）与 winit 窗口位置都是**物理像素**，
-    /// 而 egui `OuterPosition` 期望**逻辑点**（egui-winit 内部按窗口 scale
-    /// factor 再换算回物理）。这里用 `ctx.pixels_per_point()` 作换算率
-    /// （即当前窗口缩放）。多 DPI 混合屏上目标屏缩放与窗口当前缩放不同时
-    /// 会有几像素偏差——验收标准（grills A1："每次唤起居中、无位置跳动"）
-    /// 不要求像素级精确，单屏/同 DPI 场景完全居中。
-    ///
-    /// 失败时静默返回（指针/显示器信息取不到）：窗口仍会正常显示在
-    /// 上一次的位置，仅不居中——不让定位失败阻断唤起。
+    /// 与 [`center_on_cursor`] 拆分的原因：原 `send_center_on_cursor` 在发
+    /// `InnerSize` **之前**读取 `inner_rect` 作为居中窗口尺寸——但该尺寸是上一次
+    /// 可见态的遗留值（例如设置页 650×640），而本次 `show()` 实际要显示的是
+    /// 复位后的根页 650×440。用陈旧尺寸居中 + 实际小尺寸渲染 → 面板相对屏心
+    /// 偏移 `(大-小)/2`，表现为"切换设置项后关闭重开面板位置变化"。拆分后
+    /// 先取工作区算目标尺寸，再用目标尺寸精确居中，消除该跳动。
     #[cfg(windows)]
-    pub(crate) fn send_center_on_cursor(&self, ctx: &egui::Context) {
+    pub(crate) fn cursor_work_area(&self, ctx: &egui::Context) -> Option<(f32, f32)> {
+        use windows_sys::Win32::Foundation::POINT;
+        use windows_sys::Win32::Graphics::Gdi::{
+            GetMonitorInfoW, MonitorFromPoint, MONITORINFO, MONITOR_DEFAULTTONEAREST,
+        };
+        use windows_sys::Win32::UI::WindowsAndMessaging::GetCursorPos;
+
+        let mut pt = POINT { x: 0, y: 0 };
+        if unsafe { GetCursorPos(&mut pt) } == 0 {
+            eprintln!("[dd-gui] 居中：GetCursorPos 失败，保持原位显示");
+            return None;
+        }
+        let monitor = unsafe { MonitorFromPoint(pt, MONITOR_DEFAULTTONEAREST) };
+        if monitor.is_null() {
+            eprintln!("[dd-gui] 居中：MonitorFromPoint 无结果，保持原位显示");
+            return None;
+        }
+        let mut info: MONITORINFO = unsafe { std::mem::zeroed() };
+        info.cbSize = std::mem::size_of::<MONITORINFO>() as u32;
+        if unsafe { GetMonitorInfoW(monitor, &mut info) } == 0 {
+            eprintln!("[dd-gui] 居中：GetMonitorInfoW 失败，保持原位显示");
+            return None;
+        }
+        let work = info.rcWork; // 工作区（物理像素，不含任务栏）
+        let ppp = ctx.pixels_per_point().max(0.5);
+        Some((
+            (work.right - work.left) as f32 / ppp,
+            (work.bottom - work.top) as f32 / ppp,
+        ))
+    }
+
+    /// 把 `target`（逻辑点，即本次 `show()` 将要显示的窗口尺寸）居中到
+    /// 光标所在显示器工作区，发送 `OuterPosition`。
+    ///
+    /// 坐标换算：显示器（`rcWork`）与 winit 窗口位置都是**物理像素**，而
+    /// egui `OuterPosition` 期望**逻辑点**（egui-winit 内部按窗口 scale factor
+    /// 再换算回物理）。这里用 `ctx.pixels_per_point()` 作换算率（即当前窗口缩放）。
+    /// 多 DPI 混合屏上目标屏缩放与窗口当前缩放不同时会有几像素偏差——验收标准
+    /// （grills A1："每次唤起居中、无位置跳动"）不要求像素级精确，单屏/同 DPI
+    /// 场景完全居中。
+    ///
+    /// 任一步失败直接返回（指针/显示器信息取不到）：窗口仍正常显示在上一次
+    /// 位置，仅不居中——不让定位失败阻断唤起。
+    #[cfg(windows)]
+    pub(crate) fn center_on_cursor(&self, ctx: &egui::Context, target: (f32, f32)) {
         use windows_sys::Win32::Foundation::POINT;
         use windows_sys::Win32::Graphics::Gdi::{
             GetMonitorInfoW, MonitorFromPoint, MONITORINFO, MONITOR_DEFAULTTONEAREST,
@@ -186,18 +263,21 @@ impl PaletteApp {
             eprintln!("[dd-gui] 居中：GetMonitorInfoW 失败，保持原位显示");
             return;
         }
-        let work = info.rcWork; // 工作区（物理像素，不含任务栏）
+        let work = info.rcWork;
         let ppp = ctx.pixels_per_point().max(0.5);
-        let win_w = APP_W * ppp;
-        let win_h = APP_H * ppp;
+        // 用**目标尺寸**而非 `inner_rect` 的遗留尺寸（见 `cursor_work_area` 注释）。
+        let win_w = target.0 * ppp;
+        let win_h = target.1 * ppp;
         let cx = work.left as f32 + ((work.right - work.left) as f32 - win_w) * 0.5;
         let cy = work.top as f32 + ((work.bottom - work.top) as f32 - win_h) * 0.5;
         eprintln!(
-            "[dd-gui] 唤起居中：光标屏工作区=({},{} {}x{}) → ({}, {})",
+            "[dd-gui] 唤起居中：光标屏工作区=({},{} {}x{}) 目标={}x{} → ({}, {})",
             work.left,
             work.top,
             work.right - work.left,
             work.bottom - work.top,
+            target.0,
+            target.1,
             cx,
             cy
         );
@@ -207,10 +287,16 @@ impl PaletteApp {
         )));
     }
 
+    /// 非 Windows 占位：取不到工作区，返回 `None`（唤起尺寸不做 clamp）。
+    #[cfg(not(windows))]
+    pub(crate) fn cursor_work_area(&self, _ctx: &egui::Context) -> Option<(f32, f32)> {
+        None
+    }
+
     /// 非 Windows 占位：退化为 egui 自带"按窗口当前所在屏居中"（dd-run 当前
     /// Windows 宿主不走此分支；多屏语义在此平台未定义）。
     #[cfg(not(windows))]
-    pub(crate) fn send_center_on_cursor(&self, ctx: &egui::Context) {
+    pub(crate) fn center_on_cursor(&self, ctx: &egui::Context, _target: (f32, f32)) {
         if let Some(cmd) = egui::ViewportCommand::center_on_screen(ctx) {
             ctx.send_viewport_cmd(cmd);
         }
@@ -431,4 +517,25 @@ pub fn set_autostart(enable: bool) -> Result<(), String> {
 #[cfg(not(windows))]
 pub fn set_autostart(_enable: bool) -> Result<(), String> {
     Err("仅 Windows 支持开机自启".to_string())
+}
+
+/// 系统 UI 语言探测（v4.13 D38）：`GetUserDefaultUILanguage` 的主语言 ID
+/// （LANGID 低 10 位）为中文（0x04）→ [`Lang::ZhCn`]，否则 → [`Lang::EnUs`]。
+/// 供 `settings.lang == FollowSystem` 时解析生效语言（`PaletteApp::resolve_lang`）。
+#[cfg(windows)]
+pub fn system_ui_lang() -> dd_gui::settings::Lang {
+    use windows_sys::Win32::Globalization::GetUserDefaultUILanguage;
+    // SAFETY：无参数、仅读进程默认 UI 语言，线程安全。
+    let langid = unsafe { GetUserDefaultUILanguage() };
+    if langid & 0x03FF == 0x0004 {
+        dd_gui::settings::Lang::ZhCn
+    } else {
+        dd_gui::settings::Lang::EnUs
+    }
+}
+
+/// 非 Windows 开发兜底：文案表以中文为主开发语言，跟随系统 → ZhCn。
+#[cfg(not(windows))]
+pub fn system_ui_lang() -> dd_gui::settings::Lang {
+    dd_gui::settings::Lang::ZhCn
 }

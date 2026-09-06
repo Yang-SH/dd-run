@@ -86,7 +86,13 @@ pub(crate) fn shimmer_color(p: &theme::Palette, time: f64) -> egui::Color32 {
 ///
 /// 占位设计：不改拉取时序与超时语义（`TIMEOUT_GET_ITEMS` 不变）。
 /// 动画由调用方 `request_repaint_after` 驱动（egui 按需重绘）。
-pub(crate) fn draw_loading_state(ui: &mut egui::Ui, p: &theme::Palette, dark: bool, time: f64) {
+pub(crate) fn draw_loading_state(
+    ui: &mut egui::Ui,
+    lang: dd_gui::settings::Lang,
+    p: &theme::Palette,
+    dark: bool,
+    time: f64,
+) {
     // ── Spinner + 文案（`.loading`：居中、gap 12） ──
     ui.vertical_centered(|ui| {
         ui.add_space(26.0);
@@ -113,7 +119,7 @@ pub(crate) fn draw_loading_state(ui: &mut egui::Ui, p: &theme::Palette, dark: bo
             .add(egui::Shape::line(pts, egui::Stroke::new(2.5, p.accent)));
         ui.add_space(12.0);
         ui.label(
-            egui::RichText::new("正在加载…")
+            egui::RichText::new(crate::text::t(lang, "panel.loading"))
                 .size(theme::FOOTER_FONT)
                 .color(p.text3),
         );

@@ -232,8 +232,23 @@ impl PaletteApp {
                 self.settings.autostart = on;
                 self.settings.save();
             }
-            Err(e) => self.show_toast(format!("开机自启设置失败：{e}"), None),
+            Err(e) => self.show_toast(self.tr("toast.autostart_fail").replace("{e}", &e), None),
         }
+    }
+
+    /// 设置页语言切换（v4.13 D38）：更新偏好 + 重算生效语言 + 落盘 + 同步托盘
+    /// 菜单语言（菜单每次右键即席创建，读共享原子量，无需重建托盘）；
+    /// egui immediate mode 下一帧全量重绘即生效。纯内存 + 落盘操作，无失败路径。
+    pub(crate) fn apply_lang(&mut self, lang: dd_gui::settings::Lang) {
+        if self.settings.lang == lang {
+            return;
+        }
+        self.settings.lang = lang;
+        self.lang_effective = Self::resolve_lang(&self.settings);
+        self.settings.save();
+        crate::tray::set_tray_lang(self.lang_effective);
+        // 扩展进程须以新 DDRUN_LANG 重启才生效；离开设置页时重聚合消费。
+        self.lang_dirty = true;
     }
 
     /// 设置页扩展启停（M6 批次 6.3）：更新停用表 + 落盘 + 置脏标记
@@ -391,6 +406,7 @@ impl PaletteApp {
             self.cache.clone(),
             self.settings.search_engines_env(),
             self.settings.disabled_extensions.clone(),
+            self.lang_effective,
         );
         self.aggregate_rx = Some(rx);
         self.aggregating = true;

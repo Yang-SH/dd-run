@@ -15,7 +15,7 @@
 //! 参考实现：[`docs/m4-record.md`](../../docs/m4-record.md) P4 决策（扩展侧先行：
 //! 宿主 fallback UI 链路属后续轮，本扩展的兜底能力由 roundtrip 与单测先行验证）。
 
-use dd_ext::{run, Effect, ExtensionSpec};
+use dd_ext::{i18n::tr, run, Effect, ExtensionSpec};
 use dd_protocol::messages::InvokeParams;
 use dd_protocol::model::{CommandItem, CommandRef, CommandResult, Icon, IconKind};
 
@@ -26,8 +26,11 @@ fn main() {
 fn spec() -> ExtensionSpec {
     ExtensionSpec {
         id: "com.ddrun.calc",
-        display_name: "Calculator",
-        description: "在搜索框输入表达式（如 2+2*3）即时计算",
+        display_name: tr("计算器", "Calculator"),
+        description: tr(
+            "在搜索框输入表达式（如 2+2*3）即时计算",
+            "Type an expression in the box (e.g. 2+2*3) for instant calculation",
+        ),
         frozen: true,
         has_fallback: true,
         capabilities: &["host/set_clipboard"],
@@ -43,12 +46,18 @@ fn top_level_commands() -> Vec<CommandItem> {
     vec![CommandItem {
         id: "calc.eval".to_string(),
         title: "Calculator".to_string(),
-        subtitle: Some("在搜索框输入表达式后选择「= …」结果项，如 2+2*3".to_string()),
+        subtitle: Some(
+            tr(
+                "在搜索框输入表达式后选择「= …」结果项，如 2+2*3",
+                "Type an expression, then pick the “= …” result item, e.g. 2+2*3",
+            )
+            .to_string(),
+        ),
         icon: Some(Icon {
             kind: IconKind::Glyph,
             value: "\u{E8EF}".to_string(), // Calculator (Segoe Fluent Icons)
         }),
-        section: Some("计算".to_string()),
+        section: Some(tr("计算", "Calculator").to_string()),
         tags: Some(vec!["calc".to_string(), "math".to_string()]),
         details: None,
         // 输入以 "calc " 开头时也命中（设计文档 §4.4：选中后回填）
@@ -63,12 +72,18 @@ fn fallback_commands() -> Vec<CommandItem> {
     vec![CommandItem {
         id: "calc.eval.query".to_string(),
         title: "= {query}".to_string(),
-        subtitle: Some("计算表达式（Enter 后显示结果并复制到剪贴板）".to_string()),
+        subtitle: Some(
+            tr(
+                "计算表达式（Enter 后显示结果并复制到剪贴板）",
+                "Evaluate the expression (Enter shows the result and copies it to clipboard)",
+            )
+            .to_string(),
+        ),
         icon: Some(Icon {
             kind: IconKind::Glyph,
             value: "\u{E8EF}".to_string(),
         }),
-        section: Some("计算".to_string()),
+        section: Some(tr("计算", "Calculator").to_string()),
         tags: None,
         details: None,
         text_to_suggest: None,
@@ -88,7 +103,11 @@ fn handle_invoke(params: &InvokeParams) -> (CommandResult, Vec<Effect>) {
     let Some(query) = query_after_prefix(query) else {
         return (
             CommandResult::ShowToast {
-                message: "输入表达式后选择「= …」项，例如 2+2*3".to_string(),
+                message: tr(
+                    "输入表达式后选择「= …」项，例如 2+2*3",
+                    "Type an expression, then pick the “= …” item, e.g. 2+2*3",
+                )
+                .to_string(),
                 duration_ms: Some(2_500),
             },
             Vec::new(),
@@ -97,7 +116,11 @@ fn handle_invoke(params: &InvokeParams) -> (CommandResult, Vec<Effect>) {
     if query.is_empty() {
         return (
             CommandResult::ShowToast {
-                message: "表达式为空：输入如 1+2*3、2^10、pi*2".to_string(),
+                message: tr(
+                    "表达式为空：输入如 1+2*3、2^10、pi*2",
+                    "Expression is empty: try e.g. 1+2*3, 2^10, pi*2",
+                )
+                .to_string(),
                 duration_ms: Some(2_500),
             },
             Vec::new(),
@@ -120,7 +143,8 @@ fn handle_invoke(params: &InvokeParams) -> (CommandResult, Vec<Effect>) {
         }
         Err(reason) => (
             CommandResult::ShowToast {
-                message: format!("无法计算：{reason}"),
+                message: tr("无法计算：{reason}", "Cannot evaluate: {reason}")
+                    .replace("{reason}", &reason.to_string()),
                 duration_ms: Some(3_000),
             },
             Vec::new(),
