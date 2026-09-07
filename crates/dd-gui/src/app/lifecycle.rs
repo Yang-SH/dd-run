@@ -12,6 +12,7 @@ impl PaletteApp {
     // ── 窗口可见性 ───────────────────────────────────────────
 
     pub(crate) fn show(&mut self, ctx: &egui::Context) {
+        eprintln!("[dd-gui] show()：visible→false→true，重置状态并唤起");
         self.visible = true;
         self.paint_hide_frame = false; // 显示时清掉可能残留的隐藏帧标记
         self.ever_focused = false;
@@ -57,6 +58,19 @@ impl PaletteApp {
     }
 
     pub(crate) fn hide(&mut self, ctx: &egui::Context) {
+        // v4.16 真机修复（拖拽后面板空白）：原生拖拽/缩放模态循环在途时，
+        // `Visible(false)`（ShowWindow SW_HIDE）会被 Windows 静默忽略 →
+        // 应用态 visible=false 而窗口仍可见，ui() 早返回只呈现透明帧 =
+        // 纯材质空白底（真机截图形态）。故循环在途时推迟 hide，由
+        // `chrome_begin` 在循环结束后补执行。
+        if self.native_resize {
+            self.hide_pending = true;
+            eprintln!("[dd-gui] hide()：原生模态循环在途 → 推迟至循环结束后执行");
+            return;
+        }
+        eprintln!("[dd-gui] hide()：visible→false（Visible(false) 排队）");
+        self.panel_open.store(false, Ordering::Relaxed);
+        self.hide_desync_since = None;
         // v4.12 D37：隐藏前落盘本显示周期的拉伸尺寸（best-effort，见
         // `persist_panel_size`）——此时窗口尺寸即本周期最终尺寸。
         self.persist_panel_size(ctx);

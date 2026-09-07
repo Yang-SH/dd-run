@@ -63,6 +63,9 @@ impl PaletteApp {
                                 "[dd-gui] get_items 成功：page={page_id} items={}",
                                 items.len()
                             );
+                            // 文件搜索自动进页：落地时回填搜索框查询文本（否则被清空）
+                            let drill_armed = self.file_drill_armed;
+                            let drill_q = self.file_drill.clone();
                             let page = self.stack.current_mut();
                             page.is_loading = false;
                             page.empty = if items.is_empty() && !is_loading {
@@ -72,6 +75,21 @@ impl PaletteApp {
                             };
                             page.is_loading = is_loading;
                             page.list = PanelState::new(items);
+                            if drill_armed {
+                                self.file_drill_armed = false;
+                                if page_id == crate::app::FILE_SEARCH_PAGE_ID {
+                                    if let Some(root_q) = &drill_q {
+                                        if let Some(rest) =
+                                            root_q.strip_prefix(crate::app::FILE_SEARCH_PREFIX)
+                                        {
+                                            let q = rest.trim_start().to_string();
+                                            if !q.is_empty() {
+                                                page.list.set_query(q);
+                                            }
+                                        }
+                                    }
+                                }
+                            }
                         }
                         Err(e) => {
                             if stub_reheat {
@@ -98,7 +116,9 @@ impl PaletteApp {
                         }
                     }
                 } else {
-                    // 用户已离开来源页：成功（或 warm 失败但进程存活）仍归还进程——
+                    // 用户已离开来源页：清除文件搜索回填标记，避免后续落地误回填旧查询
+                    self.file_drill_armed = false;
+                    // 成功（或 warm 失败但进程存活）仍归还进程——
                     // 它是扩展资产；复热失败或进程已死则不保活（A8：回落 stub）。
                     let proc_alive = proc.as_mut().map(|p| !p.has_exited()).unwrap_or(false);
                     if result.is_ok() || (proc_alive && !stub_reheat) {

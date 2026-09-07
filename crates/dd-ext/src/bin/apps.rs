@@ -30,6 +30,20 @@ use dd_ext::{i18n::tr, run, Effect, ExtensionSpec};
 use dd_protocol::messages::InvokeParams;
 use dd_protocol::model::{CommandItem, CommandRef, CommandResult, Icon, IconKind};
 
+/// 稳定版「UTF-16 LE 字节 → String」解码。
+/// `String::from_utf16le_lossy` 在稳定工具链上仍受 `str_from_utf16_endian`
+/// feature gate 限制，这里手写等价实现（LE 字节 → u16 → 稳定的
+/// `String::from_utf16_lossy`），避免引入 nightly 依赖。
+fn from_utf16le_lossy(bytes: &[u8]) -> String {
+    let mut v = Vec::with_capacity(bytes.len() / 2);
+    let mut i = 0;
+    while i + 1 < bytes.len() {
+        v.push(u16::from_le_bytes([bytes[i], bytes[i + 1]]));
+        i += 2;
+    }
+    String::from_utf16_lossy(&v)
+}
+
 fn main() {
     run(&spec());
 }
@@ -47,6 +61,7 @@ fn spec() -> ExtensionSpec {
         has_fallback: false,
         capabilities: &[],
         log_tag: "dd-ext-apps",
+        pages: None, // 应用枚举为顶层命令，无子页（§6.3）
         top_level: sys::top_level_commands,
         fallback: None,
         invoke: sys::handle_invoke,
@@ -526,7 +541,7 @@ mod sys {
         let bytes = std::fs::read(path).ok()?;
         let text: String = if bytes.starts_with(&[0xFF, 0xFE]) {
             // UTF-16 LE + BOM
-            String::from_utf16le_lossy(&bytes[2..])
+            from_utf16le_lossy(&bytes[2..])
         } else if bytes.starts_with(&[0xFE, 0xFF]) {
             // UTF-16 BE + BOM：交换字节序后按 LE 解码
             let mut le = Vec::with_capacity(bytes.len() - 2);
@@ -536,7 +551,7 @@ mod sys {
                 le.push(bytes[i]);
                 i += 2;
             }
-            String::from_utf16le_lossy(&le)
+            from_utf16le_lossy(&le)
         } else {
             String::from_utf8_lossy(&bytes).into_owned()
         };
@@ -558,7 +573,7 @@ mod sys {
     fn url_icon_file(path: &Path) -> Option<PathBuf> {
         let bytes = std::fs::read(path).ok()?;
         let text: String = if bytes.starts_with(&[0xFF, 0xFE]) {
-            String::from_utf16le_lossy(&bytes[2..])
+            from_utf16le_lossy(&bytes[2..])
         } else if bytes.starts_with(&[0xFE, 0xFF]) {
             let mut le = Vec::with_capacity(bytes.len() - 2);
             let mut i = 2;
@@ -567,7 +582,7 @@ mod sys {
                 le.push(bytes[i]);
                 i += 2;
             }
-            String::from_utf16le_lossy(&le)
+            from_utf16le_lossy(&le)
         } else {
             String::from_utf8_lossy(&bytes).into_owned()
         };

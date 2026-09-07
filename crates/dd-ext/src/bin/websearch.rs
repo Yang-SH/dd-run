@@ -178,6 +178,7 @@ fn spec() -> ExtensionSpec {
         has_fallback: true,
         capabilities: &["host/open_url"],
         log_tag: "dd-ext-websearch",
+        pages: None, // 网络搜索为顶层命令，无子页（§6.3）
         top_level: top_level_commands,
         fallback: Some(fallback_commands),
         invoke: handle_invoke,

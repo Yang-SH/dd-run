@@ -452,6 +452,22 @@ pub fn set_immersive_dark(_hwnd: isize, _dark: bool) -> bool {
     false
 }
 
+/// 窗口是否 OS 层可见（`IsWindowVisible`）。
+///
+/// v4.16 真机修复（拖拽后面板空白）判据：应用态 `visible=false` 但 OS 可见
+/// ⇒ `Visible(false)` 曾在原生拖拽/缩放模态循环内被 Windows 静默忽略
+/// （SC_MOVE 循环内 ShowWindow 无效），应用态与 OS 态脱钩——宿主据此自愈。
+#[cfg(windows)]
+pub fn is_window_visible(hwnd: isize) -> bool {
+    use windows_sys::Win32::UI::WindowsAndMessaging::IsWindowVisible;
+    unsafe { IsWindowVisible(hwnd as _) != 0 }
+}
+
+#[cfg(not(windows))]
+pub fn is_window_visible(_hwnd: isize) -> bool {
+    true
+}
+
 /// UTF-16 NUL 结尾宽字符串（windows-sys 0.61 无 wide_string! 宏，本地辅助）。
 #[cfg(windows)]
 fn wide(s: &str) -> Vec<u16> {

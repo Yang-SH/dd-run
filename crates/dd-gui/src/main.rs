@@ -107,6 +107,21 @@ fn main() -> eframe::Result {
             // 点击在途旗标（修复失焦隐藏与 Toggle 的「闪黑又展示」竞态）。
             let tray_click_flag = Arc::new(AtomicBool::new(false));
             let tray = TrayThread::spawn(cc.egui_ctx.clone(), Arc::clone(&tray_click_flag));
+            // v4.16 真机修复（拖拽后面板空白）重绘看门狗：面板打开期间每秒
+            // 强制重绘一次——自愈「GL surface 在原生拖拽/缩放模态循环内
+            // present 失败遗留的空白表面」（循环内无输入事件时 egui 不会自行
+            // 重绘，空白会一直停留）。隐藏期间（panel_open=false）零唤醒。
+            let panel_open = Arc::new(AtomicBool::new(false));
+            {
+                let ctx = cc.egui_ctx.clone();
+                let open = Arc::clone(&panel_open);
+                std::thread::spawn(move || loop {
+                    std::thread::sleep(std::time::Duration::from_secs(1));
+                    if open.load(std::sync::atomic::Ordering::Relaxed) {
+                        ctx.request_repaint();
+                    }
+                });
+            }
             // M3 磁盘桩缓存（读桩不拉起进程 A6；目录 = 数据根目录/cache）
             // PaletteApp 持有一份副本：设置页搜索引擎变更触发重聚合时复用。
             let cache = manifest::cache_dir().map(FrozenCache::new);
@@ -127,6 +142,7 @@ fn main() -> eframe::Result {
                 cold,
                 cache,
                 settings,
+                panel_open,
             )))
         }),
     )

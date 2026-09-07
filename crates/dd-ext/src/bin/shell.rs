@@ -40,6 +40,7 @@ fn spec() -> ExtensionSpec {
         has_fallback: true,
         capabilities: &[],
         log_tag: "dd-ext-shell",
+        pages: None, // Shell 为顶层命令，无子页（§6.3）
         top_level: sys::top_level_commands,
         fallback: Some(fallback_commands),
         invoke: sys::handle_invoke,

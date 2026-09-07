@@ -35,6 +35,7 @@ fn spec() -> ExtensionSpec {
         has_fallback: true,
         capabilities: &["host/set_clipboard"],
         log_tag: "dd-ext-calc",
+        pages: None, // 计算器为顶层命令，无子页（§6.3）
         top_level: top_level_commands,
         fallback: Some(fallback_commands),
         invoke: handle_invoke,

@@ -44,6 +44,7 @@ use dd_protocol::messages::InvokeParams;
 use eframe::egui;
 use std::collections::{HashMap, HashSet};
 use std::sync::atomic::AtomicBool;
+use std::sync::atomic::Ordering;
 use std::sync::mpsc::Receiver;
 use std::sync::Arc;
 use std::time::Instant;
@@ -122,6 +123,29 @@ pub(crate) fn settings_panel_size(
         Some((ww, wh)) => clamp_to_workarea(w, h, ww, wh),
         None => (w, h),
     }
+}
+
+/// 文件搜索便捷触发：根视图查询以此前缀开头即自动进入文件结果页（免去
+/// 「在文件中搜索」网关项的二次选择）。选 `f `（字母 f + 空格）以与常规搜索词区分。
+pub(crate) const FILE_SEARCH_PREFIX: &str = "f ";
+pub(crate) const FILE_SEARCH_EXT_ID: &str = "com.ddrun.filesearch";
+pub(crate) const FILE_SEARCH_PAGE_ID: &str = "files.results";
+
+/// 纯决策：根查询以 `FILE_SEARCH_PREFIX` 开头、尚未为此查询进页、且扩展可用 →
+/// 返回去除前缀后的搜索词；否则 `None`。抽到纯函数便于单测（无宿主状态）。
+pub(crate) fn file_search_drill_target(
+    root_query: &str,
+    drilled: Option<&str>,
+    present: bool,
+) -> Option<String> {
+    if !present {
+        return None;
+    }
+    let rest = root_query.strip_prefix(FILE_SEARCH_PREFIX)?;
+    if drilled == Some(root_query) {
+        return None;
+    }
+    Some(rest.trim_start().to_string())
 }
 
 pub struct PaletteApp {
@@ -212,6 +236,14 @@ pub struct PaletteApp {
     pub(crate) fallback_store: dd_gui::fallback::FallbackStore,
     /// 后台 `fallback_commands` 拉取结果接收端（`Some` = 有拉取在途）。
     pub(crate) fallback_rx: Option<Receiver<FallbackFetchOutcome>>,
+    /// 文件搜索「前缀自动进页」去重标记：记录已为此查询进页的根查询，
+    /// 避免每帧重复触发（返回根视图时清空）。
+    pub(crate) file_drill: Option<String>,
+    /// 文件搜索自动进页后，标记"首次 get_items 落地"待回填搜索框：
+    /// poll_page 结果落地时把 `f ` 之后的查询文本写回搜索框（否则被
+    /// `PanelState::new` 清空）。仅文件结果页、`file_drill` 命中时生效，
+    /// 落地即消耗，不影响页内二次输入的实时重拉（v3.3 另议）。
+    pub(crate) file_drill_armed: bool,
     /// path 图标纹理缓存：路径 → TextureHandle（每路径只读盘+解码一次，
     /// 避免列表每次重绘都重复 I/O 与解码——设计稿 04"按路径缓存 textureId"）。
     pub(crate) icon_cache: HashMap<String, (egui::TextureHandle, bool)>,
@@ -250,8 +282,23 @@ pub struct PaletteApp {
     pub(crate) settings_sized: bool,
     /// v4.10 D36：原生缩放模态循环在途（`BeginResize` 后 winit 捕获事件
     /// 循环，egui 收不到输入；`primary_down()==false` 首帧清除，见
-    /// `ui/chrome.rs`）。
+    /// `ui/chrome.rs`）。v4.12 扩展：也覆盖 `StartDrag` 窗口拖动模态循环。
     pub(crate) native_resize: bool,
+    /// v4.16 真机修复（拖拽后面板空白）：原生模态循环开始时刻。winit 吞掉
+    /// 左键释放的极端场景下旗标永不清除（上游 winit #2192/#2999 一类）→
+    /// chrome 永久禁用；超 3s 由 `chrome_begin` 强制清除兜底。
+    pub(crate) native_resize_since: Option<Instant>,
+    /// v4.16 真机修复（拖拽后面板空白）：模态循环在途时被推迟的 hide
+    /// （`Visible(false)` 在 SC_MOVE 循环内会被 Windows 静默忽略 → 应用态
+    /// 与 OS 态脱钩）；循环结束后由 `chrome_begin` 补执行。
+    pub(crate) hide_pending: bool,
+    /// v4.16 真机修复（拖拽后面板空白）：`visible=false` 但窗口 OS 可见的
+    /// 脱钩起始时刻（自愈宽限计时，见 `logic()` 可见性自愈）。
+    pub(crate) hide_desync_since: Option<Instant>,
+    /// v4.16 真机修复（拖拽后面板空白）：面板「应用态打开」共享旗标——
+    /// 看门狗线程仅在其为真期间 1Hz 强制重绘（自愈模态循环内 present
+    /// 失败遗留的空白表面）；隐藏期间零唤醒。
+    pub(crate) panel_open: Arc<AtomicBool>,
     /// v4.11 修正：拖拽候选起点。在「空白区」按下主键时记录起点，指针移动
     /// 超过阈值后发 `StartDrag`；落在前台交互控件或缩放热区时不记录，从而
     /// 不与控件 click 争夺 press（避免全屏 drag widget 抢占导致 click 被
@@ -300,6 +347,7 @@ impl PaletteApp {
         }
     }
 
+    #[allow(clippy::too_many_arguments)] // 构造注入依赖多（v4.16 增看门狗旗标）
     pub fn new(
         hotkey: HotkeyThread,
         tray_events: Receiver<TrayEvent>,
@@ -308,6 +356,7 @@ impl PaletteApp {
         cold: ColdStartTimer,
         cache: Option<FrozenCache>,
         settings: dd_gui::settings::Settings,
+        panel_open: Arc<AtomicBool>,
     ) -> Self {
         // FollowSystem 在此一次性解析为具体语言（每帧取用零探测开销）。
         let lang_effective = Self::resolve_lang(&settings);
@@ -346,6 +395,8 @@ impl PaletteApp {
             crash_guards: HashMap::new(),
             fallback_store: dd_gui::fallback::FallbackStore::new(),
             fallback_rx: None,
+            file_drill: None,
+            file_drill_armed: false,
             icon_cache: HashMap::new(),
             icon_failed: HashSet::new(),
             settings,
@@ -360,6 +411,10 @@ impl PaletteApp {
             backdrop_clear_countdown: 0,
             settings_sized: false,
             native_resize: false,
+            native_resize_since: None,
+            hide_pending: false,
+            hide_desync_since: None,
+            panel_open,
             drag_candidate: None,
             ctx_menu: None,
             want_ctx_menu_for_selected: false,
@@ -387,6 +442,44 @@ impl PaletteApp {
     pub(crate) fn tr(&self, key: &'static str) -> &'static str {
         crate::text::t(self.lang_effective, key)
     }
+
+    /// 文件搜索"直达前缀"：根页输入以 `f ` 开头且扩展可用时，自动进页到
+    /// 文件结果页并回填剩余查询，省去"fallback 模板 → 选中 → 进页"的第二次 Enter。
+    /// 仅在栈顶为 Root 时触发；同一查询已进页（file_drill 命中）不再重复进页。
+    pub(crate) fn maybe_drill_file_search(&mut self) {
+        if !self.stack.at_root() {
+            return;
+        }
+        let q = self.stack.current().list.query().to_string();
+        if let Some(rest) =
+            file_search_drill_target(&q, self.file_drill.as_deref(), self.file_search_present())
+        {
+            self.file_drill = Some(q.clone());
+            self.open_page(
+                FILE_SEARCH_EXT_ID,
+                FILE_SEARCH_PAGE_ID,
+                Some(rest.clone()),
+                None,
+            );
+            self.stack.current_mut().list.set_query(rest.clone());
+            // 标记首次落地需回填搜索框（poll_page 消耗），避免结果回来后框被清空
+            self.file_drill_armed = true;
+        } else if !q.starts_with(FILE_SEARCH_PREFIX) {
+            self.file_drill = None;
+        }
+    }
+
+    /// 文件搜索扩展是否已加载且未被禁用。
+    fn file_search_present(&self) -> bool {
+        self.exts
+            .iter()
+            .any(|e| e.manifest.id == FILE_SEARCH_EXT_ID)
+            && !self
+                .settings
+                .disabled_extensions
+                .iter()
+                .any(|d| d == FILE_SEARCH_EXT_ID)
+    }
 }
 
 impl eframe::App for PaletteApp {
@@ -410,6 +503,33 @@ impl eframe::App for PaletteApp {
         self.poll_hotkey(ctx);
         self.poll_tray(ctx);
         self.handle_focus_loss(ctx);
+        // v4.16 真机修复（拖拽后面板空白）：可见性自愈。拖拽/缩放原生模态
+        // 循环内若失焦触发 hide()，`Visible(false)`（ShowWindow SW_HIDE）在
+        // SC_MOVE 循环内会被 Windows 静默忽略 → 应用态 visible=false 而窗口
+        // 仍可见：ui() 早返回每帧只呈现透明帧（= 纯材质空白底，用户截图
+        // 形态）。此处检测该脱钩并恢复绘制；500ms 宽限避开正常 hide 的命令
+        // 生效间隙（hide 当帧命令在帧末应用，下一帧逻辑时窗口已真隐藏）。
+        if !self.visible {
+            if let Some(hwnd) = self.hwnd {
+                if crate::platform::is_window_visible(hwnd) {
+                    let since = *self.hide_desync_since.get_or_insert(Instant::now());
+                    if since.elapsed() >= std::time::Duration::from_millis(500) {
+                        eprintln!(
+                            "[dd-gui] 可见性自愈：visible=false 但窗口 OS 可见 >500ms（疑似模态循环内 hide 被忽略）→ 恢复绘制"
+                        );
+                        self.hide_desync_since = None;
+                        self.visible = true;
+                        self.panel_open.store(true, Ordering::Relaxed);
+                        self.refresh_backdrop(ctx);
+                        ctx.request_repaint();
+                    }
+                } else {
+                    self.hide_desync_since = None;
+                }
+            }
+        } else {
+            self.hide_desync_since = None;
+        }
         // A8：每帧健康检查——面板可见期间扩展崩溃也能及时移除（此前仅 show() 时查一次，
         // 面板一直开着时崩溃的进程会滞留到下次唤起才被清理）。
         self.refresh_health();
@@ -435,6 +555,7 @@ impl eframe::App for PaletteApp {
         if !self.visible {
             // 隐藏当帧：仍绘制一次面板内容（纯色空帧 = 闪黑），不做任何交互处理。
             if !self.paint_hide_frame {
+                eprintln!("[dd-gui] ui()：早返回（visible=false 且非隐藏帧）→ 本帧不绘制");
                 return;
             }
             self.paint_hide_frame = false;
@@ -447,6 +568,7 @@ impl eframe::App for PaletteApp {
         self.poll_notifications();
         self.poll_host_requests(); // M4 P2：host/* 副作用（Toast/剪贴板/开 URL）
         self.poll_fallback(&ctx); // M4 宿主 fallback：兜底模板拉取结果
+        self.maybe_drill_file_search(); // 文件搜索 f 前缀自动进页
         self.tick_refresh();
 
         // Toast 到期清除；未到期则预约重绘

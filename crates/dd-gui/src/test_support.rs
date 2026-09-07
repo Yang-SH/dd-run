@@ -93,6 +93,7 @@ pub(crate) fn make_app() -> PaletteApp {
         ColdStartTimer::new(),
         None,
         dd_gui::settings::Settings::default(),
+        Arc::new(AtomicBool::new(false)),
     )
 }
 

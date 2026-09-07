@@ -1,0 +1,12 @@
+{
+  "schema_version": "1.0",
+  "id": "com.ddrun.filesearch",
+  "name": "File Search",
+  "version": "0.1.0",
+  "description": "Local file search powered by Everything (Windows-only). Type 'f ' to jump in.",
+  "author": "dd-run",
+  "entry": { "command": "${EXT_DIR}/dd-ext-search" },
+  "frozen": false,
+  "capabilities": ["host/open_url", "host/show_status"],
+  "platforms": ["windows"]
+}

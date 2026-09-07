@@ -32,6 +32,7 @@ fn spec() -> ExtensionSpec {
         has_fallback: false,
         capabilities: &[],
         log_tag: "dd-ext-system",
+        pages: None, // 系统命令为顶层命令，无子页（§6.3）
         top_level: sys::top_level_commands,
         fallback: None,
         invoke: sys::handle_invoke,

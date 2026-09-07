@@ -23,6 +23,7 @@
 
 use crate::app::PaletteApp;
 use eframe::egui;
+use std::time::Instant;
 
 /// 边缘热区厚度（非角段，px）。
 const EDGE: f32 = 6.0;
@@ -96,11 +97,34 @@ fn edge_zone(
 /// 这样前台控件 click 完全不受干扰。
 pub(crate) fn chrome_begin(app: &mut PaletteApp, ctx: &egui::Context) {
     if app.native_resize {
-        // 原生缩放模态循环期间 egui 收不到输入；循环结束后的首个
-        // 「主键已抬起」帧在这里清除旗标，恢复 chrome。
         app.drag_candidate = None;
-        if !ctx.input(|i| i.pointer.primary_down()) {
+        let released = !ctx.input(|i| i.pointer.primary_down());
+        // v4.16 兜底：winit 吞掉左键释放（上游 #2192/#2999 一类场景）时
+        // 旗标永不清除 → chrome 永久禁用。超 3s 视为释放事件丢失，强制按
+        // 「循环已结束」处理。
+        let expired = app
+            .native_resize_since
+            .is_some_and(|t| t.elapsed() >= std::time::Duration::from_secs(3));
+        if expired && !released {
+            eprintln!("[dd-gui] chrome：模态旗标超 3s 未清（释放事件疑似丢失）→ 强制清除");
+        }
+        if released || expired {
+            eprintln!("[dd-gui] chrome：原生模态循环结束（旗标清除 + 强制重绘 + 刷新材质）");
             app.native_resize = false;
+            app.native_resize_since = None;
+            // v4.12 真机修复：原生缩放/拖拽模态循环结束后的首帧强制重绘，
+            // 避免窗口内容停留在循环开始前的空底或旧帧。
+            ctx.request_repaint();
+            // 透明材质（云母/亚克力）在模态循环期间可能失效，循环结束后刷新
+            // DWM 材质以确保面板内容可恢复显示。
+            app.refresh_backdrop(ctx);
+            // v4.16：模态循环内被推迟的 hide（`Visible(false)` 在 SC_MOVE
+            // 循环内会被 Windows 忽略）在循环结束后补执行。
+            if app.hide_pending {
+                app.hide_pending = false;
+                eprintln!("[dd-gui] chrome：补执行模态循环内推迟的 hide()");
+                app.hide(ctx);
+            }
         }
         return;
     }
@@ -128,7 +152,13 @@ pub(crate) fn chrome_begin(app: &mut PaletteApp, ctx: &egui::Context) {
         if pointer.primary_down() {
             if let Some(pos) = pointer.latest_pos() {
                 if pos.distance(origin) > DRAG_THRESHOLD {
+                    eprintln!("[dd-gui] chrome：发 StartDrag（原生拖拽模态循环开始）");
                     ctx.send_viewport_cmd(egui::ViewportCommand::StartDrag);
+                    // v4.12 真机修复：StartDrag 进入原生模态循环后 egui 不收
+                    // 事件；循环结束后必须立即重绘，否则窗口可能停留在空白底。
+                    ctx.request_repaint();
+                    app.native_resize = true; // 用同一旗标标记原生模态循环在途
+                    app.native_resize_since = Some(Instant::now()); // v4.16 卡死兜底计时
                     app.drag_candidate = None;
                 }
             }
@@ -153,6 +183,9 @@ pub(crate) fn chrome_end(app: &mut PaletteApp, ctx: &egui::Context) {
         if ctx.input(|i| i.pointer.primary_pressed()) {
             app.native_resize = true;
             ctx.send_viewport_cmd(egui::ViewportCommand::BeginResize(dir));
+            // v4.12 真机修复：BeginResize 进入原生模态循环后 egui 不收事件，
+            // 松手后需要一次重绘恢复内容。
+            ctx.request_repaint();
         }
     }
 }

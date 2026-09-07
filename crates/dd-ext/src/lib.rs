@@ -19,8 +19,9 @@
 //! - `get_command`（§6.4）：按 id 从顶层命令中查找，找不到回 `command: null`（正常结果）；
 //! - `invoke`（§6.5）：交 [`spec.invoke`] 处理，成功回 [`model::CommandResult`]，
 //!   处理器返回的副作用（host/* 请求、items_changed 通知）在响应**之后**按序发出；
-//! - `get_items`（§6.3）：本运行时未提供子页注册点（5 个内置扩展均无子页），
-//!   一律回 `-32005 Page not found`；
+//! - `get_items`（§6.3）：若扩展声明了 `pages`（`PageHandler`），按 `page_id` +
+//!   `search_text` 返回整页项；未声明（`pages: None`，如 5 个内置扩展）则回
+//!   `-32005 Page not found`；
 //! - `close`（§6.6）：回 `{}` 并置退出标志（后置规则 2：尽快自行退出）。
 //!
 //! 未注册的方法 → `-32601 Method not found`（§9.2）。
@@ -30,7 +31,7 @@ use std::io::{self, Read, Write};
 use dd_protocol::framing::{encode, Decoder, Frame};
 use dd_protocol::messages::{
     error_codes, CommandListResult, GetCommandParams, GetCommandResult, GetItemsParams,
-    InitializeResult, InvokeParams, ProviderInfo, RawMessage, JSONRPC_VERSION,
+    GetItemsResult, InitializeResult, InvokeParams, ProviderInfo, RawMessage, JSONRPC_VERSION,
 };
 use dd_protocol::model::{CommandItem, CommandResult};
 
@@ -61,6 +62,13 @@ pub type InvokeHandler = fn(&InvokeParams) -> (CommandResult, Vec<Effect>);
 /// 顶层 / 兜底命令集合的构造器（无状态纯函数）。
 pub type ListHandler = fn() -> Vec<CommandItem>;
 
+/// 子页内容构造器（§6.3 `get_items`）：按 `page_id` + `search_text` 返回整页项。
+///
+/// 协议 §6.3 已定义 `get_items` 方法，本运行时此前未提供注册点（5 个内置扩展
+/// 均无子页，一律回 `-32005`）。新增 `PageHandler` 仅是"补齐协议合规"，**不改
+/// 协议**——有子页的扩展（如文件搜索）声明 `pages: Some(handler)` 即可。
+pub type PageHandler = fn(&GetItemsParams) -> GetItemsResult;
+
 /// 一个扩展的完整声明（id / 展示信息 / 特性 / 命令集合 / invoke 处理器）。
 #[derive(Debug, Clone)]
 pub struct ExtensionSpec {
@@ -85,6 +93,8 @@ pub struct ExtensionSpec {
     pub fallback: Option<ListHandler>,
     /// §6.5：命令执行。按 `params.id`（+ `context.query`）分派到具体行为。
     pub invoke: InvokeHandler,
+    /// §6.3：子页内容构造器。`None` 表示无子页（运行时回 `-32005`）。
+    pub pages: Option<PageHandler>,
 }
 
 /// 运行扩展主循环（进程入口）：读 stdin 的 NDJSON，逐条响应，直到 `close` 或 stdin EOF。
@@ -255,22 +265,42 @@ pub fn serve_line(spec: &ExtensionSpec, line: &str) -> (Vec<serde_json::Value>, 
             (outputs, false)
         }
         "get_items" => {
-            // 本运行时未提供子页注册点（5 个内置扩展均无子页）→ 一律 -32005
-            let page_id = msg
+            let params = msg
                 .params
-                .and_then(|v| serde_json::from_value::<GetItemsParams>(v).ok())
-                .map(|p| p.page_id)
+                .and_then(|v| serde_json::from_value::<GetItemsParams>(v).ok());
+            // 提前取出 page_id 供 -32005 分支记录/回传（params 在 match 中被移动）
+            let page_id_for_err = params
+                .as_ref()
+                .map(|p| p.page_id.clone())
                 .unwrap_or_default();
-            log(spec, &format!("-> get_items {page_id} => 无子页（-32005）"));
-            (
-                vec![make_error(
-                    Some(id),
-                    error_codes::PAGE_NOT_FOUND,
-                    "Page not found",
-                    Some(serde_json::json!({ "page_id": page_id })),
-                )],
-                false,
-            )
+            match (&spec.pages, params) {
+                // 有子页注册点 → 调用 PageHandler 返回整页项（协议 §6.3）
+                (Some(handler), Some(p)) => {
+                    let handler_fn = *handler;
+                    log(spec, &format!("-> get_items {} => 子页", p.page_id));
+                    (
+                        vec![make_result(
+                            id,
+                            serde_json::to_value(handler_fn(&p))
+                                .expect("序列化 GetItemsResult"),
+                        )],
+                        false,
+                    )
+                }
+                // 未声明子页（或参数缺失）→ 维持 -32005（5 个内置扩展默认）
+                _ => {
+                    log(spec, &format!("-> get_items {page_id_for_err} => 无子页（-32005）"));
+                    (
+                        vec![make_error(
+                            Some(id),
+                            error_codes::PAGE_NOT_FOUND,
+                            "Page not found",
+                            Some(serde_json::json!({ "page_id": page_id_for_err })),
+                        )],
+                        false,
+                    )
+                }
+            }
         }
         "close" => {
             // §6.6 后置规则 2：返回 result 后尽快自行退出
@@ -467,6 +497,7 @@ mod tests {
                     Vec::new(),
                 ),
             },
+            pages: None,
         }
     }
 
@@ -591,6 +622,43 @@ mod tests {
         let (out, _) = serve_line(&spec(), line);
         assert_eq!(out[0]["error"]["code"], -32005);
         assert_eq!(out[0]["error"]["data"]["page_id"], "fix.sub");
+    }
+
+    #[test]
+    fn get_items_page_handler_returns_items_when_registered() {
+        use dd_protocol::messages::GetItemsResult;
+        let mut s = spec();
+        // 非捕获闭包 → 可 coerce 为 `fn` 指针（PageHandler）
+        s.pages = Some(|p: &GetItemsParams| {
+            assert_eq!(p.page_id, "fix.sub");
+            assert_eq!(p.search_text.as_deref(), Some("q"));
+            GetItemsResult {
+                items: vec![CommandItem {
+                    id: "p.x".into(),
+                    title: "X".into(),
+                    subtitle: None,
+                    icon: None,
+                    section: None,
+                    tags: None,
+                    details: None,
+                    text_to_suggest: None,
+                    more_commands: None,
+                    command: CommandRef::Invoke,
+                }],
+                has_more_items: false,
+                is_loading: false,
+            }
+        });
+        let line =
+            r#"{"jsonrpc":"2.0","id":5,"method":"get_items","params":{"page_id":"fix.sub","search_text":"q"}}"#;
+        let (out, _) = serve_line(&s, line);
+        assert_eq!(out.len(), 1);
+        assert!(
+            out[0].get("result").is_some(),
+            "有子页 → 返回 result 而非 error"
+        );
+        assert_eq!(out[0]["result"]["items"][0]["id"], "p.x");
+        assert_eq!(out[0]["result"]["has_more_items"], false);
     }
 
     #[test]

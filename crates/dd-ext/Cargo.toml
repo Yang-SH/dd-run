@@ -8,7 +8,11 @@ publish = false
 
 [dependencies]
 dd-protocol = { path = "../dd-protocol" }
+serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+anyhow = "1"
+fuzzy-matcher = "0.3"          # 文件名/路径模糊评分（纯 Rust，零 C 依赖）
+chrono = "0.4"                  # 文件修改时间 → Unix 秒（近因加分；手搓 civil→days 易错，用成熟库保证正确）
 
 # M6（apps.rs 对齐 PowerToys CmdPal）：
 # - image[png]：HICON → GetDIBits → RgbaImage → PngEncoder 写 PNG（bytes），
@@ -57,6 +61,10 @@ path = "src/bin/system.rs"
 [[bin]]
 name = "dd-ext-websearch"
 path = "src/bin/websearch.rs"
+
+[[bin]]
+name = "dd-ext-search"
+path = "src/bin/search.rs"
 
 [[bin]]
 name = "dd-ext-shell"
