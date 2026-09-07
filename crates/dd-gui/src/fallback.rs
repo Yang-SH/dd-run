@@ -57,6 +57,14 @@ impl FallbackStore {
         !self.fetching.contains(ext_id) && self.state(ext_id).is_none()
     }
 
+    /// 作废全部缓存（配置变更后重聚合调用）：进程以新环境变量（搜索引擎/
+    /// 语言）重启，旧兜底模板已失效（如引擎 5→1 仍显示全部）。清空后各扩展
+    /// 重新进入 `Unknown`，下一帧由新进程重新拉取正确模板；同时清在途标记。
+    pub fn clear(&mut self) {
+        self.exts.clear();
+        self.fetching.clear();
+    }
+
     /// 标记开始拉取（幂等：已在拉取中则忽略）。
     pub fn begin_fetch(&mut self, ext_id: &str) {
         if self.state(ext_id).is_none() {

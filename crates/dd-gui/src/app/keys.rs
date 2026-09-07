@@ -400,6 +400,12 @@ impl PaletteApp {
     /// → 替换 Root 列表（复用首屏聚合的全部既有机制，含进程替换与 LRU）。
     pub(crate) fn restart_aggregation(&mut self) {
         eprintln!("[dd-gui] 搜索引擎配置变更 → 重新聚合首屏");
+        // 进程将以新环境变量（搜索引擎/语言）重启：作废已缓存的兜底模板与
+        // 在途拉取，否则会残留旧引擎/旧语言的兜底项（如仅启用 Bing 仍显示
+        // 全部搜索引擎的「在 X 搜索 …」）。下一帧由新进程重新拉取正确模板。
+        self.fallback_store.clear();
+        self.inflight.clear();
+        self.fallback_rx = None; // 丢弃旧在途拉取（其进程属旧环境）
         let (tx, rx) = mpsc::channel();
         crate::app::spawn_aggregation(
             tx,

@@ -158,11 +158,10 @@ impl PaletteApp {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use crate::test_support::{ctx, dying_process, make_app};
     use dd_gui::state::PanelItem;
     use dd_gui::state::PanelState;
-    use dd_protocol::model::CommandRef;
+    use dd_protocol::model::{CommandItem, CommandRef};
 
     /// calc 兜底模板（title 含 `{query}`，render 时替换）。
     fn calc_template() -> CommandItem {
@@ -278,5 +277,62 @@ mod tests {
         );
         assert!(app.fallback_store.is_empty());
         assert_eq!(app.fallback_store.template_count(ext_id), 0);
+    }
+
+    // ── 回归：搜索引擎配置变更（如 5→1）后兜底模板缓存必须作废 ──────
+    // 否则仅启用 Bing 时，输入框输入内容后仍会残留全部 5 个引擎的
+    // 「在 X 搜索 …」兜底项（FallbackStore 按扩展 id 缓存、wants 不再拉取）。
+
+    fn websearch_template(name: &str) -> CommandItem {
+        CommandItem {
+            id: format!("websearch.{name}.query"),
+            title: format!("Search {name} for {{query}}"),
+            subtitle: Some(format!("{name} Search")),
+            icon: None,
+            section: Some("Web Search".to_string()),
+            tags: None,
+            details: None,
+            text_to_suggest: None,
+            more_commands: None,
+            command: CommandRef::Invoke,
+        }
+    }
+
+    #[test]
+    fn engine_change_invalidates_cached_fallback_templates() {
+        let mut app = make_app();
+        app.aggregating = false;
+        // 首启已缓存 5 个搜索引擎兜底模板
+        let tmpls: Vec<CommandItem> = ["Google", "Bing", "Baidu", "DuckDuckGo", "GitHub"]
+            .iter()
+            .map(|n| websearch_template(n))
+            .collect();
+        app.fallback_store
+            .store("com.ddrun.websearch", "Web Search", tmpls);
+        assert_eq!(
+            app.fallback_store.template_count("com.ddrun.websearch"),
+            5,
+            "首启应缓存 5 个引擎兜底项"
+        );
+        assert!(
+            !app.fallback_store.wants("com.ddrun.websearch"),
+            "已缓存后不应再拉取"
+        );
+
+        // 配置变更触发重聚合（restart_aggregation 现在会先清缓存）
+        app.fallback_store.clear();
+        app.inflight.clear();
+        app.fallback_rx = None;
+
+        // 缓存已作废 → 仅剩 Bing 的新进程会重新拉取到 1 条模板
+        assert_eq!(
+            app.fallback_store.template_count("com.ddrun.websearch"),
+            0,
+            "clear 后旧模板必须消失"
+        );
+        assert!(
+            app.fallback_store.wants("com.ddrun.websearch"),
+            "clear 后应重新拉取新引擎模板"
+        );
     }
 }
