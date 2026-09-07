@@ -406,6 +406,13 @@ impl PaletteApp {
         // 本帧行矩形存档（菜单开着时右键另一行的命中依据，见 `reopen_ctx_menu_at`）。
         let mut row_rects: Vec<(usize, egui::Rect)> = Vec::new();
         let scroll_follow = self.scroll_follow;
+        // v4.17a：鼠标自唤起后**尚未活动过**时抑制 hover 视觉。指针可能恰好停
+        // 在结果行上（唤起前的残留位置），此时画 hover 会让用户以为"那行被选中了"，
+        // 而实际选中是第一项（键盘流）。一旦鼠标真正动过即恢复常驻 hover。
+        let hover_visual = self
+            .mouse_hide
+            .as_ref()
+            .is_none_or(|s| s.pointer_engaged());
         egui::ScrollArea::vertical().show(ui, |ui| {
             // `.results` 容器：padding 6px 6px 8px（CSS 简写 = 上 6 / 左右 6 /
             // 下 8；行相对搜索栏再内收 6px、列表底部留 8px。egui Frame
@@ -442,6 +449,7 @@ impl PaletteApp {
                                 item,
                                 Some(*idx) == selected,
                                 icon_views.get(idx),
+                                hover_visual,
                             );
                             row_rects.push((*idx, resp.rect));
                             if Some(*idx) == selected {
@@ -475,7 +483,14 @@ impl PaletteApp {
         // - hovered：**仅当鼠标指针本帧真正移动过**（`current_hover_pos` ≠ 上一帧），
         //   且悬停行与基准不同，才接管选中——静止的鼠标不抢占键盘（Tab/↓/↑）选中，
         //   修复「一直按 ↑ 滚到顶部时，内容从静止鼠标下滚过把选中抢回鼠标所在行」。
-        let pointer_moved = self.last_pointer_pos != current_hover_pos;
+        // v4.17a：`None` 基准 = 面板刚唤起（或指针刚回到窗口内），本帧**只采样**
+        // 不判活动。否则"唤起面板"这一动作本身会被当成鼠标移动，让 hover 行
+        // 抢走第一项选中（用户反馈：鼠标在面板中时默认选中了鼠标所在项）。
+        let pointer_moved = match (self.last_pointer_pos, current_hover_pos) {
+            (None, _) => false,
+            (Some(prev), Some(cur)) => prev != cur,
+            (Some(_), None) => false,
+        };
         let last_hovered = self.last_hovered_index;
         if let Some(idx) = clicked {
             self.stack.current_mut().list.set_selected(idx);
@@ -545,10 +560,19 @@ pub(crate) fn draw_searchbar(
         egui::Sense::hover(),
     );
 
-    // 2) filled-darker 外观（D17）：只画 bg3 凹陷填充、圆角 4，**无边框**——
-    //    Fluent 三种外观互斥，不再保留 v2 的「1px 全边框 + 2px 底边」混合形态。
+    // 2) filled-darker 外观（D17）：底色 = input_fill alpha=64（亚克力下通透，
+    //    让桌面 / panel 底色透出来——避免输入框在玻璃背景上"贴一块"的割裂感）；
+    //    圆角 4、**无边框**——Fluent 三种外观互斥，与原 1px 全边框 + 2px 底边
+    //    混合形态不并存。input_fill 在其他场景（shimmer 加载态等）仍为实色，
+    //    此处仅本地半透，不污染 theme。
     let radius = egui::CornerRadius::same(theme::SEARCHBAR_RADIUS);
-    ui.painter().rect_filled(rect, radius, p.input_fill);
+    let input_fill_glass = egui::Color32::from_rgba_unmultiplied(
+        p.input_fill.r(),
+        p.input_fill.g(),
+        p.input_fill.b(),
+        64,
+    );
+    ui.painter().rect_filled(rect, radius, input_fill_glass);
 
     // 3) 在 40px 矩形内开 child Ui：左右各留 12px padding（设计稿 searchbar
     //    padding 0 12px），内容用 left_to_right + Align::Center 垂直居中。

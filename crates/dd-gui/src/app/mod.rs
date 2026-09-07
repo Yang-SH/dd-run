@@ -312,6 +312,10 @@ pub struct PaletteApp {
     /// 本帧各列表行矩形（`draw_list` 每帧重建）：菜单开着时右键另一行，全屏
     /// 捕获层会吞掉该行的 `secondary_clicked`（D19 修正），据此命中行就地重开。
     pub(crate) ctx_row_rects: Vec<(usize, egui::Rect)>,
+    /// 面板显示期间的鼠标隐藏守卫（v4.17 亚克力体验优化）：`Some` = 面板已
+    /// 显示且鼠标已隐藏；`None` = 面板未显示或已释放。`show()` 构造并 `Some`，
+    /// `hide()` `take()` 触发 `Drop` 调 `set_cursor_visible(true)` 恢复可见。
+    pub(crate) mouse_hide: Option<crate::platform::MouseHideScope>,
     /// v4.12 D37：最近一次 `show()` 时程序设定的窗口逻辑尺寸（根页或设置页，
     /// 随栈顶而定）。`persist_panel_size` 以此判定「用户真拉伸了」——只有当前
     /// 尺寸偏离它（> [`SIZE_EPSILON`]）才把偏离值落盘为记忆，防止小屏 clamp 的
@@ -423,6 +427,7 @@ impl PaletteApp {
             last_work_area: None,
             resize_pending_since: None,
             lang_effective,
+            mouse_hide: None,
         }
     }
 
@@ -645,6 +650,12 @@ impl eframe::App for PaletteApp {
         // 全屏 drag widget 会令前台控件 click 被 is_decidedly_dragging 抑制）。
         // 仅当指针落在非交互空白区才记候选，移动超阈值发 StartDrag，前台
         // 控件点击零干扰；缩放热区内则不发起拖拽（缩放优先，见 chrome_end）。
+        // v4.17a：按「指针闲置」动态决定光标——静止隐藏、移动即恢复（每帧
+        // 重设，因 chrome_end 会按缩放热区覆盖为 Resize 光标；守卫必须早于
+        // chrome_begin 才能稳定隐藏主体区域、边缘仍显 Resize 反馈）。
+        if let Some(scope) = self.mouse_hide.as_mut() {
+            scope.apply(&ctx);
+        }
         crate::ui::chrome::chrome_begin(self, &ctx);
         self.draw_panel(ui);
         self.draw_toast(&ctx);

@@ -12,6 +12,7 @@ pub(crate) fn draw_item_row(
     item: &PanelItem,
     selected: bool,
     icon: Option<&IconView>,
+    hover_enabled: bool,
 ) -> egui::Response {
     let p = theme::Palette::of(ui.visuals().dark_mode);
 
@@ -20,11 +21,17 @@ pub(crate) fn draw_item_row(
         ui.cursor().min,
         egui::vec2(ui.available_width(), theme::ROW_H),
     );
-    let hovered_now = ui.rect_contains_pointer(row_rect);
+    // v4.17a：`hover_enabled=false` = 鼠标自面板唤起后尚未动过（指针停在唤起
+    // 前的残留位置）→ 不画 hover，避免与"第一项 keyboard 选中"抢视觉。
+    let hovered_now = hover_enabled && ui.rect_contains_pointer(row_rect);
     let fill = if selected {
+        // 选中行：实色填充 + 左侧 accent 竖条（与 hover 玻璃色视觉可区分）。
         p.row_selected
     } else if hovered_now {
-        p.row_hover
+        // 非选中行 hover：玻璃色（row_hover alpha=80），亚克力下通透。
+        // selected 行即使被 hover 也不画 hover（fill 分支已优先 selected）——
+        // 避免键盘选中被鼠标覆盖（设计稿 §6.1 视觉一致性）。
+        p.row_hover_glass
     } else {
         egui::Color32::TRANSPARENT
     };

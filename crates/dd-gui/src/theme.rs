@@ -83,6 +83,9 @@ pub struct Palette {
     pub danger: Color32,
     /// 行 hover 填充（05 `colorNeutralBackground1Hover`；v4 改实色）
     pub row_hover: Color32,
+    /// 行 hover 玻璃填充：`row_hover` alpha=80，专供结果列表（亚克力下通透）。
+    /// 其他用 `row_hover` 的场景（卡片 hover/设置项/icon 按钮/确认按钮/菜单）维持实色不变。
+    pub row_hover_glass: Color32,
     /// 行按下填充（05 `colorNeutralBackground1Pressed`）
     pub row_pressed: Color32,
     /// 选中行填充（05 `colorNeutralBackground1Selected`；v4 改实色）
@@ -111,6 +114,7 @@ impl Palette {
             success: rgb(0x54_b0_54), // green[tint30] · colorStatusSuccessForeground1（暗，2026-09 按 @fluentui/tokens 核实）
             danger: rgb(0xdc_62_6d),  // cranberry[tint30] · colorStatusDangerForeground1（暗）
             row_hover: rgb(0x3d_3d_3d),
+            row_hover_glass: glass(0x3d_3d_3d, 80), // 玻璃：等色 alpha=80
             row_pressed: rgb(0x1f_1f_1f),
             row_selected: rgb(0x38_38_38),
             input_fill: rgb(0x14_14_14),
@@ -135,6 +139,7 @@ impl Palette {
             success: rgb(0x0e_70_0e), // green[shade10] · colorStatusSuccessForeground1（亮；#107c10 实为 primary）
             danger: rgb(0xb1_0e_1c), // cranberry[shade10] · colorStatusDangerForeground1（亮；#c50f1f 实为 primary）
             row_hover: rgb(0xf5_f5_f5),
+            row_hover_glass: glass(0xf5_f5_f5, 80), // 玻璃：等色 alpha=80
             row_pressed: rgb(0xe0_e0_e0),
             row_selected: rgb(0xeb_eb_eb),
             input_fill: rgb(0xf5_f5_f5),
@@ -301,6 +306,17 @@ fn rgb(v: u32) -> Color32 {
     )
 }
 
+/// 构造带 alpha 的 `Color32`（24 位 RGB + 自定义 alpha，未预乘）。
+/// 用于「半透叠加」场景（如亚克力下的 hover 玻璃色、搜索框底色、下边框）。
+fn glass(v: u32, a: u8) -> Color32 {
+    Color32::from_rgba_unmultiplied(
+        ((v >> 16) & 0xff) as u8,
+        ((v >> 8) & 0xff) as u8,
+        (v & 0xff) as u8,
+        a,
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -450,6 +466,46 @@ mod tests {
         assert_eq!(p.row_hover.a(), 255, "暗色 hover 为实色");
         assert_eq!(p.row_selected.a(), 255, "暗色 selected 为实色");
         assert_ne!(p.row_hover, p.row_selected, "hover 与 selected 可区分");
+    }
+
+    /// 行 hover 玻璃色（亚克力下结果列表用）：保留 row_hover 色相，仅 alpha=80，
+    /// RGB 与 row_hover 一致仅 alpha 不同（其他用 row_hover 的场景不受牵连）。
+    #[test]
+    fn row_hover_glass_is_translucent_and_keeps_hue() {
+        for dark in [true, false] {
+            let p = Palette::of(dark);
+            // 期望值直接用 from_rgba_unmultiplied 构造（与 glass helper 同实现路径），
+            // 全字段相等比较避免 Color32 内部预乘语义差异
+            let (v, name) = if dark { (0x3d_3d_3d, "暗") } else { (0xf5_f5_f5, "亮") };
+            let expected = Color32::from_rgba_unmultiplied(
+                ((v >> 16) & 0xff) as u8,
+                ((v >> 8) & 0xff) as u8,
+                (v & 0xff) as u8,
+                80,
+            );
+            assert_eq!(
+                p.row_hover_glass, expected,
+                "{} 主题：glass = rgb({:02x},{:02x},{:02x},80)",
+                name,
+                (v >> 16) & 0xff,
+                (v >> 8) & 0xff,
+                v & 0xff
+            );
+            assert_eq!(
+                p.row_hover, rgb(v),
+                "{} 主题：row_hover = rgb({:02x},{:02x},{:02x}) 实色",
+                name,
+                (v >> 16) & 0xff,
+                (v >> 8) & 0xff,
+                v & 0xff
+            );
+            assert_eq!(
+                p.row_hover_glass.a(),
+                80,
+                "{} 主题：glass alpha=80（亚克力下通透）",
+                name
+            );
+        }
     }
 
     /// 卡片表面（Toast/设置卡/按钮底）与面板底可区分（暗色 card grey[20]

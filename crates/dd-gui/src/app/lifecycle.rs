@@ -55,6 +55,21 @@ impl PaletteApp {
         ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(egui::vec2(w, h)));
         ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
         ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
+        // v4.17a 真机修复：唤起时重置指针基准 + hover 基准。
+        // 面板隐藏期间指针可能已移到别处，若沿用上次遗留坐标，首帧
+        // `last_pointer_pos != current_hover_pos` 会被判成"鼠标移动过"→ hover
+        // 行接管选中，表现为「输入文字时鼠标在面板中，默认选中了鼠标所在项」
+        // 而非第一项。置 `None` = 首帧只采样不判活动（见 `draw_list` 的
+        // `pointer_moved` 匹配分支）。
+        self.last_pointer_pos = None;
+        self.last_hovered_index = None;
+        // v4.17a：面板唤起后默认隐藏鼠标（静止 → 隐藏，鼠标一动即恢复，
+        // 由 `MouseHideScope::apply` 每帧按闲置时长判定）。take() 兜底：
+        // 若守卫意外残留（旧 show 未配对 hide），先释放再构造新的。
+        if let Some(stale) = self.mouse_hide.take() {
+            stale.release();
+        }
+        self.mouse_hide = Some(crate::platform::MouseHideScope::new());
     }
 
     pub(crate) fn hide(&mut self, ctx: &egui::Context) {
@@ -71,6 +86,13 @@ impl PaletteApp {
         eprintln!("[dd-gui] hide()：visible→false（Visible(false) 排队）");
         self.panel_open.store(false, Ordering::Relaxed);
         self.hide_desync_since = None;
+        // v4.17 亚克力体验优化：面板关闭时 take 鼠标守卫并**立即恢复默认光标**。
+        // 主动恢复是因为面板隐藏后 ui() 早返回（`paint_hide_frame` 之后不再
+        // 调 apply），单靠下一帧 apply() 兜底不够稳。模态循环在途的 hide() 已
+        // early return（守卫继续 hold），chrome_begin 补执行本函数时再 take。
+        if self.mouse_hide.take().is_some() {
+            ctx.set_cursor_icon(egui::CursorIcon::Default);
+        }
         // v4.12 D37：隐藏前落盘本显示周期的拉伸尺寸（best-effort，见
         // `persist_panel_size`）——此时窗口尺寸即本周期最终尺寸。
         self.persist_panel_size(ctx);
