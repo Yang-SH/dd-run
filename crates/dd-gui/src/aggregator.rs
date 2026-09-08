@@ -10,6 +10,9 @@
 //!   [`load_extension_sources`]：打包后走**内嵌物化**（单文件 `dd-run.exe`），
 //!   开发期回退宿主 exe 同目录；
 //!   扩展目录中的第三方清单与其**并存**，同 id 以内置优先。
+//! - **扩展清单扫描双位置**（M7 批次 7.5）：用户数据目录 `extensions.d/`（manifest-schema
+//!   §2 主位置）+ **宿主 exe 同目录 `extensions.d/` 便携 sidecar**（免安装 zip「解压即用」）；
+//!   两处按 id 去重——用户目录优先覆盖分发版，sidecar 独有追加，内置仍最优先。
 //!
 //! M3 缓存与懒加载（见 [`docs/implementation.md`](../../docs/implementation.md) §M3）：
 //! - **frozen + 磁盘桩命中** → [`ExtItems::Stub`]：**不拉起进程**（A6），首屏读桩渲染；
@@ -175,32 +178,76 @@ pub fn load_extension_sources() -> (Vec<LoadedExtension>, String) {
         }
     };
 
-    // 第三方/磁盘扩展：extensions.d 扫描结果并入（同 id 内置优先）
-    let scanned = match manifest::extensions_dir() {
-        Some(d) => {
-            let outcome = manifest::scan_dir(&d, &ScanOptions::default());
-            if let Some(err) = &outcome.dir_error {
-                if !note.is_empty() {
-                    note.push('；');
-                }
-                note.push_str(&format!("扩展目录不可读：{err}"));
-            }
-            outcome.loaded
-        }
-        None => {
-            if !note.is_empty() {
-                note.push('；');
-            }
-            note.push_str("无法定位扩展目录（home 环境变量缺失）");
-            Vec::new()
-        }
-    };
-
-    let merged = merge_builtins(builtins, scanned);
+    let merged = merge_builtins(
+        builtins,
+        merge_sidecar_scan(manifest::extensions_dir(), &mut note),
+    );
     if merged.is_empty() && note.is_empty() {
         note = "无可用扩展（内置与扩展目录均为空）".to_string();
     }
     (merged, note)
+}
+
+/// 便携 sidecar 扩展目录：宿主 exe 同目录的 `extensions.d/`（M7 批次 7.5）。
+///
+/// 免安装分发的 zip 布局为 `dd-run-<ver>.exe + extensions.d/`（file-search
+/// sidecar 随包携带），解压后与 exe 的相对位置不变——扫描此目录即可
+/// 「解压即用」，无需先把清单拷入用户数据目录。
+/// 开发期 / 内嵌物化目录下无此子目录：`scan_dir` 对不存在目录视作空（非错误）。
+fn sidecar_extensions_dir() -> Option<PathBuf> {
+    std::env::current_exe()
+        .ok()
+        .and_then(|p| p.parent().map(|d| d.join("extensions.d")))
+}
+
+/// 合并用户目录与便携 sidecar 两处扫描结果：**同 id 保留 `first`**（用户目录
+/// 优先——用户手动放置的版本覆盖分发自带版本），`second` 其余按原序追加。
+/// 与内置扩展的去重（内置最优先）由 [`merge_builtins`] 负责。
+fn merge_scanned_dirs(
+    first: Vec<LoadedExtension>,
+    second: Vec<LoadedExtension>,
+) -> Vec<LoadedExtension> {
+    let mut merged = first;
+    for ext in second {
+        if !merged.iter().any(|e| e.manifest.id == ext.manifest.id) {
+            merged.push(ext);
+        }
+    }
+    merged
+}
+
+/// 扫描用户数据目录 `extensions.d` + 便携 sidecar，异常记入 `note`。
+fn merge_sidecar_scan(user_dir: Option<PathBuf>, note: &mut String) -> Vec<LoadedExtension> {
+    let mut scanned = match user_dir {
+        Some(d) => {
+            let outcome = manifest::scan_dir(&d, &ScanOptions::default());
+            if let Some(err) = &outcome.dir_error {
+                push_note(note, &format!("扩展目录不可读：{err}"));
+            }
+            outcome.loaded
+        }
+        None => {
+            push_note(note, "无法定位扩展目录（home 环境变量缺失）");
+            Vec::new()
+        }
+    };
+
+    // 便携 sidecar（M7 批次 7.5）：同 id 用户目录优先。
+    if let Some(dir) = sidecar_extensions_dir() {
+        let outcome = manifest::scan_dir(&dir, &ScanOptions::default());
+        if let Some(err) = &outcome.dir_error {
+            push_note(note, &format!("扩展目录不可读：{err}"));
+        }
+        scanned = merge_scanned_dirs(scanned, outcome.loaded);
+    }
+    scanned
+}
+
+fn push_note(note: &mut String, msg: &str) {
+    if !note.is_empty() {
+        note.push('；');
+    }
+    note.push_str(msg);
 }
 
 /// 单个扩展线程的原始结果（携带进程，跨线程回传）。
@@ -477,6 +524,71 @@ mod tests {
             name: name.to_string(),
             items,
         }
+    }
+
+    /// 最小可加载扩展夹具：`path` 携带 `tag` 以区分「用户目录 / sidecar」来源。
+    fn loaded_ext(id: &str, tag: &str) -> LoadedExtension {
+        use dd_host::manifest::{Entry, Manifest};
+        LoadedExtension {
+            manifest: Manifest {
+                schema_version: "1.0".to_string(),
+                id: id.to_string(),
+                name: format!("Ext {id}"),
+                version: "0.1.0".to_string(),
+                description: String::new(),
+                author: String::new(),
+                license: String::new(),
+                homepage: String::new(),
+                icon: None,
+                entry: Entry {
+                    command: "ext.exe".to_string(),
+                    args: Vec::new(),
+                    env: Default::default(),
+                    cwd: None,
+                },
+                frozen: true,
+                capabilities: Vec::new(),
+                platforms: None,
+                min_host_version: None,
+            },
+            path: PathBuf::from(format!(r"{tag}\{id}.json")),
+            dir: PathBuf::from(tag),
+            command: PathBuf::from(format!(r"{tag}\ext.exe")),
+            cwd: PathBuf::from(tag),
+        }
+    }
+
+    #[test]
+    fn merge_scanned_dirs_user_dir_wins_and_sidecar_appends() {
+        // M7 批次 7.5：便携 sidecar 合并语义——同 id 用户目录优先（覆盖分发版）、
+        // sidecar 独有扩展按原序追加；first 顺序保持。
+        let user = vec![loaded_ext("com.a", "user"), loaded_ext("com.b", "user")];
+        let sidecar = vec![
+            loaded_ext("com.b", "sidecar"),
+            loaded_ext("com.c", "sidecar"),
+        ];
+        let merged = merge_scanned_dirs(user, sidecar);
+        let ids: Vec<&str> = merged.iter().map(|e| e.manifest.id.as_str()).collect();
+        assert_eq!(
+            ids,
+            ["com.a", "com.b", "com.c"],
+            "同 id 去重 + sidecar 新增按原序追加"
+        );
+        // com.b 保留的是用户目录那份（path 前缀区分来源）
+        assert_eq!(
+            merged[1].path,
+            PathBuf::from(r"user\com.b.json"),
+            "同 id 应保留用户目录版本（覆盖分发版）"
+        );
+    }
+
+    #[test]
+    fn merge_scanned_dirs_empty_sidecar_keeps_user_order() {
+        // sidecar 无此扩展（zip 未带 / 目录不存在）→ 用户目录原样保留。
+        let user = vec![loaded_ext("com.a", "user"), loaded_ext("com.b", "user")];
+        let merged = merge_scanned_dirs(user, Vec::new());
+        let ids: Vec<&str> = merged.iter().map(|e| e.manifest.id.as_str()).collect();
+        assert_eq!(ids, ["com.a", "com.b"]);
     }
 
     #[test]

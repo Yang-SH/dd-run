@@ -1,0 +1,68 @@
+name: Release
+
+# 批次 7.5：tag → 构建 → 免安装绿色包 zip → GitHub Release 附着。
+# 分发形态（2026-09-08 定案）：仅免安装单文件——dist/dd-run-<ver>.exe（5 内置扩展
+# 内嵌）+ dist/extensions.d/（file-search sidecar），整体 zip，无安装器。
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+env:
+  CARGO_INCREMENTAL: "0"
+
+jobs:
+  release:
+    name: build + portable zip + GitHub Release
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # tag（ vX.Y.Z）必须与 crates/dd-gui/Cargo.toml 的 version 一致，防错发。
+      - name: Verify tag matches Cargo.toml version
+        shell: bash
+        run: |
+          VER=$(grep -m1 '^version' crates/dd-gui/Cargo.toml | sed -E 's/.*"([^"]+)".*/\1/')
+          echo "crate version = ${VER}, tag = ${GITHUB_REF_NAME}"
+          if [ "v${VER}" != "${GITHUB_REF_NAME}" ]; then
+            echo "::error::tag ${GITHUB_REF_NAME} 与 crates/dd-gui/Cargo.toml 版本 v${VER} 不一致"
+            exit 1
+          fi
+
+      - name: Install toolchain (stable-x86_64-pc-windows-gnu)
+        run: |
+          rustup toolchain install stable-x86_64-pc-windows-gnu --profile minimal
+          rustup default stable-x86_64-pc-windows-gnu
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+
+      # 仓库 .cargo/config.toml 默认 target = x86_64-pc-windows-gnu；gnu 工具链自带
+      # self-contained 链接器（package.sh 对 self-contained 仅作 PATH 兜底追加）。
+      # dist/dev/ 下的 dd-run-cli/dd-ext-sample 是本机自检工具，不进发布 zip。
+      - name: Build & package
+        shell: bash
+        run: bash tools/package.sh
+
+      # zip 布局（解压即用）：dd-run-<ver>.exe + extensions.d/（清单 ${EXT_DIR}
+      # 解析到本目录，自动定位 dd-ext-search.exe）。
+      - name: Zip portable bundle
+        shell: pwsh
+        run: |
+          $ver = (Select-String -Path crates/dd-gui/Cargo.toml -Pattern '^version = "(.+)"').Matches[0].Groups[1].Value
+          Compress-Archive -Path "dist/dd-run-$ver.exe", "dist/extensions.d" `
+            -DestinationPath "dist/dd-run-$ver-portable.zip" -Force
+          Get-ChildItem dist -Filter *.zip | Select-Object Name, Length
+
+      - name: Attach to GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/dd-run-*-portable.zip
+          body: |
+            dd-run ${{ github.ref_name }} — 免安装绿色版（portable）
+
+            - 解压后直接运行 `dd-run-<版本>.exe`（单文件，5 个内置扩展已内嵌，无安装器）
+            - `extensions.d/` 为文件搜索扩展 sidecar：与 exe 保持相对位置即可被自动发现（需本机装有 [Everything](https://www.voidtools.com/)）
+            - 数据目录：`%APPDATA%\dd-run\`（设置 / 扩展清单 / 缓存）；开机自启在应用内设置页开启

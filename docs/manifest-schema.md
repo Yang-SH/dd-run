@@ -27,6 +27,8 @@
 | **macOS** | `~/Library/Application Support/dd-run/extensions.d/` |
 | **Windows** | `%APPDATA%\dd-run\extensions.d\` |
 
+**便携 sidecar（v1.0 补充，M7 批次 7.5）**：宿主还会扫描**与宿主可执行文件同目录**的 `extensions.d/`（免安装分发布局 `dd-run-<版本>.exe + extensions.d/`，解压即用）。两处扫描结果按 `id` 去重：**用户数据目录优先**（用户手动放置的版本覆盖分发自带版本），sidecar 独有者追加；内置扩展仍最优先（见 §7 规则 7 与宿主 `merge_builtins`）。`${EXT_DIR}` 在 sidecar 清单中解析为该 sidecar 目录。
+
 - **文件名**任意，建议用 `<id>.json`（如 `com.example.calc.json`）便于排查。
 - **加载顺序**：宿主按文件名字典序读取；顺序**不影响**首屏排序（首屏排序由 `CommandItem.section` 与宿主策略决定）。
 

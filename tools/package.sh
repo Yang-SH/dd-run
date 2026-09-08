@@ -17,7 +17,11 @@ cd "$(dirname "$0")/.."   # 仓库根
 # 1) windows-gnu 工具链 self-contained bin（含 as.exe 等），**追加**到 PATH 末尾：
 #    优先使用 PATH 上已有的可用 mingw（如本机 /c/Strawberry/c/bin），self-contained
 #    仅作兜底。前置会遮蔽可用链接器、导致 ld 找不到 crt2.o/libkernel32.a。
-export PATH="$PATH:/c/Users/y7398/.rustup/toolchains/stable-x86_64-pc-windows-gnu/lib/rustlib/x86_64-pc-windows-gnu/bin/self-contained"
+#    路径经 $HOME/RUSTUP_HOME 推导（CI runner 同样适用），目录不存在则跳过。
+SELF_CONTAINED="${RUSTUP_HOME:-$HOME/.rustup}/toolchains/stable-x86_64-pc-windows-gnu/lib/rustlib/x86_64-pc-windows-gnu/bin/self-contained"
+if [ -d "$SELF_CONTAINED" ]; then
+  export PATH="$PATH:$SELF_CONTAINED"
+fi
 TOOLCHAIN="+stable-x86_64-pc-windows-gnu"
 
 REL="target/x86_64-pc-windows-gnu/release"
