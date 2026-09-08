@@ -25,11 +25,11 @@ EMBED="crates/dd-gui/assets/embed"
 BINS="dd-ext-apps dd-ext-calc dd-ext-system dd-ext-websearch dd-ext-shell"
 
 # 2) 先构建 5 个内置扩展（release）——它们是待内嵌的字节源
-echo "==> [1/4] 构建扩展（dd-ext）"
+echo "==> [1/5] 构建扩展（dd-ext）"
 cargo ${TOOLCHAIN} build --release -p dd-ext
 
 # 3) 把扩展 exe 拷入宿主 assets/embed（供 dd-gui build.rs 内嵌）
-echo "==> [2/4] 拷贝扩展到 $EMBED"
+echo "==> [2/5] 拷贝扩展到 $EMBED"
 mkdir -p "$EMBED"
 for bin in $BINS; do
   cp "${REL}/${bin}.exe" "$EMBED/"
@@ -37,16 +37,23 @@ done
 ls -1 "$EMBED"/*.exe
 
 # 4) 构建宿主 dd-gui → 产物 dd-run.exe（build.rs 见 assets/embed 有 exe → 内嵌）
-echo "==> [3/4] 构建宿主 dd-gui（→ dd-run.exe，内嵌扩展）"
+echo "==> [3/5] 构建宿主 dd-gui（→ dd-run.exe，内嵌扩展）"
 cargo ${TOOLCHAIN} build --release -p dd-gui --bin dd-run
 
 # 5) 归集单文件到 dist/
-echo "==> [4/4] 产出单文件到 dist/"
+echo "==> [4/5] 产出单文件到 dist/"
 VER=$(grep -m1 '^version' crates/dd-gui/Cargo.toml | sed -E 's/.*"([^"]+)".*/\1/')
 OUT="dist/dd-run-${VER}.exe"
 mkdir -p dist
 cp "${REL}/dd-run.exe" "$OUT"
 echo "✅ 单文件已生成：$OUT（$(du -h "$OUT" | cut -f1)）"
+
+# 6) 文件搜索 sidecar（批次 7.4 定案：不内嵌，随绿色包 dist/extensions.d/ 携带——
+#    免安装分发；清单 ${EXT_DIR} 解析到本目录，自动定位 exe）
+echo "==> [5/5] 归集文件搜索 sidecar 到 dist/extensions.d"
+mkdir -p dist/extensions.d
+cp "${REL}/dd-ext-search.exe" dist/extensions.d/
+cp examples/extensions.d/com.ddrun.filesearch.json dist/extensions.d/
 
 # 可选：同时把开发自检 CLI 与示例扩展放到 dist/dev/（非分发必需，便于排查）
 DEV="dist/dev"
