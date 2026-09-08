@@ -75,7 +75,7 @@
 | [`docs/implementation.md`](./docs/implementation.md) | **实施方案**：里程碑 M0–M6、ADR 决策记录、A1–A12 验收映射、当前进度与遗留项台账 | 要动手写代码 |
 | [`docs/protocol.md`](./docs/protocol.md) | **dd-run Extension Protocol v1.0**：NDJSON 成帧、JSON-RPC 信封、方法、错误码、生命周期状态机、超时与崩溃恢复 | 写宿主或写扩展 |
 | [`docs/manifest-schema.md`](./docs/manifest-schema.md) | **扩展清单 schema**：字段表、三平台配置目录、最小可拷贝示例 | 写扩展 |
-| [`docs/search-file.md`](./docs/search-file.md) | **文件搜索扩展方案**（v3.2）：Everything 优先 Provider、`f ` 前缀直达、速度打桩 | 写扩展 |
+| [`docs/search-file.md`](./docs/search-file.md) | **文件搜索扩展方案**（v3.2）：Everything 优先 Provider、`f ` 前缀直达、速度打磨 | 写扩展 |
 
 **阅读顺序建议**：设计文档 §1–§7（理解模型）→ [`docs/implementation.md`](./docs/implementation.md)（知道先做什么）→ [`docs/protocol.md`](./docs/protocol.md) + [`docs/manifest-schema.md`](./docs/manifest-schema.md)（照着实现）。
 
