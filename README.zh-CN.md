@@ -4,7 +4,7 @@
 
 **用 Rust 从零构建的跨平台命令面板 / 启动器。** 设计参考自 [PowerToys Command Palette（CmdPal）](https://github.com/microsoft/PowerToys/tree/main/src/modules/cmdpal) 模块。
 
-> **当前状态**：MVP 里程碑 M0–M4 已全部关闭并通过真机验收；M5（ueli 风格 UI 重构）已完成；M6（设置与系统集成）已落地——设置页、Mica/Acrylic 窗口材质、托盘图标、自定义全局热键、拼音搜索、文件搜索扩展。里程碑进度见 [`docs/implementation.md`](./docs/implementation.md) §5，遗留项台账见其 §6.1。
+> **当前状态**：MVP 里程碑 M0–M4 已全部关闭并通过真机验收；M5（ueli 风格 UI 重构）已完成；M6（设置与系统集成）已落地并通过真机验收（2026-09-08 M6 集中回归 A–F 全部通过）——设置页、Mica/Acrylic 窗口材质、托盘图标、自定义全局热键、拼音搜索、文件搜索扩展。里程碑进度见 [`docs/implementation.md`](./docs/implementation.md) §5，遗留项台账见其 §6.1。
 
 ---
 
@@ -101,7 +101,7 @@
 
 - **M0–M4 已全部关闭**：协议冻结 → 最小面板 → 命令执行与状态机 → 缓存懒加载 → 5 内置扩展与健壮性（commit `757f3b4`）。
 - **M5 已完成**：ueli 风格 UI 重构，批次 1–4.2 + 六轮真机反馈修复（commit `5cf32b7`）+ 设计稿 C 组占位（Loading 骨架 / Dialog 遮罩 / Toast 意图色）。
-- **M6 已落地**：设置页（外观 / 常规 / 搜索 / 扩展）、Mica/Acrylic 窗口材质、托盘图标、拖动与缩放、自定义全局热键、开机自启、拼音搜索、多语言、冷启动 CJK 字体后台加载、文件搜索扩展（`f ` 直达）（commits `a007656`…`2e5b3da`，设计稿 v4.17/v4.17a）。
+- **M6 已完成**（2026-09-08 M6 集中回归 A–F 真机验收全部通过）：设置页（外观 / 常规 / 搜索 / 扩展）、Mica/Acrylic 窗口材质、托盘图标、拖动与缩放、自定义全局热键、开机自启、拼音搜索、多语言、冷启动 CJK 字体后台加载、文件搜索扩展（`f ` 直达）（commits `a007656`…`2e5b3da`，设计稿 v4.17/v4.17a）。
 - **M7 进行中**（发布工程，2026-09-08 立项）：GitHub Actions CI（windows-gnu 上 build / test / clippy `-D warnings` / fmt 四关，首跑绿灯）、`assets/app.ico` 增 256px 档。分发定案：**仅免安装单文件绿色版**（曾探索 Inno Setup 安装器后按决策放弃，不留安装器代码）；文件搜索扩展以 sidecar 形态随 `dist/extensions.d/` 携带。宿主会扫描**可执行文件同目录的** `extensions.d/`（批次 7.5），绿色 zip **解压即用**、无需人工拷贝。剩余：真机走查（解压 → `f ` 前缀可进文件搜索）+ 一次 tag → GitHub Release 演练。
 - **候选方向**：第三方扩展端到端验证、A2 冷启动 GUI 瓶颈（异步字体修复前 wgpu + 22MB 字体 ~2.8s）、跨平台。完整进度与遗留项台账见 [`docs/implementation.md`](./docs/implementation.md) §5 / §6.1。
 

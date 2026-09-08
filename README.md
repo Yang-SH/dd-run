@@ -4,7 +4,7 @@
 
 **A cross-platform command palette / launcher, written in Rust.** Design inspired by the [PowerToys Command Palette (CmdPal)](https://github.com/microsoft/PowerToys/tree/main/src/modules/cmdpal) module.
 
-> **Status**: MVP milestones M0–M4 are all closed and verified on real hardware. M5 (ueli-style UI redesign) is complete. M6 (settings & system integration) has shipped: settings pages, Mica/Acrylic window material, tray icon, customizable global hotkey, Pinyin search, and a file-search extension. See [`docs/implementation.md`](./docs/implementation.md) §5 for milestone progress and §6.1 for the follow-ups ledger.
+> **Status**: MVP milestones M0–M4 are all closed and verified on real hardware. M5 (ueli-style UI redesign) is complete. M6 (settings & system integration) is complete and verified on real hardware (consolidated regression A–F passed, 2026-09-08): settings pages, Mica/Acrylic window material, tray icon, customizable global hotkey, Pinyin search, and a file-search extension. See [`docs/implementation.md`](./docs/implementation.md) §5 for milestone progress and §6.1 for the follow-ups ledger.
 
 ---
 
@@ -101,7 +101,7 @@ Full records and rationale live in the ADR section of [`docs/implementation.md`]
 
 - **M0–M4 closed**: protocol freeze → minimal panel → command execution & state machine → cache/lazy loading → 5 built-in extensions & robustness (commit `757f3b4`).
 - **M5 complete**: ueli-style UI redesign, batches 1–4.2 + six rounds of real-hardware feedback fixes (commit `5cf32b7`) + design-spec group C (loading skeletons, dialog overlays, toast intents).
-- **M6 shipped**: settings pages (appearance / general / search / extensions), Mica/Acrylic window material, tray icon, drag & resize, custom global hotkey, autostart, Pinyin search, i18n, cold-start CJK font background loading, and the file-search extension with `f ` direct entry (commits `a007656`…`2e5b3da`, UI spec v4.17/v4.17a).
+- **M6 complete** (verified on real hardware via the consolidated regression A–F on 2026-09-08): settings pages (appearance / general / search / extensions), Mica/Acrylic window material, tray icon, drag & resize, custom global hotkey, autostart, Pinyin search, i18n, cold-start CJK font background loading, and the file-search extension with `f ` direct entry (commits `a007656`…`2e5b3da`, UI spec v4.17/v4.17a).
 - **M7 in progress** (release engineering, started 2026-09-08): GitHub Actions CI (build / test / clippy `-D warnings` / fmt on windows-gnu, first run green), 256px icon tier added to `assets/app.ico`. Distribution decision: **portable single-file only** (an Inno Setup installer was explored and then dropped — no installer code is kept); the file-search extension ships as a sidecar in `dist/extensions.d/`. The host scans an `extensions.d/` next to the executable (batch 7.5), so the green zip is **unzip & run** — no copying needed. Remaining: real-machine walkthrough (unzip → file-search discoverable via `f `) + a tag → GitHub Release drill.
 - **Candidate next steps**: third-party extension end-to-end validation, A2 cold-start GUI profiling (wgpu + 22 MB font ≈ 2.8 s before the async fix), cross-platform work. Full progress and the follow-ups ledger: [`docs/implementation.md`](./docs/implementation.md) §5 / §6.1.
 
