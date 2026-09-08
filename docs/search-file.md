@@ -10,7 +10,7 @@
 > 6. **删除独立 Ctrl+F 面板**：真实宿主是单一聚合面板，文件结果随主搜索框经 `fallback_commands`+`get_items` 自然呈现；防抖由宿主侧控制，扩展内不做。
 > 7. **跨平台矛盾修正**：Everything 仅 Windows 可用，故 v0.1 **仅 Windows**；原"三平台产物"与"v0.1 依赖 Everything"自相矛盾 → 改为 v0.2（fd Provider）再谈跨平台。
 > 8. **评分/类型 bug 修复**：`SkimMatcherV2::fuzzy_match` 返回 `Option<i64>`，原 `name_score + path_score*0.3` 存在 i64/f64 混算编译错误且 `score` 量级不对 → 归一化到 0~1；`date_modified` 必须规范化为 Unix 秒后再与 `now_7days()` 比较（原文直接比较会错）。
-> 9. **依赖修正**：`Cargo.toml` 仅保留 `fuzzy-matcher` + `chrono` 两个第三方依赖；HTTP 用标准库 `TcpStream`、URL 编码用扩展内手写 `pct_encode`；移除 `tokio`、`async-trait`、`reqwest`、`urlencoding`（同步模型 + 最小依赖）。
+> 9. **依赖修正**：相对 dd-ext 基线，**本功能新增的第三方依赖仅 `fuzzy-matcher` + `chrono`**（`anyhow`/`serde`/`serde_json` 为既有基线依赖，search.rs 复用）；HTTP 用标准库 `TcpStream`、URL 编码用扩展内手写 `pct_encode`；**不引入** `tokio`、`async-trait`、`reqwest`、`urlencoding`（同步模型 + 最小依赖）。
 > **v3.2 追注**：上列第 2、9 条中「`reqwest::blocking` / `urlencoding`」表述已被 §7.2 落地实现取代（实际 dd-ext 依赖仅 `fuzzy-matcher` / `chrono`，HTTP 用标准库 `TcpStream`、URL 编码用扩展内手写 `pct_encode`）；第 3 条「由安装器写入」已被 M7 批次 7.4/7.5 的**免安装 sidecar** 定案取代（清单源码在 `examples/extensions.d/`，由 `tools/package.sh` 归集进 `dist/extensions.d/`）。其余各条为 v3.1 相对原 v3 的修正记录，保留。
 
 > **调整原因**：本地已安装 Everything，先接入 Everything 可以**用最小代价最快跑通全链路**（运行时 → Provider → UI），且 Everything 的搜索性能天花板最高，适合作为架构的第一个验证者。
@@ -144,7 +144,7 @@ chrono = "0.4"                 # date_modified 规范化（任务 2.2）
 | `fallback_commands` | **每个非空 query** 返回一条入口项 `"在文件中搜索 {query}"`，`command=Page{files.results}`（宿主渲染时替换 `{query}`） |
 | `get_items` | 进入 `files.results` 页后，宿主带 `search_text` 调用 → 返回前 N 条文件 `CommandItem`（**前置任务已补齐**） |
 | `invoke` | `files.open.<u64>` → 经 `host/open_url`（`file://`）打开文件，`Dismiss` |
-| `host/open_url` | 扩展反向请求，打开 `file://` 文件；`host/show_status` 用于 Everything 不可用时的引导 Toast |
+| `host/open_url` | 扩展反向请求，打开 `file://` 文件；`host/show_status` 已声明（清单合规）但**当前扩展未实际发起**——Everything 不可用时的引导经 `get_items` 返回列表项 `files.guide`，点击落回通用「未知命令」Toast（见 §7.4） |
 
 > ❌ **删除原 v3 的 `search` / `search_status` 两张表**：它们不在 v1.0 协议里，且会触发协议冻结约束。Everything 可用性与结果列表改由 `fallback_commands` + `get_items` 表达。
 
@@ -474,7 +474,7 @@ Everything 查询本身毫秒级返回，30 条评分开销可忽略。归一化
 | 超时收紧 | 探测 800ms；搜索 3s（Everything 本地通常 <50ms）；⚠️ 宿主 `get_items` 超时仅 2000ms，见 §7.4 | 异常时快速失败，不挂起 UI |
 | 结果数自适应 | 默认取前 30 条，skim 评分排序稳定 | 海量结果只取前 N，列表瞬时填充 |
 | 查询直透 | Everything 全部语法（`ext:`/`dm:`/`path:`/通配符/正则）原样透传 | 扩展侧零解析、零损耗 |
-| 依赖最小 | HTTP 用标准库 `TcpStream`（HTTP/1.1 `Connection: close`）；评分用 `fuzzy-matcher`；时间用 `chrono`（手搓 civil→days 易错，改用成熟库） | 仅 fuzzy-matcher/chrono 两个第三方依赖，不引入 reqwest/urlencoding 等重依赖 |
+| 依赖最小 | HTTP 用标准库 `TcpStream`（HTTP/1.1 `Connection: close`）；评分用 `fuzzy-matcher`；时间用 `chrono`（手搓 civil→days 易错，改用成熟库） | 相对 dd-ext 基线**仅新增** fuzzy-matcher/chrono（anyhow/serde/serde_json 复用既有基线），不引入 reqwest/urlencoding 等重依赖 |
 
 ### 7.3 验收（acceptance）
 
@@ -482,8 +482,8 @@ Everything 查询本身毫秒级返回，30 条评分开销可忽略。归一化
 - [ ] **防重**：对 `f report` 连续多帧 `ui()` 不重复 `open_page`（仅一次进页）；按 Esc 返回 Root 后框内仍含 `f report` 不会立即重进页；清空查询后 `file_drill` 复位，再次输入 `f x` 可正常进页。
 - [ ] **速度**：Everything 在线时，从输入完成到结果填充主观 <200ms（本地回环）；`everything_available()` 在 TTL 内对同一状态不再发起新探测。
 - [ ] **健壮**：关闭 Everything HTTP 服务 → `f x` 进页后返回「未检测到 Everything」引导项，不挂起、不 panic；扩展进程不崩溃（运行时熔断不误触发）。
-- [ ] **回归**：既有 5 扩展 `pages: None` 行为不变（仍 `-32005`）；`cargo test -p dd-ext` 全过（含 `get_items` PageHandler、日期解析、评分归一化、路径索引 round-trip）。
-- [ ] **单测新增**：`search.rs` 覆盖 `pct_encode` / 日期多格式解析 / `score` 归一化与近因加分 / 路径索引 round-trip / `get_file_items` 空查询→hint、Everything 不可用→guide。
+- [x] **回归**：既有 5 扩展 `pages: None` 行为不变（仍 `-32005`）；`cargo test -p dd-ext` 全过（含 `get_items` PageHandler、日期解析、评分归一化、路径索引 round-trip）。**2026-09-08 实证**：`cargo test --workspace` **274 passed / 0 failed**。
+- [x] **单测新增**：`search.rs` 覆盖 `pct_encode` / 日期多格式解析 / `score` 归一化与近因加分 / 路径索引 round-trip / `get_file_items` 空查询→hint、Everything 不可用→guide。**2026-09-08 补齐**：另增 `guess_is_dir` 边界、`handle_invoke` 分发与 Toast、`to_command_item` 与三个占位项 shape、`parse_response`（fixture 离线）、路径索引容量淘汰、`spec`/commands 契约——`dd-ext-search` 单测由 9 → **21**。
 
 ### 7.4 已知边界（v3.2 记录，部分已在本轮解决）
 
@@ -492,6 +492,240 @@ Everything 查询本身毫秒级返回，30 条评分开销可忽略。归一化
 - **`f ` 前缀会劫持根视图字面查询**：用户若想在主面板搜字面 `f report` 文本，会被自动进文件页。属设计取舍（便捷前缀），如需可改为可配置前缀或仅在空 Root 时触发。
 - **扩展搜索超时（3s）被宿主 `get_items` 超时（2000ms）截断（v3.2 记录，未处理）**：宿主 `TIMEOUT_GET_ITEMS=2000ms`（`crates/dd-host/src/process.rs`，协议 §10）固定不变；Everything 若超过 2s 无响应，宿主先判 `-32001 extension_timeout` 并丢弃迟到响应，表现为超时错误而非引导项——§7.2「搜索 3s 兜底」实际到不了。如需引导项兜底，v3.3 把 `search.rs` 的 3000ms 对齐到 ≤2000ms（宿主侧不改）。
 - **引导项/占位项点击文案未打磨（v3.2 记录，未处理）**：`files.hint` / `files.guide` / `files.error` / `files.search` 的 `command` 均为 `Invoke`，但 `handle_invoke` 仅分发 `files.open.<u64>`，其余落回通用「未知命令」Toast——列表内 title/subtitle 已把信息讲清，点击提示可后续打磨（v3.3）。
+
+---
+
+## 八、AI Agent 可执行最小任务分解（按依赖优先级排序）
+
+> **目的**：把 §二/§三/§六 的"人读计划"重写为**原子、可独立提交、可机器验收**的任务序列，供 AI agent 顺序（或同层并行）执行。每个任务都是「打开这些文件 → 做这些确定性改动 → 跑这条命令验收」的最小单元，不夹带歧义。
+> **落地基线**：§7.3 已 `[x]` 的项（便捷进页、f 前缀回填、`file://` 打开实测）视为已完成。AI agent 执行时将其作为**回归验收基线**——跳过实现、仅做核对；其余任务从零落地。
+> **优先级规则**：优先级 = 依赖拓扑层（**P0 最底层前置 → P7 最高层收尾**）。同层任务互不依赖、可由不同 agent 并行；跨层必须**先完成低层全部任务**再开始高层。任务 ID 全局唯一（`T-01`…`T-25`），`依赖` 列列出前置任务 ID。每个任务完成后跑对应单测再提交，不符合验收不进入下一层。
+
+### 8.1 依赖拓扑图（优先级即层号）
+
+```mermaid
+graph TD
+    T01[T01 运行时PageHandler] --> T02[T02 运行时单测]
+    T01 --> T04[T04 search.rs骨架]
+    T03[T03 Cargo bin+依赖] --> T04
+    T03 --> T05[T05 清单json]
+    T04 --> T06[T06 探测]
+    T04 --> T07[T07 http_get]
+    T04 --> T08[T08 pct_encode]
+    T04 --> T13[T13 路径索引]
+    T04 --> T26[T26 契约冒烟]
+    T07 --> T09[T09 FileEntry/search解析]
+    T08 --> T09
+    T09 --> T10[T10 日期解析]
+    T09 --> T11[T11 guess_is_dir]
+    T09 --> T12[T12 评分]
+    T10 --> T12
+    T09 --> T16[T16 to_command_item]
+    T06 --> T14[T14 get_file_items]
+    T09 --> T14
+    T10 --> T14
+    T11 --> T14
+    T12 --> T14
+    T13 --> T14
+    T13 --> T15[T15 handle_invoke]
+    T14 --> T17[T17 编译+测试]
+    T15 --> T17
+    T16 --> T17
+    T04 --> T18[T18 宿主f前缀进页]
+    T01 --> T18
+    T18 --> T19[T19 poll_page回填]
+    T19 --> T27[T27 防重与Esc语义]
+    T15 --> T20[T20 host/open_url file://]
+    T17 --> T21[T21 package.sh归集]
+    T05 --> T21
+    T17 --> T22[T22 docs/search.md]
+    T17 --> T23[T23 CHANGELOG]
+    T21 --> T24[T24 发布构建+走查]
+    T20 --> T24
+    T22 --> T24
+    T23 --> T24
+    T17 --> T28[T28 性能与健壮回归]
+    T06 --> T28
+    T19 --> T28
+    T27 --> T24
+    T28 --> T24
+    T24 --> T25[T25 GitHub Release]
+```
+
+### 8.2 任务清单（按优先级层 P0 → P7）
+
+#### P0 · 前置（运行时补齐 `get_items`）— 第 1 天上午
+
+| ID | 任务 | 目标文件 | 具体动作（AI 可执行） | 验收 | 依赖 |
+| :--- | :--- | :--- | :--- | :--- | :--- |
+| **T-01** | 运行时支持 `PageHandler` | `crates/dd-ext/src/lib.rs` | 新增 `pub type PageHandler = fn(&GetItemsParams) -> GetItemsResult;`；为 `ExtensionSpec` 增加字段 `pub pages: Option<PageHandler>`；在 `serve_line` 的 `"get_items"` 分支：若 `pages: Some(h)` 调 `h(params)` 返回 `GetItemsResult`（含 `has_more_items`/`is_loading`），否则维持原 `-32005 Page not found`。**不修改 `docs/protocol.md`**。 | 既有 5 扩展 `pages: None` 行为不变（仍 `-32005`）。 | — |
+| **T-02** | 运行时 `PageHandler` 单测 | `crates/dd-ext/src/lib.rs`（`#[cfg(test)]`） | 新增 `page_handler_none_still_32005`（5 扩展之一构造 spec 调 `get_items` 期望 `-32005`）；`page_handler_returns_items`（注册临时 `PageHandler` 返回非空 `GetItemsResult`）。 | `cargo test -p dd-ext` 新增测试通过。 | T-01 |
+
+#### P1 · 扩展骨架（bin + 清单）— 第 1~2 天
+
+| ID | 任务 | 目标文件 | 具体动作（AI 可执行） | 验收 | 依赖 |
+| :--- | :--- | :--- | :--- | :--- | :--- |
+| **T-03** | 注册 bin 与依赖 | `crates/dd-ext/Cargo.toml` | `[[bin]]` 区追加 `name = "dd-ext-search"` / `path = "src/bin/search.rs"`；`[dependencies]` 确保含 `fuzzy-matcher = "0.3"` 与 `chrono = "0.4"`（不重复添加已存在的 `anyhow`/`serde`/`serde_json`）。 | `cargo metadata` 解析无误；与 §三 1.1 清单一致。 | — |
+| **T-04** | `search.rs` 骨架 | `crates/dd-ext/src/bin/search.rs`（新建） | 照 §三 1.3 写 `spec()`（`id=com.ddrun.filesearch`、`frozen=false`、`has_fallback=true`、`capabilities=[host/open_url, host/show_status]`、`pages=Some(get_file_items)`、`log_tag=dd-ext-filesearch`）；`fallback_commands()` 返回 `CommandRef::Page { page_id: "files.results" }` 入口项（`id=files.search.query`）；`top_level_commands()` 返回顶层文件搜索说明项（`§7.1` 保留的发现性入口，不得省略）；`main(){ run(&spec()) }`；`get_file_items`/`handle_invoke` 先放可编译占位（如返回 hint 项）。**所有用户可见文案必须走 `dd_ext::i18n::tr(中文, English)` 双语**，禁止硬编码单语字符串。 | `cargo build -p dd-ext --bin dd-ext-search` 编译通过；`spec()` 字段与 §三 1.3 逐字段一致。 | T-01, T-03 |
+| **T-05** | 扩展清单 | `examples/extensions.d/com.ddrun.filesearch.json`（新建） | 照 `docs/manifest-schema.md` 写：`id=com.ddrun.filesearch`、`display_name`、`entry.command` 指向 `dd-ext-search.exe`（`${EXT_DIR}` 相对定位）、`platforms=["windows"]`、`capabilities=["host/open_url","host/show_status"]`。 | `python -m json.tool` 合法；字段与 manifest-schema 一致。 | T-03 |
+| **T-26** | NDJSON 契约冒烟 | `crates/dd-ext/src/bin/search.rs`、`examples/extensions.d/` | 以 stdin/stdout 管道驱动扩展，逐个校验协议 v1.0 契约（**不新增字段**）：`initialize` 返回 `provider.id=com.ddrun.filesearch` / `has_fallback=true` / `capabilities` 含 `host/open_url`；`fallback_commands` 返回含 `Page{files.results}` 的入口项；`get_items` 返回 `GetItemsResult`（空 query→hint、异常→guide）。命令形如 `echo '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}' \| cargo run -p dd-ext --bin dd-ext-search`。 | 三条契约响应字段与 §三 1.2 表逐项一致；`initialize` 的 `id`/`has_fallback` 断言存在（对应 §六 **D2** 验收）。 | T-04, T-05 |
+
+#### P2 · Provider 基础（探测 / HTTP / 编码 / 解析）— 第 3 天
+
+| ID | 任务 | 目标文件 | 具体动作（AI 可执行） | 验收 | 依赖 |
+| :--- | :--- | :--- | :--- | :--- | :--- |
+| **T-06** | Everything 可用探测 | `crates/dd-ext/src/bin/search.rs` | 实现 `everything_base()`（默认 `127.0.0.1:8080`，环境变量 `DDRUN_EVERYTHING_URL` 覆盖）；`everything_available()`（`TcpStream::connect` 探测 `GET /?json=1&count=1`，读/写超时 800ms，3s TTL 缓存跳过重复探测）。**探测目标必须可注入**（函数接受 base 地址参数或读 env），以便单测用本地临时 `TcpListener`（`127.0.0.1:0`）模拟 up/down。 | 单测 `everything_available_true_when_up` / `_false_when_down`：**用本地临时 TcpListener 模拟**，不依赖真实 Everything（规则见 §8.4.2）。 | T-04 |
+| **T-07** | 同步 `http_get` | `crates/dd-ext/src/bin/search.rs` | 实现 `http_get(rel)`：标准库 `TcpStream` 发 HTTP/1.1 GET，`Connection: close`，读超时 3s / 写超时 800ms，body 取自首个 `\r\n\r\n` 之后；返回 `anyhow::Result<String>`。连接地址同样需可注入（同 T-06）。 | 单测 `http_get_reads_body_after_crlf`：起本地临时 `TcpListener` 返回固定响应，断言 body 正确截取；另覆盖**连接失败返回 Err 而非 panic**。不依赖真实 Everything。 | T-04 |
+| **T-08** | `pct_encode` | `crates/dd-ext/src/bin/search.rs` | 实现 `pct_encode(input)`：保留 `-_.~` 与字母数字，其余按 RFC 3986 大写 `%XX` 编码（含 UTF-8 字节）。 | 单测 `pct_encode_keeps_unreserved_and_encodes_rest`（覆盖中文、`a+b=c`、空格）。 | T-04 |
+| **T-09** | `FileEntry` + `search` 解析 | `crates/dd-ext/src/bin/search.rs` | 定义 `RawEntry`/`FileEntry`（`name,dir,size,is_dir,modified`）与 `EvResponse`；实现 `search(q, limit)`：拼 `/?search={pct_encode(q)}&json=1&count={limit}&path_column=1&size_column=1&date_modified_column=1` → `http_get` → 解析 → 映射 `Vec<FileEntry>`（`dir + "\\" + name` 为 `full_path`）。**必须把解析抽为纯函数 `parse_response(&str) -> anyhow::Result<Vec<FileEntry>>`**，与传输解耦以保证可离线单测（§8.4.2 第 2 条）。 | 单测 `search_parses_everything_response` / `parse_response_malformed_returns_err`：以**本机真实响应样例字符串作 fixture**（存入 `#[cfg(test)]` 常量），断言字段映射与 `full_path` 拼接；畸形 JSON 返回 Err 不 panic。 | T-07, T-08 |
+
+#### P3 · 字段映射 / 评分 / 路径索引 — 第 4 天
+
+| ID | 任务 | 目标文件 | 具体动作（AI 可执行） | 验收 | 依赖 |
+| :--- | :--- | :--- | :--- | :--- | :--- |
+| **T-10** | `date_modified` 规范化 | `crates/dd-ext/src/bin/search.rs` | 实现 `parse_everything_date(s)`：按空格切日期/时间 → 按 `-`/`/` 切年月日 → 按 `:` 切时分秒（截断 `.fff`）→ `chrono` 构造 UTC 秒；失败返回 `0` 不 panic。 | 单测 `date_parse_known_formats`（多格式）/ `date_parse_invalid_returns_zero`。 | T-09 |
+| **T-11** | `guess_is_dir` | `crates/dd-ext/src/bin/search.rs` | 实现 `guess_is_dir(name, size, type_field)`：`type=="folder"` 优先；否则无扩展名且 `size==0`。 | 单测 `guess_is_dir_folder_priority` / `_heuristic_boundary`。 | T-09 |
+| **T-12** | 评分排序 | `crates/dd-ext/src/bin/search.rs` | 实现 `norm(skim)`（`/1000.0` 收敛 0~1）、`score(entry, query)`（`name` + `path*0.3` + 近因 `0.1`）、`now_7days_unix()`（`chrono` UTC - 7d）、`score_and_sort()`。 | 单测 `score_normalizes_and_ranks_name_over_path` / `score_recency_bonus_for_recent`。 | T-09, T-10 |
+| **T-13** | 进程内路径索引 | `crates/dd-ext/src/bin/search.rs` | 实现 `register_path(path)->u64` / `lookup_path(u64)->Option<PathBuf>`（线程安全）；`id` 用 `files.open.<u64>`，**不内嵌路径**。**必须带容量上限与淘汰**（如环形/LRU，或每次 `get_items` 重建本页索引），否则扩展长驻进程内索引会随调用次数无限增长，与「连续 100 次请求无内存泄漏」（§三测试清单）直接冲突。 | 单测 `path_index_roundtrip`（register → lookup 一致）；`path_index_evicts_beyond_capacity`（超容量后旧项被淘汰、不无限增长）。 | T-04 |
+
+#### P4 · 组装 `get_items` / `invoke` / 映射 — 第 4~5 天
+
+| ID | 任务 | 目标文件 | 具体动作（AI 可执行） | 验收 | 依赖 |
+| :--- | :--- | :--- | :--- | :--- | :--- |
+| **T-14** | `get_file_items` | `crates/dd-ext/src/bin/search.rs` | 实现 `get_file_items(params)`：空 query → `hint_item()`；`!everything_available()` → `guide_item()`；否则 `search` → `score_and_sort` → `to_command_item`；错误 → `error_item`。 | 单测 `get_file_items_empty_query_returns_hint` / `everything_unavailable_returns_guide`。 | T-06, T-09, T-10, T-11, T-12, T-13 |
+| **T-15** | `handle_invoke` | `crates/dd-ext/src/bin/search.rs` | 实现 `handle_invoke(params)`：`files.open.<u64>` → `lookup_path` → `file:///` + 路径（`\`→`/`）→ `Effect::HostRequest { method:"host/open_url", params: json!({"url":url}) }` + `CommandResult::Dismiss`；其余 → `ShowToast` 未知命令。 | 单测 `handle_invoke_opens_file_via_host_request` / `_unknown_command_toast`。 | T-13 |
+| **T-16** | `to_command_item` + 静态项 | `crates/dd-ext/src/bin/search.rs` | 实现 `to_command_item(entry)`：输出 `CommandItem { id:"files.open.<n>", title:name, subtitle:full_path, section:"文件", icon glyph \uE7C3, command: invoke, details: 大小/修改 }`；`hint_item()`/`guide_item()`/`error_item()` 三个静态项（§7.4 所列 `files.search.query` 属 fallback 入口项，非本任务的页内占位项）。 | 单测 `to_command_item_maps_fields`（含 `id` 形如 `files.open.<n>`、`details` 含大小与修改时间）；`hint_guide_error_items_shape`（三项 `command` 均为 `Invoke`、文案双语走 `tr()`）。 | T-09, T-10, T-11 |
+
+#### P5 · 编译 + 全量测试 — 第 5 天
+
+| ID | 任务 | 目标文件 | 具体动作（AI 可执行） | 验收 | 依赖 |
+| :--- | :--- | :--- | :--- | :--- | :--- |
+| **T-17** | 编译 + 全量门禁 | 仓库根 | 运行完整门禁（§8.4.3 命令集）：`cargo fmt --all --check` → `cargo clippy --workspace --all-targets` → `export APPDATA=...` 后 `cargo test --workspace` → `cargo +stable-x86_64-pc-windows-gnu build -p dd-ext --bin dd-ext-search`；修复全部错误与警告至全绿。 | **三项基线全绿**：fmt exit 0、clippy **零 warning**、`cargo test --workspace` **0 failed**（含 PageHandler、日期、评分、路径 round-trip、`get_file_items`）；扩展 build exit 0。任一不达标均视为 T-17 未完成。 | T-14, T-15, T-16 |
+
+#### P6 · 宿主联调（f 前缀 / 打开）— 第 5 天
+
+| ID | 任务 | 目标文件 | 具体动作（AI 可执行） | 验收 | 依赖 |
+| :--- | :--- | :--- | :--- | :--- | :--- |
+| **T-18** | 宿主 `f ` 前缀自动进页 | `crates/dd-gui/src/app/mod.rs`、`page.rs` | 新增常量 `FILE_SEARCH_PREFIX="f "`、`file_search_drill_target()`（返回 provider id + `files.results`）、`PaletteApp` 方法 `maybe_drill_file_search()`（栈顶 Root 且查询以前缀开头且 provider 已加载未禁用 → `open_page` 并标记 `file_drill`）、`file_search_present()`；状态字段 `file_drill`/`file_drill_armed`。 | §7.3 便捷项已 `[x]`；以该验收为回归基线核对（输入 `f report` 自动进页、回填 query）。 | T-04, T-01 |
+| **T-19** | `poll_page` 回填查询 | `crates/dd-gui/src/app/page.rs`、`mod.rs` | 在 `poll_page` 结果落地时，若 `file_drill_armed` 命中则将 `f ` 之后的查询写回搜索框并消耗标记；Esc 返回 Root 的 else 分支清 `file_drill_armed`。 | §7.3「结果回来后框被清空」边角已落地；回归核对。 | T-18 |
+| **T-20** | `host/open_url` 开 `file://` | `crates/dd-gui/src/app/host_actions.rs` | 确认 `host/open_url` 经 `webbrowser::open` 处理 `file://`；若实测不支持，改为 `cmd /c start` 兜底；保持经现有 `invoke` 链路。 | §7.3「`file://` 打开实测」；真机回车打开文件。 | T-15 |
+| **T-27** | 防重与 Esc 语义 | `crates/dd-gui/src/app/mod.rs`、`page.rs` | 落地并验证 §7.3「防重」项：`f report` 连续多帧 `ui()` 仅 `open_page` **一次**；Esc 返回 Root 后框内仍含 `f report` 时**不**立即重进页；清空查询后 `file_drill` 复位，再次输入 `f x` 可正常进页。 | 单测覆盖 `file_search_drill_target` 前缀判定与复位；真机按 §8.4.5 第 11 项勾选。 | T-18, T-19 |
+| **T-28** | 性能与健壮回归 | `crates/dd-ext/src/bin/search.rs`、宿主 | 落地并验证 §7.3「速度 / 健壮 / 回归」三项：① 速度——Everything 在线时输入完成到结果填充主观 <200ms，且 `everything_available()` 在 TTL 内不重复发起探测；② 健壮——关闭 Everything HTTP 后 `f x` 进页返回引导项，不挂起、不 panic、扩展进程不崩溃（运行时熔断不误触发）；③ 回归——既有 5 扩展 `pages: None` 仍返回 `-32005`，`cargo test -p dd-ext` 全过。 | §8.4.5 第 5/10/12 项真机勾选；`cargo test --workspace` 0 failed。 | T-17, T-19, T-06 |
+
+#### P7 · 打包 / 文档 / 发布 — 第 6 天
+
+| ID | 任务 | 目标文件 | 具体动作（AI 可执行） | 验收 | 依赖 |
+| :--- | :--- | :--- | :--- | :--- | :--- |
+| **T-21** | `package.sh` 归集 | `tools/package.sh`、`dist/` | 确认 `package.sh` 把 `dd-ext-search.exe` 与 `examples/extensions.d/com.ddrun.filesearch.json` 归集进 `dist/extensions.d/`；跑 `bash tools/package.sh` 验证产出。 | `dist/extensions.d/` 含 `dd-ext-search.exe` + `com.ddrun.filesearch.json`；宿主扫描同目录 `extensions.d` 能加载。 | T-17, T-05 |
+| **T-22** | 用户文档 | `docs/search.md`（新建） | 写用户文档：Everything 安装 + 开 HTTP（图）、常用语法速查（`ext:`/`dm:`/`path:`）、配置项 `DDRUN_EVERYTHING_URL`（默认 `127.0.0.1:8080`、仅绑 `127.0.0.1` 安全提示）、明确 v0.1 仅 Windows。 | 文档可被用户照做完成 Everything 配置并搜到结果。 | T-17 |
+| **T-23** | CHANGELOG | `CHANGELOG.md` | 追加 v0.1 条目："文件搜索依赖 Everything（Windows）；fd 兜底 Provider 计划 v0.2"。 | CHANGELOG 含该条目。 | T-17 |
+| **T-24** | 发布构建 + 走查 | `dist/`、仓库 | `bash tools/package.sh` 产出 `dist/dd-run-<ver>.exe` + `dist/extensions.d/`；真机走查：解压直接运行 → `f ` 进文件搜索、`file://` 打开、Esc 返回、升级覆盖。 | **§8.4.5 真机验收清单 12 项逐项勾选全过**（无一项未勾即不得进入 T-25）。 | T-21, T-20, T-22, T-23, T-27, T-28 |
+| **T-25** | GitHub Release | GitHub | tag + 推送 + 创建 Release v0.1.0（Windows 绿色包）。 | Release 资产含 dist 产物，下载解压可用。 | T-24 |
+
+### 8.3 执行纪律
+
+1. **同层并行、跨层串行**：P0→P1→…→P7 严格递进；P2 内 T-06/T-07/T-08 互不依赖可并行，但都需先完成 P1 的 T-04；T-09 必须等 T-07+T-08。
+2. **三层门禁**：每个任务落地的同时提交对应单测；`cargo fmt --all --check` + `cargo clippy --workspace --all-targets`（零 warning）+ `cargo test --workspace`（0 failed）三项未全绿，不得进入 P5/P6（命令见 §8.4.3）。
+3. **零协议改动**：T-01 仅补齐运行时 `get_items`，不得向 `docs/protocol.md` 追加方法或字段（协议 v1.0 冻结）；契约测试断言的必须是 v1.0 已定义字段。
+4. **最小依赖**：仅新增 `fuzzy-matcher`/`chrono`；不引入 `reqwest`/`urlencoding`/`tokio`/`async-trait`（同步模型）。红线见 §8.4.2 第 8 条。
+5. **回归基线**：§7.3 已 `[x]` 的 P6 任务（T-18/T-19/T-20）以现有实现为基线，AI 执行时优先核对而非重写。
+6. **边界不越界**：§7.4 记录的 v3.3 遗留项（搜索超时 3s 与宿主 2000ms 对齐、引导项点击文案打磨、结果页二次输入实时重拉）**不在本分解范围**，除非任务显式要求，否则不得顺手实现——避免与 v3.3 规划冲突。
+7. **验收唯一口径**：所有任务的「验收」列以 §8.4 为准；出现分歧时以 §8.4.4 量化红线与 §8.4.6 DoD 判定。
+
+### 8.4 验证标准与测试规则（§八 判定基准）
+
+> 本节是 §八 的**唯一判定基准**：所有任务的「验收」列均引用至此。AI agent 在判定任一任务完成前，必须能通过本节对应层级的门禁。
+
+#### 8.4.1 测试分层（L1–L4）
+
+| 层 | 类型 | 覆盖范围 | 依赖 Everything | 运行方式 |
+| :--- | :--- | :--- | :--- | :--- |
+| **L1** | 纯函数单测 | `pct_encode` / `parse_everything_date` / `guess_is_dir` / `norm` / `score` / `register_path`+`lookup_path` / `parse_response` / `to_command_item` / `handle_invoke` / `file_search_drill_target` | ❌ 否（**必须可离线运行**） | `cargo test --workspace` |
+| **L2** | 契约测试（NDJSON） | 以 stdin/stdout 管道驱动扩展进程，校验 `initialize` / `top_level_commands` / `fallback_commands` / `get_items` / `invoke` 的请求-响应 | ❌ 否（可注入假响应） | `echo '<json>' \| cargo run -p dd-ext --bin dd-ext-search` |
+| **L3** | 集成测试（真实 Everything） | 端到端：真实 HTTP 探测 → 搜索 → 评分 → 映射 | ✅ 是 | `#[ignore]` + `cargo test -- --ignored` |
+| **L4** | 真机验收 | GUI 行为：`f ` 进页、↑↓/Enter/Esc、文件打开、长跑、防重 | ✅ 是 | 真机走查（§8.4.5 清单） |
+
+**硬规则**：L1/L2 必须在**无 Everything、无 GUI** 的干净 CI 上全绿；L3/L4 允许被跳过，但被跳过的用例必须在 §8.4.5 清单中被人工执行并勾选，否则不得进入 T-24/T-25。
+
+#### 8.4.2 测试规则（硬性，违反即视为任务未完成）
+
+1. **可离线性**：L1 单测**禁止**发起真实 TCP 连接、禁止依赖 Everything 进程、禁止依赖真实文件系统结果。需要网络语义时用**本地临时 `TcpListener`**（绑定 `127.0.0.1:0`）或**注入 fixture 字符串**。
+2. **解析与传输解耦**：`search()` 必须拆为 `http_get()`（传输）+ `parse_response(&str)`（纯解析）；解析以 `&str` 入参单测，fixture 取自本机 Everything 真实响应样例（存 `#[cfg(test)]` 常量或 `tests/fixtures/`）。
+3. **命名规范**：`<被测函数>_<场景>_<预期>`，如 `date_parse_invalid_returns_zero`、`pct_encode_keeps_unreserved_and_encodes_rest`。§三「单元测试重点」已列出的名字**保持不变，不得重命名**。
+4. **L3 标记**：依赖真实 Everything 的测试一律 `#[ignore]`，注释写明 `// L3: requires local Everything HTTP server; run with --ignored`。
+5. **禁 panic**：`parse_everything_date` 对异常输入必须返回 `0`，不得 `unwrap()`/`expect()`/`panic!`；单测须覆盖空串、缺字段、FILETIME 数值串、超长输入四类。
+6. **确定性**：评分/排序单测须给出确定输入与确定期望顺序；recency 场景用**固定 `modified` 时间戳**构造，不得依赖"当前真实文件"的修改时间。
+7. **不改协议**：L2 契约测试断言的是**协议 v1.0 已定义字段**；出现新增字段一律视为失败。
+8. **依赖红线**：测试中出现 `reqwest` / `tokio` / `async-trait` / `urlencoding` 即视为违规（同步模型 + 最小依赖）。
+
+#### 8.4.3 门禁命令（提交前必跑，顺序执行）
+
+```bash
+# 1) 格式（必须 exit 0）
+cargo fmt --all --check
+
+# 2) 静态检查（workspace 全 target，必须零 warning）
+cargo clippy --workspace --all-targets
+
+# 3) 测试：Git Bash 下 APPDATA 为空会导致 dd-gui 图标缓存测试假阳性失败，必须显式导出
+export APPDATA='C:\Users\y7398\AppData\Roaming'
+cargo test --workspace
+
+# 4) 扩展构建（self-contained 目录必须前置到 PATH，否则 dlltool not found）
+export PATH="/c/Users/y7398/.rustup/toolchains/stable-x86_64-pc-windows-gnu/lib/rustlib/x86_64-pc-windows-gnu/bin/self-contained:$PATH"
+cargo +stable-x86_64-pc-windows-gnu build -p dd-ext --bin dd-ext-search
+
+# 5) 可选：L3 端到端（需本机 Everything HTTP 服务已开启）
+cargo test --workspace -- --ignored
+```
+
+> ⚠️ **incremental 缓存 ICE**：若 clippy/test 报 `rustc_metadata rmeta encoder panic`（`os error 5 ... metadata.rmeta`），属 incremental 缓存目录权限损坏而非代码问题，统一加 **`CARGO_INCREMENTAL=0`** 重跑即可，不要改代码。
+
+#### 8.4.4 量化验收基准（数值红线）
+
+| 指标 | 基准值 | 来源 |
+| :--- | :--- | :--- |
+| 可用性探测超时 | 读 / 写均 **800ms** | §7.2 |
+| 可用性 TTL 缓存 | **3s**（窗口内不重复探测） | §7.2 |
+| 搜索读超时 | **3s**（⚠️ 实际被宿主 2000ms 截断，见 §7.4） | §7.2 / §7.4 |
+| 宿主 `get_items` 超时 | **2000ms**（固定，不改） | §7.4 / 协议 §10 |
+| 结果条数上限 | **30 条** | §7.2 |
+| 评分区间 | **0.0 ~ 1.0**（`norm = skim/1000.0`，`clamp`） | §三 2.3 |
+| 路径权重 | `path_score × 0.3` | §三 2.3 |
+| 近因加分 | `modified > now − 7d` → **+0.1** | §三 2.3 |
+| 本地搜索响应 | **<100ms** | §三 测试清单 |
+| 端到端（输入完成 → 结果填充） | 主观 **<200ms**（本地回环） | §7.3 |
+| 长跑 | 连续 **100 次**请求无内存 / 句柄泄漏 | §三 测试清单 |
+
+#### 8.4.5 真机验收清单（L4，T-24 发布前逐项勾选）
+
+| # | 场景 | 操作 | 判定标准 |
+| :--- | :--- | :--- | :--- |
+| 1 | 基础搜索 | 输入 `f readme` | 结果页展示匹配文件，响应 **<100ms** |
+| 2 | 中文搜索 | 输入 `f 文档` | UTF-8 正常，无乱码 |
+| 3 | 特殊字符 | 输入 `f dd-run`、`f v0.1` | `pct_encode` 正确，结果准确 |
+| 4 | 语法透传 | 输入 `f ext:rs dm:today` | Everything 语法原样透传并生效 |
+| 5 | Everything 未启动 | 退出 Everything 后进页 | 返回「未检测到 Everything」引导项；**不挂起、不 panic** |
+| 6 | 端口变更 | 改端口 9090 + `DDRUN_EVERYTHING_URL=http://127.0.0.1:9090` | 能正常搜索 |
+| 7 | 空结果 | 搜不存在关键词 | 返回空数组，UI 显示「无结果」 |
+| 8 | limit 截断 | 输入 `f e` | 仅返回 **30 条**，排序稳定 |
+| 9 | `file://` 打开 | 回车打开某文件 | 系统默认程序打开成功（否则走 `cmd /c start` 兜底） |
+| 10 | 长跑 | 连续 **100 次**请求 | 无内存 / 句柄泄漏 |
+| 11 | 防重 | 停留 `f report` 多帧 → Esc 返回 → 清空 → 重输 `f x` | 仅进页 **一次**；Esc 后不立即重进；清空复位后可再进 |
+| 12 | 回归 | 5 个既有扩展 | `pages: None` 行为不变（仍 **-32005**） |
+
+#### 8.4.6 完成判定（Definition of Done）
+
+一个任务**只有全部满足**以下各项才算完成：
+
+- [ ] 代码改动落在任务声明的「目标文件」范围内，未越界修改无关文件；
+- [ ] 对应的 L1/L2 测试已写且通过（必测点见 §8.4.2 第 3 条命名规范）；
+- [ ] §8.4.3 三项基线全绿：fmt exit 0、clippy 零 warning、`cargo test --workspace` 0 failed；
+- [ ] 涉及量化指标的任务满足 §8.4.4 对应红线；
+- [ ] 未修改 `docs/protocol.md`（协议 v1.0 冻结）；
+- [ ] 未新增 `fuzzy-matcher` / `chrono` 之外的第三方依赖。
+
+> **不在本分解范围（§7.4 已知边界，留给 v3.3）**：① 搜索超时 3s 与宿主 2000ms 的对齐（把 `search.rs` 的 3000ms 改为 ≤2000ms）；② `files.hint` / `files.guide` / `files.error` 点击文案打磨（当前落回通用「未知命令」Toast）；③ 结果页随页内二次输入实时重拉 `get_items`。AI agent 执行 §八 **不得顺手实现**这三项。
 
 ---
 

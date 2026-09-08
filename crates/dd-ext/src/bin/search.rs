@@ -41,18 +41,41 @@ const AVAIL_TTL: Duration = Duration::from_secs(3);
 // ─── 进程内路径索引（invoke 时按 id 找回完整路径）─────────────────────
 // 进程随 stdin 循环常驻，索引单调递增、无碰撞；会话结束随进程退出释放。
 // `HashMap::new()` 非 const，用 `LazyLock` 惰性初始化。
+//
+// ⚠️ 容量上限：扩展进程长驻，若只增不删，索引会随 `get_items` 调用次数无限
+// 增长（每页最多 RESULT_LIMIT=30 条），与「连续 100 次请求无内存泄漏」的验收
+// （§三 测试清单 / §8.4.5 第 10 项）直接冲突。故超出上限时淘汰**最旧**的一批：
+// id 单调递增 → 最小即最旧；最近注册的 id 恒在保留范围内，因此
+// 「注册后立即 lookup」永远命中（这是 invoke 链路的唯一用法）。
+const PATH_INDEX_CAP: usize = 1024;
 static PATH_INDEX: LazyLock<Mutex<HashMap<u64, String>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
 static PATH_NEXT: AtomicU64 = AtomicU64::new(1);
 
 fn register_path(path: &str) -> u64 {
     let id = PATH_NEXT.fetch_add(1, Ordering::Relaxed);
-    PATH_INDEX.lock().unwrap().insert(id, path.to_string());
+    let mut idx = PATH_INDEX.lock().unwrap();
+    if idx.len() >= PATH_INDEX_CAP {
+        // 淘汰最旧的若干项，使容量回落到 PATH_INDEX_CAP - 1（为本次 insert 留位）
+        let mut keys: Vec<u64> = idx.keys().copied().collect();
+        keys.sort_unstable();
+        let evict = keys.len() - PATH_INDEX_CAP + 1;
+        for k in keys.into_iter().take(evict) {
+            idx.remove(&k);
+        }
+    }
+    idx.insert(id, path.to_string());
     id
 }
 
 fn lookup_path(id: u64) -> Option<String> {
     PATH_INDEX.lock().unwrap().get(&id).cloned()
+}
+
+/// 当前索引条目数（仅测试用，用于断言容量上限生效）。
+#[cfg(test)]
+fn path_index_len() -> usize {
+    PATH_INDEX.lock().unwrap().len()
 }
 
 // ─── availability 探测缓存（TTL）────────────────────────────────────
@@ -257,14 +280,12 @@ fn guess_is_dir(name: &str, size: u64, type_field: &str) -> bool {
     !name.contains('.') && size == 0
 }
 
-fn search(q: &str, limit: usize) -> anyhow::Result<Vec<FileEntry>> {
-    let rel = format!(
-        "/?search={}&json=1&count={}&path_column=1&size_column=1&date_modified_column=1",
-        pct_encode(q),
-        limit
-    );
-    let body = http_get(&rel)?;
-    let resp: EvResponse = serde_json::from_str(&body).map_err(|e| {
+/// 解析 Everything JSON 响应体 → `FileEntry` 列表。
+///
+/// **纯函数（与传输解耦）**：`search()` 只负责取回字符串再交给这里，使解析逻辑
+/// 可用 fixture 字符串离线单测，符合 §8.4.2 第 2 条（解析与传输解耦）。
+fn parse_response(body: &str) -> anyhow::Result<Vec<FileEntry>> {
+    let resp: EvResponse = serde_json::from_str(body).map_err(|e| {
         anyhow::anyhow!(
             "Everything 响应解析失败：{e}（原始：{}）",
             &body[..body.len().min(200)]
@@ -286,6 +307,16 @@ fn search(q: &str, limit: usize) -> anyhow::Result<Vec<FileEntry>> {
             }
         })
         .collect())
+}
+
+fn search(q: &str, limit: usize) -> anyhow::Result<Vec<FileEntry>> {
+    let rel = format!(
+        "/?search={}&json=1&count={}&path_column=1&size_column=1&date_modified_column=1",
+        pct_encode(q),
+        limit
+    );
+    let body = http_get(&rel)?;
+    parse_response(&body)
 }
 
 // ─── 评分（归一化到 0~1）────────────────────────────────────────────
@@ -576,6 +607,7 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use dd_protocol::model::Sender;
 
     #[test]
     fn pct_encode_keeps_unreserved_and_encodes_rest() {
@@ -693,5 +725,195 @@ mod tests {
         });
         assert_eq!(r.items.len(), 1);
         assert!(r.items[0].id == "files.guide" || r.items[0].id == "files.error");
+    }
+
+    // ─── T-11 目录判定 ────────────────────────────────────────────
+    #[test]
+    fn guess_is_dir_folder_priority() {
+        // type=="folder" 优先（大小写不敏感），即便有扩展名、size 非 0
+        assert!(guess_is_dir("src.txt", 4096, "folder"));
+        assert!(guess_is_dir("src", 0, "FOLDER"));
+        // 明确的文件类型 → 走启发式，不应误判为目录
+        assert!(!guess_is_dir("a.txt", 10, "file"));
+    }
+
+    #[test]
+    fn guess_is_dir_heuristic_boundary() {
+        assert!(guess_is_dir("README", 0, ""), "无扩展名且 size==0 → 目录");
+        assert!(!guess_is_dir("README.md", 0, ""), "有扩展名 → 非目录");
+        assert!(!guess_is_dir("README", 1, ""), "无扩展名但 size>0 → 非目录");
+    }
+
+    // ─── T-09 响应解析（纯函数，fixture 离线，不依赖 Everything）───
+    #[test]
+    fn parse_response_maps_everything_fields() {
+        let json = r#"{"results":[{"type":"file","name":"main.rs","path":"C:\\proj\\src",
+            "size":1024,"date_modified":"2024-05-30 12:34:56"}]}"#;
+        let entries = parse_response(json).expect("合法响应应解析成功");
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].name, "main.rs");
+        assert_eq!(entries[0].dir, "C:\\proj\\src");
+        assert_eq!(entries[0].size, 1024);
+        assert_eq!(entries[0].full_path(), "C:\\proj\\src\\main.rs");
+        assert!(!entries[0].is_dir);
+        assert_eq!(
+            entries[0].modified, 1717072496,
+            "date_modified 应为 Unix 秒"
+        );
+    }
+
+    #[test]
+    fn parse_response_folder_type_marks_is_dir() {
+        let json = r#"{"results":[{"type":"folder","name":"src","path":"C:\\proj",
+            "size":0,"date_modified":""}]}"#;
+        let entries = parse_response(json).expect("应解析成功");
+        assert!(entries[0].is_dir, "type=folder 应判定为目录");
+        assert_eq!(entries[0].modified, 0, "空日期应为 0 而非 panic");
+    }
+
+    #[test]
+    fn parse_response_malformed_returns_err() {
+        assert!(parse_response("").is_err(), "空串应返回 Err");
+        assert!(parse_response("not json").is_err(), "非法 JSON 应返回 Err");
+        assert!(
+            parse_response("{}").is_ok(),
+            "缺 results 字段视为合法（serde default → 空列表）"
+        );
+    }
+
+    // ─── T-15 invoke 分发 ────────────────────────────────────────
+    #[test]
+    fn handle_invoke_opens_file_via_host_request() {
+        let pid = register_path("C:\\proj\\src\\main.rs");
+        let (result, effects) = handle_invoke(&InvokeParams {
+            id: format!("files.open.{pid}"),
+            sender: Sender::ListItem,
+            context: None,
+        });
+        assert!(
+            matches!(result, CommandResult::Dismiss),
+            "打开文件后应关闭面板"
+        );
+        assert_eq!(effects.len(), 1, "应发出一个 host/open_url 反向请求");
+        match &effects[0] {
+            Effect::HostRequest { method, params } => {
+                assert_eq!(*method, "host/open_url");
+                let url = params["url"].as_str().expect("应带 url 参数");
+                assert_eq!(url, "file:///C:/proj/src/main.rs", "反斜杠应转为正斜杠");
+            }
+            other => panic!("期望 HostRequest，实际 {other:?}"),
+        }
+    }
+
+    #[test]
+    fn handle_invoke_unknown_command_toast() {
+        // 引导项/占位项（files.hint/guide/error）当前落回通用 Toast——属 §7.4 已知边界，
+        // 此处锁定「不 panic、有明确反馈、无副作用」这一不变量
+        for id in [
+            "files.hint",
+            "files.guide",
+            "files.error",
+            "files.open.notanumber",
+        ] {
+            let (result, effects) = handle_invoke(&InvokeParams {
+                id: id.into(),
+                sender: Sender::ListItem,
+                context: None,
+            });
+            assert!(
+                matches!(result, CommandResult::ShowToast { .. }),
+                "{id} 应回 Toast"
+            );
+            assert!(effects.is_empty(), "{id} 不应发出副作用");
+        }
+    }
+
+    // ─── T-16 CommandItem 映射 ───────────────────────────────────
+    #[test]
+    fn to_command_item_maps_fields() {
+        let entry = FileEntry {
+            name: "main.rs".into(),
+            dir: "C:\\proj\\src".into(),
+            size: 1024,
+            modified: 1717072496,
+            modified_raw: "2024-05-30 12:34:56".into(),
+            is_dir: false,
+        };
+        let item = to_command_item(&entry);
+        assert!(
+            item.id.starts_with("files.open."),
+            "id 应为 files.open.<u64>"
+        );
+        assert_eq!(item.title, "main.rs");
+        assert_eq!(item.subtitle.as_deref(), Some("C:\\proj\\src\\main.rs"));
+        assert_eq!(item.section.as_deref(), Some("文件"));
+        assert!(matches!(item.command, CommandRef::Invoke));
+        let details = item.details.as_ref().expect("应有 details");
+        assert_eq!(details.title, "main.rs");
+        assert!(
+            details.body.contains("2024-05-30 12:34:56"),
+            "详情应含修改时间"
+        );
+        assert!(item.icon.is_some(), "应有图标字形");
+    }
+
+    #[test]
+    fn hint_guide_error_items_shape() {
+        for (item, expected_id) in [
+            (hint_item(), "files.hint"),
+            (guide_item(), "files.guide"),
+            (error_item("boom"), "files.error"),
+        ] {
+            assert_eq!(item.id, expected_id);
+            assert!(
+                matches!(item.command, CommandRef::Invoke),
+                "{expected_id} 应为 Invoke"
+            );
+            assert!(!item.title.is_empty(), "{expected_id} 应有标题");
+        }
+    }
+
+    // ─── T-13 索引容量上限（长跑内存泄漏防线）─────────────────────
+    #[test]
+    fn path_index_evicts_beyond_capacity() {
+        let oldest = register_path("C:\\oldest");
+        let mut newest = oldest;
+        for i in 0..(PATH_INDEX_CAP + 20) {
+            newest = register_path(&format!("C:\\p{i}"));
+        }
+        assert!(
+            path_index_len() <= PATH_INDEX_CAP,
+            "索引不得超过容量上限，实际 {}",
+            path_index_len()
+        );
+        assert!(lookup_path(newest).is_some(), "最近注册的路径不得被淘汰");
+        assert_eq!(lookup_path(oldest), None, "最旧的路径应已被淘汰");
+    }
+
+    // ─── T-26 契约（v1.0 已定义字段，未新增协议方法）──────────────
+    #[test]
+    fn spec_contract_fields() {
+        let s = spec();
+        assert_eq!(s.id, EXT_ID);
+        assert!(s.has_fallback, "文件搜索必须有 fallback 入口");
+        assert!(!s.frozen, "结果随 query 变化，不可冻结缓存");
+        assert!(s.pages.is_some(), "必须注册 files.results 子页处理器");
+        assert!(
+            s.capabilities.contains(&"host/open_url"),
+            "capabilities 必须含 host/open_url"
+        );
+    }
+
+    #[test]
+    fn commands_contract_page_and_top_level() {
+        let top = top_level_commands();
+        assert!(!top.is_empty(), "顶层应有文件搜索入口（发现性）");
+        let fb = fallback_commands();
+        assert_eq!(fb.len(), 1, "每个非空 query 应返回一条入口项");
+        assert!(
+            matches!(fb[0].command, CommandRef::Page { .. }),
+            "fallback 入口必须指向 files.results 子页"
+        );
+        assert!(fb[0].title.contains("{query}"), "入口标题应含 query 占位符");
     }
 }
