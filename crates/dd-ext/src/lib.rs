@@ -281,15 +281,17 @@ pub fn serve_line(spec: &ExtensionSpec, line: &str) -> (Vec<serde_json::Value>, 
                     (
                         vec![make_result(
                             id,
-                            serde_json::to_value(handler_fn(&p))
-                                .expect("序列化 GetItemsResult"),
+                            serde_json::to_value(handler_fn(&p)).expect("序列化 GetItemsResult"),
                         )],
                         false,
                     )
                 }
                 // 未声明子页（或参数缺失）→ 维持 -32005（5 个内置扩展默认）
                 _ => {
-                    log(spec, &format!("-> get_items {page_id_for_err} => 无子页（-32005）"));
+                    log(
+                        spec,
+                        &format!("-> get_items {page_id_for_err} => 无子页（-32005）"),
+                    );
                     (
                         vec![make_error(
                             Some(id),
@@ -649,8 +651,7 @@ mod tests {
                 is_loading: false,
             }
         });
-        let line =
-            r#"{"jsonrpc":"2.0","id":5,"method":"get_items","params":{"page_id":"fix.sub","search_text":"q"}}"#;
+        let line = r#"{"jsonrpc":"2.0","id":5,"method":"get_items","params":{"page_id":"fix.sub","search_text":"q"}}"#;
         let (out, _) = serve_line(&s, line);
         assert_eq!(out.len(), 1);
         assert!(

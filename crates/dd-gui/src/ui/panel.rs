@@ -409,10 +409,7 @@ impl PaletteApp {
         // v4.17a：鼠标自唤起后**尚未活动过**时抑制 hover 视觉。指针可能恰好停
         // 在结果行上（唤起前的残留位置），此时画 hover 会让用户以为"那行被选中了"，
         // 而实际选中是第一项（键盘流）。一旦鼠标真正动过即恢复常驻 hover。
-        let hover_visual = self
-            .mouse_hide
-            .as_ref()
-            .is_none_or(|s| s.pointer_engaged());
+        let hover_visual = self.mouse_hide.as_ref().is_none_or(|s| s.pointer_engaged());
         egui::ScrollArea::vertical().show(ui, |ui| {
             // `.results` 容器：padding 6px 6px 8px（CSS 简写 = 上 6 / 左右 6 /
             // 下 8；行相对搜索栏再内收 6px、列表底部留 8px。egui Frame

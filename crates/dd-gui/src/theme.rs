@@ -476,7 +476,11 @@ mod tests {
             let p = Palette::of(dark);
             // 期望值直接用 from_rgba_unmultiplied 构造（与 glass helper 同实现路径），
             // 全字段相等比较避免 Color32 内部预乘语义差异
-            let (v, name) = if dark { (0x3d_3d_3d, "暗") } else { (0xf5_f5_f5, "亮") };
+            let (v, name) = if dark {
+                (0x3d_3d_3d, "暗")
+            } else {
+                (0xf5_f5_f5, "亮")
+            };
             let expected = Color32::from_rgba_unmultiplied(
                 ((v >> 16) & 0xff) as u8,
                 ((v >> 8) & 0xff) as u8,
@@ -484,7 +488,8 @@ mod tests {
                 80,
             );
             assert_eq!(
-                p.row_hover_glass, expected,
+                p.row_hover_glass,
+                expected,
                 "{} 主题：glass = rgb({:02x},{:02x},{:02x},80)",
                 name,
                 (v >> 16) & 0xff,
@@ -492,7 +497,8 @@ mod tests {
                 v & 0xff
             );
             assert_eq!(
-                p.row_hover, rgb(v),
+                p.row_hover,
+                rgb(v),
                 "{} 主题：row_hover = rgb({:02x},{:02x},{:02x}) 实色",
                 name,
                 (v >> 16) & 0xff,

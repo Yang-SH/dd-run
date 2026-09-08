@@ -7,11 +7,12 @@
 - 底色线性渐变 135°：#3AA0FF → #0F5FC0；
 - 主标「DD 快进」：每个大写 D = 竖杠宽 3 + 右半圆 r6（mark 高 12，y 10–22），
   D 间距 2，整组居中 x 6–26，白色实心；
-- 小尺寸：256 母版 LANCZOS 缩到 48/32/24/20/16（16 = 托盘逻辑尺寸）。
+- 小尺寸：256 母版 LANCZOS 缩到 48/32/24/20/16（16 = 托盘逻辑尺寸）；
+- 256 档（M7 批次 7.2）：安装器/文件资源管理器大图标用，同 BMP 条目。
 
 产出：
 - crates/dd-gui/assets/app.ico（BMP 条目，LoadImageW 全版本兼容；
-  16/20/24/32 = D22 DPI 档，48 富余）；
+  16/20/24/32 = D22 DPI 档，48 富余，256 = 打包/安装器档）；
 - tools/gen_icon_preview.png（256px 预览，人工核验用）。
 
 用法：python tools/gen_icon.py（需 Pillow）。
@@ -36,7 +37,7 @@ MARK_BOT = 22 * SCALE      # mark 底 y
 D1_BAR_X = 6 * SCALE       # D1 竖杠左缘
 D_GAP = 2 * SCALE          # D 间距（D1 半圆右缘 → D2 竖杠左缘）
 
-SIZES = [48, 32, 24, 20, 16]
+SIZES = [256, 48, 32, 24, 20, 16]  # 256 = M7 打包/安装器档，其余 = D22 DPI 档
 OUT_ICO = Path(__file__).resolve().parent.parent / "crates/dd-gui/assets/app.ico"
 OUT_PNG = Path(__file__).resolve().parent / "gen_icon_preview.png"
 

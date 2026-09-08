@@ -83,7 +83,8 @@ mod menu_id {
 }
 
 /// 内嵌应用图标（`tools/gen_icon.py` 按 10C.3 几何生成；BMP 条目 16–48px，
-/// `LoadImageW` 全版本兼容）。BMP 条目顺序即 D22 DPI 档：16/20/24/32（+48 富余）。
+/// `LoadImageW` 全版本兼容）。BMP 条目顺序即 D22 DPI 档：16/20/24/32（+48 富余，
+/// +256 = M7 打包/安装器档）。
 #[cfg(windows)]
 const APP_ICO: &[u8] = include_bytes!("../assets/app.ico");
 
@@ -471,7 +472,10 @@ mod tests {
         // ICO 容器：ICONDIR(6) + ICONDIRENTRY(16)×n。宽在偏移 6+16i（0 = 256）。
         assert!(APP_ICO.len() > 22, "ico 容器不完整");
         let count = u16::from_le_bytes([APP_ICO[4], APP_ICO[5]]) as usize;
-        assert_eq!(count, 5, "应有 16/20/24/32/48 五档条目");
+        assert_eq!(
+            count, 6,
+            "应有 16/20/24/32/48/256 六档条目（256 = M7 打包档）"
+        );
         let widths: Vec<usize> = (0..count)
             .map(|i| {
                 let base = 6 + 16 * i;
@@ -482,6 +486,10 @@ mod tests {
                 }
             })
             .collect();
-        assert_eq!(widths, vec![16, 20, 24, 32, 48]);
+        assert_eq!(
+            widths,
+            vec![16, 20, 24, 32, 48, 256],
+            "DPI 档 + 256 打包档（M7 批次 7.2）"
+        );
     }
 }

@@ -1,0 +1,41 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+env:
+  CARGO_INCREMENTAL: "0"
+
+jobs:
+  check:
+    name: build / test / clippy / fmt (windows-gnu)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install toolchain (stable-x86_64-pc-windows-gnu)
+        run: |
+          rustup toolchain install stable-x86_64-pc-windows-gnu --profile minimal
+          rustup default stable-x86_64-pc-windows-gnu
+          rustup component add clippy rustfmt
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+
+      # 仓库 .cargo/config.toml 默认 target = x86_64-pc-windows-gnu，
+      # rustup 的 gnu 工具链自带 self-contained 链接器，runner 无需外部 mingw。
+      - name: Build (workspace, all targets)
+        run: cargo build --workspace --all-targets
+
+      # --skip：apps 扩展的 steam 测试硬编码期望本机已装「Flowframes」，机器相关，
+      # CI 环境不满足（docs/implementation.md M7 取舍记档；夹具改造后移除）。
+      - name: Test (workspace)
+        run: cargo test --workspace -- --skip steam_installed_shown_uninstalled_filtered_root_lnk_shown
+
+      - name: Clippy (-D warnings)
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      - name: Format check
+        run: cargo fmt --all --check

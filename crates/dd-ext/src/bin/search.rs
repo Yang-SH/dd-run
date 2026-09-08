@@ -20,14 +20,12 @@
 //! 为本地 HTTP/1.1，简单可靠、零额外 crate，契合项目最小依赖风格）。
 //! 协议 v1.0 冻结：**未新增任何协议方法**，完全复用 provider 模型。
 
+use chrono::{NaiveDate, NaiveDateTime, TimeZone, Utc};
 use dd_ext::{i18n::tr, run, Effect, ExtensionSpec};
 use dd_protocol::messages::{GetItemsParams, GetItemsResult, InvokeParams};
-use dd_protocol::model::{
-    CommandItem, CommandRef, CommandResult, Details, Icon, IconKind,
-};
+use dd_protocol::model::{CommandItem, CommandRef, CommandResult, Details, Icon, IconKind};
 use fuzzy_matcher::skim::SkimMatcherV2;
 use fuzzy_matcher::FuzzyMatcher;
-use chrono::{NaiveDate, NaiveDateTime, TimeZone, Utc};
 use std::collections::HashMap;
 use std::io::{Read, Write};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -117,9 +115,8 @@ fn http_get(rel: &str) -> anyhow::Result<String> {
     // availability 探测另走更短的 800ms 超时。
     stream.set_read_timeout(Some(Duration::from_millis(3000)))?;
     stream.set_write_timeout(Some(Duration::from_millis(800)))?;
-    let req = format!(
-        "GET {rel} HTTP/1.1\r\nHost: {host}\r\nConnection: close\r\nAccept: */*\r\n\r\n"
-    );
+    let req =
+        format!("GET {rel} HTTP/1.1\r\nHost: {host}\r\nConnection: close\r\nAccept: */*\r\n\r\n");
     stream.write_all(req.as_bytes())?;
     let mut buf = Vec::with_capacity(16 * 1024);
     stream.read_to_end(&mut buf)?;
@@ -216,8 +213,14 @@ fn parse_everything_date(s: &str) -> i64 {
     };
     let tp = time_part.trim();
     let mut titer = tp.split(':');
-    let h = titer.next().and_then(|x| x.parse::<u32>().ok()).unwrap_or(0);
-    let mi = titer.next().and_then(|x| x.parse::<u32>().ok()).unwrap_or(0);
+    let h = titer
+        .next()
+        .and_then(|x| x.parse::<u32>().ok())
+        .unwrap_or(0);
+    let mi = titer
+        .next()
+        .and_then(|x| x.parse::<u32>().ok())
+        .unwrap_or(0);
     let sec_raw = titer.next().unwrap_or("0");
     // 秒可能带 .fff 子秒，截断即可（对排序无影响）
     let sec = sec_raw
@@ -261,8 +264,12 @@ fn search(q: &str, limit: usize) -> anyhow::Result<Vec<FileEntry>> {
         limit
     );
     let body = http_get(&rel)?;
-    let resp: EvResponse = serde_json::from_str(&body)
-        .map_err(|e| anyhow::anyhow!("Everything 响应解析失败：{e}（原始：{}）", &body[..body.len().min(200)]))?;
+    let resp: EvResponse = serde_json::from_str(&body).map_err(|e| {
+        anyhow::anyhow!(
+            "Everything 响应解析失败：{e}（原始：{}）",
+            &body[..body.len().min(200)]
+        )
+    })?;
     Ok(resp
         .results
         .into_iter()
@@ -475,7 +482,13 @@ fn fallback_commands() -> Vec<CommandItem> {
     vec![CommandItem {
         id: "files.search.query".into(),
         title: tr("在文件中搜索 {query}", "Search files for {query}").into(),
-        subtitle: Some(tr("用 Everything 搜索本地文件", "Search local files with Everything").into()),
+        subtitle: Some(
+            tr(
+                "用 Everything 搜索本地文件",
+                "Search local files with Everything",
+            )
+            .into(),
+        ),
         icon: Some(Icon {
             kind: IconKind::Glyph,
             value: file_glyph(false).to_string(),
@@ -510,13 +523,9 @@ fn get_file_items(params: &GetItemsParams) -> GetItemsResult {
     }
     match search(query, RESULT_LIMIT) {
         Ok(entries) => {
-            let mut scored: Vec<(f64, FileEntry)> = entries
-                .into_iter()
-                .map(|e| (score(&e, query), e))
-                .collect();
-            scored.sort_by(|a, b| {
-                b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal)
-            });
+            let mut scored: Vec<(f64, FileEntry)> =
+                entries.into_iter().map(|e| (score(&e, query), e)).collect();
+            scored.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
             let items: Vec<CommandItem> = scored
                 .into_iter()
                 .take(RESULT_LIMIT)

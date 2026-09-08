@@ -45,6 +45,13 @@ fn all_builtins_present(exe_dir: &Path) -> bool {
 }
 
 /// 按注册表构造某个内置扩展的 [`LoadedExtension`]（指向真实 exe）。
+///
+/// 注入 `DDRUN_LANG=en_us`：注册表名（`spec.name`）是英文常量，而扩展自述
+/// `display_name` 经 dd-ext i18n `tr()` 随语言本地化（M6 批次 D；缺失 env 时
+/// 无条件回落 zh_cn）。固定 en_us 使握手自述名与注册表可精确比较——否则
+/// `builtin_initialize_matches_registry` 在任何环境都必然失配（真机中文运行时
+/// 由 GUI 注入设置语言，显示本地化名，属预期行为，与本测试的注册表一致性
+/// 检查语义不同）。
 fn load_builtin(exe_dir: &Path, spec: &dd_host::builtin::BuiltinSpec) -> LoadedExtension {
     let exe = if cfg!(windows) {
         format!("{}.exe", spec.exe)
@@ -57,14 +64,19 @@ fn load_builtin(exe_dir: &Path, spec: &dd_host::builtin::BuiltinSpec) -> LoadedE
         "找不到内置扩展：{}（请先执行 `cargo build`）",
         command.display()
     );
-    from_builtin(
+    let mut ext = from_builtin(
         command,
         spec.id,
         spec.name,
         spec.host_frozen(), // 与 ensure_builtins 同口径（宿主缓存策略）
         spec.capabilities,
         env!("CARGO_PKG_VERSION"),
-    )
+    );
+    ext.manifest
+        .entry
+        .env
+        .insert("DDRUN_LANG".to_string(), "en_us".to_string());
+    ext
 }
 
 /// helper：spawn + 握手一个内置扩展。
