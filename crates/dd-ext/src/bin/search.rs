@@ -20,14 +20,15 @@
 //! 为本地 HTTP/1.1，简单可靠、零额外 crate，契合项目最小依赖风格）。
 //! 协议 v1.0 冻结：**未新增任何协议方法**，完全复用 provider 模型。
 
-use chrono::{NaiveDate, NaiveDateTime, TimeZone, Utc};
+use chrono::{DateTime, Local, Utc};
 use dd_ext::{i18n::tr, run, Effect, ExtensionSpec};
 use dd_protocol::messages::{GetItemsParams, GetItemsResult, InvokeParams};
 use dd_protocol::model::{CommandItem, CommandRef, CommandResult, Details, Icon, IconKind};
 use fuzzy_matcher::skim::SkimMatcherV2;
 use fuzzy_matcher::FuzzyMatcher;
 use std::collections::HashMap;
-use std::io::{Read, Write};
+use std::io::Read;
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{LazyLock, Mutex};
 use std::time::{Duration, Instant};
@@ -37,6 +38,8 @@ const PAGE_ID: &str = "files.results";
 const RESULT_LIMIT: usize = 30;
 /// availability 探测缓存 TTL：窗口内跳过重复探测。
 const AVAIL_TTL: Duration = Duration::from_secs(3);
+/// 单次 es.exe 查询超时（宿主 `get_items` 超时仅 2000ms，需留足余量）。
+const ES_TIMEOUT: Duration = Duration::from_millis(1200);
 
 // ─── 进程内路径索引（invoke 时按 id 找回完整路径）─────────────────────
 // 进程随 stdin 循环常驻，索引单调递增、无碰撞；会话结束随进程退出释放。
@@ -85,24 +88,10 @@ struct AvailCache {
 }
 static AVAIL: Mutex<Option<AvailCache>> = Mutex::new(None);
 
-fn everything_base() -> (String, u16) {
-    // 默认 127.0.0.1:8080；可用 DDRUN_EVERYTHING_URL=http://host:port 覆盖。
-    match std::env::var("DDRUN_EVERYTHING_URL") {
-        Ok(u) if u.starts_with("http://") => {
-            let rest = &u["http://".len()..];
-            let (host, port_raw) = rest.split_once(':').unwrap_or((rest, "8080"));
-            let port = port_raw
-                .split('/')
-                .next()
-                .and_then(|p| p.parse::<u16>().ok())
-                .unwrap_or(8080);
-            (host.to_string(), port)
-        }
-        _ => ("127.0.0.1".to_string(), 8080),
-    }
-}
-
-/// Everything 是否在线（带 TTL 缓存，避免每次按键都探测）。
+/// Everything（经 es.exe / IPC）是否可用（带 TTL 缓存，避免每次按键都启动进程探测）。
+///
+/// `-get-everything-version` 是与 Everything 建立 IPC 的最轻量方式：Everything 未运行时
+/// es 以非 0 退出码失败（8 = 无 IPC 窗口），此处只需判断命令能否成功执行。
 fn everything_available() -> bool {
     let now = Instant::now();
     if let Some(c) = AVAIL.lock().unwrap().as_ref() {
@@ -110,83 +99,153 @@ fn everything_available() -> bool {
             return c.ok;
         }
     }
-    let (host, port) = everything_base();
-    let ok = std::net::TcpStream::connect((host.as_str(), port))
-        .and_then(|mut s| {
-            s.set_read_timeout(Some(Duration::from_millis(800)))?;
-            s.set_write_timeout(Some(Duration::from_millis(800)))?;
-            // 最简探测：根路径 json 请求（Connection: close 由对端关闭结束）
-            let req = format!(
-                "GET /?json=1&count=1 HTTP/1.1\r\nHost: {host}\r\nConnection: close\r\nAccept: */*\r\n\r\n"
-            );
-            s.write_all(req.as_bytes())?;
-            let mut buf = [0u8; 256];
-            // 只读一点即可：能连上即视为在线
-            s.read(&mut buf).map(|_| ())
-        })
-        .is_ok();
+    let ok = match es_exe_path() {
+        Some(exe) => run_es(&exe, &["-get-everything-version"]).is_ok(),
+        None => false,
+    };
     *AVAIL.lock().unwrap() = Some(AvailCache { ok, at: now });
     ok
 }
 
-/// 极简 HTTP/1.1 GET（Connection: close → 读到 EOF 即 body 结束，规避分块解析）。
-fn http_get(rel: &str) -> anyhow::Result<String> {
-    let (host, port) = everything_base();
-    let mut stream = std::net::TcpStream::connect((host.as_str(), port))
-        .map_err(|e| anyhow::anyhow!("Everything 连接失败（{host}:{port}）：{e}"))?;
-    // 搜索本身放宽到 3s（Everything 本地通常 <50ms，3s 仅作异常兜底）；
-    // availability 探测另走更短的 800ms 超时。
-    stream.set_read_timeout(Some(Duration::from_millis(3000)))?;
-    stream.set_write_timeout(Some(Duration::from_millis(800)))?;
-    let req =
-        format!("GET {rel} HTTP/1.1\r\nHost: {host}\r\nConnection: close\r\nAccept: */*\r\n\r\n");
-    stream.write_all(req.as_bytes())?;
-    let mut buf = Vec::with_capacity(16 * 1024);
-    stream.read_to_end(&mut buf)?;
-    let text = String::from_utf8_lossy(&buf);
-    let body = text
-        .split_once("\r\n\r\n")
-        .map(|(_, b)| b)
-        .or_else(|| text.split_once("\n\n").map(|(_, b)| b))
-        .unwrap_or("");
-    Ok(body.to_string())
-}
-
-/// 仅编码 URL 不安全字节（RFC 3986 非保留字符保留），供 Everything 查询拼 URL。
-fn pct_encode(input: &str) -> String {
-    const HEX: &[u8; 16] = b"0123456789ABCDEF";
-    let mut out = String::with_capacity(input.len());
-    for b in input.as_bytes() {
-        let unreserved = b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.' | b'~');
-        if unreserved {
-            out.push(*b as char);
-        } else {
-            out.push('%');
-            out.push(HEX[(b >> 4) as usize] as char);
-            out.push(HEX[(b & 0x0F) as usize] as char);
+/// 定位 es.exe（Everything 官方命令行工具，走 IPC，**无需开启 HTTP 服务器**）。
+///
+/// 优先级：`DDRUN_ES_PATH`（完整路径）→ PATH 中的 `es.exe`（winget 安装后即在 PATH）
+/// → `DDRUN_EVERYTHING_DIR`（用户给出的 Everything 安装目录）。
+fn es_exe_path() -> Option<PathBuf> {
+    if let Ok(p) = std::env::var("DDRUN_ES_PATH") {
+        let p = PathBuf::from(p);
+        if p.is_file() {
+            return Some(p);
         }
     }
-    out
+    if let Ok(paths) = std::env::var("PATH") {
+        for dir in std::env::split_paths(&paths) {
+            let cand = dir.join("es.exe");
+            if cand.is_file() {
+                return Some(cand);
+            }
+        }
+    }
+    if let Ok(dir) = std::env::var("DDRUN_EVERYTHING_DIR") {
+        let cand = PathBuf::from(dir).join("es.exe");
+        if cand.is_file() {
+            return Some(cand);
+        }
+    }
+    None
 }
 
-// ─── Everything 响应解析 ───────────────────────────────────────────
+/// 执行 es.exe 并返回 stdout（**按代码页解码**：es 经管道输出为系统 OEM 代码页
+/// GBK，必须 `decode_output` 转 UTF-8，否则中文路径损坏，见下方 decode 模块）。
+///
+/// 读取放在子线程持续消费管道，避免输出较多时子进程写满管道阻塞（死锁）；
+/// 主线程用 `recv_timeout` 做超时兜底（宿主 `get_items` 超时仅 2000ms）。
+fn run_es(exe: &std::path::Path, args: &[&str]) -> anyhow::Result<String> {
+    let mut child = std::process::Command::new(exe)
+        .args(args)
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .map_err(|e| anyhow::anyhow!("启动 es.exe 失败：{e}"))?;
+    let mut stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| anyhow::anyhow!("无法获取 es.exe stdout"))?;
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let mut buf = Vec::new();
+        let r = stdout.read_to_end(&mut buf).map(|_| buf);
+        let _ = tx.send(r);
+    });
+    match rx.recv_timeout(ES_TIMEOUT) {
+        Ok(Ok(bytes)) => {
+            let _ = child.wait();
+            Ok(decode_output(&bytes))
+        }
+        Ok(Err(e)) => {
+            let _ = child.wait();
+            Err(anyhow::anyhow!("读取 es.exe 输出失败：{e}"))
+        }
+        Err(_) => {
+            let _ = child.kill();
+            let _ = child.wait();
+            Err(anyhow::anyhow!(
+                "es.exe 查询超时（>{}ms）",
+                ES_TIMEOUT.as_millis()
+            ))
+        }
+    }
+}
+
+// ─── es.exe 输出解码（GBK 乱码修复）───────────────────────────────
+/// es.exe 经管道输出的是系统 OEM 代码页（中文 Windows = 936/GBK），**并非 UTF-8**。
+/// 直接 `from_utf8` 会把中文替换成 U+FFFD，导致中文路径损坏、搜索「搜不到」。
+/// 解码策略（复用 `shell.rs` 惯例）：
+/// ① 合法 UTF-8 直接采用；② 否则按 `GetConsoleOutputCP()` 转码；③ 转码失败回落 lossy。
+#[cfg(windows)]
+fn decode_output(bytes: &[u8]) -> String {
+    if let Ok(s) = std::str::from_utf8(bytes) {
+        return s.to_string();
+    }
+    let cp = unsafe { windows_sys::Win32::System::Console::GetConsoleOutputCP() };
+    decode_with_codepage(bytes, cp).unwrap_or_else(|| String::from_utf8_lossy(bytes).into_owned())
+}
+
+#[cfg(not(windows))]
+fn decode_output(bytes: &[u8]) -> String {
+    String::from_utf8_lossy(bytes).into_owned()
+}
+
+/// 按指定代码页把多字节串转 UTF-16 再到 `String`（`MultiByteToWideChar`）。
+#[cfg(windows)]
+fn decode_with_codepage(bytes: &[u8], codepage: u32) -> Option<String> {
+    if bytes.is_empty() {
+        return Some(String::new());
+    }
+    let len = unsafe {
+        windows_sys::Win32::Globalization::MultiByteToWideChar(
+            codepage,
+            0,
+            bytes.as_ptr(),
+            bytes.len() as i32,
+            std::ptr::null_mut(),
+            0,
+        )
+    };
+    if len <= 0 {
+        return None;
+    }
+    let mut utf16 = vec![0u16; len as usize];
+    let written = unsafe {
+        windows_sys::Win32::Globalization::MultiByteToWideChar(
+            codepage,
+            0,
+            bytes.as_ptr(),
+            bytes.len() as i32,
+            utf16.as_mut_ptr(),
+            len,
+        )
+    };
+    if written != len {
+        return None;
+    }
+    Some(String::from_utf16_lossy(&utf16))
+}
+
+// ─── es.exe JSON 输出解析 ─────────────────────────────────────────
+/// `es.exe -json -size -dm -attributes` 的单条输出（本机实测结构）。
 #[derive(serde::Deserialize)]
-struct RawEntry {
-    name: String,
-    #[serde(default)]
-    path: String,
+struct EsEntry {
+    /// 完整路径（目录以 `\` 结尾）
+    filename: String,
     #[serde(default)]
     size: u64,
+    /// Windows FILETIME（100ns 间隔，自 1601-01-01 UTC）
     #[serde(default)]
-    date_modified: String,
+    date_modified: i64,
+    /// Win32 文件属性位；`0x10` = FILE_ATTRIBUTE_DIRECTORY
     #[serde(default)]
-    r#type: String,
-}
-
-#[derive(serde::Deserialize)]
-struct EvResponse {
-    #[serde(default)]
-    results: Vec<RawEntry>,
+    attributes: u32,
 }
 
 /// 解析后的单条文件（扩展内部表示）。
@@ -211,68 +270,49 @@ impl FileEntry {
     }
 }
 
-/// 把 Everything 的 `date_modified` 规范化为 Unix 秒；失败返回 0（不 panic）。
+/// Windows FILETIME（100ns 间隔，自 1601-01-01）→ Unix 秒；非正值返回 0（不 panic）。
 ///
-/// 真实格式以本机响应为准（常见 `2024-05-30 12:34:56.789` 或 `2024/05/30 ...`）。
-/// 日期/时间分隔符统一切分后交给 `chrono` 构造 `NaiveDateTime`（按 UTC 取 timestamp，
-/// 仅用于近因加分，时区误差可忽略）。手搓 civil→days 易错，故用成熟库保证正确。
-fn parse_everything_date(s: &str) -> i64 {
-    let s = s.trim();
-    if s.is_empty() {
-        return 0;
+/// es.exe 的 `-dm` 直接给出 FILETIME，**比原 HTTP 通道的日期字符串确定得多**——
+/// 后者格式随 Everything 版本/设置而变（见 §三 2.2 已知坑），需猜测解析。
+const FILETIME_UNIX_DIFF: i64 = 11_644_473_600; // 1601-01-01 → 1970-01-01 的秒数
+fn filetime_to_unix(ft: i64) -> i64 {
+    if ft <= 0 {
+        0
+    } else {
+        ft / 10_000_000 - FILETIME_UNIX_DIFF
     }
-    let (date_part, time_part) = match s.split_once(' ') {
-        Some((d, t)) => (d, t),
-        None => (s, "00:00:00"),
-    };
-    let mut diter = date_part.split(['-', '/']);
-    let (yy, mo, dd) = match (diter.next(), diter.next(), diter.next()) {
-        (Some(a), Some(b), Some(c)) => (a, b, c),
-        _ => return 0,
-    };
-    let (yy, mo, dd) = match (yy.parse::<i32>(), mo.parse::<u32>(), dd.parse::<u32>()) {
-        (Ok(a), Ok(b), Ok(c)) => (a, b, c),
-        _ => return 0,
-    };
-    let tp = time_part.trim();
-    let mut titer = tp.split(':');
-    let h = titer
-        .next()
-        .and_then(|x| x.parse::<u32>().ok())
-        .unwrap_or(0);
-    let mi = titer
-        .next()
-        .and_then(|x| x.parse::<u32>().ok())
-        .unwrap_or(0);
-    let sec_raw = titer.next().unwrap_or("0");
-    // 秒可能带 .fff 子秒，截断即可（对排序无影响）
-    let sec = sec_raw
-        .split_once('.')
-        .map(|(a, _)| a)
-        .unwrap_or(sec_raw)
-        .parse::<u32>()
-        .unwrap_or(0);
-    let date = match NaiveDate::from_ymd_opt(yy, mo, dd) {
-        Some(d) => d,
-        None => return 0,
-    };
-    let ndt: NaiveDateTime = match date.and_hms_opt(h, mi, sec) {
-        Some(t) => t,
-        None => date.and_hms_opt(0, 0, 0).unwrap_or_else(|| {
-            NaiveDate::from_ymd_opt(1970, 1, 1)
-                .unwrap()
-                .and_hms_opt(0, 0, 0)
-                .unwrap()
-        }),
-    };
-    Utc.from_utc_datetime(&ndt).timestamp()
+}
+
+/// FILETIME → 本地时间展示串（详情面板用）；无效返回 `-`。
+fn format_filetime(ft: i64) -> String {
+    let unix = filetime_to_unix(ft);
+    if unix <= 0 {
+        return "-".to_string();
+    }
+    match DateTime::from_timestamp(unix, 0) {
+        Some(dt) => dt
+            .with_timezone(&Local)
+            .format("%Y-%m-%d %H:%M:%S")
+            .to_string(),
+        None => "-".to_string(),
+    }
+}
+
+/// 拆分 es 给出的完整路径 → `(目录, 文件名)`；目录项以 `\` 结尾，需先裁剪。
+fn split_path(full: &str) -> (String, String) {
+    let t = full.trim_end_matches(['\\', '/']);
+    match t.rsplit_once(['\\', '/']) {
+        Some((dir, name)) => (dir.to_string(), name.to_string()),
+        None => (String::new(), t.to_string()),
+    }
 }
 
 fn now_7days_unix() -> i64 {
     Utc::now().timestamp() - 7 * 24 * 3600
 }
 
-/// 目录启发式（best-effort，v0.1）：`type=="folder"` 优先；否则无扩展名且 size==0 粗判。
+/// 目录启发式（best-effort）：**仅在 es 未给出 attributes（为 0）时兜底**；
+/// 正常情况下由 `FILE_ATTRIBUTE_DIRECTORY` 精确判定。
 fn guess_is_dir(name: &str, size: u64, type_field: &str) -> bool {
     if type_field.eq_ignore_ascii_case("folder") {
         return true;
@@ -280,29 +320,34 @@ fn guess_is_dir(name: &str, size: u64, type_field: &str) -> bool {
     !name.contains('.') && size == 0
 }
 
-/// 解析 Everything JSON 响应体 → `FileEntry` 列表。
+/// 解析 es.exe 的 JSON 输出 → `FileEntry` 列表。
 ///
-/// **纯函数（与传输解耦）**：`search()` 只负责取回字符串再交给这里，使解析逻辑
-/// 可用 fixture 字符串离线单测，符合 §8.4.2 第 2 条（解析与传输解耦）。
+/// **纯函数（与传输解耦）**：可用 fixture 字符串离线单测（§8.4.2 第 2 条）。
+/// ⚠️ es **无结果时输出空字符串**（不是 `[]`），必须按空结果处理。
 fn parse_response(body: &str) -> anyhow::Result<Vec<FileEntry>> {
-    let resp: EvResponse = serde_json::from_str(body).map_err(|e| {
-        anyhow::anyhow!(
-            "Everything 响应解析失败：{e}（原始：{}）",
-            &body[..body.len().min(200)]
-        )
-    })?;
-    Ok(resp
-        .results
+    let t = body.trim();
+    if t.is_empty() {
+        return Ok(Vec::new());
+    }
+    let entries: Vec<EsEntry> = serde_json::from_str(t)
+        .map_err(|e| anyhow::anyhow!("es 输出解析失败：{e}（原始：{}）", &t[..t.len().min(200)]))?;
+    Ok(entries
         .into_iter()
-        .map(|r| {
-            // 先借用 r.name 计算 is_dir，再把 r.name 移入 FileEntry（避免 use-after-move）
-            let is_dir = guess_is_dir(&r.name, r.size, &r.r#type);
+        .map(|e| {
+            let (dir, name) = split_path(&e.filename);
+            // attributes 有效（非 0）时用 FILE_ATTRIBUTE_DIRECTORY(0x10) 精确判定；
+            // 缺失（0）时退回启发式
+            let is_dir = if e.attributes == 0 {
+                guess_is_dir(&name, e.size, "")
+            } else {
+                e.attributes & 0x10 != 0
+            };
             FileEntry {
-                name: r.name,
-                dir: r.path,
-                size: r.size,
-                modified: parse_everything_date(&r.date_modified),
-                modified_raw: r.date_modified,
+                name,
+                dir,
+                size: e.size,
+                modified: filetime_to_unix(e.date_modified),
+                modified_raw: format_filetime(e.date_modified),
                 is_dir,
             }
         })
@@ -310,13 +355,21 @@ fn parse_response(body: &str) -> anyhow::Result<Vec<FileEntry>> {
 }
 
 fn search(q: &str, limit: usize) -> anyhow::Result<Vec<FileEntry>> {
-    let rel = format!(
-        "/?search={}&json=1&count={}&path_column=1&size_column=1&date_modified_column=1",
-        pct_encode(q),
-        limit
-    );
-    let body = http_get(&rel)?;
-    parse_response(&body)
+    let exe =
+        es_exe_path().ok_or_else(|| anyhow::anyhow!("未找到 es.exe（Everything 命令行工具）"))?;
+    // `-json` 输出 JSON；`-n` 限条数；`-size`/`-dm`/`-attributes` 取大小、修改时间、属性。
+    // query 以 `-` / `/` 开头时用 `^` 转义，避免被 es 误判为开关（官方用法）。
+    let query = if q.starts_with('-') || q.starts_with('/') {
+        format!("^{q}")
+    } else {
+        q.to_string()
+    };
+    let n = limit.to_string();
+    let out = run_es(
+        &exe,
+        &["-json", "-n", &n, "-size", "-dm", "-attributes", &query],
+    )?;
+    parse_response(&out)
 }
 
 // ─── 评分（归一化到 0~1）────────────────────────────────────────────
@@ -610,29 +663,39 @@ mod tests {
     use dd_protocol::model::Sender;
 
     #[test]
-    fn pct_encode_keeps_unreserved_and_encodes_rest() {
-        assert_eq!(pct_encode("hello world"), "hello%20world");
-        assert_eq!(pct_encode("a+b=c"), "a%2Bb%3Dc");
-        assert_eq!(pct_encode("中文"), "%E4%B8%AD%E6%96%87");
-        assert_eq!(pct_encode("a-b.c~d_"), "a-b.c~d_");
+    fn filetime_to_unix_converts_and_guards() {
+        // 1970-01-01 的 FILETIME 基准 → 0；每 10^7 为 1 秒
+        const BASE: i64 = 116_444_736_000_000_000;
+        assert_eq!(filetime_to_unix(BASE), 0);
+        assert_eq!(filetime_to_unix(BASE + 10_000_000), 1);
+        // 实测样本（2026 年前后的文件）
+        assert!(filetime_to_unix(134_195_186_392_659_119) > 1_700_000_000);
+        // 非法/缺失值受保护，不 panic
+        assert_eq!(filetime_to_unix(0), 0);
+        assert_eq!(filetime_to_unix(-1), 0);
     }
 
     #[test]
-    fn date_parse_known_formats() {
-        // 常见 Everything 格式（秒级 / 带子秒 / 斜杠分隔）应得到同一 Unix 秒
-        let t = 1717072496; // 2024-05-30 12:34:56 UTC（1704067200 + 150d + 12:34:56）
-        assert_eq!(parse_everything_date("2024-05-30 12:34:56"), t);
-        assert_eq!(parse_everything_date("2024-05-30 12:34:56.789"), t);
-        assert_eq!(parse_everything_date("2024/05/30 12:34:56"), t);
-        // 基准：2024-01-01 00:00:00 UTC
-        assert_eq!(parse_everything_date("2024-01-01 00:00:00"), 1704067200);
+    fn split_path_handles_files_dirs_and_roots() {
+        assert_eq!(
+            split_path("C:\\d\\f.txt"),
+            ("C:\\d".to_string(), "f.txt".to_string())
+        );
+        // 目录项以反斜杠结尾（es 实测输出）→ 裁剪后末段为名
+        assert_eq!(
+            split_path("C:\\Program Files\\Everything\\"),
+            ("C:\\Program Files".to_string(), "Everything".to_string())
+        );
+        assert_eq!(split_path("C:\\"), (String::new(), "C:".to_string()));
+        assert_eq!(split_path("f.txt"), (String::new(), "f.txt".to_string()));
     }
 
     #[test]
-    fn date_parse_invalid_returns_zero() {
-        assert_eq!(parse_everything_date(""), 0);
-        assert_eq!(parse_everything_date("not-a-date"), 0);
-        assert_eq!(parse_everything_date("2024-13-40"), 0, "非法月日 → 0");
+    fn guess_is_dir_falls_back_when_attributes_missing() {
+        // es 给出 attributes 时不走启发式；这里锁定 attributes==0（缺失）时的兜底行为
+        assert!(guess_is_dir("README", 0, ""));
+        assert!(!guess_is_dir("README.md", 0, ""));
+        assert!(!guess_is_dir("README", 1, ""));
     }
 
     #[test]
@@ -727,58 +790,76 @@ mod tests {
         assert!(r.items[0].id == "files.guide" || r.items[0].id == "files.error");
     }
 
-    // ─── T-11 目录判定 ────────────────────────────────────────────
+    // ─── es 输出解析（纯函数，fixture 离线，不依赖 es / Everything）──
     #[test]
-    fn guess_is_dir_folder_priority() {
-        // type=="folder" 优先（大小写不敏感），即便有扩展名、size 非 0
-        assert!(guess_is_dir("src.txt", 4096, "folder"));
-        assert!(guess_is_dir("src", 0, "FOLDER"));
-        // 明确的文件类型 → 走启发式，不应误判为目录
-        assert!(!guess_is_dir("a.txt", 10, "file"));
-    }
-
-    #[test]
-    fn guess_is_dir_heuristic_boundary() {
-        assert!(guess_is_dir("README", 0, ""), "无扩展名且 size==0 → 目录");
-        assert!(!guess_is_dir("README.md", 0, ""), "有扩展名 → 非目录");
-        assert!(!guess_is_dir("README", 1, ""), "无扩展名但 size>0 → 非目录");
-    }
-
-    // ─── T-09 响应解析（纯函数，fixture 离线，不依赖 Everything）───
-    #[test]
-    fn parse_response_maps_everything_fields() {
-        let json = r#"{"results":[{"type":"file","name":"main.rs","path":"C:\\proj\\src",
-            "size":1024,"date_modified":"2024-05-30 12:34:56"}]}"#;
-        let entries = parse_response(json).expect("合法响应应解析成功");
+    fn parse_response_maps_es_fields() {
+        // 本机 es.exe -json -size -dm -attributes "提示词" 的真实输出样本
+        let json = r#"[{"filename":"E:\\AI\\kb\\cc-提示词.md","size":44222,
+            "date_modified":134195186392659119,"attributes":32}]"#;
+        let entries = parse_response(json).expect("合法 es 输出应解析成功");
         assert_eq!(entries.len(), 1);
-        assert_eq!(entries[0].name, "main.rs");
-        assert_eq!(entries[0].dir, "C:\\proj\\src");
-        assert_eq!(entries[0].size, 1024);
-        assert_eq!(entries[0].full_path(), "C:\\proj\\src\\main.rs");
-        assert!(!entries[0].is_dir);
-        assert_eq!(
-            entries[0].modified, 1717072496,
-            "date_modified 应为 Unix 秒"
+        assert_eq!(entries[0].name, "cc-提示词.md");
+        assert_eq!(entries[0].dir, "E:\\AI\\kb");
+        assert_eq!(entries[0].size, 44222);
+        assert_eq!(entries[0].full_path(), "E:\\AI\\kb\\cc-提示词.md");
+        assert!(
+            entries[0].modified > 1_700_000_000,
+            "FILETIME 应换算为 Unix 秒"
+        );
+        assert!(!entries[0].is_dir, "attributes=32(ARCHIVE) 非目录");
+        assert!(
+            !entries[0].modified_raw.is_empty() && entries[0].modified_raw != "-",
+            "详情应格式化出修改时间"
         );
     }
 
     #[test]
-    fn parse_response_folder_type_marks_is_dir() {
-        let json = r#"{"results":[{"type":"folder","name":"src","path":"C:\\proj",
-            "size":0,"date_modified":""}]}"#;
+    fn parse_response_directory_attribute_marks_is_dir() {
+        let json = r#"[{"filename":"C:\\Program Files\\Everything\\","size":0,
+            "date_modified":0,"attributes":16}]"#;
         let entries = parse_response(json).expect("应解析成功");
-        assert!(entries[0].is_dir, "type=folder 应判定为目录");
-        assert_eq!(entries[0].modified, 0, "空日期应为 0 而非 panic");
+        assert!(entries[0].is_dir, "attributes=0x10 应判定为目录");
+        assert_eq!(entries[0].name, "Everything", "目录尾部反斜杠应被裁剪");
+        assert_eq!(entries[0].modified, 0, "无效 FILETIME 应为 0（不 panic）");
+    }
+
+    #[test]
+    fn parse_response_empty_output_means_no_results() {
+        // ⚠️ 实测：es 无结果时输出**空字符串**，不是 []——必须按空结果处理
+        let entries = parse_response("").expect("空输出应视为无结果而非报错");
+        assert!(entries.is_empty());
+        let entries = parse_response("  \n ").expect("纯空白亦视为无结果");
+        assert!(entries.is_empty());
+    }
+
+    // ─── GBK 解码（es 管道输出为系统 OEM 代码页，非 UTF-8）───
+    #[cfg(windows)]
+    #[test]
+    fn decode_with_codepage_converts_gbk_filename() {
+        // "提示词" 的 GBK(CP936) 编码字节（python: '提示词'.encode('gbk')）
+        let gbk = [0xCCu8, 0xE1, 0xCA, 0xBE, 0xB4, 0xCA];
+        let s = decode_with_codepage(&gbk, 936).expect("GBK 应可解码");
+        assert_eq!(s, "提示词", "中文文件名须正确还原，不得为 U+FFFD");
+    }
+
+    #[test]
+    fn decode_output_keeps_utf8_json() {
+        // 纯 ASCII/UTF-8 的 JSON 应原样保留（快路径），不被转码破坏
+        let bytes = br#"[{"filename":"C:\a.txt","size":1}]"#;
+        assert_eq!(
+            decode_output(bytes),
+            r#"[{"filename":"C:\a.txt","size":1}]"#
+        );
     }
 
     #[test]
     fn parse_response_malformed_returns_err() {
-        assert!(parse_response("").is_err(), "空串应返回 Err");
         assert!(parse_response("not json").is_err(), "非法 JSON 应返回 Err");
         assert!(
-            parse_response("{}").is_ok(),
-            "缺 results 字段视为合法（serde default → 空列表）"
+            parse_response("[{\"filename\":123}]").is_err(),
+            "字段类型不符应返回 Err"
         );
+        assert!(parse_response("[]").is_ok(), "空数组是合法输出");
     }
 
     // ─── T-15 invoke 分发 ────────────────────────────────────────

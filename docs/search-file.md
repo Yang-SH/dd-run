@@ -13,6 +13,8 @@
 > 9. **依赖修正**：相对 dd-ext 基线，**本功能新增的第三方依赖仅 `fuzzy-matcher` + `chrono`**（`anyhow`/`serde`/`serde_json` 为既有基线依赖，search.rs 复用）；HTTP 用标准库 `TcpStream`、URL 编码用扩展内手写 `pct_encode`；**不引入** `tokio`、`async-trait`、`reqwest`、`urlencoding`（同步模型 + 最小依赖）。
 > **v3.2 追注**：上列第 2、9 条中「`reqwest::blocking` / `urlencoding`」表述已被 §7.2 落地实现取代（实际 dd-ext 依赖仅 `fuzzy-matcher` / `chrono`，HTTP 用标准库 `TcpStream`、URL 编码用扩展内手写 `pct_encode`）；第 3 条「由安装器写入」已被 M7 批次 7.4/7.5 的**免安装 sidecar** 定案取代（清单源码在 `examples/extensions.d/`，由 `tools/package.sh` 归集进 `dist/extensions.d/`）。其余各条为 v3.1 相对原 v3 的修正记录，保留。
 
+> **v3.3 追注（2026-09-08 传输层落地切换）**：v0.1 实际实现**未采用 HTTP**，改为经 Everything 官方命令行工具 **`es.exe`（IPC 通道）** 检索——`run_es()` 启动 `es.exe -json -size -dm -attributes <q>` 并解析其 JSON；`everything_available()` 用 `es.exe -get-everything-version` 探活。**好处**：用户**无需开启 Everything HTTP 服务器**（此前"搜不到文件"的根因正是 HTTP 未开启 + es 输出 GBK 未解码）；仅需 Everything 在运行 + `es.exe` 已安装（`winget install --id=voidtools.Everything.Cli`）。**改动范围**：仅 `search.rs` 内部传输层（HTTP/TCP → 进程调用），协议 / 运行时 `get_items` / 宿主 `f ` 进页**零改动**。es.exe 经管道输出为系统 OEM 代码页（中文 Windows = 936/GBK）而非 UTF-8，已在读取后用 `decode_output()`（`MultiByteToWideChar` + `GetConsoleOutputCP`，复用 `shell.rs` 惯例）按代码页转 UTF-8，单测 `decode_with_codepage_converts_gbk_filename` 覆盖。用户文档 [`search.md`](./search.md) 已同步为 es.exe 方案。
+
 > **调整原因**：本地已安装 Everything，先接入 Everything 可以**用最小代价最快跑通全链路**（运行时 → Provider → UI），且 Everything 的搜索性能天花板最高，适合作为架构的第一个验证者。
 > **架构不变**：provider 抽象已在 `dd_ext` 运行时固化（`ExtensionSpec`），fd 作为 v0.2 的第二个 Provider 接入（届时只是"加一个命令分支 / 新 bin"，不动运行时与协议）。
 > **总工期**：**约 5~6 个工作日**（含运行时 `get_items` 补齐这一必备前置）。
@@ -252,7 +254,7 @@ fn main() { run(&spec()); }
 #### 任务 2.1：同步 HTTP 探测与搜索请求（第 3 天）
 
 ```rust
-// crates/dd-ext/src/bin/search.rs（v3.2 已落地：标准库 TcpStream，零 HTTP 依赖）
+// crates/dd-ext/src/bin/search.rs（v3.1 计划期 HTTP 草图；v3.3 实际已切换为 es.exe IPC，见顶部 v3.3 追注）
 fn everything_base() -> (String, u16) {
     // 默认 127.0.0.1:8080；可用环境变量 DDRUN_EVERYTHING_URL=http://host:port 覆盖
     // （文档「配置项说明」同源；Everything HTTP 默认端口为 80，本扩展默认 8080）
@@ -351,12 +353,12 @@ Everything 查询本身毫秒级返回，30 条评分开销可忽略。归一化
 
 #### 任务 2.4：Everything 侧的适配工作（第 4 天，**用户操作清单**）
 
-在你本机 Everything 中确认以下设置（一次性，2 分钟）：
+在你本机完成以下一次性准备（约 2 分钟；**v3.3 起已切换为 es.exe，无需开启 HTTP 服务器**，实际步骤以用户文档 [`search.md`](./search.md) 为准）：
 
-1. `工具 → 选项 → HTTP服务器`：✅ 启用 HTTP 服务器，端口 `8080`（Everything 默认端口为 `80`，此处改用 8080 需在 Everything 内显式设置）
-2. `HTTP服务器 → 用户名/密码`：留空（仅监听 localhost 时可接受；文档中注明安全建议）
-3. 验证：浏览器访问 `http://localhost:8080/?search=test&json=1&count=5`，应返回 JSON
-4. 安全：在 `工具 → 选项 → HTTP服务器` 中确认仅绑定 `127.0.0.1`（若 Everything 暴露到 `0.0.0.0` 会被局域网其他机器访问，存在安全隐患）
+1. 安装并运行 Everything（1.4+）；dd-run 仅要求 Everything 在运行，不要求开任何服务。
+2. 安装 `es.exe`（Everything 命令行工具，不随 Everything 安装包附带）：`winget install --id=voidtools.Everything.Cli`；或手动放到 Everything 目录（`C:\Program Files\Everything\`）。
+3. 验证：终端执行 `es.exe -get-everything-version`，应返回版本号（确认 IPC 可用）。
+4. 无需任何网络/端口/防火墙配置——es.exe 走本机 IPC，无局域网暴露风险。
 
 ### ✅ 阶段三：宿主联调与 UI（第 5 天）
 
@@ -384,7 +386,7 @@ Everything 查询本身毫秒级返回，30 条评分开销可忽略。归一化
 | 特殊字符 | 搜 `dd-run`、`v0.1` | `pct_encode`（RFC 3986）正确处理，结果准确 |
 | Everything 语法透传 | 搜 `ext:rs dm:today` | query 直接透传给 Everything（免费获得高级搜索）✨ |
 | Everything 未启动 | 退出 Everything 进程 | `get_items` 返回引导项；点击弹 Toast（当前为通用「未知命令」文案，见 §7.4）；不卡死不 panic |
-| 端口被改 | 改成 9090 后重启扩展 | 通过环境变量 `DDRUN_EVERYTHING_URL=http://127.0.0.1:9090` 适配 |
+| es.exe 路径变更 | 放到非 PATH 位置 | 通过环境变量 `DDRUN_ES_PATH=...` 显式指定 |
 | 空结果 | 搜不存在关键词 | 返回空数组，UI 显示"无结果" |
 | limit 截断 | 搜 `e`（海量结果） | 只返回 30 条，评分排序稳定 |
 | `file://` 打开 | 回车打开某文件 | 宿主 `host/open_url` 用系统默认程序打开（实现：`crates/dd-gui/src/app/host_actions.rs` 经 `webbrowser::open`；`file://` 真机实测属 D6 / §7.3 验收，若不支持则宿主/扩展侧 `cmd /c start` 兜底） |
@@ -408,7 +410,7 @@ Everything 查询本身毫秒级返回，30 条评分开销可忽略。归一化
 2. `docs/search.md`（用户文档）：
    - 前置条件：Everything 安装 + 开启 HTTP 服务（图文教程，含仅绑定 127.0.0.1 安全提示）
    - 常用搜索语法速查表（`ext:rs`、`dm:today`、`path:dd-run` 等）
-   - 配置项说明（环境变量 `DDRUN_EVERYTHING_URL`，默认 `127.0.0.1:8080`，端口非默认/换主机的改法）
+   - 配置项说明（环境变量 `DDRUN_ES_PATH` / `DDRUN_EVERYTHING_DIR`，默认自动定位，无需 HTTP）
    - 明确标注：**v0.1 仅支持 Windows（依赖 Everything）**；跨平台需等 v0.2 fd Provider
 3. CHANGELOG 注明："v0.1 文件搜索依赖 Everything（Windows）；fd 兜底 Provider 计划于 v0.2 提供"
 4. 真机走查（M7 批次 7.5 收尾）：解压绿色 zip 直接运行 → `f ` 前缀可进文件搜索、升级覆盖 → tag → GitHub Release。
@@ -432,10 +434,10 @@ Everything 查询本身毫秒级返回，30 条评分开销可忽略。归一化
 
 | 风险 | 概率 | 预案 |
 | :--- | :--- | :--- |
-| 用户未开启 Everything HTTP 服务 | 高（对公开发布而言） | `get_items` 返回引导项 + `host/show_status` Toast；v0.2 用 fd 彻底解决 |
+| 用户未安装 `es.exe` / Everything 未运行 | 中（winget 一行装 es.exe） | `get_items` 返回引导项；文档指引装 es.exe + 启动 Everything；v0.2 用 fd 彻底解决 |
 | `date_modified` 格式随 Everything 版本变化 | 中 | D4 用本机真实响应锁定解析；异常置 0 不报错（单测覆盖） |
-| HTTP 服务被防火墙/杀软拦截 | 中 | 探测超时 800ms 快速失败，引导项提示检查端口 |
-| HTTP 服务暴露局域网的安全隐患 | 低（localhost默认） | 文档安全提示（仅绑 127.0.0.1）；v0.2+ 可支持 Basic Auth |
+| `es.exe` 启动失败 / 不在 PATH | 低 | 引导项提示安装 es.exe；`DDRUN_ES_PATH` 可显式指定路径 |
+| 网络暴露面 | 无 | es.exe 走本机 IPC（命名管道/WM_COPYDATA），不监听端口，无局域网暴露风险 |
 | Everything 查询语法特殊字符与 URL 编码冲突 | 低 | `pct_encode`（扩展内手写 RFC 3986）统一处理 + 特殊字符用例测试（单测已含 `a+b=c`、中文） |
 | **`host/open_url` 对 `file://` 行为不确定** | 中 | **v0.1 实测 `webbrowser::open("file:///...")`**（宿主 `crates/dd-gui/src/app/host_actions.rs`）；若宿主侧不支持，预案为宿主侧改用 `cmd /c start` 相对可执行打开（或扩展侧兜底），仍经现有 `invoke` 链路 |
 | **同步 HTTP 阻塞主循环** | 低 | Everything 本地 <50ms，远低于 `get_items` 2000ms 超时；宿主侧已串行化保护 |
@@ -470,25 +472,25 @@ Everything 查询本身毫秒级返回，30 条评分开销可忽略。归一化
 
 | 打磨点 | 做法 | 预期 |
 | --- | --- | --- |
-| availability 探测缓存 | `AVAIL` TTL 缓存（默认 3s），窗口内跳过重复 TCP 探测 | 连续按键不每次探测 Everything |
+| availability 探测缓存 | `AVAIL` TTL 缓存（默认 3s），窗口内跳过重复 es.exe 进程探测 | 连续按键不每次探测 Everything |
 | 超时收紧 | 探测 800ms；搜索 3s（Everything 本地通常 <50ms）；⚠️ 宿主 `get_items` 超时仅 2000ms，见 §7.4 | 异常时快速失败，不挂起 UI |
 | 结果数自适应 | 默认取前 30 条，skim 评分排序稳定 | 海量结果只取前 N，列表瞬时填充 |
 | 查询直透 | Everything 全部语法（`ext:`/`dm:`/`path:`/通配符/正则）原样透传 | 扩展侧零解析、零损耗 |
-| 依赖最小 | HTTP 用标准库 `TcpStream`（HTTP/1.1 `Connection: close`）；评分用 `fuzzy-matcher`；时间用 `chrono`（手搓 civil→days 易错，改用成熟库） | 相对 dd-ext 基线**仅新增** fuzzy-matcher/chrono（anyhow/serde/serde_json 复用既有基线），不引入 reqwest/urlencoding 等重依赖 |
+| 依赖最小 | 传输走 es.exe 进程调用（标准库 `std::process`，无 HTTP/TCP 依赖）；评分用 `fuzzy-matcher`；时间用 `chrono`（FILETIME 换算比日期串更可靠） | 相对 dd-ext 基线**仅新增** fuzzy-matcher/chrono（anyhow/serde/serde_json 复用既有基线），不引入 reqwest/urlencoding 等重依赖 |
 
 ### 7.3 验收（acceptance）
 
 - [x] **便捷**：根视图输入 `f report` → 无需选中、无需第二次 Enter，即进入文件结果页并展示 Everything 对 `report` 的前 30 条结果；搜索框保留显示 `report`（`poll_page` 落地时回填 `file_drill_armed` 标记的查询，已落地消除"结果回来后框被清空"的边角，dev 构建通过）。真机核对显示与二次输入行为。
 - [ ] **防重**：对 `f report` 连续多帧 `ui()` 不重复 `open_page`（仅一次进页）；按 Esc 返回 Root 后框内仍含 `f report` 不会立即重进页；清空查询后 `file_drill` 复位，再次输入 `f x` 可正常进页。
 - [ ] **速度**：Everything 在线时，从输入完成到结果填充主观 <200ms（本地回环）；`everything_available()` 在 TTL 内对同一状态不再发起新探测。
-- [ ] **健壮**：关闭 Everything HTTP 服务 → `f x` 进页后返回「未检测到 Everything」引导项，不挂起、不 panic；扩展进程不崩溃（运行时熔断不误触发）。
+- [ ] **健壮**：退出 Everything / `es.exe` 不可用 → `f x` 进页后返回「未检测到 Everything」引导项，不挂起、不 panic；扩展进程不崩溃（运行时熔断不误触发）。
 - [x] **回归**：既有 5 扩展 `pages: None` 行为不变（仍 `-32005`）；`cargo test -p dd-ext` 全过（含 `get_items` PageHandler、日期解析、评分归一化、路径索引 round-trip）。**2026-09-08 实证**：`cargo test --workspace` **274 passed / 0 failed**。
 - [x] **单测新增**：`search.rs` 覆盖 `pct_encode` / 日期多格式解析 / `score` 归一化与近因加分 / 路径索引 round-trip / `get_file_items` 空查询→hint、Everything 不可用→guide。**2026-09-08 补齐**：另增 `guess_is_dir` 边界、`handle_invoke` 分发与 Toast、`to_command_item` 与三个占位项 shape、`parse_response`（fixture 离线）、路径索引容量淘汰、`spec`/commands 契约——`dd-ext-search` 单测由 9 → **21**。
 
 ### 7.4 已知边界（v3.2 记录，部分已在本轮解决）
 
 - **初始进页搜索框回填（已解决）**：`maybe_drill_file_search` 进页后标记 `file_drill_armed`，`poll_page` 结果落地时把 `f ` 之后的查询写回搜索框（`dd-gui/src/app/page.rs` + `mod.rs`）。仅文件结果页、且 `file_drill` 命中时生效，落地即消耗；用户先 Esc 离开再手动进页不会误回填旧查询（else 分支也清 `file_drill_armed`）。
-- **结果页不随页内二次输入实时重拉（仍属 v3.3）**：当前宿主嵌套页仅在 `open_page` / `items_changed` 时取数，页内搜索框二次输入只做本地过滤（受前 30 条限制）。彻底"边打边搜"需宿主在嵌套页 query 变化时重发 `get_items`——属宿主改动，留待 v3.3 评估。
+- **结果页不随页内二次输入实时重拉（仍属 v3.3）**：当前宿主嵌套页仅在 `open_page` / `items_changed` 时取数，页内搜索框二次输入只做本地过滤（受前 30 条限制）。彻底"边打边搜"需宿主在嵌套页 query 变化时重发 `get_items`——属宿主改动，留待 v3.3 评估。**真机实测（2026-09-08）**：最初表现为进页后页内输入「提示词」显示宿主空态「未找到匹配的命令」——真实原因是两阶段叠加：① 旧 HTTP 通道未开启 Everything HTTP 服务；② 切到 es.exe 后 es 经管道输出为 **GBK**，旧代码 `read_to_string` 强转 UTF-8 把中文路径替换成 U+FFFD 导致结果损坏。已修复：改用 es.exe IPC（无需开 HTTP）+ `decode_output()` 按代码页转 UTF-8，真机搜「提示词」现稳定返回正确中文结果。页内二次输入仍只做本地过滤（受前 30 条限制），属 v3.3 待办；`f ` 前缀直达每次重发 `get_items` 不受影响。
 - **`f ` 前缀会劫持根视图字面查询**：用户若想在主面板搜字面 `f report` 文本，会被自动进文件页。属设计取舍（便捷前缀），如需可改为可配置前缀或仅在空 Root 时触发。
 - **扩展搜索超时（3s）被宿主 `get_items` 超时（2000ms）截断（v3.2 记录，未处理）**：宿主 `TIMEOUT_GET_ITEMS=2000ms`（`crates/dd-host/src/process.rs`，协议 §10）固定不变；Everything 若超过 2s 无响应，宿主先判 `-32001 extension_timeout` 并丢弃迟到响应，表现为超时错误而非引导项——§7.2「搜索 3s 兜底」实际到不了。如需引导项兜底，v3.3 把 `search.rs` 的 3000ms 对齐到 ≤2000ms（宿主侧不改）。
 - **引导项/占位项点击文案未打磨（v3.2 记录，未处理）**：`files.hint` / `files.guide` / `files.error` / `files.search` 的 `command` 均为 `Invoke`，但 `handle_invoke` 仅分发 `files.open.<u64>`，其余落回通用「未知命令」Toast——列表内 title/subtitle 已把信息讲清，点击提示可后续打磨（v3.3）。
@@ -510,7 +512,7 @@ graph TD
     T03[T03 Cargo bin+依赖] --> T04
     T03 --> T05[T05 清单json]
     T04 --> T06[T06 探测]
-    T04 --> T07[T07 http_get]
+    T04 --> T07[T07 es.exe 调用 run_es]
     T04 --> T08[T08 pct_encode]
     T04 --> T13[T13 路径索引]
     T04 --> T26[T26 契约冒烟]
@@ -617,7 +619,7 @@ graph TD
 | ID | 任务 | 目标文件 | 具体动作（AI 可执行） | 验收 | 依赖 |
 | :--- | :--- | :--- | :--- | :--- | :--- |
 | **T-21** | `package.sh` 归集 | `tools/package.sh`、`dist/` | 确认 `package.sh` 把 `dd-ext-search.exe` 与 `examples/extensions.d/com.ddrun.filesearch.json` 归集进 `dist/extensions.d/`；跑 `bash tools/package.sh` 验证产出。 | `dist/extensions.d/` 含 `dd-ext-search.exe` + `com.ddrun.filesearch.json`；宿主扫描同目录 `extensions.d` 能加载。 | T-17, T-05 |
-| **T-22** | 用户文档 | `docs/search.md`（新建） | 写用户文档：Everything 安装 + 开 HTTP（图）、常用语法速查（`ext:`/`dm:`/`path:`）、配置项 `DDRUN_EVERYTHING_URL`（默认 `127.0.0.1:8080`、仅绑 `127.0.0.1` 安全提示）、明确 v0.1 仅 Windows。 | 文档可被用户照做完成 Everything 配置并搜到结果。 | T-17 |
+| **T-22** | 用户文档 | `docs/search.md`（新建） | 写用户文档：Everything 安装 + 装 `es.exe`（winget）、常用语法速查（`ext:`/`dm:`/`path:`）、配置项 `DDRUN_ES_PATH`/`DDRUN_EVERYTHING_DIR`（默认自动定位，无 HTTP）、明确 v0.1 仅 Windows。 | 文档可被用户照做完成 Everything 配置并搜到结果。 | T-17 |
 | **T-23** | CHANGELOG | `CHANGELOG.md` | 追加 v0.1 条目："文件搜索依赖 Everything（Windows）；fd 兜底 Provider 计划 v0.2"。 | CHANGELOG 含该条目。 | T-17 |
 | **T-24** | 发布构建 + 走查 | `dist/`、仓库 | `bash tools/package.sh` 产出 `dist/dd-run-<ver>.exe` + `dist/extensions.d/`；真机走查：解压直接运行 → `f ` 进文件搜索、`file://` 打开、Esc 返回、升级覆盖。 | **§8.4.5 真机验收清单 12 项逐项勾选全过**（无一项未勾即不得进入 T-25）。 | T-21, T-20, T-22, T-23, T-27, T-28 |
 | **T-25** | GitHub Release | GitHub | tag + 推送 + 创建 Release v0.1.0（Windows 绿色包）。 | Release 资产含 dist 产物，下载解压可用。 | T-24 |
@@ -706,7 +708,7 @@ cargo test --workspace -- --ignored
 | 3 | 特殊字符 | 输入 `f dd-run`、`f v0.1` | `pct_encode` 正确，结果准确 |
 | 4 | 语法透传 | 输入 `f ext:rs dm:today` | Everything 语法原样透传并生效 |
 | 5 | Everything 未启动 | 退出 Everything 后进页 | 返回「未检测到 Everything」引导项；**不挂起、不 panic** |
-| 6 | 端口变更 | 改端口 9090 + `DDRUN_EVERYTHING_URL=http://127.0.0.1:9090` | 能正常搜索 |
+| 6 | es.exe 路径 | 非默认位置 + `DDRUN_ES_PATH=...` | 能正常搜索 |
 | 7 | 空结果 | 搜不存在关键词 | 返回空数组，UI 显示「无结果」 |
 | 8 | limit 截断 | 输入 `f e` | 仅返回 **30 条**，排序稳定 |
 | 9 | `file://` 打开 | 回车打开某文件 | 系统默认程序打开成功（否则走 `cmd /c start` 兜底） |

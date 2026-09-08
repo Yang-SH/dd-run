@@ -3,21 +3,25 @@
 > **适用版本**：v0.1.0+ ｜ **平台**：仅 Windows（依赖 Everything）
 > **面向**：使用者。实现方案与任务分解见 [`search-file.md`](./search-file.md)（开发者文档）。
 
-文件搜索通过本机 **Everything** 的 HTTP 服务检索本地文件，结果直接呈现在 dd-run 主面板中。
+文件搜索通过 Everything 官方命令行工具 **`es.exe`**（IPC 通道）检索本地文件，结果直接呈现在 dd-run 主面板中。**无需开启 Everything 的 HTTP 服务器。**
 
 ---
 
-## 一、前置条件：启用 Everything HTTP 服务（一次性，约 2 分钟）
+## 一、前置条件（一次性，约 2 分钟）
 
-1. 安装 [Everything](https://www.voidtools.com/) 1.4 及以上版本。
-2. 打开 `工具 → 选项 → HTTP 服务器`：
-   - ✅ 勾选**启用 HTTP 服务器**
-   - **端口**改为 `8080`（dd-run 默认连接 8080；Everything 自身默认是 80，需显式修改）
-   - **用户名 / 密码**留空
-3. 确认绑定地址仅为 `127.0.0.1`（localhost）。
-4. 验证：浏览器访问 <http://127.0.0.1:8080/?search=test&json=1&count=5>，应返回 JSON 文本。
+文件搜索通过 Everything 官方命令行工具 **`es.exe`**（IPC 通道）检索本地文件，**无需开启 Everything 的 HTTP 服务器**。
 
-> ⚠️ **安全提示**：若 HTTP 服务暴露到 `0.0.0.0`，局域网内其他机器可检索你的文件名索引。请务必仅绑定 `127.0.0.1`。
+1. 安装并运行 [Everything](https://www.voidtools.com/)（1.4 及以上）。dd-run 仅要求 Everything **在运行**，不要求开启任何网络服务。
+2. 安装 `es.exe`（Everything 命令行工具，不随 Everything 安装包附带）：
+   - 推荐：`winget install --id=voidtools.Everything.Cli`
+   - 或手动从 voidtools 下载 `es.exe`，放到 Everything 安装目录（默认 `C:\Program Files\Everything\`）。
+3. dd-run 按以下顺序自动定位 `es.exe`，**正常情况下无需手动配置**：
+   - 环境变量 `DDRUN_ES_PATH`（完整路径）
+   - 系统 `PATH`（winget 安装后 `es.exe` 已在 PATH）
+   - 环境变量 `DDRUN_EVERYTHING_DIR`（你给出的 Everything 安装目录）
+4. 验证：终端执行 `es.exe -get-everything-version`，应返回 Everything 的版本号。
+
+> ⚠️ `es.exe` 走 IPC 与 Everything 通信，**索引必须已由 Everything 建好**；新装 Everything 后请稍等其完成首轮索引。
 
 ---
 
@@ -58,9 +62,10 @@
 
 | 环境变量 | 默认值 | 用途 |
 | :--- | :--- | :--- |
-| `DDRUN_EVERYTHING_URL` | `http://127.0.0.1:8080` | Everything HTTP 服务地址；改端口或换主机时设置 |
+| `DDRUN_ES_PATH` | 空 | `es.exe` 的完整路径；仅在它不在 `PATH`、也不在 Everything 目录时使用 |
+| `DDRUN_EVERYTHING_DIR` | 空 | Everything 安装目录（用于定位同目录的 `es.exe`） |
 
-> 环境变量在**扩展进程启动时**读取，修改后需**重启 dd-run** 生效。
+> 环境变量在**扩展进程启动时**读取，修改后需**重启 dd-run** 生效。正常情况下无需设置任何变量——winget 安装 `es.exe` 后即可直接使用。
 
 ---
 
@@ -68,11 +73,11 @@
 
 | 现象 | 可能原因 | 处理 |
 | :--- | :--- | :--- |
-| 提示「未检测到 Everything」 | Everything 未运行，或 HTTP 服务未开启 | 按 §一 开启服务，确认端口为 8080 |
-| 改了端口后搜不到 | 扩展仍连接默认的 8080 | 设置 `DDRUN_EVERYTHING_URL` 并重启 dd-run |
+| 提示「未检测到 Everything」 | Everything 未运行，或 `es.exe` 不在 PATH/指定位置 | 启动 Everything；执行 `es.exe -get-everything-version` 确认识别；必要时设 `DDRUN_ES_PATH` |
+| 搜不到文件 / 结果乱码 | `es.exe` 未安装或版本过旧 | 重装 `es.exe`（`winget install --id=voidtools.Everything.Cli`）；确认 `es.exe -get-everything-version` 正常 |
 | 结果为空 | 关键词过窄，或 Everything 索引尚未建完 | 等待索引完成；换更宽泛的关键词 |
 | 有结果但打不开文件 | 系统未关联默认程序，或文件已被移动/删除 | 手动关联程序；确认文件仍在原路径 |
-| 搜索长时间无响应 | Everything 服务异常 | 重启 Everything；dd-run 会在 2 秒后按超时处理，不会卡死 |
+| 搜索长时间无响应 | Everything 进程异常 | 重启 Everything；dd-run 会在约 1.2 秒后按超时处理，不会卡死 |
 
 ---
 
@@ -81,5 +86,5 @@
 - **仅支持 Windows**：依赖 Everything。跨平台能力（fd 兜底 Provider）计划于 v0.2 提供。
 - 每次最多返回前 **30** 条结果，按「文件名 > 路径」的相关度并叠加近因加分排序。
 - 结果页内的二次输入只做**本地过滤**（受前 30 条限制），不会重新请求 Everything。
-- Everything 未启用 HTTP 时，引导项的点击提示为通用文案，将在后续版本打磨。
+- Everything 未运行或 `es.exe` 缺失时，引导项的点击提示为通用文案，将在后续版本打磨。
 - 单个搜索请求超过 **2 秒**未响应时，宿主按超时处理（不挂起、不崩溃）。
