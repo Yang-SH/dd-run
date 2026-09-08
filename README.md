@@ -1,106 +1,106 @@
 # dd-run
 
-**跨平台命令面板（Rust）** —— 设计参考自 [PowerToys Command Palette（CmdPal）](https://github.com/microsoft/PowerToys/tree/main/src/modules/cmdpal)
+[English](./README.md) | [简体中文](./README.zh-CN.md)
 
-> **当前状态：MVP（M0–M4）已全部关闭并通过真机验收；M5（ueli 风格 UI 重构）主体完成，设计稿 v4.3。** 里程碑进度见 [`docs/implementation.md`](./docs/implementation.md) §5，遗留项台账见其 §6.1。
+**A cross-platform command palette / launcher, written in Rust.** Design inspired by the [PowerToys Command Palette (CmdPal)](https://github.com/microsoft/PowerToys/tree/main/src/modules/cmdpal) module.
+
+> **Status**: MVP milestones M0–M4 are all closed and verified on real hardware. M5 (ueli-style UI redesign) is complete. M6 (settings & system integration) has shipped: settings pages, Mica/Acrylic window material, tray icon, customizable global hotkey, Pinyin search, and a file-search extension. See [`docs/implementation.md`](./docs/implementation.md) §5 for milestone progress and §6.1 for the follow-ups ledger.
 
 ---
 
-## 这是什么
+## What is it
 
-`dd-run` 是一个用 Rust 从零构建的**跨平台（Windows / macOS / Linux）命令面板 / 启动器**：全局热键唤起，输入即搜，键盘直达，靠扩展生态扩展能力。
+`dd-run` is a **cross-platform (Windows / macOS / Linux) command palette / launcher built from scratch in Rust**: summoned by a global hotkey, type-to-search, keyboard-first, extensible through an extension ecosystem.
 
-它的架构与扩展契约**提炼自微软 PowerToys 的 CmdPal 模块**，但不是 CmdPal 的移植——CmdPal 深度绑定 Windows（WinRT / COM / XAML），`dd-run` 把其中的平台无关部分（UI 模型、扩展契约、宿主生命周期）抽象出来，换成 Rust 生态的等价实现：
+Its architecture and extension contracts are **distilled from Microsoft PowerToys' CmdPal module** — but it is not a port. CmdPal is deeply bound to Windows (WinRT / COM / XAML); `dd-run` abstracts the platform-independent parts (UI model, extension contracts, host lifecycle) and replaces them with Rust-ecosystem equivalents:
 
-| CmdPal（Windows） | dd-run（跨平台） |
+| CmdPal (Windows) | dd-run (cross-platform) |
 |---|---|
-| 进程外 COM / WinRT | **子进程 + NDJSON 上的 JSON-RPC**（见 [`docs/protocol.md`](./docs/protocol.md)） |
-| AppExtensionCatalog / 注册表发现 | **清单文件扫描**（`extensions.d/*.json`，见 [`docs/manifest-schema.md`](./docs/manifest-schema.md)） |
-| WinUI 3 / XAML | egui（MVP 选型，见 [`implementation.md`](./docs/implementation.md) ADR-2） |
-| C# 扩展 | 任意能读写 stdin/stdout 的语言 |
+| Out-of-process COM / WinRT | **Sub-process + JSON-RPC over NDJSON** (see [`docs/protocol.md`](./docs/protocol.md)) |
+| AppExtensionCatalog / registry discovery | **Manifest file scanning** (`extensions.d/*.json`, see [`docs/manifest-schema.md`](./docs/manifest-schema.md)) |
+| WinUI 3 / XAML | egui (see [`docs/implementation.md`](./docs/implementation.md) ADR-2) |
+| C# extensions | Any language that can read/write stdin/stdout |
 
----
+## Highlights
 
-## 目标与非目标
+- **Keyboard-first**: the entire core loop (summon → search → select → execute → back → close) is 100% keyboard-driven.
+- **6 built-in extensions**: Apps, Calculator, System, Web Search, Shell, and File Search (Everything-backed, Windows; direct entry via the `f ` query prefix).
+- **Pinyin matching**: CJK app names match by full Pinyin and initials (e.g. `jsq` → 计算器).
+- **Settings pages** (open with `Ctrl+,`): appearance (light/dark theme, Mica/Acrylic material), general (autostart, customizable global hotkey — default `Win+Alt+Space`), search-engine management (preset + custom engines with `{q}` templates), extension management (enable/disable per extension).
+- **Localized UI**: the panel follows the system display language.
+- **Fast & isolated**: cold start reads on-disk "command stubs" so extension processes launch lazily (frozen/stub/LRU mechanism); every extension runs in its own process — a crash never takes the host down.
+- **Single-file distribution**: `dist/dd-run-0.1.0.exe` (~10 MB, `strip = "symbols"` + fat LTO). The built-in extensions are embedded into the host binary at build time and materialized to a per-user cache directory on first launch — **process isolation (ADR-1) is fully preserved**. No installer, no sidecar files: double-click and run.
 
-### 目标
+## Goals and non-goals
 
-1. **跨平台**：三平台同一套契约与代码，平台差异收敛在适配层。
-2. **键盘优先**：核心路径（唤起 / 搜索 / 选择 / 执行 / 返回 / 关闭）**100% 可纯键盘完成**（验收 A11）。
-3. **快**：冷启动走磁盘缓存的"命令桩"，扩展进程懒加载（frozen / stub 机制，见设计文档 §6.3）。
-4. **可扩展**：第三方扩展是独立进程，崩溃不影响宿主，用文本协议即可接入。
-5. **简单可实现**：MVP 只做最小可用集，不预先为假想需求付复杂度。
+### Goals
 
-### 非目标（MVP 阶段明确不做）
+1. **Cross-platform**: one contract and one codebase for all three platforms; platform differences are confined to adapter layers.
+2. **Keyboard-first**: the core paths are 100% keyboard-completable (acceptance A11).
+3. **Fast**: cold start reads on-disk command stubs; extension processes load lazily.
+4. **Extensible**: third-party extensions are independent processes that talk a plain text protocol; their crashes never affect the host.
+5. **Simple to build**: the MVP implements the minimal useful set; no complexity is paid upfront for imaginary requirements.
 
-- **不做 Windows 专属扩展的跨平台移植**：§7 清单里 9 个 `🪟` 项（注册表、Windows 设置、WinGet 等）无跨平台等价物，不在范围内。
-- **不做扩展商店（Gallery）**：可选模块，非 MVP（设计文档 §6.6）。
-- **不做 WASM 沙箱 / 进程注册发现**：进阶可选，MVP 用最简路径（ADR-1 / ADR-3）。
-- **不做移动端 / Web 端**。
-- **不做云端同步、遥测、账号体系**。
+### Non-goals (explicitly out of scope for MVP)
 
----
+- **No cross-platform ports of Windows-only extensions**: 9 `🪟` items in the design doc §7 (registry, Windows settings, WinGet, …) have no cross-platform equivalents.
+- **No extension store (Gallery)**: optional module, not MVP.
+- **No WASM sandbox / process-registration discovery**: advanced options; MVP takes the simplest path (ADR-1 / ADR-3).
+- **No mobile / web clients.**
+- **No cloud sync, telemetry, or accounts.**
 
-## 文档导航
+## Build and packaging
 
-| 文档 | 内容 | 读者 |
-|---|---|---|
-| [`cmdpal-platform-agnostic-design.md`](./cmdpal-platform-agnostic-design.md) | **设计参考（上游来源）**：CmdPal 的 UI 模型、扩展契约、宿主模型、内置扩展清单、Rust 参照实现、验收标准 A1–A12 | 想理解"为什么这样设计" |
-| [`cmdpal-ui-mockups.html`](./cmdpal-ui-mockups.html) | **交互设计稿**：11 屏暗色主题组件（Root View / 搜索 / ListPage / DetailPage / FormPage / Markdown / Grid / 上下文菜单 / Confirm+Toast / Empty / Loading），可键盘走查 | 想看界面长什么样 |
-| [`docs/implementation.md`](./docs/implementation.md) | **实施方案**：里程碑 M0–M4、ADR 决策记录、A1–A12 验收映射、当前进度 | 要动手写代码 |
-| [`docs/protocol.md`](./docs/protocol.md) | **dd-run Extension Protocol v1.0**：NDJSON 成帧、JSON-RPC 信封、12 个方法、错误码、生命周期状态机、超时与崩溃恢复 | 写宿主或写扩展 |
-| [`docs/manifest-schema.md`](./docs/manifest-schema.md) | **扩展清单 schema**：字段表、三平台配置目录、最小可拷贝示例 | 写扩展 |
+> **Hard rule: every package is a single file that is the whole program.**
+> The only distribution artifact is `dist/dd-run-<version>.exe` — no sidecar extension exes, resource directories, installers, or extra configuration. Double-click and use; process isolation (ADR-1) is unchanged.
 
-**阅读顺序建议**：设计文档 §1–§7（理解模型）→ [`docs/implementation.md`](./docs/implementation.md)（知道先做什么）→ [`docs/protocol.md`](./docs/protocol.md) + [`docs/manifest-schema.md`](./docs/manifest-schema.md)（照着实现）。
-
----
-
-## 已定设计决策（摘要）
-
-完整记录与理由见 [`docs/implementation.md`](./docs/implementation.md) 的 ADR 部分。
-
-| # | 决策 | 结论 |
-|---|---|---|
-| ADR-1 | 扩展隔离方式 | **子进程 + NDJSON JSON-RPC**（WASM 沙箱降为进阶可选） |
-| ADR-2 | GUI 框架 | **egui**（Slint / iced 为备选） |
-| ADR-3 | 扩展发现方式 | **清单文件扫描**（进程注册 / WASM 内嵌降为可选） |
-| ADR-4 | 协议成帧 | **NDJSON**（一行一条 JSON、`\n` 结尾；握手预留 `transport` 字段） |
-
----
-
-## 上游引用与许可
-
-- 本项目的设计文档大量**提炼、改写自** [`microsoft/PowerToys`](https://github.com/microsoft/PowerToys) 仓库中 CmdPal 模块的官方文档（README / SDK Spec / UI 解剖 / 设计原则 / Gallery 说明），出处逐条列于设计文档 §11。
-- **核验基准**：设计文档与规范中对上游事实的引用，均以 `microsoft/PowerToys` tag **v0.101.2362.0**（2026-09-01 核验）为准；上游仍处 preview，可能演进（见设计文档 §11 与 implementation.md R6）。
-- PowerToys 采用 **MIT License**；`dd-run` 自身同样采用 **MIT License**（根 `LICENSE` + 各 crate `license = "MIT"`）。引用边界复核为遗留项 L6（见 implementation.md §6.1）。
-- `dd-run` 不含任何 PowerToys 源码；所有 Rust 代码为独立实现。
-
----
-
----
-
-## 构建与打包
-
-> **强原则：每次打包都是——一个文件即是完整程序。**
-> 分发产物只有 `dist/dd-run-<version>.exe` 一个可执行文件，无需伴生扩展 exe、资源目录、安装器或额外配置；**双击即用，进程隔离（ADR-1）不变。**
-
-| 项 | 说明 |
+| Item | Detail |
 |---|---|
-| 入口产物 | `dist/dd-run-0.1.0.exe`（Windows，34 MB 量级；版本随 `dd-gui/Cargo.toml` 升） |
-| 内嵌方式 | 5 个内置扩展 exe（`dd-ext-{apps,calc,system,websearch,shell}`）经 `dd-gui/build.rs` 编译期内嵌进宿主字节（`assets/embed/` 为打包脚本的临时输入，已 gitignore） |
-| 运行机制 | 首次启动由 `dd-gui::embedded::materialize` 物化到 `%APPDATA%/dd-run/cache/embedded/`（`.host-version` 标记幂等刷新），宿主按原 `ensure_builtins` + `ExtensionProcess::spawn` 拉起子进程——**进程隔离完整保留** |
-| 入口命名 | `dd-run.exe` = GUI 宿主（crate 名仍 `dd-gui`）；M0 CLI 改名 `dd-run-cli.exe`（保留自检能力、让出产物名） |
-| 一键出包 | `bash tools/package.sh`（先 build `dd-ext` → 拷 5 exe → build `dd-gui --bin dd-run` → 拷贝产物到 `dist/`） |
-| 仓库纯净度 | 源码树不含任何二进制（`/dist/`、`/crates/dd-gui/assets/embed/*.exe` 均 gitignore） |
-| 验证口径 | `cargo fmt --check` / `cargo clippy --workspace --all-targets` / `cargo test --workspace` **全绿** + 脱离源码树冒烟（隔离目录仅 `dd-run.exe` → 物化 → 4/5 扩展 warm 握手成功，第 5 个经直接握手验证可枚举 99 应用） |
+| Entry artifact | `dist/dd-run-0.1.0.exe` (Windows, ~10 MB; version tracks `crates/dd-gui/Cargo.toml`) |
+| Embedding | Built-in extension exes (`dd-ext-{apps,calc,system,websearch,shell}`) are embedded into the host bytes at compile time by `dd-gui/build.rs` (`assets/embed/` is a scratch input for the packaging script and is gitignored) |
+| Runtime | On first launch, `dd-gui::embedded::materialize` materializes them into `%APPDATA%/dd-run/cache/embedded/` (an `.host-version` marker keeps it idempotent), then the host spawns them via the usual `ensure_builtins` + `ExtensionProcess::spawn` — **process isolation fully preserved** |
+| Naming | `dd-run.exe` = GUI host (crate stays `dd-gui`); the M0 CLI is renamed `dd-run-cli.exe` (keeps self-check ability, yields the artifact name) |
+| One-command package | `bash tools/package.sh` (build `dd-ext` → copy exes → build `dd-gui --bin dd-run` → copy artifact into `dist/`) |
+| Repo hygiene | No binaries in the source tree (`/dist/` and `/crates/dd-gui/assets/embed/*.exe` are gitignored) |
+| Verification bar | `cargo fmt --check` / `cargo clippy --workspace --all-targets` / `cargo test --workspace` all green, plus an out-of-tree smoke test (isolated directory containing only `dd-run.exe` → materialization → warm handshakes) |
 
-**为什么不做安装器 / 不做 zip 多文件归集**：项目 MVP 阶段显式选择"简单可实现"——单文件产物同时满足"零安装仪式"与"任意机器双击即跑"，又不必为分发付注册表 / 安装卸载 / 升级脚本复杂度。详见 [`docs/implementation.md`](./docs/implementation.md) §5 状态注记与 ADR 部分。
+**Why no installer / no multi-file zip**: during the MVP stage the project explicitly chooses "simple to build" — a single-file artifact delivers "zero install ceremony" and "double-click on any machine" without paying for registry/installer/uninstaller/upgrade-script complexity. See [`docs/implementation.md`](./docs/implementation.md) §5 and the ADR section.
 
----
+## Documentation
 
-## 下一步
+| Document | Contents | Audience |
+|---|---|---|
+| [`cmdpal-platform-agnostic-design.md`](./cmdpal-platform-agnostic-design.md) | **Design reference (upstream source)**: CmdPal's UI model, extension contracts, host model, built-in extension inventory, Rust reference implementation, acceptance criteria A1–A12 | Understand *why* it is designed this way |
+| [`cmdpal-ui-mockups.html`](./cmdpal-ui-mockups.html) | **Interactive UI spec** (v4.17): dark/light theme component gallery — root view, search, list/detail pages, settings cards, context menus, dialogs, toasts, loading skeletons | See what it looks like |
+| [`docs/implementation.md`](./docs/implementation.md) | **Implementation plan**: milestones M0–M6, ADR decision records, A1–A12 acceptance mapping, current progress, follow-ups ledger | Write code |
+| [`docs/protocol.md`](./docs/protocol.md) | **dd-run Extension Protocol v1.0**: NDJSON framing, JSON-RPC envelope, methods, error codes, lifecycle state machine, timeouts and crash recovery | Host or extension authors |
+| [`docs/manifest-schema.md`](./docs/manifest-schema.md) | **Extension manifest schema**: field tables, per-platform config directories, minimal copyable example | Extension authors |
+| [`docs/search-file.md`](./docs/search-file.md) | **File-search extension plan** (v3.2): Everything-first provider, `f ` prefix direct entry, performance budget | Extension authors |
 
-- **M0–M4 已全部关闭**：协议冻结 → 最小面板 → 命令执行与状态机 → 缓存懒加载 → 5 内置扩展与健壮性（commit `757f3b4`）。
-- **M5（ueli 风格 UI 重构）主体完成**：设计稿 v4.3 + 批次 1–4.2 + 六轮真机反馈修复（commit `5cf32b7`）；剩余设计稿 C 组占位（嵌套页顶行统一 / Loading 骨架 / Dialog 遮罩 / 焦点态 / Toast 意图色），见 implementation.md §6.1 L8。
-- **候选 M6 方向（待定义）**：第三方扩展端到端验证、A2 冷启动 GUI 瓶颈（wgpu + 22MB 字体 ~2.8s）、跨平台。
-- 完整进度与遗留项台账见 [`docs/implementation.md`](./docs/implementation.md) §5 / §6.1。
+Suggested reading order: design doc §1–§7 (the model) → [`docs/implementation.md`](./docs/implementation.md) (what to build first) → [`docs/protocol.md`](./docs/protocol.md) + [`docs/manifest-schema.md`](./docs/manifest-schema.md) (build against these).
+
+## Design decisions (summary)
+
+Full records and rationale live in the ADR section of [`docs/implementation.md`](./docs/implementation.md).
+
+| # | Decision | Outcome |
+|---|---|---|
+| ADR-1 | Extension isolation | **Sub-process + NDJSON JSON-RPC** (WASM sandbox demoted to advanced/optional) |
+| ADR-2 | GUI framework | **egui** (Slint / iced as runners-up) |
+| ADR-3 | Extension discovery | **Manifest file scanning** (process registration / WASM embedding demoted to optional) |
+| ADR-4 | Protocol framing | **NDJSON** (one JSON per line, `\n` terminated; handshake reserves a `transport` field) |
+
+## Upstream attribution and license
+
+- The design docs **distill and adapt** material from the CmdPal module of the [`microsoft/PowerToys`](https://github.com/microsoft/PowerToys) repository (README / SDK spec / UI anatomy / design principles / Gallery notes); per-item attributions are listed in the design doc §11.
+- **Verification baseline**: factual claims about upstream are verified against `microsoft/PowerToys` tag **v0.101.2362.0** (checked 2026-09-01); upstream is still in preview and may evolve (design doc §11 and implementation.md R6).
+- PowerToys is **MIT licensed**; `dd-run` is likewise **MIT licensed** (root `LICENSE` + `license = "MIT"` in every crate). Re-checking the attribution boundary is follow-up L6 (implementation.md §6.1).
+- `dd-run` contains no PowerToys source code; all Rust code is an independent implementation.
+
+## Roadmap
+
+- **M0–M4 closed**: protocol freeze → minimal panel → command execution & state machine → cache/lazy loading → 5 built-in extensions & robustness (commit `757f3b4`).
+- **M5 complete**: ueli-style UI redesign, batches 1–4.2 + six rounds of real-hardware feedback fixes (commit `5cf32b7`) + design-spec group C (loading skeletons, dialog overlays, toast intents).
+- **M6 shipped**: settings pages (appearance / general / search / extensions), Mica/Acrylic window material, tray icon, drag & resize, custom global hotkey, autostart, Pinyin search, i18n, cold-start CJK font background loading, and the file-search extension with `f ` direct entry (commits `a007656`…`2e5b3da`, UI spec v4.17/v4.17a).
+- **Candidate next steps**: embedding the file-search extension into the single-file package, third-party extension end-to-end validation, A2 cold-start GUI profiling (wgpu + 22 MB font ≈ 2.8 s before the async fix), cross-platform work. Full progress and the follow-ups ledger: [`docs/implementation.md`](./docs/implementation.md) §5 / §6.1.
+
