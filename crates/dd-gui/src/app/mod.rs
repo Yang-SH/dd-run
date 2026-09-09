@@ -215,6 +215,10 @@ pub struct PaletteApp {
     pub(crate) confirm: Option<ConfirmDialog>,
     /// `items_changed` 合并刷新调度。
     pub(crate) refresh: Option<RefreshState>,
+    /// 嵌套页**页内二次输入**的去抖调度：query 变化时记录到期时刻，到期后
+    /// `tick_refresh` 用当前页 query 重新拉 `get_items`（v3.3：边打边搜）。
+    /// `None` = 无待拉取；`Some(t)` = 在 `t` 之后拉取。仅在嵌套页输入非空时调度。
+    pub(crate) page_query_debounce: Option<Instant>,
     /// 鼠标上一帧悬停的行索引。仅当本帧悬停行与它**不同**时才接管选中，
     /// 静止不动的鼠标不再每帧抢占键盘（Tab/↓）选中——修复鼠标/键盘选择互相干扰。
     pub(crate) last_hovered_index: Option<usize>,
@@ -392,6 +396,7 @@ impl PaletteApp {
             toast: None,
             confirm: None,
             refresh: None,
+            page_query_debounce: None,
             last_hovered_index: None,
             last_pointer_pos: None,
             scroll_follow: true, // 键盘是主输入：初始允许滚动跟随

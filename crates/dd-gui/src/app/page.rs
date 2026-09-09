@@ -19,6 +19,9 @@ pub(crate) struct PageOutcome {
     /// 同 [`InvokeOutcome::proc`]。
     pub(crate) proc: Option<ExtensionProcess>,
     pub(crate) page_id: String,
+    /// 发起本次 `get_items` 时携带的 search 文本：落地时与页内当前 query 比对，
+    /// 不一致说明「请求期间用户又输入了」→ 本次结果已过期，重新武装去抖补拉。
+    pub(crate) search: Option<String>,
     pub(crate) result: Result<GetItemsResult, String>,
     /// 本次是否由**桩复热**发起：失败时不归还进程、回退 stub。
     pub(crate) stub_reheat: bool,
@@ -37,6 +40,7 @@ impl PaletteApp {
                     ext_id,
                     mut proc,
                     page_id,
+                    search: req_search,
                     result,
                     stub_reheat,
                 } = outcome;
@@ -74,7 +78,16 @@ impl PaletteApp {
                                 None
                             };
                             page.is_loading = is_loading;
+                            // v3.3：落地**保留**页内 query（旧实现整表重建会把搜索框清空，
+                            // 用户在 loading 期间打的字全部丢失）；items 重建但 query 保留。
+                            let prev_query = page.list.query().to_owned();
                             page.list = PanelState::new(items);
+                            page.list.set_passthrough(); // 嵌套页：扩展已过滤/排序，宿主不再二次过滤
+                            if !prev_query.is_empty() {
+                                page.list.set_query(prev_query.clone());
+                            }
+                            // 备用：普通嵌套页（非文件搜索 drill）落地后 query 已由
+                            // draw_searchbar 写回列表（panel.rs），这里无需额外处理。
                             if drill_armed {
                                 self.file_drill_armed = false;
                                 if page_id == crate::app::FILE_SEARCH_PAGE_ID {
@@ -89,6 +102,16 @@ impl PaletteApp {
                                         }
                                     }
                                 }
+                            }
+                            // v3.3 过期补偿：请求期间用户又输入了 → 本次结果是旧查询的，重新武装去抖
+                            //（200ms 静默后按最新 query 补拉）。仅在页内**已有输入**且与请求
+                            // search 不一致时触发——页内框为空属合法初始态（open_page 会把
+                            // Root 查询作为 search 传入而页内框初始为空，如点「在文件中搜索」），
+                            // 不补拉以保留扩展的初始过滤结果。set_query 幂等 + 去抖刷新式调度，
+                            // 不构成循环；直到「query 稳定 ∧ 结果与 query 对应」才收敛。
+                            let cur_query = self.stack.current().list.query().to_owned();
+                            if !cur_query.is_empty() && Some(cur_query) != req_search {
+                                self.schedule_page_query_debounce();
                             }
                         }
                         Err(e) => {
@@ -109,10 +132,16 @@ impl PaletteApp {
                             }
                             eprintln!("[dd-gui] get_items 失败：page={page_id}：{e}");
                             let page = self.stack.current_mut();
+                            // v3.3：失败落地同样保留页内 query（不吞掉 loading 期间输入）
+                            let prev_query = page.list.query().to_owned();
                             page.is_loading = false;
                             page.empty =
                                 Some(crate::text::t(lang, "page.fetch_fail").replace("{e}", &e));
                             page.list = PanelState::new(Vec::new());
+                            page.list.set_passthrough();
+                            if !prev_query.is_empty() {
+                                page.list.set_query(prev_query);
+                            }
                         }
                     }
                 } else {
@@ -153,6 +182,8 @@ impl PaletteApp {
         self.stack
             .push(PageState::nested(page_id, page_id, ext_id, Vec::new()));
         self.stack.current_mut().is_loading = true;
+        // 进嵌套页即聚焦搜索框（截图反馈：进入文件搜索后输入框无光标 → 无法直接键入）
+        self.want_focus = true;
         self.dispatch_fetch_page(ext_id, page_id, search, command_id);
     }
 
@@ -206,6 +237,7 @@ impl PaletteApp {
         self.inflight.insert(ext_id.to_string());
         let ext_id = ext_id.to_string();
         let page_id = page_id.to_string();
+        let search_req = search.clone(); // 供落地时比对（v3.3 过期补偿）
         let (tx, rx) = mpsc::channel();
         thread::spawn(move || {
             let result = get_items_on(&mut proc, &page_id, search);
@@ -213,6 +245,7 @@ impl PaletteApp {
                 ext_id,
                 proc: Some(proc),
                 page_id,
+                search: search_req,
                 result,
                 stub_reheat: false,
             });
@@ -247,6 +280,7 @@ impl PaletteApp {
                         ext_id,
                         proc: None,
                         page_id,
+                        search,
                         result: Err(e),
                         stub_reheat: true,
                     });
@@ -256,16 +290,17 @@ impl PaletteApp {
             // 协议 §6.4：被点击的 Page 命令先 `get_command` 校验桩是否仍有效
             let result: Result<GetItemsResult, String> = match &command_id {
                 Some(cid) => match proc.get_command(cid).map_err(|e| e.to_string()) {
-                    Ok(Some(_)) => get_items_on(&mut proc, &page_id, search),
+                    Ok(Some(_)) => get_items_on(&mut proc, &page_id, search.clone()),
                     Ok(None) => Err(crate::text::t(lang, "page.cmd_stale").to_string()),
                     Err(e) => Err(e),
                 },
-                None => get_items_on(&mut proc, &page_id, search),
+                None => get_items_on(&mut proc, &page_id, search.clone()),
             };
             let _ = tx.send(PageOutcome {
                 ext_id,
                 proc: Some(proc),
                 page_id,
+                search,
                 result,
                 stub_reheat: true,
             });

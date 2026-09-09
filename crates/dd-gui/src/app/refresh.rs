@@ -7,6 +7,11 @@ use std::time::Instant;
 /// §6.3 + A9：`items_changed` 通知的合并窗口（窗口内多次通知只重拉一次）。
 pub(crate) const REFRESH_WINDOW: Duration = Duration::from_millis(100);
 
+/// 嵌套页「页内二次输入」的去抖窗口（v3.3 边打边搜）：停止输入该时长后
+/// 才按最新 query 重拉 `get_items`——避免每个按键都启动扩展搜索（Everything
+/// 单次 <50ms 但 IPC 仍有开销；`f ` 前缀自动进页不受影响，仍即时拉取）。
+pub(crate) const PAGE_QUERY_DEBOUNCE: Duration = Duration::from_millis(200);
+
 /// `items_changed` 的合并刷新调度。
 pub(crate) struct RefreshState {
     pub(crate) page_id: String,
@@ -78,28 +83,41 @@ impl PaletteApp {
     /// 合并窗口到期：顶层刷新 → Root 全量重聚合；页级刷新 → 重拉当前页
     ///（**全量**，协议层无增量推送）。
     pub(crate) fn tick_refresh(&mut self) {
-        let Some(refresh) = &self.refresh else {
-            return;
-        };
-        if Instant::now() < refresh.ready_at {
-            return;
+        // 先处理 items_changed 合并刷新（原有语义，优先级更高——它是扩展侧的显式通知）
+        if let Some(refresh) = &self.refresh {
+            if Instant::now() >= refresh.ready_at {
+                let top = refresh.top;
+                let page_id = refresh.page_id.clone();
+                self.refresh = None;
+                if top {
+                    eprintln!("[dd-gui] 顶层 items_changed 合并窗口到期 → Root 全量重聚合（A9）");
+                    self.restart_aggregation();
+                } else {
+                    self.refetch_page_if_current(&page_id);
+                }
+            }
         }
-        // 顶层刷新（items_changed 无 page_id）：到期触发 Root 全量重聚合（A9）。
-        // 只替换 root，嵌套页不受影响；不依赖当前页（与页级分支脱离）。
-        if refresh.top {
-            self.refresh = None;
-            eprintln!("[dd-gui] 顶层 items_changed 合并窗口到期 → Root 全量重聚合（A9）");
-            self.restart_aggregation();
-            return;
+        // 再去抖处理嵌套页「页内二次输入」：到期用当前页最新 query 重拉
+        if let Some(due) = &self.page_query_debounce {
+            if Instant::now() >= *due {
+                self.page_query_debounce = None;
+                eprintln!("[dd-gui] 页内二次输入去抖到期 → 按最新 query 重拉当前页（v3.3 边打边搜）");
+                let page = self.stack.current();
+                if let Some(page_id) = page.page_id.clone() {
+                    self.refetch_page_if_current(&page_id);
+                }
+            }
         }
-        let page_id = refresh.page_id.clone();
-        self.refresh = None;
+    }
 
+    /// 页级刷新（合并窗口到期 / 页内输入去抖到期）统一入口：目标页仍是当前页时
+    /// 用该页当前 query 重拉 `get_items`。
+    fn refetch_page_if_current(&mut self, page_id: &str) {
         let page = self.stack.current();
         // 用户可能已离开通知来源页（如已 GoBack）→ 目标页非当前页时丢弃，
         // 避免拉取一个不可见的页（结果也只会被 poll_page 作废）。
-        if page.page_id.as_deref() != Some(page_id.as_str()) {
-            eprintln!("[dd-gui] items_changed 刷新作废：已离开 page={page_id}");
+        if page.page_id.as_deref() != Some(page_id) {
+            eprintln!("[dd-gui] 页级刷新作废：已离开 page={page_id}");
             return;
         }
         let (ext_id, query) = (page.ext_id.clone(), page.list.query().to_owned());
@@ -108,7 +126,24 @@ impl PaletteApp {
         }
         let search = (!query.is_empty()).then_some(query);
         // M3：warm 直发 / 进程被驱逐则走复热；`command_id=None`（刷新非命令点击）
-        self.dispatch_fetch_page(&ext_id, &page_id, search, None);
+        self.dispatch_fetch_page(&ext_id, page_id, search, None);
+    }
+
+    /// 调度嵌套页「页内二次输入」的去抖重拉：由 [`draw_searchbar`] 检测到页内
+    /// query 变化后调用（见 panel.rs）。仅在有实际查询文本、且页面列表非空（非加载态）
+    /// 时生效；连续输入会刷新到期时刻（天然去抖）。
+    pub(crate) fn schedule_page_query_debounce(&mut self) {
+        // 仅嵌套页的输入共生（Root 的输入走 fallback/聚合，不在此列）
+        let page = self.stack.current();
+        if page.page_id.is_none() || page.is_settings {
+            return;
+        }
+        if page.is_loading {
+            return; // 正在拉取：等待落地后自然再比较，避免叠加
+        }
+        if !self.aggregating {
+            self.page_query_debounce = Some(Instant::now() + PAGE_QUERY_DEBOUNCE);
+        }
     }
 }
 

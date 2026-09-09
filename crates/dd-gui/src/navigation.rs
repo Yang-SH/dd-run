@@ -54,11 +54,14 @@ impl PageState {
         ext_id: impl Into<String>,
         items: Vec<PanelItem>,
     ) -> Self {
+        let list = PanelState::new(items);
+        let mut list = list;
+        list.set_passthrough(); // 嵌套页“直通”模式：扩展已过滤/排序，宿主不再二次过滤
         Self {
             page_id: Some(page_id.into()),
             ext_id: ext_id.into(),
             title: title.into(),
-            list: PanelState::new(items),
+            list,
             is_loading: false,
             empty: None,
             is_settings: false,

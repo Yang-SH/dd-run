@@ -121,6 +121,7 @@ impl PaletteApp {
                     search_rect.min.x = back_rect.right() + 8.0;
                 }
                 let mut query = self.stack.current().list.query().to_owned();
+                let prev_query = query.clone(); // 渲染前页内查询（v3.3 变化检测基线）
                 let placeholder = if is_nested {
                     nested_search_placeholder(self.lang_effective, &page_title)
                 } else {
@@ -132,6 +133,7 @@ impl PaletteApp {
                         .layout(egui::Layout::left_to_right(egui::Align::Center)),
                 );
                 let resp = draw_searchbar(search_ui, &mut query, &placeholder);
+                let query_changed = query != prev_query; // v3.3：渲染后变化检测（set_query 会 move query）
                 {
                     let page = self.stack.current_mut();
                     page.list.set_query(query);
@@ -142,6 +144,12 @@ impl PaletteApp {
                 }
                 if go_back_clicked {
                     self.stack.go_back();
+                }
+                // v3.3：页内二次输入 → 去抖重拉 get_items（嵌套页边打边搜）。
+                // set_query 内部 q == self.state.query 时早退，故 query 未变（非按键帧）
+                // 不会误触发；连续打字会持续刷新去抖到期时刻。
+                if is_nested && query_changed {
+                    self.schedule_page_query_debounce();
                 }
                 // M4 宿主 fallback：查询变化后同步兜底展示/拉取（页面借用已释放）
                 self.sync_fallback();

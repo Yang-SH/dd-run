@@ -644,13 +644,50 @@ fn handle_invoke(params: &InvokeParams) -> (CommandResult, Vec<Effect>) {
             }
         }
     }
-    (
-        CommandResult::ShowToast {
-            message: tr("未知命令", "Unknown command").to_string(),
-            duration_ms: Some(2000),
-        },
-        Vec::new(),
-    )
+// 静态占位项点击：不落回通用「未知命令」（§7.4 已知边界修复）——给出与该项
+    // 含义匹配的提示：hint = 需先输入关键词；guide/error = Everything/错误说明。
+    match params.id.as_str() {
+        "files.hint" => (
+            CommandResult::ShowToast {
+                message: tr(
+                    "请在搜索框输入关键词后回车",
+                    "Type a keyword in the search box and press Enter",
+                )
+                .to_string(),
+                duration_ms: Some(2000),
+            },
+            Vec::new(),
+        ),
+        "files.guide" => (
+            CommandResult::ShowToast {
+                message: tr(
+                    "未检测到 Everything（或 es.exe 不在 PATH），请先安装/启动后重试",
+                    "Everything (or es.exe) not detected — install/start it and retry",
+                )
+                .to_string(),
+                duration_ms: Some(2500),
+            },
+            Vec::new(),
+        ),
+        "files.error" => (
+            CommandResult::ShowToast {
+                message: tr(
+                    "文件搜索出现错误，请查看详情",
+                    "File search hit an error — see the item details",
+                )
+                .to_string(),
+                duration_ms: Some(2000),
+            },
+            Vec::new(),
+        ),
+        _ => (
+            CommandResult::ShowToast {
+                message: tr("未知命令", "Unknown command").to_string(),
+                duration_ms: Some(2000),
+            },
+            Vec::new(),
+        ),
+    }
 }
 
 fn main() {
@@ -888,8 +925,9 @@ mod tests {
 
     #[test]
     fn handle_invoke_unknown_command_toast() {
-        // 引导项/占位项（files.hint/guide/error）当前落回通用 Toast——属 §7.4 已知边界，
-        // 此处锁定「不 panic、有明确反馈、无副作用」这一不变量
+        // 引导项/占位项（files.hint/guide/error）点击给出**专属文案** Toast（v3.3 修复，
+        // 不再落回通用「未知命令」）；未知 id 仍回通用 Toast。锁定「不 panic、有明确
+        // 反馈、无副作用」不变量。
         for id in [
             "files.hint",
             "files.guide",
@@ -907,6 +945,22 @@ mod tests {
             );
             assert!(effects.is_empty(), "{id} 不应发出副作用");
         }
+        // 专属文案抽查：hint/guide/error 不再与「未知命令」同文案
+        let (hint_toast, _) = handle_invoke(&InvokeParams {
+            id: "files.hint".into(),
+            sender: Sender::ListItem,
+            context: None,
+        });
+        let (unknown_toast, _) = handle_invoke(&InvokeParams {
+            id: "files.open.notanumber".into(),
+            sender: Sender::ListItem,
+            context: None,
+        });
+        assert_ne!(
+            hint_toast,
+            unknown_toast,
+            "hint 点击文案应与通用「未知命令」区分"
+        );
     }
 
     // ─── T-16 CommandItem 映射 ───────────────────────────────────

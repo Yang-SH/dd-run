@@ -1,6 +1,11 @@
-﻿# 📋 dd-run 文件搜索执行方案（v3.2：Everything 优先版 · 架构对齐 + f 前缀自动进页 + 速度打磨）
+# 📋 dd-run 文件搜索执行方案（v3.3：Everything IPC 直连 + more_commands）
 
-> **现状（核对至 2026-09-08）**：本文档的「便捷 + 速度优化」（§7）与 v0.1 文件搜索核心已随 M6/M7 落地——`crates/dd-ext/src/bin/search.rs`（bin 名 `dd-ext-search`）、宿主 `f ` 前缀自动进页（`crates/dd-gui/src/app/mod.rs`）、免安装 sidecar 分发（`tools/package.sh` → `dist/extensions.d/`，见 [`implementation.md`](./implementation.md) §5 M6/M7 行）。下文 §二 时间线、§三 任务分解、§六 D0–D6 验收清单为 **v3.1 计划期口径**，保留作 v0.1 完整规划与 Release 验收门的原始记录；与落地实现不符处已在文内标注「已落地 / 差异见 §7.x」。
+> **文档状态（2026-09-09）**：本文上半部分记录 v0.1 已落地基线；本文末尾的
+> **§九 v3.3 变更方案**是基于 [`search-file-update.md`](./search-file-update.md) 的评审后实施计划，
+> **尚未实现**。在 P0/P1/P2 全部验收前，不得把“无需 `es.exe`”或“显示/复制路径”写入当前版本
+> 的用户承诺。
+
+> **现状（核对至 2026-09-08）**：本文档的「便捷 + 速度优化」（§7）与 v0.1 文件搜索核心已随 M6/M7 落地——`crates/dd-ext/src/bin/search.rs`（bin 名 `dd-ext-search`）、宿主 `f ` 前缀自动进页（`crates/dd-gui/src/app/mod.rs`）、免安装 sidecar 分发（`tools/package.sh` → `dist/extensions.d/`，见 [`implementation.md`](./implementation.md) §5 M6/M7 行）。下文 §二 时间线、§三 任务分解、§六 D0–D6 验收清单为 **v3.1 计划期口径**，保留作 v0.1 完整规划与 Release 验收门的原始记录；与落地实现不符处已在文内标注「已落地 / 差异见 §7.x」。v3.3 计划以本文 §九 为准。
 > **v3.1 修订说明（对齐 2026-09-07 同步后的仓库架构）**：原 v3 基于"自创 `search`/`search_status` 方法 + 异步 Provider trait + 独立 Ctrl+F 面板"假设撰写，与当前仓库实际严重冲突。本次修订已逐条核对 [`docs/protocol.md`](./protocol.md)（v1.0 **冻结**）、[`docs/manifest-schema.md`](./manifest-schema.md)（v1.0）、`crates/dd-ext`（同步运行时）、`crates/dd-gui`（宿主）后重写技术章节。核心修正：
 > 1. **不新增协议方法**：v1.0 协议已冻结且无 `search`/`search_status`。本方案完全复用 provider 模型（`initialize`/`top_level_commands`/`fallback_commands`/`invoke`）+ 协议已定义但**运行时尚未实现**的 `get_items`（§6.3）。实现 `get_items` 属于"补齐协议合规"，**不是**协议变更（无需走 §13 演进）。
 > 2. **运行时是同步的**：`dd_ext::run` + `ExtensionSpec`，所有处理器为纯函数 `fn`。原方案的 `async_trait`/`reqwest` 异步/`tokio`/`.await` 无法编译 → 改用标准库 `TcpStream`（HTTP/1.1 `Connection: close`）。
@@ -26,7 +31,7 @@
 ```mermaid
 flowchart LR
     subgraph v0.1["v0.1（本方案，5~6天，Windows-only）"]
-        A1["Everything（同步 HTTP）<br>唯一 Provider"]
+        A1["Everything + es.exe IPC<br>唯一 Provider"]
     end
     subgraph v0.2["v0.2（后续，跨平台）"]
         A2["+ fd Provider<br>（自动下载，兜底未装Everything的用户）"]
@@ -48,7 +53,8 @@ flowchart LR
   └─ 不选中 → 无动作
 ```
 
-> ⚠️ **明确取舍**：v0.1 阶段，没装 Everything 或未开启 HTTP 服务的用户无法使用文件搜索。这对**你自己使用**完全没问题，对公开发布而言 v0.2 补上 fd 即可闭环。Everything 仅 Windows，故 v0.1 仅 Windows 构建与发布。
+> ⚠️ **明确取舍**：v0.1 阶段，未安装 Everything 或 `es.exe` 的用户无法使用文件搜索；
+> 不要求开启 HTTP 服务。Everything 仅 Windows，故 v0.1 仅 Windows 构建与发布。
 
 ---
 
@@ -727,8 +733,114 @@ cargo test --workspace -- --ignored
 - [ ] 未修改 `docs/protocol.md`（协议 v1.0 冻结）；
 - [ ] 未新增 `fuzzy-matcher` / `chrono` 之外的第三方依赖。
 
-> **不在本分解范围（§7.4 已知边界，留给 v3.3）**：① 搜索超时 3s 与宿主 2000ms 的对齐（把 `search.rs` 的 3000ms 改为 ≤2000ms）；② `files.hint` / `files.guide` / `files.error` 点击文案打磨（当前落回通用「未知命令」Toast）；③ 结果页随页内二次输入实时重拉 `get_items`。AI agent 执行 §八 **不得顺手实现**这三项。
-
 ---
 
-**方案核心变化总结**：v0.1 砍掉 fd 与自动下载模块、**不新增协议方法**、复用 v1.0 provider 模型 + 补齐运行时 `get_items`，**5~6 天内交付一个基于 Everything 的 Windows 文件搜索**（随主面板自然呈现、回车打开、Esc 返回），你本机即可日常使用；fd 兜底与跨平台作为 v0.2 的增量（2~3 天）补上，架构无缝扩展。v3.2 在不变更协议的前提下，通过宿主 `f ` 前缀自动进页 + 扩展侧速度打磨，把"文件搜索"从两步操作收敛为一步、并消除每次按键的可用性探测开销。
+## 九、v3.3 变更方案：IPC 直连与三项高频操作（待实施）
+
+### 9.1 评审结论与范围
+
+| 结论 | 评审结果 |
+| :--- | :--- |
+| 项目需要 | **需要**：当前每次查询启动 `es.exe`，且结果项只有默认打开，确实存在可感知的启动开销和常用操作缺口。 |
+| 技术可实施性 | **有条件可实施**：P0/P1 可在现有扩展模型内完成；P2 依赖第三方 crate 的 API、Everything 版本兼容性和 Windows 真机验证，不能先假定可编译或可用。 |
+| 协议兼容性 | 目标为协议 v1.0 零改动；`more_commands`、`CommandResult`、`Effect` 和 `host/set_clipboard` 必须使用仓库现有定义，禁止新增方法或字段。 |
+| 发布风险 | P2 失败时必须保留当前 `es.exe` 回落通道；P1 失败时不得发布声明了却不可执行的命令。 |
+
+纠正项：环境变量统一使用现有实现的 `DDRUN_ES_PATH` 和 `DDRUN_EVERYTHING_DIR`（不是
+`DDRUN_ES_PAT` 或大小写混写）；当前用户文档中的 `es.exe` 依赖仍然有效，直到 P2 通过并发布。
+
+### 9.2 分阶段实施步骤
+
+#### P0：文案和契约基线（必须先完成）
+
+1. 在 `search.rs`、`search.md`、manifest 和本方案中统一当前/目标状态、环境变量名称和错误提示。
+2. 以 `cargo metadata`、锁文件和 crate 源码确认 `everything-ipc` 的版本、许可证、MSRV、
+   Windows-only 条件、同步/线程安全约束和 `RequestFlags`、日期字段类型；确认失败则停止 P2，
+   不写占位实现。不得把未验证的 crate API 写成编译步骤或验收承诺。
+3. 先核对宿主是否已渲染 `CommandItem.more_commands`、生成上下文菜单并发送
+   `sender=context_menu` 的 `invoke`。若宿主尚未支持，P1 必须先增加宿主 UI/调用链，不能只
+   在扩展返回字段后宣称功能可用。
+4. 建立回滚点：P0/P1/P2 各自独立提交，P2 只允许新增 IPC 适配层，不得删除 `run_es`。
+
+#### P1：`more_commands` 与用户动作
+
+1. 为每个文件结果注册同一 `PATH_INDEX` pid，并生成三个动作：默认打开、显示所在目录、复制路径。
+2. 在 `spec().capabilities` 与 `examples/extensions.d/com.ddrun.filesearch.json` **同时**加入
+   `host/set_clipboard`；增加启动时 capability/manifest 一致性测试。
+3. `handle_invoke` 严格校验命令前缀、pid 数字格式、pid 是否仍在索引中和 `context`（若存在）的
+   选中项；失效项返回明确 Toast，不执行副作用。
+4. Windows 显示动作使用 `CommandExt::raw_arg` 构造
+   `explorer.exe /select,"path"`；测试覆盖空格、Unicode、目录和不存在路径。Windows 路径
+   不允许包含双引号，因此不得把“含引号的合法路径”列为测试输入；应另测非法输入被拒绝。
+5. 复制动作返回 `ShowToast`，并通过 `host/set_clipboard` 发出路径；确认响应后 Effect 顺序符合运行时
+   “响应后按序发送副作用”的语义。
+
+#### P2：`everything-ipc` 主通道与 `es.exe` 回落
+
+1. 仅在 P0 第 2 步通过后锁定依赖版本，新增最小 Windows target dependency；禁止引入异步运行时。
+2. 实现可复用的 `EverythingClient`（只有在 crate 明确满足 `Send`/`Sync` 且连接可安全复用时
+   才使用全局实例）：先探测/连接 Everything IPC，失败后调用现有 `run_es`；IPC 查询失败、
+   超时、版本不兼容和窗口不可用都必须可观测并可回落。
+3. 确保 stdin 主循环不被 IPC 阻塞。若 crate 不提供可取消/可限时调用，不得简单套用
+   `recv_timeout` 后丢弃仍阻塞的线程；必须采用 crate 支持的超时方式，或将该能力标记为
+   blocked。超时和异常路径须验证线程、句柄、窗口资源不会持续增长。
+4. 保留 `es.exe` 的 GBK/代码页解码，仅对 IPC 的 UTF-16 响应走明确的 UTF-16 解码路径；不得
+   根据“看起来像 UTF-8”静默猜测编码。
+5. 目录属性和修改时间只在 crate API 已确认单位/字段后接入；否则继续使用现有启发式与转换函数，
+   并记录已知精度边界。P3 自动拉起 Everything 不属于本次范围。
+
+### 9.3 严格测试流程
+
+#### L0：静态与依赖审查
+
+1. `cargo metadata --locked`：确认依赖可解析、锁文件变化仅包含批准的 crate。
+2. 核对 `cargo tree -i everything-ipc`、许可证、MSRV、目标平台和 release 包体差异；任何未批准
+   传递依赖或非 Windows 编译回归均阻断合并。
+3. 对协议 v1.0、manifest schema、`more_commands`、`Effect` 和 capability 前置规则做字段级审查。
+
+#### L1：离线单测（必须全绿）
+
+覆盖命令 id/pid 构造与解析、三分支 invoke、失效 pid、路径含空格/Unicode、目录/文件、
+`raw_arg` 参数、复制 Toast 与 Effect、PATH_INDEX 容量、IPC UTF-16 解码、es.exe 回落、
+超时/错误映射、`RequestFlags`/日期单位适配，以及 `spec` 与 manifest capability 集合相等。
+测试不得启动 Everything、`explorer.exe` 或真实剪贴板；Windows API 用可注入执行器或断言最终参数。
+
+#### L2：协议、宿主调用链与进程契约
+
+用 NDJSON stdin/stdout 驱动 `dd-ext-search`，断言 `initialize`、`get_items`、`invoke` 的 JSON
+字段与协议 v1.0 完全一致；通过宿主 UI 真实打开每个 `more_commands`，验证上下文菜单到
+`sender=context_menu` 的调用链，再逐项验证 open/reveal/copy 的 `CommandResult`、Effect 顺序和
+未知命令错误。既有 `files.open.<pid>` 行为必须保持兼容。
+
+#### L3：Windows 集成与回落
+
+在 Windows 10/11、Everything 1.4 与 1.5（若支持矩阵可用）分别执行：Everything 运行/退出、
+IPC 可用/不可用、es.exe 存在/缺失、中文和长路径、冷启动/热查询、连续 1000 次查询。记录每次
+请求通道、耗时、结果数、错误和进程/句柄数量；不得以人工“看起来能搜到”替代日志证据。
+
+#### L4：发布回归
+
+执行 `cargo fmt --all --check`、`cargo clippy --workspace --all-targets -- -D warnings`、
+`cargo test --workspace`、Windows release 构建和 `tools/package.sh`；检查 sidecar manifest、
+可执行文件、依赖 DLL、能力声明均随包存在且可加载。P2 失败时验证回滚到 P1/现状仍可搜索。
+
+### 9.4 可量化、可观测验收标准
+
+| 编号 | 标准 | 通过证据 |
+| :--- | :--- | :--- |
+| A-33-01 | 当前实现、用户文档和 manifest/实现能力声明 100% 一致；当前用户路径不得残留 HTTP 配置要求（历史设计记录可保留并明确标注） | `rg` 审查 + manifest/`spec` 测试 |
+| A-33-02 | 每个结果最多 3 个动作；30 条结果均可生成合法 pid；PATH_INDEX 始终 `<=1024` | 离线测试 + 1000 次压力报告 |
+| A-33-03 | open/reveal/copy 三动作成功率 100%（各 100 次，含空格和 Unicode 路径）；失败均有 Toast 且无错误副作用 | L1/L2/L3 日志和操作录屏 |
+| A-33-04 | manifest 与 `spec` 的能力集合完全相等；宿主拒绝未声明能力时返回可观测错误，扩展不伪造成功 | 契约测试 + 宿主集成测试 |
+| A-33-05 | IPC 热查询 p50 <10ms、p95 <30ms；相对当前 `run_es` 基线 p95 至少降低 50% | 1000 次同机基准，记录硬件/版本 |
+| A-33-06 | IPC 不可用时 100% 回落至 `es.exe`；两者均不可用时 100% 返回引导项，单请求 <=2000ms | 故障注入报告 |
+| A-33-07 | 连续 1000 次查询无扩展崩溃、线程/句柄持续增长或 PATH_INDEX 超限；RSS 增长 <10% | 进程/线程/句柄/RSS 时间序列 |
+| A-33-08 | Windows 10/11 × Everything 1.4/1.5 支持矩阵全部有结果或明确“不支持”记录；不允许静默错误 | 真机矩阵报告 |
+| A-33-09 | 全量格式、clippy、workspace 测试、release 打包均 exit 0；协议测试无新增字段/方法 | CI 日志与产物检查 |
+
+### 9.5 不通过时的处理
+
+- 依赖 API、协议字段、Everything 版本兼容性或性能指标任一未验证：P2 标记 blocked，不合并。
+- P1 任一动作失败：撤销对应 `more_commands` 和 capability 声明，保留打开文件和现有搜索。
+- P2 任一故障：关闭 IPC 优先路径，使用 `es.exe` 回落；不得把“Everything 运行中即可用”
+  写入用户文档，直到 A-33-06/A-33-08 通过。

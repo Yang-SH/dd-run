@@ -131,11 +131,22 @@ pub struct PanelState {
     selected: Selected,
     /// 空查询首屏显示范围（设置项；仅影响空查询分支，见 [`Self::recompute_visible`]）。
     empty_view: EmptyQueryView,
+    /// 嵌套页是否跳过宿主本地二次过滤（`true` = 扩展 `get_items` 已按查询过滤/排序完毕，
+    /// 宿主 `visible` 直接 = 全部 `items`，保持扩展返回顺序）。Root 页恒为 `false`。
+    passthrough: bool,
 }
 
 impl PanelState {
     pub fn new(items: Vec<PanelItem>) -> Self {
         Self::with_empty_view(items, EmptyQueryView::All)
+    }
+
+    /// 切换为「直通」模式（嵌套页专用）：扩展 `get_items` 已按查询过滤/排序，
+    /// 宿主 `visible` 恒 = 全部 items，不再做本地二次模糊过滤（A11 文件搜索）。
+    pub fn set_passthrough(&mut self) {
+        self.passthrough = true;
+        self.recompute_visible();
+        self.reset_selection();
     }
 
     /// 指定空查询首屏视图构造（宿主按设置项调用）。
@@ -147,6 +158,7 @@ impl PanelState {
             fallback: Vec::new(),
             selected: Selected::None,
             empty_view,
+            passthrough: false,
         };
         s.recompute_visible();
         s.reset_selection();
@@ -318,6 +330,12 @@ impl PanelState {
     fn recompute_visible(&mut self) {
         let start = std::time::Instant::now(); // A3 埋点：一次重算 = 一次按键的过滤成本
         let n = self.items.len();
+        if self.passthrough {
+            // 嵌套页：扩展 get_items 已按查询过滤/排序完毕，宿主不再做二次模糊过滤，
+            // 全量展示扩展返回顺序（文件搜索场景 Everything 结果自带相关性序）。
+            self.visible = (0..n).collect();
+            return;
+        }
         if self.query.trim().is_empty() {
             // 空查询：按首屏视图过滤（WithoutApps = 隐藏「应用」类项，
             // 默认功能视图——应用仍可通过输入查询命中）
