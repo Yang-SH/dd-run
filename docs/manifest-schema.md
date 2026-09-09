@@ -142,6 +142,14 @@
 
 ## 10. 内置扩展如何注册
 
-MVP 的 5 个内置扩展（Apps / Calc / System / WebSearch / Shell，见 [`cmdpal-platform-agnostic-design.md`](../cmdpal-platform-agnostic-design.md) §7 与 [`implementation.md`](./implementation.md)）**同样通过清单注册**——与第三方扩展走完全相同的路径，只是清单文件由安装器写入扩展目录。
+> 本节随 M7 批次 7.3–7.5 的分发定案更新（2026-09-08）：MVP 设想「内置扩展也走清单扫描」已被现行实现取代——内置扩展经**代码注册表 + 编译期内嵌**注册，file-search 则作为 sidecar 走清单扫描。
 
-这样做的收益：内置与第三方在宿主侧**没有任何特判代码**，协议与生命周期逻辑只需一套实现；调试内置扩展时可直接改清单指向本地构建产物。
+**内置 5 扩展（Apps / Calc / System / WebSearch / Shell，见 [`cmdpal-platform-agnostic-design.md`](../cmdpal-platform-agnostic-design.md) §7）不通过清单文件注册**：
+
+- 注册事实源 = `dd-host` 的 `builtin::BUILTINS` 硬编码表（id / 名称 / frozen / capabilities，与各扩展 `initialize` 自述对齐）；
+- 分发时 5 个扩展 exe 经 `dd-gui/build.rs` 编译期内嵌进宿主字节，首次启动由 `dd-gui::embedded::materialize` 物化到 `%APPDATA%/dd-run/cache/embedded/`，宿主对该目录执行 `ensure_builtins`，再经 `merge_builtins` 并入扫描结果——**内置 id 最优先**，用户/sidecar 清单不能覆盖或顶替同名内置扩展；
+- 进程隔离（ADR-1）不变：内置扩展仍是独立子进程，spawn 与生命周期逻辑和第三方共用同一套实现。
+
+**file-search（`com.ddrun.filesearch`）** 是目前唯一的清单注册型官方扩展：清单源码在 `examples/extensions.d/com.ddrun.filesearch.json`，由 `tools/package.sh` 归集进 `dist/extensions.d/` 作为 sidecar 随包分发（位置与优先级见 §2 便携 sidecar）；开发期可将该清单拷入用户扩展目录，并把 `entry.command` 指向本地构建产物进行调试。
+
+**加载优先级**（同 `id` 去重、先者优先）：内置（`merge_builtins`）＞ 用户数据目录 ＞ 便携 sidecar。

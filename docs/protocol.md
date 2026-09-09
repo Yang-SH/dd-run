@@ -740,4 +740,4 @@ discovered → spawned → initializing → ready ⇄ busy ─┤
 ← {"jsonrpc":"2.0","id":6,"result":{}}
 ```
 
-> 注意第一条 `host/set_clipboard`（`id:10`）是**扩展在 `invoke` 处理过程中反向发起的请求**——它的 `id` 属扩展自己的 id 空间，且**在 `invoke` 的响应之前**到达。宿主必须能同时处理"我发出请求的响应"与"对端发来的请求"（见 §3.3）。
+> 注意示例中扩展发出的 `host/set_clipboard`（`id:1`）是**扩展在 `invoke` 处理过程中反向发起的请求**——它的 `id` 属**扩展自己的 id 空间**，与本会话中宿主发出的 `id:1`（`initialize`）互不相干（两侧 id 空间相互独立），且它**在 `invoke` 的响应之前**到达。宿主必须能同时处理"我发出请求的响应"与"对端发来的请求"（见 §3.3）。

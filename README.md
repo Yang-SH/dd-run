@@ -29,7 +29,7 @@ Its architecture and extension contracts are **distilled from Microsoft PowerToy
 - **Settings pages** (open with `Ctrl+,`): appearance (light/dark theme, Mica/Acrylic material), general (autostart, customizable global hotkey — default `Win+Alt+Space`), search-engine management (preset + custom engines with `{q}` templates), extension management (enable/disable per extension).
 - **Localized UI**: the panel follows the system display language.
 - **Fast & isolated**: cold start reads on-disk "command stubs" so extension processes launch lazily (frozen/stub/LRU mechanism); every extension runs in its own process — a crash never takes the host down.
-- **Single-file distribution**: `dist/dd-run-0.1.0.exe` (~10 MB, `strip = "symbols"` + fat LTO). The built-in extensions are embedded into the host binary at build time and materialized to a per-user cache directory on first launch — **process isolation (ADR-1) is fully preserved**. No installer, no sidecar files: double-click and run.
+- **Portable distribution**: `dist/dd-run-0.1.0.exe` (~10 MB, `strip = "symbols"` + fat LTO) with the five built-in extensions embedded into the host binary at build time and materialized to a per-user cache directory on first launch — **process isolation (ADR-1) is fully preserved**. The file-search extension ships as a sidecar in `dist/extensions.d/` and is discovered automatically next to the executable. No installer: unzip the release zip and run.
 
 ## Goals and non-goals
 
@@ -51,31 +51,34 @@ Its architecture and extension contracts are **distilled from Microsoft PowerToy
 
 ## Build and packaging
 
-> **Hard rule: every package is a single file that is the whole program.**
-> The only distribution artifact is `dist/dd-run-<version>.exe` — no sidecar extension exes, resource directories, installers, or extra configuration. Double-click and use; process isolation (ADR-1) is unchanged.
+> **Hard rule: the host is a single file — the five built-in extensions are embedded into the host binary.**
+> Release layout = `dist/dd-run-<version>.exe` + `dist/extensions.d/` (file-search sidecar), zipped as a whole and attached to the GitHub Release. Unzip and run; no installer.
 
 | Item | Detail |
 |---|---|
 | Entry artifact | `dist/dd-run-0.1.0.exe` (Windows, ~10 MB; version tracks `crates/dd-gui/Cargo.toml`) |
 | Embedding | Built-in extension exes (`dd-ext-{apps,calc,system,websearch,shell}`) are embedded into the host bytes at compile time by `dd-gui/build.rs` (`assets/embed/` is a scratch input for the packaging script and is gitignored) |
-| Runtime | On first launch, `dd-gui::embedded::materialize` materializes them into `%APPDATA%/dd-run/cache/embedded/` (an `.host-version` marker keeps it idempotent), then the host spawns them via the usual `ensure_builtins` + `ExtensionProcess::spawn` — **process isolation fully preserved** |
+| Runtime | On first launch, `dd-gui::embedded::materialize` materializes them into `%APPDATA%/dd-run/cache/embedded/` (a content-fingerprint `.host-version` marker keeps it idempotent), then the host spawns them via the usual `ensure_builtins` + `ExtensionProcess::spawn` — **process isolation fully preserved** |
+| Sidecar | The file-search extension (`dd-ext-search.exe` + `com.ddrun.filesearch.json`) ships in `dist/extensions.d/`; the host scans an `extensions.d/` next to the executable (batch 7.5), so the zip is unzip & run — precedence: user data dir > sidecar > built-ins |
 | Naming | `dd-run.exe` = GUI host (crate stays `dd-gui`); the M0 CLI is renamed `dd-run-cli.exe` (keeps self-check ability, yields the artifact name) |
-| One-command package | `bash tools/package.sh` (build `dd-ext` → copy exes → build `dd-gui --bin dd-run` → copy artifact into `dist/`) |
+| One-command package | `bash tools/package.sh` (build `dd-ext` → copy exes → build `dd-gui --bin dd-run` → copy artifact + collect sidecar into `dist/`) |
+| Release automation | tag push → `.github/workflows/release.yml`: verify tag = crate version → `package.sh` → zip `dd-run-<ver>.exe + extensions.d/` → attach to GitHub Release |
 | Repo hygiene | No binaries in the source tree (`/dist/` and `/crates/dd-gui/assets/embed/*.exe` are gitignored) |
-| Verification bar | `cargo fmt --check` / `cargo clippy --workspace --all-targets` / `cargo test --workspace` all green, plus an out-of-tree smoke test (isolated directory containing only `dd-run.exe` → materialization → warm handshakes) |
+| Verification bar | `cargo fmt --check` / `cargo clippy --workspace --all-targets` / `cargo test --workspace` all green, plus an out-of-tree smoke test (isolated directory → materialization → warm handshakes) |
 
-**Why no installer / no multi-file zip**: during the MVP stage the project explicitly chooses "simple to build" — a single-file artifact delivers "zero install ceremony" and "double-click on any machine" without paying for registry/installer/uninstaller/upgrade-script complexity. See [`docs/implementation.md`](./docs/implementation.md) §5 and the ADR section.
+**Why no installer / why file-search stays a sidecar**: the project explicitly chooses "simple to build" — a portable zip delivers "zero install ceremony" without paying registry/installer/uninstaller complexity (an Inno Setup installer was explored in M7 batch 7.3 and then dropped by decision — no installer code is kept). The file-search extension is kept out of the embedded set because it depends on a user-environment dependency (Everything): shipping it as a sidecar decouples "with or without file search" from the host binary (M7 batch 7.4 decision record, `docs/implementation.md` §5).
 
 ## Documentation
 
 | Document | Contents | Audience |
 |---|---|---|
 | [`cmdpal-platform-agnostic-design.md`](./cmdpal-platform-agnostic-design.md) | **Design reference (upstream source)**: CmdPal's UI model, extension contracts, host model, built-in extension inventory, Rust reference implementation, acceptance criteria A1–A12 | Understand *why* it is designed this way |
-| [`cmdpal-ui-mockups.html`](./cmdpal-ui-mockups.html) | **Interactive UI spec** (v4.17): dark/light theme component gallery — root view, search, list/detail pages, settings cards, context menus, dialogs, toasts, loading skeletons | See what it looks like |
-| [`docs/implementation.md`](./docs/implementation.md) | **Implementation plan**: milestones M0–M6, ADR decision records, A1–A12 acceptance mapping, current progress, follow-ups ledger | Write code |
+| [`cmdpal-ui-mockups.html`](./cmdpal-ui-mockups.html) | **Interactive UI spec** (v4.13): dark/light theme component gallery — root view, search, list/detail pages, settings cards, context menus, dialogs, toasts, loading skeletons. Later spec batches (v4.14–v4.17a) are recorded in [`docs/implementation.md`](./docs/implementation.md) §7 but not yet back-ported into this HTML | See what it looks like |
+| [`docs/implementation.md`](./docs/implementation.md) | **Implementation plan**: milestones M0–M7, ADR decision records, A1–A12 acceptance mapping, current progress, follow-ups ledger | Write code |
 | [`docs/protocol.md`](./docs/protocol.md) | **dd-run Extension Protocol v1.0**: NDJSON framing, JSON-RPC envelope, methods, error codes, lifecycle state machine, timeouts and crash recovery | Host or extension authors |
 | [`docs/manifest-schema.md`](./docs/manifest-schema.md) | **Extension manifest schema**: field tables, per-platform config directories, minimal copyable example | Extension authors |
 | [`docs/search-file.md`](./docs/search-file.md) | **File-search extension plan** (v3.2): Everything-first provider, `f ` prefix direct entry, performance budget | Extension authors |
+| [`docs/search.md`](./docs/search.md) | **File-search user guide** (v0.1.0+): Everything/es.exe setup, search syntax cheat sheet, troubleshooting | End users |
 
 Suggested reading order: design doc §1–§7 (the model) → [`docs/implementation.md`](./docs/implementation.md) (what to build first) → [`docs/protocol.md`](./docs/protocol.md) + [`docs/manifest-schema.md`](./docs/manifest-schema.md) (build against these).
 
@@ -101,7 +104,7 @@ Full records and rationale live in the ADR section of [`docs/implementation.md`]
 
 - **M0–M4 closed**: protocol freeze → minimal panel → command execution & state machine → cache/lazy loading → 5 built-in extensions & robustness (commit `757f3b4`).
 - **M5 complete**: ueli-style UI redesign, batches 1–4.2 + six rounds of real-hardware feedback fixes (commit `5cf32b7`) + design-spec group C (loading skeletons, dialog overlays, toast intents).
-- **M6 complete** (verified on real hardware via the consolidated regression A–F on 2026-09-08): settings pages (appearance / general / search / extensions), Mica/Acrylic window material, tray icon, drag & resize, custom global hotkey, autostart, Pinyin search, i18n, cold-start CJK font background loading, and the file-search extension with `f ` direct entry (commits `a007656`…`2e5b3da`, UI spec v4.17/v4.17a).
+- **M6 complete** (verified on real hardware via the consolidated regression A–F on 2026-09-08): settings pages (appearance / general / search / extensions), Mica/Acrylic window material, tray icon, drag & resize, custom global hotkey, autostart, Pinyin search, i18n, cold-start CJK font background loading, and the file-search extension with `f ` direct entry (commits `a007656`…`2e5b3da`; UI spec batches v4.17/v4.17a — the mockup HTML file itself stops at v4.13).
 - **M7 in progress** (release engineering, started 2026-09-08): GitHub Actions CI (build / test / clippy `-D warnings` / fmt on windows-gnu, first run green), 256px icon tier added to `assets/app.ico`. Distribution decision: **portable single-file only** (an Inno Setup installer was explored and then dropped — no installer code is kept); the file-search extension ships as a sidecar in `dist/extensions.d/`. The host scans an `extensions.d/` next to the executable (batch 7.5), so the green zip is **unzip & run** — no copying needed. Remaining: real-machine walkthrough (unzip → file-search discoverable via `f `) + a tag → GitHub Release drill.
 - **Candidate next steps**: third-party extension end-to-end validation, A2 cold-start GUI profiling (wgpu + 22 MB font ≈ 2.8 s before the async fix), cross-platform work. Full progress and the follow-ups ledger: [`docs/implementation.md`](./docs/implementation.md) §5 / §6.1.
 
