@@ -7,6 +7,6 @@
   "author": "dd-run",
   "entry": { "command": "${EXT_DIR}/dd-ext-search" },
   "frozen": false,
-  "capabilities": ["host/open_url", "host/show_status"],
+  "capabilities": ["host/open_url", "host/show_status", "host/set_clipboard"],
   "platforms": ["windows"]
 }

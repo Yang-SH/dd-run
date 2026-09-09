@@ -479,6 +479,9 @@ pub fn to_panel_item(
         // M6 批次 6.1（L4）：预计算拼音匹配索引（全拼+首字母），协议层零改动
         pinyin: crate::state::pinyin_haystack(&cmd.title),
         command: cmd.command.clone(),
+        // v3.3 P1：`more_commands` 透传（§8.1 上下文菜单动作，右键菜单渲染 +
+        // `sender=context_menu` 回调 invoke）
+        more_commands: cmd.more_commands.clone().unwrap_or_default(),
     }
 }
 
@@ -524,6 +527,23 @@ mod tests {
             name: name.to_string(),
             items,
         }
+    }
+
+    #[test]
+    fn to_panel_item_carries_more_commands() {
+        // v3.3 P1：§8.1 more_commands 透传进 PanelItem（右键菜单渲染源）
+        let mut c = cmd("files.open.1", "报告.txt", Some("文件"));
+        c.more_commands = Some(vec![
+            cmd("files.reveal.1", "显示所在目录", None),
+            cmd("files.copy.1", "复制路径", None),
+        ]);
+        let panel = to_panel_item(&c, "com.ddrun.filesearch", "文件", Lang::ZhCn);
+        assert_eq!(panel.more_commands.len(), 2);
+        assert_eq!(panel.more_commands[0].id, "files.reveal.1");
+        assert_eq!(panel.more_commands[1].id, "files.copy.1");
+        // None → 空表（无 more_commands 的项菜单走静态映射）
+        let plain = to_panel_item(&cmd("a", "b", None), "com.ddrun.calc", "", Lang::ZhCn);
+        assert!(plain.more_commands.is_empty());
     }
 
     /// 最小可加载扩展夹具：`path` 携带 `tag` 以区分「用户目录 / sidecar」来源。

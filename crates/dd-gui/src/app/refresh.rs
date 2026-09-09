@@ -101,7 +101,9 @@ impl PaletteApp {
         if let Some(due) = &self.page_query_debounce {
             if Instant::now() >= *due {
                 self.page_query_debounce = None;
-                eprintln!("[dd-gui] 页内二次输入去抖到期 → 按最新 query 重拉当前页（v3.3 边打边搜）");
+                eprintln!(
+                    "[dd-gui] 页内二次输入去抖到期 → 按最新 query 重拉当前页（v3.3 边打边搜）"
+                );
                 let page = self.stack.current();
                 if let Some(page_id) = page.page_id.clone() {
                     self.refetch_page_if_current(&page_id);

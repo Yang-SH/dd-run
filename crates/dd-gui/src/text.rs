@@ -101,6 +101,7 @@ const I18N: &[(&str, &str, &str)] = &[
     // ── 页脚（动作文本 / 键位图例 / 设置页页脚提示）──
     ("footer.enter", "进入", "Open"),
     ("footer.open_apps", "打开应用", "Open app"),
+    ("footer.open_file", "打开文件", "Open file"),
     ("footer.open_settings", "打开设置", "Open settings"),
     ("footer.run_command", "运行命令", "Run command"),
     ("footer.open_web", "打开网页", "Open web"),
@@ -316,6 +317,7 @@ pub(crate) fn footer_action_text(lang: Lang, item: &PanelItem) -> String {
         .unwrap_or(&item.ext_id);
     let key = match short {
         "apps" => "footer.open_apps",
+        "filesearch" => "footer.open_file",
         "system" => "footer.open_settings",
         "shell" => "footer.run_command",
         "websearch" => "footer.open_web",
@@ -357,6 +359,7 @@ mod tests {
     fn footer_action_maps_five_builtin_extensions() {
         let cases = [
             ("com.ddrun.apps", "打开应用"),
+            ("com.ddrun.filesearch", "打开文件"),
             ("com.ddrun.calc", "计算"),
             ("com.ddrun.system", "打开设置"),
             ("com.ddrun.websearch", "打开网页"),

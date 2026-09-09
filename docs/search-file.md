@@ -496,10 +496,10 @@ Everything 查询本身毫秒级返回，30 条评分开销可忽略。归一化
 ### 7.4 已知边界（v3.2 记录，部分已在本轮解决）
 
 - **初始进页搜索框回填（已解决）**：`maybe_drill_file_search` 进页后标记 `file_drill_armed`，`poll_page` 结果落地时把 `f ` 之后的查询写回搜索框（`dd-gui/src/app/page.rs` + `mod.rs`）。仅文件结果页、且 `file_drill` 命中时生效，落地即消耗；用户先 Esc 离开再手动进页不会误回填旧查询（else 分支也清 `file_drill_armed`）。
-- **结果页不随页内二次输入实时重拉（仍属 v3.3）**：当前宿主嵌套页仅在 `open_page` / `items_changed` 时取数，页内搜索框二次输入只做本地过滤（受前 30 条限制）。彻底"边打边搜"需宿主在嵌套页 query 变化时重发 `get_items`——属宿主改动，留待 v3.3 评估。**真机实测（2026-09-08）**：最初表现为进页后页内输入「提示词」显示宿主空态「未找到匹配的命令」——真实原因是两阶段叠加：① 旧 HTTP 通道未开启 Everything HTTP 服务；② 切到 es.exe 后 es 经管道输出为 **GBK**，旧代码 `read_to_string` 强转 UTF-8 把中文路径替换成 U+FFFD 导致结果损坏。已修复：改用 es.exe IPC（无需开 HTTP）+ `decode_output()` 按代码页转 UTF-8，真机搜「提示词」现稳定返回正确中文结果。页内二次输入仍只做本地过滤（受前 30 条限制），属 v3.3 待办；`f ` 前缀直达每次重发 `get_items` 不受影响。
+- **结果页不随页内二次输入实时重拉（✅ 已解决，2026-09-09）**：宿主嵌套页 query 变化 → 200ms 去抖（`PAGE_QUERY_DEBOUNCE`）重发 `get_items`（`page_query_debounce` 调度 + `PageOutcome.search` 过期补偿：请求期间用户又输入则落地时重新武装去抖，直至「query 稳定 ∧ 结果与 query 对应」收敛）；落地保留页内 query（旧实现整表重建会清空 loading 期间的输入）。同时嵌套页 `PanelState::set_passthrough()`——扩展 `get_items` 已过滤/排序，宿主不再本地二次模糊过滤；进嵌套页自动聚焦搜索框。
 - **`f ` 前缀会劫持根视图字面查询**：用户若想在主面板搜字面 `f report` 文本，会被自动进文件页。属设计取舍（便捷前缀），如需可改为可配置前缀或仅在空 Root 时触发。
-- **扩展搜索超时（3s）被宿主 `get_items` 超时（2000ms）截断（v3.2 记录，未处理）**：宿主 `TIMEOUT_GET_ITEMS=2000ms`（`crates/dd-host/src/process.rs`，协议 §10）固定不变；Everything 若超过 2s 无响应，宿主先判 `-32001 extension_timeout` 并丢弃迟到响应，表现为超时错误而非引导项——§7.2「搜索 3s 兜底」实际到不了。如需引导项兜底，v3.3 把 `search.rs` 的 3000ms 对齐到 ≤2000ms（宿主侧不改）。
-- **引导项/占位项点击文案未打磨（v3.2 记录，未处理）**：`files.hint` / `files.guide` / `files.error` / `files.search` 的 `command` 均为 `Invoke`，但 `handle_invoke` 仅分发 `files.open.<u64>`，其余落回通用「未知命令」Toast——列表内 title/subtitle 已把信息讲清，点击提示可后续打磨（v3.3）。
+- **扩展搜索超时（3s）被宿主 `get_items` 超时（2000ms）截断（✅ 已解决，v3.3 实况）**：`search.rs` 的查询超时已收紧为 `ES_TIMEOUT = 1200ms`（≤ 宿主 2000ms，留余量），不再出现「扩展 3s 兜底永远到不了」的矛盾。
+- **引导项/占位项点击文案未打磨（✅ 已解决，2026-09-09）**：`handle_invoke` 对 `files.hint` / `files.guide` / `files.error` 给出**专属文案** Toast（不再落回通用「未知命令」）；`files.guide` 的 subtitle 同步改为 es.exe 通道文案。`files.search`（Page 命令）无需 invoke 文案。
 
 ---
 
@@ -735,7 +735,9 @@ cargo test --workspace -- --ignored
 
 ---
 
-## 九、v3.3 变更方案：IPC 直连与三项高频操作（待实施）
+## 九、v3.3 变更方案：IPC 直连与三项高频操作（P0/P1 已实施，P2 待实施）
+
+> **实施状态（2026-09-09）**：**P0 ✅**（占位项专属文案 + guide subtitle/模块注释对齐 es.exe 通道）；**P1 ✅**（more_commands 三动作 + 宿主 `PanelItem.more_commands` 透传与 `sender=context_menu` 调用链 + spec/manifest `host/set_clipboard` 一致性断言 + L2 NDJSON 冒烟通过）；**P2 待实施**（everything-ipc 直连，硬前置 = 先核 docs.rs 的 `RequestFlags`/`DateModified`）。`Sender::ContextMenu` / `InvokeContext.selected_item_id` 为协议 v1.0 既有定义，零协议改动兑现。
 
 ### 9.1 评审结论与范围
 

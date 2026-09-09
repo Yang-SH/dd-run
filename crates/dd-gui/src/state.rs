@@ -10,7 +10,7 @@
 //! 本节是 M1–M2 的"逻辑自动化"部分：所有过滤/选中/循环语义
 //! 都在这里单测覆盖，egui 层只做渲染与按键转发。
 
-use dd_protocol::model::{CommandRef, Icon};
+use dd_protocol::model::{CommandItem, CommandRef, Icon};
 
 /// 一个可展示的列表项（对应设计文档 §4.4 `IListItem` 的核心字段）。
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -39,6 +39,10 @@ pub struct PanelItem {
     pub pinyin: String,
     /// 选中这一项会发生什么（§8.2：直接执行 / 进入嵌套页）。
     pub command: CommandRef,
+    /// 扩展声明的上下文菜单动作（§8.1 `more_commands`；v3.3 P1 透传）。
+    /// 非空时右键菜单渲染扩展提供的动作，GUI 静态类别映射（D18）让位——
+    /// 扩展最清楚自己的二级动作；激活时以 `sender=context_menu` 回调 `invoke`。
+    pub more_commands: Vec<CommandItem>,
 }
 
 /// 生成拼音匹配索引：逐字取无声调全拼拼接，再附首字母缩写（M6 批次 6.1）。
@@ -82,6 +86,7 @@ impl PanelItem {
             result_category: None,
             pinyin,
             command: CommandRef::Invoke,
+            more_commands: Vec::new(),
         }
     }
 }
@@ -402,6 +407,7 @@ mod tests {
                 result_category: None,
                 pinyin: String::new(),
                 command: CommandRef::Invoke,
+                more_commands: Vec::new(),
             },
             PanelItem {
                 id: "file".into(),
@@ -414,6 +420,7 @@ mod tests {
                 result_category: None,
                 pinyin: String::new(),
                 command: CommandRef::Invoke,
+                more_commands: Vec::new(),
             },
             PanelItem {
                 id: "copy".into(),
@@ -426,6 +433,7 @@ mod tests {
                 result_category: None,
                 pinyin: String::new(),
                 command: CommandRef::Invoke,
+                more_commands: Vec::new(),
             },
         ]
     }
@@ -696,6 +704,7 @@ mod tests {
             result_category: Some("命令".to_string()),
             pinyin: String::new(),
             command: CommandRef::Invoke,
+            more_commands: Vec::new(),
         }
     }
 

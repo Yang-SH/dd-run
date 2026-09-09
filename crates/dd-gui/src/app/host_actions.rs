@@ -78,8 +78,19 @@ impl PaletteApp {
                     return;
                 };
                 eprintln!("[dd-gui] host/open_url（ext={ext_id}）：{}", params.url);
-                if let Err(e) = webbrowser::open(&params.url) {
-                    eprintln!("[dd-gui] host/open_url（ext={ext_id}）失败：{e}");
+                // v3.3 P1.5 修复：`file://` 协议改走 ShellExecute 自动派发——
+                // 目录 → Explorer 窗口；文件 → 关联程序（此前一律 webbrowser，
+                // 目录变浏览器索引页、`.txt`/`.html` 走浏览器而非关联程序）。
+                // `http(s)://` 保持 webbrowser 默认浏览器（websearch 不受影响）。
+                // 协议 v1.0 零改动——复用既有 `host/open_url`。
+                if let Some(path) = crate::platform::file_url_to_path(&params.url) {
+                    if let Err(e) = crate::platform::open_path(&path) {
+                        eprintln!(
+                            "[dd-gui] host/open_url ShellExecute 失败（ext={ext_id}, path={path}）：{e}"
+                        );
+                    }
+                } else if let Err(e) = webbrowser::open(&params.url) {
+                    eprintln!("[dd-gui] host/open_url 浏览器打开失败（ext={ext_id}）：{e}");
                 }
             }
             other => eprintln!("[dd-gui] 未知 host/* 请求：{other}（ext={ext_id}，已应答忽略）"),

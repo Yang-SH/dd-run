@@ -14,6 +14,7 @@ use crate::text::CTX_GLYPH_LINK;
 use dd_gui::settings::Lang;
 use dd_gui::state::PanelItem;
 use dd_gui::theme;
+use dd_protocol::model::CommandItem;
 use eframe::egui;
 
 // ── 右键菜单（设计稿 10B，v4.4）─────────────────────────────────────────
@@ -29,6 +30,9 @@ pub(crate) enum CtxAction {
     RevealInFolder { path: String },
     /// 复制路径 / 链接到剪贴板。
     CopyText { text: String },
+    /// 扩展声明的 `more_commands` 项（§8.1；v3.3 P1）：以
+    /// `sender=context_menu` 回调该扩展的 `invoke`，副作用与结果由扩展裁决。
+    Extension { command_id: String },
 }
 
 /// 右键菜单项（10B.1：图标 glyph 16 + 名称 body1 14 + 快捷键 caption1/fg3）。
@@ -175,6 +179,32 @@ impl PaletteApp {
                 ctx.copy_text(text.clone());
                 self.show_toast(self.tr("ctx.copied"), None);
             }
+            CtxAction::Extension { command_id } => {
+                // 与 Default 相同的防陈旧校验（ext_id 取自当前列表项），
+                // 以 `sender=context_menu` + `selected_item_id` 回调扩展 invoke。
+                let Some(item) = self
+                    .stack
+                    .current()
+                    .list
+                    .filtered()
+                    .find(|(i, it)| *i == state.visible_idx && it.id == state.item_id)
+                    .map(|(_, it)| it.clone())
+                else {
+                    eprintln!(
+                        "[dd-gui] 右键菜单：列表已刷新，丢弃陈旧激活（item={}）",
+                        state.item_id
+                    );
+                    return;
+                };
+                let query = self.stack.current().list.query().to_owned();
+                let params =
+                    dd_gui::result::context_menu_invoke_params(command_id, &state.item_id, &query);
+                eprintln!(
+                    "[dd-gui] 右键菜单：扩展动作 {}（ext={}）",
+                    command_id, item.ext_id
+                );
+                self.dispatch_invoke(&item.ext_id, params);
+            }
         }
     }
 }
@@ -191,6 +221,17 @@ pub(crate) fn ctx_entry_count(state: Option<&CtxMenuState>) -> usize {
                 .count()
         })
         .unwrap_or(0)
+}
+
+/// 从 `CommandItem.icon` 解析菜单字形（仅认 Glyph 首字符，其余回退通用动作字形）。
+fn glyph_from_command(cmd: &CommandItem) -> char {
+    match &cmd.icon {
+        Some(dd_protocol::model::Icon {
+            kind: dd_protocol::model::IconKind::Glyph,
+            value,
+        }) => value.chars().next().unwrap_or(crate::text::CTX_GLYPH_PLAY),
+        _ => crate::text::CTX_GLYPH_PLAY,
+    }
 }
 
 /// 右键菜单内容映射（10B.2，D18：GUI 层静态硬编码、协议零改动）。
@@ -212,6 +253,23 @@ pub(crate) fn context_menu_rows(lang: Lang, item: &PanelItem) -> Vec<CtxRow> {
         shortcut: "↵ Enter",
         action: CtxAction::Default,
     })];
+    // v3.3 P1：扩展自带 `more_commands`（§8.1）→ 以扩展动作渲染（分隔线隔开
+    // 默认动作组），GUI 静态类别映射让位——扩展最清楚自己的二级动作；避免
+    // 与静态动作重复（如文件搜索的 显示所在目录/复制路径）。
+    if !item.more_commands.is_empty() {
+        rows.push(CtxRow::Separator);
+        for cmd in &item.more_commands {
+            rows.push(CtxRow::Entry(CtxEntry {
+                glyph: glyph_from_command(cmd),
+                label: cmd.title.clone(),
+                shortcut: "",
+                action: CtxAction::Extension {
+                    command_id: cmd.id.clone(),
+                },
+            }));
+        }
+        return rows;
+    }
     match item.result_category.as_deref() {
         Some("应用") | Some("文件") => {
             let Some(path) = path_like(&item.subtitle) else {
@@ -272,6 +330,24 @@ mod tests {
         }
     }
 
+    /// v3.3 P1 夹具：构造一条最小 `more_commands` 菜单项（§8.1）。
+    fn more_cmd(id: &str, title: &str, glyph: char) -> CommandItem {
+        CommandItem {
+            id: id.to_string(),
+            title: title.to_string(),
+            subtitle: None,
+            icon: Some(dd_protocol::model::Icon {
+                kind: dd_protocol::model::IconKind::Glyph,
+                value: glyph.to_string(),
+            }),
+            section: None,
+            tags: None,
+            details: None,
+            text_to_suggest: None,
+            more_commands: None,
+            command: dd_protocol::model::CommandRef::Invoke,
+        }
+    }
     /// 菜单行中的动作标签序列（跳过分隔线）。
     fn entry_labels(rows: &[CtxRow]) -> Vec<&str> {
         rows.iter()
@@ -375,5 +451,59 @@ mod tests {
         };
         assert_eq!(ctx_entry_count(Some(&state)), 4, "4 个动作项 + 1 条分隔线");
         assert_eq!(ctx_entry_count(None), 0, "菜单关闭 = 无焦点项");
+    }
+
+    // ── v3.3 P1：扩展 more_commands 渲染（§8.1）────────────────────
+
+    #[test]
+    fn ctx_menu_more_commands_override_static_mapping() {
+        // 扩展自带 more_commands → 渲染扩展动作，静态类别映射让位（避免
+        // 与 文件搜索 的 显示所在目录/复制路径 重复）
+        let mut item = ctx_item("命令", r"G:\AI\dd-run\报告.txt");
+        item.ext_id = "com.ddrun.filesearch".to_string();
+        item.more_commands = vec![
+            more_cmd("files.reveal.7", "显示所在目录", '\u{E8DA}'),
+            more_cmd("files.copy.7", "复制路径", '\u{E8C8}'),
+        ];
+        let rows = context_menu_rows(Lang::ZhCn, &item);
+        assert_eq!(
+            entry_labels(&rows),
+            vec!["打开文件", "显示所在目录", "复制路径"],
+            "默认动作（filesearch 走 footer.invoke=打开文件）+ 扩展两动作，无静态类别动作"
+        );
+        // 分隔线隔开默认动作组；扩展项带 Extension 动作与命令 id
+        assert!(matches!(rows[1], CtxRow::Separator));
+        match &rows[2] {
+            CtxRow::Entry(e) => match &e.action {
+                CtxAction::Extension { command_id } => {
+                    assert_eq!(command_id, "files.reveal.7");
+                    assert_eq!(e.glyph, '\u{E8DA}', "字形取自扩展 Icon");
+                }
+                other => panic!("应为 Extension 动作，实际 {other:?}"),
+            },
+            CtxRow::Separator => panic!("第 3 行应为动作"),
+        }
+    }
+
+    #[test]
+    fn ctx_menu_more_commands_fallback_glyph_for_path_icons() {
+        // 非 Glyph 图标（如 Path）→ 回退通用动作字形，不 panic
+        let mut item = ctx_item("命令", "");
+        item.more_commands = vec![more_cmd("x.do", "做点事", '\u{E721}')];
+        item.more_commands[0].icon = Some(dd_protocol::model::Icon {
+            kind: dd_protocol::model::IconKind::Path,
+            value: "C:\\i.png".to_string(),
+        });
+        let rows = context_menu_rows(Lang::ZhCn, &item);
+        match &rows[2] {
+            CtxRow::Entry(e) => {
+                assert_eq!(
+                    e.glyph,
+                    crate::text::CTX_GLYPH_PLAY,
+                    "非 Glyph 回退通用字形"
+                )
+            }
+            CtxRow::Separator => panic!("应为动作"),
+        }
     }
 }

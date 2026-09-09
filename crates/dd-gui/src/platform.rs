@@ -342,6 +342,44 @@ pub(crate) fn run_as_admin(_path: &str) -> Result<(), String> {
     Err("仅 Windows 支持提权运行".to_string())
 }
 
+/// 把 `file:///` URL 还原成本地路径（仅本地文件协议；v3.3 P1.5 修复 host/open_url
+/// 对 file:// 的处理前置）。
+///
+/// 处理：去 `file:///` 前缀；最小 `%XX` → byte 解码（**按字节处理**，避免把
+/// UTF-8 多字节序列拆成多个 Latin-1 codepoint）；`/` → `\`（Windows）。
+/// 解码后用 `from_utf8_lossy` 还原成 String（Windows 文件名理论上 UTF-8，
+/// 极端非 UTF-8 输入走 lossy，不报错——dd-run 使用场景文件路径均为 UTF-8）。
+/// 非 `file://` 协议、非空 host（如 `file://server/share`）→ None（不在本机范围）。
+pub(crate) fn file_url_to_path(url: &str) -> Option<String> {
+    let rest = url.strip_prefix("file:///")?;
+    let bytes = rest.as_bytes();
+    let mut decoded = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%' && i + 2 < bytes.len() {
+            if let (Some(h), Some(l)) = (hex_byte(bytes[i + 1]), hex_byte(bytes[i + 2])) {
+                decoded.push(h * 16 + l);
+                i += 3;
+                continue;
+            }
+        }
+        decoded.push(bytes[i]);
+        i += 1;
+    }
+    // lossy 兜底：dd-run 文件路径均为 UTF-8；理论非法字节由 \u{FFFD} 替换
+    let s = String::from_utf8_lossy(&decoded).into_owned();
+    Some(s.replace('/', "\\"))
+}
+
+fn hex_byte(b: u8) -> Option<u8> {
+    match b {
+        b'0'..=b'9' => Some(b - b'0'),
+        b'a'..=b'f' => Some(b - b'a' + 10),
+        b'A'..=b'F' => Some(b - b'A' + 10),
+        _ => None,
+    }
+}
+
 /// 在资源管理器中定位文件（`explorer /select,<path>`，10B.2）。
 ///
 /// 若目标路径不存在，fallback 到其父目录；父目录也不存在则返回错误，避免
@@ -370,6 +408,48 @@ pub(crate) fn reveal_in_folder(path: &str) -> Result<(), String> {
 #[cfg(not(windows))]
 pub(crate) fn reveal_in_folder(_path: &str) -> Result<(), String> {
     Err("仅 Windows 支持资源管理器定位".to_string())
+}
+
+/// 用系统默认程序打开路径（v3.3 P1.5 修复 host/open_url file:// 派发）。
+///
+/// 仿 `run_as_admin` 风格：`ShellExecuteW(verb="open", file=path)`。
+/// Windows 自动派发语义：目录 → Explorer 窗口；文件 → 关联程序。
+/// 返回值 ≤ 32 视为失败（ShellExecuteW 错误约定）。
+#[cfg(windows)]
+pub(crate) fn open_path(path: &str) -> Result<(), String> {
+    use std::ffi::OsStr;
+    use std::os::windows::ffi::OsStrExt;
+    use windows_sys::Win32::UI::Shell::ShellExecuteW;
+    use windows_sys::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
+
+    fn wide(s: &str) -> Vec<u16> {
+        OsStr::new(s)
+            .encode_wide()
+            .chain(std::iter::once(0))
+            .collect()
+    }
+    let verb = wide("open");
+    let file = wide(path);
+    let h = unsafe {
+        ShellExecuteW(
+            std::ptr::null_mut(),
+            verb.as_ptr(),
+            file.as_ptr(),
+            std::ptr::null(),
+            std::ptr::null(),
+            SW_SHOWNORMAL,
+        )
+    };
+    if h as isize > 32 {
+        Ok(())
+    } else {
+        Err(format!("ShellExecuteW = {}", h as isize))
+    }
+}
+
+#[cfg(not(windows))]
+pub(crate) fn open_path(_path: &str) -> Result<(), String> {
+    Err("仅 Windows 支持 ShellExecute open".to_string())
 }
 
 /// 窗口系统背景材质（v4.7 D31：Win11 22H2+ `DWMWA_SYSTEMBACKDROP_TYPE`）。
@@ -679,7 +759,7 @@ impl Default for MouseHideScope {
 
 #[cfg(test)]
 mod tests {
-    use super::{cursor_should_hide, MouseHideScope, CURSOR_IDLE_HIDE};
+    use super::{cursor_should_hide, file_url_to_path, MouseHideScope, CURSOR_IDLE_HIDE};
     use std::time::{Duration, Instant};
 
     /// 面板唤起后鼠标未动 → 隐藏；刚动过 → 显示（v4.17a 修复的正是这条：
@@ -717,5 +797,57 @@ mod tests {
             !scope.pointer_engaged(),
             "刚创建的守卫：指针尚未活动 → hover 应被抑制"
         );
+    }
+
+    // ── v3.3 P1.5：file_url_to_path（host/open_url file:// 派发前置） ───
+
+    #[test]
+    fn file_url_to_path_basic_windows_path() {
+        assert_eq!(
+            file_url_to_path("file:///G:/AI/dd-run"),
+            Some("G:\\AI\\dd-run".to_string()),
+            "盘符 + 路径：file:///G:/x → G:\\x"
+        );
+        assert_eq!(
+            file_url_to_path("file:///C:/Windows/System32/notepad.exe"),
+            Some("C:\\Windows\\System32\\notepad.exe".to_string())
+        );
+    }
+
+    #[test]
+    fn file_url_to_path_decodes_percent_encoded_chars() {
+        // %20 = 空格（最常见：Program Files）
+        assert_eq!(
+            file_url_to_path("file:///C:/Program%20Files/test.exe"),
+            Some("C:\\Program Files\\test.exe".to_string())
+        );
+        // %E4%BD%A0%E5%A5%BD = "你好"（UTF-8 三字节，验证 char 边界不破字节）
+        assert_eq!(
+            file_url_to_path("file:///D:/%E4%BD%A0%E5%A5%BD.txt"),
+            Some("D:\\你好.txt".to_string())
+        );
+    }
+
+    #[test]
+    fn file_url_to_path_preserves_unencoded_cjk() {
+        // CJK 字符按字面 push（未编码场景：search.rs 直接拼 file:// + 路径）
+        assert_eq!(
+            file_url_to_path("file:///D:/文档/test.txt"),
+            Some("D:\\文档\\test.txt".to_string())
+        );
+    }
+
+    #[test]
+    fn file_url_to_path_returns_none_for_non_file_protocol() {
+        // websearch 的 http/https 不进 file:// 分支 → 走 webbrowser（行为不变）
+        assert_eq!(file_url_to_path("https://example.com/"), None);
+        assert_eq!(file_url_to_path("http://localhost/x"), None);
+        assert_eq!(file_url_to_path("about:blank"), None);
+    }
+
+    #[test]
+    fn file_url_to_path_returns_none_for_remote_file_url() {
+        // file://host/path（非空 host → 远程共享，dd-run 不在本机范围）
+        assert_eq!(file_url_to_path("file://server/share/x.txt"), None);
     }
 }

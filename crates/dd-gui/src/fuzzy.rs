@@ -82,6 +82,7 @@ mod tests {
             result_category: None,
             pinyin: crate::state::pinyin_haystack(title),
             command: CommandRef::Invoke,
+            more_commands: Vec::new(),
         }
     }
 

@@ -117,6 +117,22 @@ pub fn invoke_params(id: &str, query: &str) -> InvokeParams {
     }
 }
 
+/// §6.5 `invoke` 请求参数构造（上下文菜单动作场景，v3.3 P1）：
+/// `sender = context_menu`；`context.selected_item_id` = 被右键的**主项** id
+/// （pid 冗余校验锚点），`context.query` = 当前页搜索词。
+pub fn context_menu_invoke_params(id: &str, selected_item_id: &str, query: &str) -> InvokeParams {
+    InvokeParams {
+        id: id.to_string(),
+        sender: Sender::ContextMenu,
+        context: Some(InvokeContext {
+            query: Some(query.to_string()),
+            selected_item_id: Some(selected_item_id.to_string()),
+            form_data: None,
+            confirmed: None,
+        }),
+    }
+}
+
 /// 为 `Confirm` 结果构造挂起重发状态（协议 §8.3：确认后**重新 invoke**，
 /// 且仅在 context 上补 `confirmed = true`）。
 ///
@@ -249,6 +265,18 @@ mod tests {
             None,
             "首次 invoke 不带 confirmed"
         );
+    }
+
+    #[test]
+    fn context_menu_invoke_params_carry_sender_and_selected_item() {
+        // v3.3 P1：上下文菜单动作 → sender=context_menu + selected_item_id
+        let params = context_menu_invoke_params("files.copy.42", "files.open.42", "report");
+        assert_eq!(params.id, "files.copy.42");
+        assert_eq!(params.sender, Sender::ContextMenu);
+        let ctx = params.context.expect("上下文菜单 invoke 必带 context");
+        assert_eq!(ctx.selected_item_id.as_deref(), Some("files.open.42"));
+        assert_eq!(ctx.query.as_deref(), Some("report"));
+        assert_eq!(ctx.confirmed, None);
     }
 
     #[test]
