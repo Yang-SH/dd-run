@@ -29,7 +29,7 @@
 - **设置页**（`Ctrl+,` 打开）：外观（亮暗主题、Mica/Acrylic 材质）、常规（开机自启、自定义全局热键——默认 `Win+Alt+Space`）、搜索引擎管理（预设 + 自定义 `{q}` 模板引擎）、扩展管理（按扩展启停）。
 - **多语言**：面板 UI 跟随系统显示语言。
 - **快且隔离**：冷启动读磁盘"命令桩"，扩展进程懒加载（frozen / stub / LRU 机制）；每个扩展运行在独立进程中，崩溃不影响宿主。
-- **便携分发**：`dist/dd-run-0.1.0.exe`（约 10 MB，`strip = "symbols"` + fat LTO），5 个内置扩展在编译期内嵌进宿主字节，首次启动物化到用户缓存目录——**进程隔离（ADR-1）完整保留**。文件搜索扩展以 sidecar 形态随 `dist/extensions.d/` 携带，宿主自动扫描可执行文件同目录。无安装器：解压发版 zip 即用。
+- **便携分发**：`dist/dd-run-0.1.1.exe`（约 10 MB，`strip = "symbols"` + fat LTO），5 个内置扩展在编译期内嵌进宿主字节，首次启动物化到用户缓存目录——**进程隔离（ADR-1）完整保留**。文件搜索扩展以 sidecar 形态随 `dist/extensions.d/` 携带，宿主自动扫描可执行文件同目录。无安装器：解压发版 zip 即用。
 
 ## 目标与非目标
 
@@ -56,7 +56,7 @@
 
 | 项 | 说明 |
 |---|---|
-| 入口产物 | `dist/dd-run-0.1.0.exe`（Windows，约 10 MB；版本随 `crates/dd-gui/Cargo.toml` 升） |
+| 入口产物 | `dist/dd-run-0.1.1.exe`（Windows，约 10 MB；版本随 `crates/dd-gui/Cargo.toml` 升） |
 | 内嵌方式 | 5 个内置扩展 exe（`dd-ext-{apps,calc,system,websearch,shell}`）经 `dd-gui/build.rs` 编译期内嵌进宿主字节（`assets/embed/` 为打包脚本的临时输入，已 gitignore） |
 | 运行机制 | 首次启动由 `dd-gui::embedded::materialize` 物化到 `%APPDATA%/dd-run/cache/embedded/`（`.host-version` 内容指纹标记幂等刷新），宿主按原 `ensure_builtins` + `ExtensionProcess::spawn` 拉起子进程——**进程隔离完整保留** |
 | Sidecar | 文件搜索扩展（`dd-ext-search.exe` + `com.ddrun.filesearch.json`）随 `dist/extensions.d/` 携带；宿主扫描可执行文件同目录的 `extensions.d/`（批次 7.5），zip 解压即用——优先级：用户数据目录 > sidecar > 内置 |

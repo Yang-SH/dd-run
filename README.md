@@ -29,7 +29,7 @@ Its architecture and extension contracts are **distilled from Microsoft PowerToy
 - **Settings pages** (open with `Ctrl+,`): appearance (light/dark theme, Mica/Acrylic material), general (autostart, customizable global hotkey — default `Win+Alt+Space`), search-engine management (preset + custom engines with `{q}` templates), extension management (enable/disable per extension).
 - **Localized UI**: the panel follows the system display language.
 - **Fast & isolated**: cold start reads on-disk "command stubs" so extension processes launch lazily (frozen/stub/LRU mechanism); every extension runs in its own process — a crash never takes the host down.
-- **Portable distribution**: `dist/dd-run-0.1.0.exe` (~10 MB, `strip = "symbols"` + fat LTO) with the five built-in extensions embedded into the host binary at build time and materialized to a per-user cache directory on first launch — **process isolation (ADR-1) is fully preserved**. The file-search extension ships as a sidecar in `dist/extensions.d/` and is discovered automatically next to the executable. No installer: unzip the release zip and run.
+- **Portable distribution**: `dist/dd-run-0.1.1.exe` (~10 MB, `strip = "symbols"` + fat LTO) with the five built-in extensions embedded into the host binary at build time and materialized to a per-user cache directory on first launch — **process isolation (ADR-1) is fully preserved**. The file-search extension ships as a sidecar in `dist/extensions.d/` and is discovered automatically next to the executable. No installer: unzip the release zip and run.
 
 ## Goals and non-goals
 
@@ -56,7 +56,7 @@ Its architecture and extension contracts are **distilled from Microsoft PowerToy
 
 | Item | Detail |
 |---|---|
-| Entry artifact | `dist/dd-run-0.1.0.exe` (Windows, ~10 MB; version tracks `crates/dd-gui/Cargo.toml`) |
+| Entry artifact | `dist/dd-run-0.1.1.exe` (Windows, ~10 MB; version tracks `crates/dd-gui/Cargo.toml`) |
 | Embedding | Built-in extension exes (`dd-ext-{apps,calc,system,websearch,shell}`) are embedded into the host bytes at compile time by `dd-gui/build.rs` (`assets/embed/` is a scratch input for the packaging script and is gitignored) |
 | Runtime | On first launch, `dd-gui::embedded::materialize` materializes them into `%APPDATA%/dd-run/cache/embedded/` (a content-fingerprint `.host-version` marker keeps it idempotent), then the host spawns them via the usual `ensure_builtins` + `ExtensionProcess::spawn` — **process isolation fully preserved** |
 | Sidecar | The file-search extension (`dd-ext-search.exe` + `com.ddrun.filesearch.json`) ships in `dist/extensions.d/`; the host scans an `extensions.d/` next to the executable (batch 7.5), so the zip is unzip & run — precedence: user data dir > sidecar > built-ins |

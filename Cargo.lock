@@ -442,7 +442,7 @@ dependencies = [
 
 [[package]]
 name = "dd-ext"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "chrono",
@@ -457,7 +457,7 @@ dependencies = [
 
 [[package]]
 name = "dd-ext-sample"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "dd-protocol",
  "serde_json",
@@ -465,7 +465,7 @@ dependencies = [
 
 [[package]]
 name = "dd-gui"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "arboard",
  "dd-host",
@@ -482,7 +482,7 @@ dependencies = [
 
 [[package]]
 name = "dd-host"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "dd-protocol",
  "serde",
@@ -499,7 +499,7 @@ dependencies = [
 
 [[package]]
 name = "dd-run-cli"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "dd-host",
  "serde_json",

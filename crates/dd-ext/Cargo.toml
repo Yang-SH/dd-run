@@ -1,6 +1,6 @@
 [package]
 name = "dd-ext"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 license = "MIT"
 description = "dd-run 共享扩展运行时：5 个内置扩展（Apps/Calc/System/WebSearch/Shell）共用的 JSON-RPC 服务端样板与命令注册模型（契约来源：docs/protocol.md；决策 D1-A 见 docs/m4-record.md §0）"
