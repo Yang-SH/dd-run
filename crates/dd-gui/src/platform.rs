@@ -342,33 +342,121 @@ pub(crate) fn run_as_admin(_path: &str) -> Result<(), String> {
     Err("仅 Windows 支持提权运行".to_string())
 }
 
-/// 把 `file:///` URL 还原成本地路径（仅本地文件协议；v3.3 P1.5 修复 host/open_url
-/// 对 file:// 的处理前置）。
+/// 拆分 `file://` URL 为 `(authority, path)`。
 ///
-/// 处理：去 `file:///` 前缀；最小 `%XX` → byte 解码（**按字节处理**，避免把
-/// UTF-8 多字节序列拆成多个 Latin-1 codepoint）；`/` → `\`（Windows）。
-/// 解码后用 `from_utf8_lossy` 还原成 String（Windows 文件名理论上 UTF-8，
-/// 极端非 UTF-8 输入走 lossy，不报错——dd-run 使用场景文件路径均为 UTF-8）。
-/// 非 `file://` 协议、非空 host（如 `file://server/share`）→ None（不在本机范围）。
-pub(crate) fn file_url_to_path(url: &str) -> Option<String> {
-    let rest = url.strip_prefix("file:///")?;
-    let bytes = rest.as_bytes();
-    let mut decoded = Vec::with_capacity(bytes.len());
+/// - `file:///<path>` → `(None, path)`（空 authority，本机路径）
+/// - `file://<host>/<path>` → `(Some(host), path)`（UNC 网络共享，v3.3 P2 §9.6 支持）
+/// - 非 `file://` 协议、或 `file://<host>` 后无路径 → None
+///
+/// 注：host 不做 percent-decode（`file://` 的 authority 极少出现非 ASCII/IPv6
+/// 字面量，Everything 索引结果亦不会产生），已作为已知边界记档。
+fn split_file_url(url: &str) -> Option<(Option<&str>, &str)> {
+    let rest = url.strip_prefix("file://")?;
+    match rest.strip_prefix('/') {
+        Some(p) => Some((None, p)),
+        None => {
+            let slash = rest.find('/')?;
+            Some((Some(&rest[..slash]), &rest[slash + 1..]))
+        }
+    }
+}
+
+/// `(authority, path)` → Windows 路径：`/` → `\`；有 host 时拼 UNC `\\host\share\…`。
+fn to_windows_path(host: Option<&str>, path: &str) -> String {
+    let p = path.replace('/', "\\");
+    match host {
+        Some(h) => format!("\\\\{h}\\{p}"),
+        None => p,
+    }
+}
+
+/// 去掉 `?query` / `#fragment`（Windows 文件名不允许 `?`，`#` 则合法，故仅作
+/// 次要候选——见 `file_url_candidates` 的排序）。
+fn strip_query_fragment(s: &str) -> &str {
+    match s.find(['?', '#']) {
+        Some(i) => &s[..i],
+        None => s,
+    }
+}
+
+/// 最小 `%XX` → byte 解码（**按字节处理**，避免把 UTF-8 多字节序列拆成多个
+/// Latin-1 codepoint）。非法/不完整转义按字面保留。
+fn percent_decode(bytes: &[u8]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(bytes.len());
     let mut i = 0;
     while i < bytes.len() {
         if bytes[i] == b'%' && i + 2 < bytes.len() {
             if let (Some(h), Some(l)) = (hex_byte(bytes[i + 1]), hex_byte(bytes[i + 2])) {
-                decoded.push(h * 16 + l);
+                out.push(h * 16 + l);
                 i += 3;
                 continue;
             }
         }
-        decoded.push(bytes[i]);
+        out.push(bytes[i]);
         i += 1;
     }
-    // lossy 兜底：dd-run 文件路径均为 UTF-8；理论非法字节由 \u{FFFD} 替换
-    let s = String::from_utf8_lossy(&decoded).into_owned();
-    Some(s.replace('/', "\\"))
+    out
+}
+
+/// `file://` URL → **按可能性排序**的本地路径候选（纯函数，无 IO）。
+///
+/// 排序（v3.3 P2 修复 §9.6 缺陷 1/2：`%` `#` `?` 未处理）：
+/// 1. 原样保留（`%XX` 按字面）——覆盖「文件名真的含 `%`」，如 `report%20final.txt`；
+/// 2. 去 `?query`/`#fragment`——覆盖 URL 语义分量（`?` 在 Windows 文件名非法）；
+/// 3. 上述两者的 percent-decode 版——覆盖标准编码 URL，如 `%20` → 空格。
+///
+/// 伴随宿主的存在性优选（`resolve_file_url_to_path`）后，两种来源互不干扰：
+/// 字面路径存在即命中自身，不存在才落到解码解释。
+pub(crate) fn file_url_candidates(url: &str) -> Vec<String> {
+    let (host, path) = match split_file_url(url) {
+        Some(v) => v,
+        None => return Vec::new(),
+    };
+    let mut variants: Vec<&str> = vec![path];
+    let trimmed = strip_query_fragment(path);
+    if trimmed != path {
+        variants.push(trimmed);
+    }
+
+    let mut out: Vec<String> = Vec::with_capacity(4);
+    for v in &variants {
+        push_unique(&mut out, to_windows_path(host, v));
+    }
+    for v in &variants {
+        push_unique(&mut out, to_windows_path(host, &to_decoded_str(v)));
+    }
+    out
+}
+
+fn to_decoded_str(s: &str) -> String {
+    String::from_utf8_lossy(&percent_decode(s.as_bytes())).into_owned()
+}
+
+fn push_unique(out: &mut Vec<String>, s: String) {
+    if !out.contains(&s) {
+        out.push(s);
+    }
+}
+
+/// `file://` URL → 最可能存在 Windows 路径（v3.3 P2：`file_url_candidates` +
+/// 存在性优选）。
+///
+/// IO 策略：**UNC 路径不做 `exists()`**（离线 SMB 共享会让 `Path::exists()`
+/// 阻塞到网络超时），直接返回由 `ShellExecuteW` 处理；本地路径按候选顺序取
+/// 第一个存在者；全部不存在时回退首选（原样保留版），便于上层报错。
+pub(crate) fn resolve_file_url_to_path(url: &str) -> Option<String> {
+    let mut cands = file_url_candidates(url);
+    if let Some(hit) = cands
+        .iter()
+        .position(|c| !is_unc_path(c) && std::path::Path::new(c).exists())
+    {
+        return Some(cands.swap_remove(hit));
+    }
+    cands.into_iter().next()
+}
+
+fn is_unc_path(p: &str) -> bool {
+    p.starts_with("\\\\")
 }
 
 fn hex_byte(b: u8) -> Option<u8> {
@@ -759,7 +847,7 @@ impl Default for MouseHideScope {
 
 #[cfg(test)]
 mod tests {
-    use super::{cursor_should_hide, file_url_to_path, MouseHideScope, CURSOR_IDLE_HIDE};
+    use super::{cursor_should_hide, file_url_candidates, MouseHideScope, CURSOR_IDLE_HIDE};
     use std::time::{Duration, Instant};
 
     /// 面板唤起后鼠标未动 → 隐藏；刚动过 → 显示（v4.17a 修复的正是这条：
@@ -802,52 +890,113 @@ mod tests {
     // ── v3.3 P1.5：file_url_to_path（host/open_url file:// 派发前置） ───
 
     #[test]
-    fn file_url_to_path_basic_windows_path() {
+    fn file_url_candidates_basic_windows_path() {
         assert_eq!(
-            file_url_to_path("file:///G:/AI/dd-run"),
-            Some("G:\\AI\\dd-run".to_string()),
+            file_url_candidates("file:///G:/AI/dd-run")[0],
+            "G:\\AI\\dd-run",
             "盘符 + 路径：file:///G:/x → G:\\x"
         );
         assert_eq!(
-            file_url_to_path("file:///C:/Windows/System32/notepad.exe"),
-            Some("C:\\Windows\\System32\\notepad.exe".to_string())
+            file_url_candidates("file:///C:/Windows/System32/notepad.exe")[0],
+            "C:\\Windows\\System32\\notepad.exe"
         );
     }
 
     #[test]
-    fn file_url_to_path_decodes_percent_encoded_chars() {
-        // %20 = 空格（最常见：Program Files）
+    fn file_url_candidates_literal_percent_ranks_before_decoded() {
+        // v3.3 P2 §9.6 缺陷 1：文件名真的含 `%` 时必须优先保留字面量
+        let cands = file_url_candidates("file:///C:/a/report%20final.txt");
         assert_eq!(
-            file_url_to_path("file:///C:/Program%20Files/test.exe"),
-            Some("C:\\Program Files\\test.exe".to_string())
+            cands[0], "C:\\a\\report%20final.txt",
+            "首选 = 原样（% 作为文件名字符，不可被无条件解码）"
         );
-        // %E4%BD%A0%E5%A5%BD = "你好"（UTF-8 三字节，验证 char 边界不破字节）
-        assert_eq!(
-            file_url_to_path("file:///D:/%E4%BD%A0%E5%A5%BD.txt"),
-            Some("D:\\你好.txt".to_string())
-        );
-    }
-
-    #[test]
-    fn file_url_to_path_preserves_unencoded_cjk() {
-        // CJK 字符按字面 push（未编码场景：search.rs 直接拼 file:// + 路径）
-        assert_eq!(
-            file_url_to_path("file:///D:/文档/test.txt"),
-            Some("D:\\文档\\test.txt".to_string())
+        assert!(
+            cands.contains(&"C:\\a\\report final.txt".to_string()),
+            "解码版作为兜底候选存在：{cands:?}"
         );
     }
 
     #[test]
-    fn file_url_to_path_returns_none_for_non_file_protocol() {
+    fn file_url_candidates_offers_query_and_fragment_trimmed_variant() {
+        // §9.6 缺陷 2：`?`/`#` 在 URL 语义里是 query/fragment 起点
+        let cands = file_url_candidates("file:///C:/a/b.txt?v=1#frag");
+        assert_eq!(cands[0], "C:\\a\\b.txt?v=1#frag", "首选仍是完整分量");
+        assert!(
+            cands.iter().any(|c| c == "C:\\a\\b.txt"),
+            "应提供去掉 query/fragment 的候选：{cands:?}"
+        );
+    }
+
+    #[test]
+    fn file_url_candidates_decodes_percent_encoded_chars() {
+        // 标准编码 URL：`%20` = 空格、`%E4%BD%A0…` = 你好（UTF-8 三字节）
+        assert!(file_url_candidates("file:///C:/Program%20Files/test.exe")
+            .contains(&"C:\\Program Files\\test.exe".to_string()));
+        assert!(file_url_candidates("file:///D:/%E4%BD%A0%E5%A5%BD.txt")
+            .contains(&"D:\\你好.txt".to_string()));
+    }
+
+    #[test]
+    fn file_url_candidates_preserves_unencoded_cjk() {
+        // CJK 字符按字面保留（search.rs 直接拼 file:// + 路径，未做百分号编码）
+        assert_eq!(
+            file_url_candidates("file:///D:/文档/test.txt")[0],
+            "D:\\文档\\test.txt"
+        );
+    }
+
+    #[test]
+    fn file_url_candidates_is_empty_for_non_file_protocol() {
         // websearch 的 http/https 不进 file:// 分支 → 走 webbrowser（行为不变）
-        assert_eq!(file_url_to_path("https://example.com/"), None);
-        assert_eq!(file_url_to_path("http://localhost/x"), None);
-        assert_eq!(file_url_to_path("about:blank"), None);
+        assert!(file_url_candidates("https://example.com/").is_empty());
+        assert!(file_url_candidates("http://localhost/x").is_empty());
+        assert!(file_url_candidates("about:blank").is_empty());
     }
 
     #[test]
-    fn file_url_to_path_returns_none_for_remote_file_url() {
-        // file://host/path（非空 host → 远程共享，dd-run 不在本机范围）
-        assert_eq!(file_url_to_path("file://server/share/x.txt"), None);
+    fn file_url_candidates_maps_file_host_to_unc() {
+        // §9.6 缺陷 3：`file://host/share` → UNC `\\host\share`（此前恒 None，
+        // 会误落到 webbrowser 打开而失败）
+        assert_eq!(
+            file_url_candidates("file://server/share/x.txt")[0],
+            "\\\\server\\share\\x.txt"
+        );
+        assert!(
+            file_url_candidates("file://server").is_empty(),
+            "无路径部分的 authority-only URL 不构成 UNC 路径"
+        );
+    }
+
+    #[test]
+    fn resolve_file_url_to_path_prefers_existing_literal_file() {
+        // 存在性优选：两个同名候选都在时，先看字面 `%` 文件，再看解码后文件
+        let dir = std::env::temp_dir().join("dd-run-url-fixture");
+        std::fs::create_dir_all(&dir).expect("建夹具目录");
+        let literal = dir.join("report%20final.txt");
+        let decoded = dir.join("report final.txt");
+        for f in [&literal, &decoded] {
+            std::fs::write(f, b"x").expect("写夹具文件");
+        }
+
+        let url = format!(
+            "file:///{}",
+            literal.display().to_string().replace('\\', "/")
+        );
+        assert_eq!(
+            super::resolve_file_url_to_path(&url).as_deref(),
+            Some(literal.to_string_lossy().as_ref()),
+            "字面文件存在 → 命名字面路径，不被解码成「report final.txt」"
+        );
+
+        // 删掉字面文件后应回退到解码解释（而非返回不存在的路径）
+        std::fs::remove_file(&literal).expect("清理夹具");
+        assert_eq!(
+            super::resolve_file_url_to_path(&url).as_deref(),
+            Some(decoded.to_string_lossy().as_ref()),
+            "字面文件不存在 → 回退 decode 候选"
+        );
+
+        let _ = std::fs::remove_file(&decoded);
+        let _ = std::fs::remove_dir(&dir);
     }
 }

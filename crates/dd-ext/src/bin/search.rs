@@ -86,6 +86,27 @@ fn lookup_path(id: u64) -> Option<String> {
     PATH_INDEX.lock().unwrap().get(&id).cloned()
 }
 
+/// 本地路径 → `file://` URL（v3.3 P2 §9.6 缺陷 3：支持 UNC）。
+///
+/// - UNC（`\\server\share\x`）→ `file://server/share/x`——authority 承载主机名，
+///   宿主据此还原成 `\\server\share\x`（此前拼成 `file:////server/…`，被解析成
+///   根相对路径而必然打不开）；
+/// - 常规路径 → `file:///<path>`（`\` → `/`），保持不变。
+///
+/// **不做 percent-encode**：宿主 `resolve_file_url_to_path` 采用「存在性优先 +
+/// decode 兜底」的宽容解析，文件名里的 `%`/`#` 原样随 URL 传递即可正确打开，
+/// 改动扩展侧只会让新旧版本的扩展与宿主产生不必要的耦合。
+fn path_to_file_url(path: &str) -> String {
+    if let Some(rest) = path.strip_prefix(r"\\") {
+        if let Some((host, tail)) = rest.split_once('\\') {
+            if !host.is_empty() && !tail.is_empty() {
+                return format!("file://{host}/{}", tail.replace('\\', "/"));
+            }
+        }
+    }
+    format!("file:///{}", path.replace('\\', "/"))
+}
+
 /// 当前索引条目数（仅测试用，用于断言容量上限生效）。
 #[cfg(test)]
 fn path_index_len() -> usize {
@@ -1044,7 +1065,7 @@ fn handle_invoke(params: &InvokeParams) -> (CommandResult, Vec<Effect>) {
     if let Some(n_str) = params.id.strip_prefix("files.open.") {
         if let Ok(n) = n_str.parse::<u64>() {
             if let Some(path) = lookup_path(n) {
-                let url = format!("file:///{}", path.replace('\\', "/"));
+                let url = path_to_file_url(&path);
                 return (
                     CommandResult::Dismiss,
                     vec![Effect::HostRequest {
@@ -1374,6 +1395,67 @@ mod tests {
                 let url = params["url"].as_str().expect("应带 url 参数");
                 assert_eq!(url, "file:///C:/proj/src/main.rs", "反斜杠应转为正斜杠");
             }
+            other => panic!("期望 HostRequest，实际 {other:?}"),
+        }
+    }
+
+    #[test]
+    fn path_to_file_url_local_drive_keeps_third_slash() {
+        assert_eq!(
+            path_to_file_url("C:\\proj\\src\\main.rs"),
+            "file:///C:/proj/src/main.rs"
+        );
+        // 文件名含 `%` / `#` 时不做百分号编码（依赖宿主的宽容解析，§9.6 缺陷 1）
+        assert_eq!(
+            path_to_file_url("D:\\a\\report%20final.txt"),
+            "file:///D:/a/report%20final.txt"
+        );
+        assert_eq!(
+            path_to_file_url("D:\\a\\plan#2.txt"),
+            "file:///D:/a/plan#2.txt"
+        );
+    }
+
+    #[test]
+    fn path_to_file_url_unc_share_uses_host_authority() {
+        // §9.6 缺陷 3：UNC 必须走 authority，不能拼成 file:////server/…
+        assert_eq!(
+            path_to_file_url("\\\\server\\share\\dir\\x.txt"),
+            "file://server/share/dir/x.txt"
+        );
+        // 退化形态（只有 \\server\share 两段）仍成立
+        assert_eq!(
+            path_to_file_url("\\\\server\\share\\x.txt"),
+            "file://server/share/x.txt"
+        );
+    }
+
+    #[test]
+    fn path_to_file_url_edge_cases_fall_back_to_local_form() {
+        // 不以可用 host/share 构成的形态（`\\server` 缺 share 段）退回常规拼法，
+        // 仅保证不 panic（Everything 索引结果不会产生该形态）
+        assert_eq!(path_to_file_url("\\\\server"), "file://///server");
+        assert_eq!(
+            path_to_file_url("C:\\a\\b.txt"),
+            "file:///C:/a/b.txt",
+            "常规路径行为不变"
+        );
+    }
+
+    #[test]
+    fn handle_invoke_open_unc_path_builds_authority_url() {
+        let pid = register_path("\\\\nas\\public\\报告.pdf");
+        let (_, effects) = handle_invoke(&InvokeParams {
+            id: format!("files.open.{pid}"),
+            sender: Sender::ListItem,
+            context: None,
+        });
+        match &effects[0] {
+            Effect::HostRequest { params, .. } => assert_eq!(
+                params["url"].as_str().unwrap(),
+                "file://nas/public/报告.pdf",
+                "UNC 结果的 URL 必须由 authority 承载主机名"
+            ),
             other => panic!("期望 HostRequest，实际 {other:?}"),
         }
     }

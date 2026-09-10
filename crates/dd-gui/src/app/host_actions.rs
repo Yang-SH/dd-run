@@ -83,7 +83,10 @@ impl PaletteApp {
                 // 目录变浏览器索引页、`.txt`/`.html` 走浏览器而非关联程序）。
                 // `http(s)://` 保持 webbrowser 默认浏览器（websearch 不受影响）。
                 // 协议 v1.0 零改动——复用既有 `host/open_url`。
-                if let Some(path) = crate::platform::file_url_to_path(&params.url) {
+                // v3.3 P2 §9.6：`file://` 解析改为「候选 + 存在性优选」——
+                // 字面 `%`/`#` 路径优先，不存在才回退 percent-decode；UNC
+                // （`file://host/share`）也从原来的 None 变成受支持的 UNC 路径。
+                if let Some(path) = crate::platform::resolve_file_url_to_path(&params.url) {
                     if let Err(e) = crate::platform::open_path(&path) {
                         eprintln!(
                             "[dd-gui] host/open_url ShellExecute 失败（ext={ext_id}, path={path}）：{e}"

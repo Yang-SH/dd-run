@@ -943,15 +943,44 @@ IPC 可用/不可用、es.exe 存在/缺失、中文和长路径、冷启动/热
   全局 client：P2 标记 blocked**（§9.0 硬约束 1/2/4），不合并。
 - P1 任一动作失败：撤销对应 `more_commands` 和 capability 声明，保留打开文件和现有搜索。
 
-### 9.6 核对中发现的既有缺陷（属 P1 已落地代码，独立修复，2026-09-10 记录）
+### 9.6 核对中发现的既有缺陷（属 P1 已落地代码）
 
-> 以下不属于 P2 范围，但会命中 A-33-03 的用例覆盖，需单独立项修复。
+> **状态：三项已于 2026-09-10 全部修复**（实施记录见 §9.6.1；同步 `CHANGELOG.md`「文件搜索 v3.3 P2：`file://` URL 解析三缺陷」条目）。
+> 原始记录如下，保留作)
 
 | # | 缺陷 | 位置 | 后果 | 修法 |
 | :-- | :--- | :--- | :--- | :--- |
-| 1 | `file://` 路径**未 percent-encode**，而宿主对 `%XX` **无条件解码** | 扩展侧 `search.rs`（`files.open.{pid}` 的 `format!("file:///{}", …)`） + 宿主 `dd-gui/src/platform.rs::file_url_to_path` | 文件名形如 `report%20final.txt` → 被解成 `report final.txt` → 打开失败 | 二选一：扩展侧做最小 percent-encode（至少 `%` `#` `?`）；或宿主侧改为"先按原串校验存在性，失败再解码"。A-33-03 用例补 `%` / `#` |
-| 2 | `#` / `?` 未做 fragment/query 截断 | 同上 | 含 `#` `?` 的路径被截断或解析错误 | 随第 1 项一并处理 |
-| 3 | UNC 路径不支持 | `file_url_to_path` 对非空 host 返回 `None` | `\\server\share\x` 走不到 ShellExecute | 明确列为已知边界，或扩展侧识别 UNC 后改走 `file://host/...` 并由宿主支持 |
+| 1 ✅已修 | `file://` 路径**未 percent-encode**，而宿主对 `%XX` **无条件解码** | 扩展侧 `search.rs`（`files.open.{pid}`）+ 宿主 `dd-gui/src/platform.rs` | 文件名形如 `report%20final.txt` → 被解成 `report final.txt` → 打开失败 | **采用宿主侧方案**（存在性优先 + decode 兜底），见 §9.6.1 取舍 |
+| 2 ✅已修 | `#` / `?` 未做 fragment/query 截断 | 同上 | 含 `#` `?` 的路径被截断或解析错误 | 随第 1 项一并处理（`strip_query_fragment` 次要候选） |
+| 3 ✅已修 | UNC 路径不支持 | `file_url_to_path` 对非空 host 返回 `None` | `\\server\share\x` 走不到 ShellExecute | **扩展侧识别 UNC + 宿主侧解析 authority 并映射 UNC**，两侧同时支持 |
+
+#### 9.6.1 修复实施记录（2026-09-10）
+
+**取舍：为什么不动扩展侧做 percent-encode？** 宿主侧「存在性优先 + decode 兜底」已完全覆盖三种来源——
+① 文件名真含 `%`（如 `report%20final.txt`）→ 原样候选命中自身；② 标准编码 URL（`%20`）→ 回退 decode 候选；
+③ 标准 `file://` 第三方扩展。而改动扩展侧会让 **sidecar 版本的扩展与宿主产生隐性耦合**（file-search 是 sidecar，
+两者版本可独立演进），收益不对称。故 `search.rs` 侧**只补 UNC 识别**（§9.6 缺陷 3 的一半），不做 encode。
+
+**宿主侧（`crates/dd-gui/src/platform.rs`）**：
+
+| 函数 | 职责 |
+| :--- | :--- |
+| `split_file_url` | 拆 authority：`file:///<path>` → `(None, path)`；`file://<host>/<path>` → `(Some(host), path)` |
+| `to_windows_path` | `/` → `\`；有 host 时拼 UNC `\\host\share\…` |
+| `strip_query_fragment` | 去掉 `?query`/`#fragment`（次要候选；Windows 文件名允许 `#`、不允许 `?`） |
+| `file_url_candidates` | **纯函数**，产出排序候选：`原样 → 去 query/fragment → 上述两者的 percent-decode` |
+| `resolve_file_url_to_path` | 按候选顺序取**第一个存在**者；全不存在回退首选。**UNC 不做 `exists()`**——离线 SMB 共享会让 `Path::exists()` 阻塞到网络超时，直接交 `ShellExecuteW` |
+
+原 `file_url_to_path`（无条件 decode）已删除，调用点 `app/host_actions.rs` 改用 `resolve_file_url_to_path`。
+
+**扩展侧（`crates/dd-ext/src/bin/search.rs`）**：新增 `path_to_file_url(path)`——
+UNC（`\\server\share\x`）→ `file://server/share/x`；常规路径 → `file:///<path>`（`\` → `/`），行为不变。
+此前 UNC 会被拼成 `file:////server/…`（被解析成根相对路径，必然打不开）。
+
+**验证**：`fmt --all --check` 干净、`clippy --workspace --all-targets -- -D warnings` 0 告警、workspace 测试全绿；
+宿主侧 8 条单测（含**真实文件系统夹具**：同一目录下同时存在 `report%20final.txt` 与 `report final.txt`，
+断言前者优先；删除前者后回退后者）+ 扩展侧 4 条单测（本地/CJK/`%`/`#` 原样、UNC authority、退化形态、UNC invoke 端到端 URL）。
+**仍待真机**：A-33-03 用例补 `%` / `#` 的实际打开验证（随 A-33 其余项一并执行）。
 
 ### 9.7 对标核实：lin-ycv/EverythingCommandPalette（ECP，2026-09-10）
 

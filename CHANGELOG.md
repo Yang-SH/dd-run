@@ -35,6 +35,17 @@
 - 文件搜索结果右键菜单与页脚 Enter 提示的默认动作文案从「执行」改为「打开文件」（**遗漏修复**：`footer_action_text` 的 ext_id 映射表自 `com.ddrun.filesearch` 加入以来未同步，文件项被回退到 `footer.invoke`；实际 `files.open.{pid}` 走 `host/open_url` 调 ShellExecute 用系统默认程序打开，与 `apps` 扩展「打开应用」同语义）。`text.rs` 新增 `footer.open_file` i18n 条目，`footer_action_maps_five_builtin_extensions` 与 `ctx_menu_more_commands_override_static_mapping` 测试期望同步。
 - 文件搜索结果按 Enter 真正「打开文件」（v3.3 P1.5 修复）：此前 `host/open_url` 对 `file://` URL 一律走 `webbrowser::open`——目录→浏览器索引页；`.txt`/`.html`/`.mp4` 等走浏览器而非关联程序；`.exe`/未知扩展名浏览器报错。改为检测 `file://` 协议后改走 `ShellExecuteW(verb="open")` 自动派发（**目录 → Explorer 窗口；文件 → 关联程序**），`http(s)://` 保持 webbrowser 默认浏览器（websearch 不受影响）。**协议 v1.0 零改动**（复用既有 `host/open_url`）—— 新增 `platform::file_url_to_path` + `platform::open_path`（仿 `run_as_admin` 风格），5 个单测覆盖基础/编码/CJK/非 file 协议/远程 file URL。
 
+### 修复（文件搜索 v3.3 P2：`file://` URL 解析三缺陷，协议 v1.0 零改动）
+
+源码缺陷见 [`docs/search-file.md`](./docs/search-file.md) §9.6（2026-09-10 记录），本批全部修复：
+
+- **`%` 被无条件解码**（文件名含 `%` 打不开）：`report%20final.txt` → 旧链路 `file_url_to_path` 一律 `%XX` 解码 → `report final.txt` 打开失败。改为**候选 + 存在性优选**：`file_url_candidates` 按「原样 → 去 `?query`/`#fragment` → 上述两者的 percent-decode」产出排序候选，`resolve_file_url_to_path` 取**第一个存在**者（全不存在回退首选）。字面路径存在即命中自身，标准编码 URL（`%20`）仍落到解码版——**两种来源互不干扰**。
+- **`#` / `?` 未做 fragment/query 截断**：新增 `strip_query_fragment` 作为次要候选；Windows 文件名允许 `#`（原样候选优先）、不允许 `?`（必然回落到截断候选）。
+- **UNC 路径不支持**：`file://server/share/x.txt` 旧链路恒返回 `None` → 误落到 `webbrowser::open` 而失败。改为 `split_file_url` 解析 authority 并映射 UNC `\\server\share\x.txt`；**UNC 不做 `exists()` 优选**（离线 SMB 共享会让 `Path::exists()` 阻塞到网络超时），交给 `ShellExecuteW`。扩展侧 `path_to_file_url` 同步：UNC 输入走 `file://<host>/<rest>`，不再拼成必然打不开的 `file:////server/…`。
+- **未做 percent-encode（`search.rs` 侧保持原样）**：刻意选择——宿主侧宽容解析已完全覆盖 `%`/`#`，改动扩展侧只会让新旧版本的扩展与宿主产生不必要的耦合（file-search 是 sidecar，版本可独立演进）。
+- 验证：`fmt --all --check` 干净、`clippy --workspace --all-targets -- -D warnings` 0 告警、workspace 测试全绿；宿主侧 **8 条**单测（原 5 条改写为「候选列表」口径 + 新增 3 条，含一条真实文件系统夹具：`report%20final.txt` 存在 → 命中字面文件；删除后 → 回退 `report final.txt`），扩展侧新增 **4 条**（本地/CJK/`%`/`#` 不编码、UNC authority、退化形态、UNC invoke 端到端 URL）。
+- **环境洼地记录**：本机 Bash 会话 `APPDATA` 为空（`USERPROFILE`/`TEMP` 正常），`cache_dir()` 依赖它 → 未导出时 `dd-ext-apps` 的图标抽取两条测试必失败（覆盖率 0%，因 PNG 无法落盘），`export APPDATA="C:\Users\<user>\AppData\Roaming"` 后 12/12 全过。测试前先看一眼 APPDATA，别把环境缺失误判成代码回归。
+
 ## [0.1.0]
 
 ### 新增
