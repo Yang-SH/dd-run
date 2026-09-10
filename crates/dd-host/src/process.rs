@@ -44,6 +44,10 @@ pub const TIMEOUT_CLOSE_EXIT: Duration = Duration::from_millis(1_000);
 /// 扩展 stderr 的保留上限（§2.5：宿主应捕获扩展 stderr 用于崩溃诊断）。
 const STDERR_CAPTURE_LIMIT: usize = 64 * 1024;
 
+/// 诊断摘要里 stderr 末行的字符上限——整段日志塞进 Toast/卡片会失控，
+/// 而根因（解释器不在 PATH、Python traceback 末行）几乎总在最后一行。
+const STDERR_SUMMARY_CHARS: usize = 200;
+
 /// 协议层错误。
 #[derive(Debug)]
 pub enum ProtocolError {
@@ -401,6 +405,27 @@ impl ExtensionProcess {
         String::from_utf8_lossy(&bytes).to_string()
     }
 
+    /// 已捕获 stderr 的**最后一条非空行**（失败提示用），超长按**字符**截断。
+    pub fn stderr_last_line(&self) -> Option<String> {
+        last_nonempty_line(&self.stderr(), STDERR_SUMMARY_CHARS)
+    }
+
+    /// 失败诊断摘要：`退出码 N / 被信号终止；stderr: <末行>`（任一部分缺失则省略）。
+    ///
+    /// **为什么需要**（2026-09-10 真机反馈驱动）：宿主此前在扩展启动失败/崩溃时只报
+    /// 「连续崩溃 N 次」这类无信息量文案，根因（`'python' 不是内部或外部命令`、扩展
+    /// 自身的 traceback）全都躺在已捕获的 stderr 里没人读——两次真机排查都因此绕远路。
+    /// 调用方把本摘要拼进错误提示与日志即可让用户/开发者直接看到原因。
+    ///
+    /// 进程尚存活时（握手超时）`exit_status()` 为 `None`，此时仍有 stderr 末行可看。
+    pub fn failure_detail(&mut self) -> Option<String> {
+        let exit = self.exit_status().map(|st| match st.code() {
+            Some(code) => format!("退出码 {code}"),
+            None => "被信号终止".to_string(),
+        });
+        compose_failure_detail(exit, self.stderr_last_line())
+    }
+
     /// §7.1 通知轮询（非阻塞）：在没有 in-flight 请求时消费扩展发来的消息。
     ///
     /// 返回本次轮询收到的 `items_changed` 的 `page_id`（`None` 表示"顶层
@@ -612,6 +637,36 @@ fn read_loop(mut stdout: std::process::ChildStdout, tx: Sender<Frame>) {
     }
 }
 
+/// 取文本中**最后一条非空行**并按字符截断（`\r` 一并 trim，兼容 CRLF 与中文）。
+///
+/// 纯函数便于单测：截断按**字符**计数，中文不会被截成半个字。
+fn last_nonempty_line(text: &str, max_chars: usize) -> Option<String> {
+    let line = text.lines().rev().find(|l| !l.trim().is_empty())?.trim();
+    let count = line.chars().count();
+    if count <= max_chars {
+        return Some(line.to_string());
+    }
+    let mut out: String = line.chars().take(max_chars).collect();
+    out.push('…');
+    Some(out)
+}
+
+/// 纯函数：把「退出码描述 + stderr 末行」拼成诊断摘要（两者皆空 → `None`）。
+fn compose_failure_detail(exit: Option<String>, stderr_tail: Option<String>) -> Option<String> {
+    let mut parts: Vec<String> = Vec::new();
+    if let Some(exit) = exit {
+        parts.push(exit);
+    }
+    if let Some(tail) = stderr_tail {
+        parts.push(format!("stderr: {tail}"));
+    }
+    if parts.is_empty() {
+        None
+    } else {
+        Some(parts.join("；"))
+    }
+}
+
 /// §2.5 stderr 只用于日志，宿主捕获其文本供崩溃诊断（验收 A8 的可观测性）。
 fn capture_stderr(mut stderr: std::process::ChildStderr, sink: Arc<Mutex<Vec<u8>>>) {
     let mut buf = [0u8; 1024];
@@ -766,5 +821,57 @@ mod tests {
             .as_rpc_error()
             .expect("进程退出应映射");
         assert_eq!(exited.code, error_codes::PROVIDER_UNAVAILABLE);
+    }
+
+    // ── 失败诊断摘要（2026-09-10 真机反馈驱动） ──
+
+    /// 取**最后一条非空行**：忽略尾部空行，CRLF 的 `\r` 被 trim。
+    #[test]
+    fn last_nonempty_line_picks_tail_and_filters_blanks() {
+        assert_eq!(last_nonempty_line("", 100), None);
+        assert_eq!(last_nonempty_line("  \n\n\t\r\n", 100), None);
+        assert_eq!(
+            last_nonempty_line("first\nsecond\n\n", 100).as_deref(),
+            Some("second")
+        );
+        assert_eq!(
+            last_nonempty_line("a\r\nb\r\n", 100).as_deref(),
+            Some("b"),
+            "CRLF 的 \\r 应被 trim"
+        );
+    }
+
+    /// 截断按**字符**计数并加省略号（中文不得被截成半个字）。
+    #[test]
+    fn last_nonempty_line_truncates_by_chars() {
+        assert_eq!(last_nonempty_line("abcdef", 3).as_deref(), Some("abc…"));
+        assert_eq!(
+            last_nonempty_line("中文诊断日志", 2).as_deref(),
+            Some("中文…")
+        );
+        assert_eq!(
+            last_nonempty_line("abc", 3).as_deref(),
+            Some("abc"),
+            "恰好等长不截断"
+        );
+    }
+
+    /// 摘要拼装：退出码在前、stderr 在后；两者皆空 → `None`（不产出空壳提示）。
+    #[test]
+    fn compose_failure_detail_joins_parts() {
+        assert_eq!(compose_failure_detail(None, None), None);
+        assert_eq!(
+            compose_failure_detail(Some("退出码 1".into()), None).as_deref(),
+            Some("退出码 1")
+        );
+        assert_eq!(
+            compose_failure_detail(None, Some("boom".into())).as_deref(),
+            Some("stderr: boom"),
+            "进程仍存活（握手超时）时只有 stderr 可看"
+        );
+        assert_eq!(
+            compose_failure_detail(Some("退出码 1".into()), Some("boom".into())).as_deref(),
+            Some("退出码 1；stderr: boom")
+        );
     }
 }

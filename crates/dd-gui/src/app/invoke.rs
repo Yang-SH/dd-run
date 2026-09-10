@@ -62,11 +62,16 @@ impl PaletteApp {
                             if p.has_exited() {
                                 // A8：进程在调用期间崩溃——丢弃死进程，命令回落 stub
                                 // （下次点击走复热 spawn），宿主继续运行；连续计数进熔断（§11）。
+                                let detail = p.failure_detail();
                                 eprintln!(
-                                    "[dd-gui] invoke 失败：ext={ext_id} 进程已退出（A8 崩溃恢复），丢弃死进程回落 stub：{e}"
+                                    "[dd-gui] invoke 失败：ext={ext_id} 进程已退出（A8 崩溃恢复），丢弃死进程回落 stub：{e}{}",
+                                    detail
+                                        .as_deref()
+                                        .map(|d| format!("；诊断：{d}"))
+                                        .unwrap_or_default()
                                 );
                                 self.drop_source_to_stub(&ext_id);
-                                self.record_crash(&ext_id);
+                                self.record_crash(&ext_id, detail.as_deref());
                             } else {
                                 // warm 请求失败但进程还活着：进程归还（超时/错误一般可恢复）
                                 self.store_warm_process(ext_id.clone(), p);

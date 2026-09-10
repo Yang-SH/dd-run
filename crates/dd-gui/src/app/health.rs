@@ -16,26 +16,36 @@ impl PaletteApp {
         if self.processes.is_empty() {
             return;
         }
-        let exited: Vec<(String, bool)> = self
+        // 诊断摘要必须在**进程被 drop 之前**取出（stderr 随进程对象一起消失）：
+        // 退出码 + stderr 末行。2026-09-10 真机反馈驱动——此前这里只打「已退出」，
+        // 扩展写在 stderr 的根因（如 `'python' 不是内部或外部命令`）被直接丢掉。
+        let exited: Vec<(String, bool, Option<String>)> = self
             .processes
             .iter_mut()
             .filter_map(|(id, p)| {
                 // §11：非 0 退出码 = 崩溃；0 = 正常退出
-                p.exit_status().map(|st| (id.clone(), !st.success()))
+                p.exit_status().map(|st| {
+                    let detail = p.failure_detail();
+                    (id.clone(), !st.success(), detail)
+                })
             })
             .collect();
-        for (id, crashed) in exited {
+        for (id, crashed, detail) in exited {
             eprintln!(
-                "[dd-gui] 扩展进程已退出：{id}（{}，移除保活，点击命令将重新拉起）",
+                "[dd-gui] 扩展进程已退出：{id}（{}，移除保活，点击命令将重新拉起）{}",
                 if crashed {
                     "崩溃/非 0 退出码"
                 } else {
                     "正常退出"
-                }
+                },
+                detail
+                    .as_deref()
+                    .map(|d| format!("；诊断：{d}"))
+                    .unwrap_or_default()
             );
             self.drop_source_to_stub(&id);
             if crashed {
-                self.record_crash(&id);
+                self.record_crash(&id, detail.as_deref());
             }
         }
         // C 批次：warm 空闲超时回收（独立于崩溃巡检——进程仍存活但长期未使用）
@@ -73,7 +83,11 @@ impl PaletteApp {
     }
 
     /// M4/§11：记录一次崩溃，连续 [`MAX_CONSECUTIVE_CRASHES`] 次 → 熔断（暂时不可用）。
-    pub(crate) fn record_crash(&mut self, ext_id: &str) {
+    ///
+    /// `detail` = 该次崩溃的**诊断摘要**（[`dd_host::process::ExtensionProcess::failure_detail`]：
+    /// 退出码 + stderr 末行）。熔断时并入 Failed 原因与日志——设置页扩展卡片会直接
+    /// 展示它，用户无需再去翻日志（2026-09-10 真机反馈）。
+    pub(crate) fn record_crash(&mut self, ext_id: &str, detail: Option<&str>) {
         let lang = self.lang_effective; // 预捕获：sources.iter_mut() 借用期内不能调 self.tr
         let guard = self
             .crash_guards
@@ -85,8 +99,15 @@ impl PaletteApp {
         let just_tripped = guard.record_crash();
         let n = guard.consecutive();
         if just_tripped {
+            let mut error = crate::text::t(lang, "toast.ext_unavailable_crash")
+                .replace("{id}", ext_id)
+                .replace("{n}", &n.to_string());
+            if let Some(d) = detail {
+                error.push_str(&format!("（诊断：{d}）"));
+            }
             eprintln!(
-                "[dd-gui] 扩展 {ext_id} 连续崩溃 {n} 次 ≥ {MAX_CONSECUTIVE_CRASHES}，标记暂时不可用（设置→扩展管理可手动重试）"
+                "[dd-gui] 扩展 {ext_id} 连续崩溃 {n} 次 ≥ {MAX_CONSECUTIVE_CRASHES}，标记暂时不可用（设置→扩展管理可手动重试）；诊断：{}",
+                detail.unwrap_or("无")
             );
             self.show_error_toast(
                 self.tr("toast.ext_unavailable_crash")
@@ -94,14 +115,13 @@ impl PaletteApp {
                     .replace("{n}", &n.to_string()),
             );
             if let Some(s) = self.sources.iter_mut().find(|s| s.id == ext_id) {
-                s.status = SourceStatus::Failed {
-                    error: crate::text::t(lang, "toast.ext_unavailable_crash")
-                        .replace("{id}", ext_id)
-                        .replace("{n}", &n.to_string()),
-                };
+                s.status = SourceStatus::Failed { error };
             }
         } else {
-            eprintln!("[dd-gui] 扩展 {ext_id} 连续崩溃 {n}/{MAX_CONSECUTIVE_CRASHES} 次");
+            eprintln!(
+                "[dd-gui] 扩展 {ext_id} 连续崩溃 {n}/{MAX_CONSECUTIVE_CRASHES} 次；诊断：{}",
+                detail.unwrap_or("无")
+            );
         }
     }
 
@@ -189,6 +209,32 @@ mod tests {
         );
         let s = app.sources.iter().find(|s| s.id == ext_id).unwrap();
         assert!(s.status.is_failed(), "熔断后源状态应为 Failed");
+    }
+
+    /// 崩溃诊断（2026-09-10 增补）：熔断时把**诊断摘要**并入 Failed 原因，
+    /// 设置页扩展卡片据此直接展示根因（用户无需再翻日志）。
+    #[test]
+    fn crashed_failed_reason_carries_diagnostics() {
+        let mut app = make_app();
+        let ext_id = "com.example.dying";
+        app.sources.push(SourceSummary {
+            id: ext_id.to_string(),
+            name: "Dying".to_string(),
+            status: SourceStatus::Warm { commands: 1 },
+        });
+
+        for _ in 0..MAX_CONSECUTIVE_CRASHES {
+            app.record_crash(ext_id, Some("退出码 1；stderr: boom"));
+        }
+
+        let s = app.sources.iter().find(|s| s.id == ext_id).unwrap();
+        match &s.status {
+            SourceStatus::Failed { error } => {
+                assert!(error.contains("诊断"), "应含诊断段：{error}");
+                assert!(error.contains("stderr: boom"), "应含 stderr 末行：{error}");
+            }
+            other => panic!("应熔断为 Failed，实际 {other:?}"),
+        }
     }
 
     /// L2（M6.4）：熔断后 `reset_crash` 解除熔断态，使扩展管理页「重试」按钮

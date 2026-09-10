@@ -3,8 +3,52 @@
 use crate::app::PaletteApp;
 use crate::ui::widgets::draw_back_btn;
 use crate::ui::widgets::text_width;
+use dd_gui::aggregator::{SourceStatus, SourceSummary};
 use dd_gui::theme;
+use dd_host::manifest::LoadedExtension;
 use eframe::egui;
+
+/// 扩展管理的一行视图数据（纯函数产出，便于单测）。
+pub(crate) struct ExtRow {
+    pub(crate) id: String,
+    pub(crate) name: String,
+    pub(crate) version: String,
+    /// 开关是否开启（不在停用集内）。
+    pub(crate) enabled: bool,
+    /// 失败原因 = `SourceStatus::Failed.error`；`None` = 正常（warm / stub）。
+    pub(crate) failed_reason: Option<String>,
+}
+
+/// 取某扩展的失败原因（2026-09-10 增补）。
+///
+/// 此前 UI 只读 `is_failed()` 布尔——`Failed.error`（含 spawn 失败的命令路径、
+/// 熔断时的 stderr 诊断）从未被渲染，用户只能看到「暂时不可用」而无从判断原因。
+fn failed_reason(sources: &[SourceSummary], ext_id: &str) -> Option<String> {
+    sources
+        .iter()
+        .find(|s| s.id == ext_id)
+        .and_then(|s| match &s.status {
+            SourceStatus::Failed { error } => Some(error.clone()),
+            _ => None,
+        })
+}
+
+/// 汇总扩展管理行：清单 × 停用集 × 运行态。
+fn extension_rows(
+    exts: &[LoadedExtension],
+    disabled: &[String],
+    sources: &[SourceSummary],
+) -> Vec<ExtRow> {
+    exts.iter()
+        .map(|e| ExtRow {
+            id: e.manifest.id.clone(),
+            name: e.manifest.name.clone(),
+            version: e.manifest.version.clone(),
+            enabled: !disabled.iter().any(|x| x == &e.manifest.id),
+            failed_reason: failed_reason(sources, &e.manifest.id),
+        })
+        .collect()
+}
 
 /// 设置页左栏栏目（设计稿 08 v4.6，D27）：**纯视图状态**——不落盘、不改协议；
 /// 每次进入设置页经 `open_settings` 重置到首栏「外观」（B5）。
@@ -948,30 +992,13 @@ impl PaletteApp {
     /// 扩展栏：扩展管理（v4.8 排版优化：名称独占一行，版本并入第二行
     /// 「v0.1.0 · com.ddrun.apps」，不再挤在名称后）。
     fn draw_extensions_card(&mut self, ui: &mut egui::Ui, p: &theme::Palette) {
-        // 闭包外拷贝数据（闭包内只收集交互结果）。运行时状态（是否熔断 Failed）
-        // 一并收集，驱动「重试」按钮（协议 §11 用户手动重试，M6.4 L2）。
-        let rows: Vec<(String, String, String, bool, bool)> = self
-            .exts
-            .iter()
-            .map(|e| {
-                let enabled = !self
-                    .settings
-                    .disabled_extensions
-                    .iter()
-                    .any(|x| x == &e.manifest.id);
-                let failed = self
-                    .sources
-                    .iter()
-                    .any(|s| s.id == e.manifest.id && s.status.is_failed());
-                (
-                    e.manifest.id.clone(),
-                    e.manifest.name.clone(),
-                    e.manifest.version.clone(),
-                    enabled,
-                    failed,
-                )
-            })
-            .collect();
+        // 闭包外拷贝数据（闭包内只收集交互结果）。运行时状态（失败原因 / 是否熔断）
+        // 一并收集，驱动失败提示行与「重试」按钮（协议 §11 用户手动重试，M6.4 L2）。
+        let rows = extension_rows(
+            &self.exts,
+            &self.settings.disabled_extensions,
+            &self.sources,
+        );
         let mut changed: Option<(String, bool)> = None;
         let mut retry_id: Option<String> = None;
         let lang = self.lang_effective;
@@ -1015,7 +1042,7 @@ impl PaletteApp {
                         .color(p.text3),
                 );
             }
-            for (id, name, version, enabled, failed) in &rows {
+            for row in &rows {
                 let mut clicked = false;
                 let mut retry_clicked = false;
                 card.horizontal(|ui| {
@@ -1025,21 +1052,34 @@ impl PaletteApp {
                     ui.vertical(|ui| {
                         ui.set_min_height(36.0);
                         // 名称独占一行（v4.8：版本不再拼在名称后）
-                        ui.label(egui::RichText::new(name).size(14.0).color(p.text));
+                        ui.label(egui::RichText::new(&row.name).size(14.0).color(p.text));
                         ui.add_space(2.0);
                         // 第二行 = 版本 · id（monospace mini，text-3）
                         ui.label(
-                            egui::RichText::new(format!("v{} · {}", version, id))
+                            egui::RichText::new(format!("v{} · {}", row.version, row.id))
                                 .size(10.0)
                                 .color(p.text3)
                                 .monospace(),
                         );
+                        // 第三行 = 失败原因（仅失败时）：单行截断 + 悬停看全文。
+                        // 这是「扩展为什么起不来」的唯一用户可见出口——启动失败带
+                        // 被尝试的命令路径，熔断带退出码与 stderr 末行（2026-09-10 增补）。
+                        if let Some(reason) = &row.failed_reason {
+                            ui.add_space(2.0);
+                            ui.add(
+                                egui::Label::new(
+                                    egui::RichText::new(reason).size(11.0).color(p.danger),
+                                )
+                                .truncate(),
+                            )
+                            .on_hover_text(reason.clone());
+                        }
                     });
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        clicked = draw_switch_fn(ui, *enabled, p);
+                        clicked = draw_switch_fn(ui, row.enabled, p);
                         // §11 用户手动重试：熔断（连续崩溃 Failed）的扩展显示「重试」
                         // 按钮（Fluent 小按钮，贴开关左侧）→ 解除熔断并重聚合（见循环外）。
-                        if *failed {
+                        if row.failed_reason.is_some() {
                             ui.add_space(8.0);
                             if fluent_button_small(ui, crate::text::t(lang, "set.ext.retry"), p) {
                                 retry_clicked = true;
@@ -1048,10 +1088,10 @@ impl PaletteApp {
                     });
                 });
                 if clicked {
-                    changed = Some((id.clone(), !enabled));
+                    changed = Some((row.id.clone(), !row.enabled));
                 }
                 if retry_clicked {
-                    retry_id = Some(id.clone());
+                    retry_id = Some(row.id.clone());
                 }
             }
         });
@@ -1512,6 +1552,49 @@ mod tests {
                 SettingsCategory::Extensions,
             ],
             "栏目不得重复或缺漏"
+        );
+    }
+
+    /// 扩展管理行：失败原因只在 `SourceStatus::Failed` 时给出（warm / stub → `None`），
+    /// 且停用集决定开关态。2026-09-10 增补——此前 `Failed.error` 从未被渲染，
+    /// 用户只能看到「暂时不可用」而无从得知原因。
+    #[test]
+    fn extension_rows_surface_failure_reason() {
+        let exts = vec![
+            dd_host::manifest::from_executable("a.exe".into(), "com.example.a", "Ext A"),
+            dd_host::manifest::from_executable("b.exe".into(), "com.example.b", "Ext B"),
+            dd_host::manifest::from_executable("c.exe".into(), "com.example.c", "Ext C"),
+        ];
+        let sources = vec![
+            SourceSummary {
+                id: "com.example.a".into(),
+                name: "Ext A".into(),
+                status: SourceStatus::Failed {
+                    error: "spawn 失败：os error 2（命令：a.exe）".into(),
+                },
+            },
+            SourceSummary {
+                id: "com.example.b".into(),
+                name: "Ext B".into(),
+                status: SourceStatus::Warm { commands: 2 },
+            },
+        ];
+        let disabled = vec!["com.example.c".to_string()];
+
+        let rows = extension_rows(&exts, &disabled, &sources);
+        assert_eq!(rows.len(), 3);
+        assert!(rows[0].enabled, "a 未停用 → 开关开");
+        assert_eq!(
+            rows[0].failed_reason.as_deref(),
+            Some("spawn 失败：os error 2（命令：a.exe）"),
+            "失败原因应透出（含被尝试的命令路径）"
+        );
+        assert!(rows[1].enabled, "b 未停用 → 开关开");
+        assert_eq!(rows[1].failed_reason, None, "warm 态无失败原因");
+        assert!(!rows[2].enabled, "c 在停用集内 → 开关关");
+        assert_eq!(
+            rows[2].failed_reason, None,
+            "无运行态记录（未扫描到）→ 无失败原因"
         );
     }
 }

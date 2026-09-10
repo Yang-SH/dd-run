@@ -325,11 +325,26 @@ pub fn spawn_and_initialize(ext: &LoadedExtension) -> Result<ExtensionProcess, S
 pub fn spawn_and_initialize_with_info(
     ext: &LoadedExtension,
 ) -> Result<(ExtensionProcess, InitializeResult), String> {
-    let mut spawned = ExtensionProcess::spawn(ext).map_err(|e| format!("spawn 失败：{e}"))?;
-    let init = spawned
-        .initialize(PROTOCOL_VERSION, HOST_VERSION)
-        .map_err(|e| format!("initialize 失败：{e}"))?;
+    // 失败信息一律带**可操作线索**：spawn 失败附被尝试的命令路径（PATH / 路径类
+    // 问题一眼可见），握手失败附扩展 stderr 末行（根因通常就在那里）。
+    // 2026-09-10 真机反馈驱动：此前只报「spawn 失败：os error 2」，排查只能靠猜。
+    let mut spawned = ExtensionProcess::spawn(ext)
+        .map_err(|e| format!("spawn 失败：{e}（命令：{}）", ext.command.display()))?;
+    let init = match spawned.initialize(PROTOCOL_VERSION, HOST_VERSION) {
+        Ok(init) => init,
+        Err(e) => {
+            return Err(format!(
+                "initialize 失败：{e}{}",
+                detail_suffix(spawned.failure_detail())
+            ))
+        }
+    };
     Ok((spawned, init))
+}
+
+/// 追加诊断后缀：`（诊断：退出码 1；stderr: ...）`；无诊断则空串。
+fn detail_suffix(detail: Option<String>) -> String {
+    detail.map(|d| format!("（诊断：{d}）")).unwrap_or_default()
 }
 
 /// 一个扩展的完整链路：M3 分流后 spawn → initialize → top_level_commands（+落盘）。
@@ -389,7 +404,10 @@ fn load_one(ext: LoadedExtension, cache: Option<&FrozenCache>) -> ExtOutcome {
         Err(e) => ExtOutcome::Failed {
             id,
             name,
-            error: format!("top_level_commands 失败：{e}"),
+            error: format!(
+                "top_level_commands 失败：{e}{}",
+                detail_suffix(spawned.failure_detail())
+            ),
         },
     }
 }
@@ -743,5 +761,15 @@ mod tests {
         let (items, sources) = flatten(&[], Lang::ZhCn);
         assert!(items.is_empty());
         assert!(sources.is_empty());
+    }
+
+    /// 诊断后缀：有诊断才加括号，无诊断不留空壳（失败文案不得出现「（诊断：）」）。
+    #[test]
+    fn detail_suffix_only_when_present() {
+        assert_eq!(detail_suffix(None), "");
+        assert_eq!(
+            detail_suffix(Some("退出码 1；stderr: boom".to_string())),
+            "（诊断：退出码 1；stderr: boom）"
+        );
     }
 }

@@ -20,6 +20,14 @@
 - **验证**：把 PATH 摘到只剩 `System32`（**完全无 python**）后 `dd-run-cli --conformance --ext-id com.example.pymin --invoke` → **10 项全 ✓（902 ms）**，证明清单已与 PATH 解耦。
 - **真机确认（2026-09-10）**：用户点「重试」后扩展正常启动，PyMin 命令在 GUI 内可用。
 
+### 改进（扩展失败原因可观测：Failed 原因透出到卡片与日志，2026-09-10 真机反馈驱动）
+
+- **问题**：扩展启动失败/崩溃时用户只能看到「暂时不可用 + 重试」，**根因无处可见**——`SourceStatus::Failed.error` 字段早已存在，但设置页只读 `is_failed()` 布尔、**从未渲染过**；而崩溃路径（`refresh_health`）在丢弃进程前**没有读取已捕获的 stderr**（§2.5 本来就抓了），只打一行「已退出」。两次真机排查（解释器不在 PATH、`invoke` 响应形状）都因此绕了远路。
+- **`dd-host`**：新增 `ExtensionProcess::failure_detail()`（`退出码 N / 被信号终止；stderr: <末行>`）与 `stderr_last_line()`；配套纯函数 `last_nonempty_line`（取**末条非空行**、按**字符**截断 + 省略号，中文不破字、CRLF 的 `\r` 被 trim）与 `compose_failure_detail`（两部分皆空 → `None`，不产出空壳提示）。新增单测 3 条。
+- **`dd-gui` 失败信息带可操作线索**：`spawn 失败` 附**被尝试的命令路径**（PATH / 路径类问题一眼可见）；`initialize 失败` / `top_level_commands 失败` 附 stderr 末行（`（诊断：…）`，无诊断不留空括号）。`refresh_health` / `invoke` / `get_items` 三处崩溃路径**在进程 drop 前**取出摘要，并入日志与 Failed 原因。新增单测 1 条（后缀拼装）。
+- **设置页扩展卡片**：新增第三行**失败原因**（11px `danger` 色，单行截断 + 悬停看全文）；`重试` 按钮的显示判据改由失败原因驱动；行数据抽成纯函数 `extension_rows` + `failed_reason`，新增单测 1 条（Failed 透出 / warm·stub 无原因 / 停用集决定开关）。
+- **协议 v1.0 零改动**：纯宿主侧可观测性。**效果**：同类问题定位从「抓包两轮」降为「看一眼卡片」。
+
 ### 修复（invoke 响应形状：同一个错误被文档/类型/单测/自检器四处固化，2026-09-10 真机反馈）
 
 - **现象**：PyMin 示例装好后，`当前时间` / `添加便签` / `清空便签` / `打开文档` 四条命令点击即报 `命令执行失败：非法 JSON-RPC 信封：missing field ``kind```（`便签列表` 是嵌套页命令、不经 `invoke`，故不受影响）。

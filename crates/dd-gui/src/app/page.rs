@@ -121,11 +121,16 @@ impl PaletteApp {
                             } else if let Some(mut p) = proc {
                                 if p.has_exited() {
                                     // A8：进程在 get_items 期间崩溃——丢弃死进程，回落 stub
+                                    let detail = p.failure_detail();
                                     eprintln!(
-                                        "[dd-gui] get_items 失败：ext={ext_id} 进程已退出（A8 崩溃恢复），丢弃死进程回落 stub：{e}"
+                                        "[dd-gui] get_items 失败：ext={ext_id} 进程已退出（A8 崩溃恢复），丢弃死进程回落 stub：{e}{}",
+                                        detail
+                                            .as_deref()
+                                            .map(|d| format!("；诊断：{d}"))
+                                            .unwrap_or_default()
                                     );
                                     self.drop_source_to_stub(&ext_id);
-                                    self.record_crash(&ext_id);
+                                    self.record_crash(&ext_id, detail.as_deref());
                                 } else {
                                     self.store_warm_process(ext_id.clone(), p);
                                 }
