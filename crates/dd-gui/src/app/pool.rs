@@ -8,9 +8,21 @@ use dd_host::process::TIMEOUT_GET_ITEMS;
 use dd_protocol::messages::{GetItemsParams, GetItemsResult, InvokeParams};
 use dd_protocol::model::CommandResult;
 use std::thread;
+use std::time::Duration;
 
 /// M3 LRU 保活容量（设计文档 §6.3"最近 N 个"；超出则 close+释放、命令回落 stub，A7）。
 pub(crate) const LRU_WARM_CAPACITY: usize = 8;
+
+/// warm 进程**空闲超时回收**阈值（C 批次性能打磨，2026-09-10）。
+///
+/// 动机：`LRU_WARM_CAPACITY`(8) 大于扩展总数（内置 5 + 官方 sidecar 1 = 6）→
+/// **LRU 永不触发驱逐**，保活集行为上"只增不减"（稳态常驻全部扩展）。空闲超过
+/// 本阈值即按既有驱逐路径释放（close + 回落 stub），下次使用走桩复热。
+pub(crate) const WARM_IDLE_TTL: Duration = Duration::from_secs(120);
+
+/// 隐藏期驱动空闲回收巡检的请求重绘间隔（egui 隐藏窗口默认不产帧；保活集清空后
+/// 自动停止请求，恢复静默——见 `app::PaletteApp::logic`）。
+pub(crate) const WARM_IDLE_HIDDEN_TICK: Duration = Duration::from_secs(15);
 
 impl PaletteApp {
     /// 按清单 id 找已扫描扩展（复热 spawn 用）。

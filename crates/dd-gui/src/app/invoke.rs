@@ -128,7 +128,10 @@ impl PaletteApp {
         if self.processes.iter().any(|(id, _)| id == ext_id) {
             self.start_invoke(ext_id, params);
         } else if let Some(ext) = self.find_ext(ext_id).cloned() {
-            self.start_invoke_reheat(&ext, params); // 桩复热
+            // L5：兜底模板 id 不在扩展顶层命令注册表内 → §6.4 校验对其必然失败，
+            // 模板项跳过校验直接 invoke（常规命令保持 §6.4 语义不变）。
+            let skip_lookup = self.fallback_store.contains_template(ext_id, &params.id);
+            self.start_invoke_reheat(&ext, params, skip_lookup); // 桩复热
         } else {
             eprintln!("[dd-gui] invoke 失败：ext={ext_id} 无扩展信息");
             self.show_error_toast(self.tr("toast.ext_missing"));
@@ -163,12 +166,27 @@ impl PaletteApp {
 
     /// 桩复热 + `invoke`（A6 / 协议 §6.4）：spawn → initialize → `get_command(id)` → invoke。
     /// 复热失败（spawn/握手/命令失效/超时）→ 不保活新进程、扩展保持 stub 并报错。
-    pub(crate) fn start_invoke_reheat(&mut self, ext: &LoadedExtension, params: InvokeParams) {
+    ///
+    /// `skip_lookup` = 目标 id 是**兜底模板**（`FallbackStore::contains_template`）：
+    /// 模板不在顶层命令注册表内，§6.4 校验必然回 `null`，故跳过校验直接 invoke —— L5 修复
+    /// （否则扩展被 LRU 驱逐成 stub 后，点兜底项报「命令已失效」且 invoke 从未发出）。
+    pub(crate) fn start_invoke_reheat(
+        &mut self,
+        ext: &LoadedExtension,
+        params: InvokeParams,
+        skip_lookup: bool,
+    ) {
         self.last_command_id = Some(params.id.clone());
         self.last_invoke = Some(params.clone());
         eprintln!(
-            "[dd-gui] 桩复热：ext={} cmd={}（spawn→initialize→get_command→invoke）",
-            ext.manifest.id, params.id
+            "[dd-gui] 桩复热：ext={} cmd={}（spawn→initialize→{}→invoke）",
+            ext.manifest.id,
+            params.id,
+            if skip_lookup {
+                "跳过 get_command（兜底模板）"
+            } else {
+                "get_command"
+            }
         );
         self.inflight.insert(ext.manifest.id.clone());
         let ext = ext.clone();
@@ -189,13 +207,17 @@ impl PaletteApp {
                     return;
                 }
             };
-            let result: Result<CommandResult, String> =
+            let result: Result<CommandResult, String> = if skip_lookup {
+                // L5：兜底模板不在顶层注册表内，§6.4 校验必失败 → 直接执行
+                invoke_on(&mut proc, &params)
+            } else {
                 match proc.get_command(&params.id).map_err(|e| e.to_string()) {
                     // §6.4：取回真实命令后再执行
                     Ok(Some(_)) => invoke_on(&mut proc, &params),
                     Ok(None) => Err(crate::text::t(lang, "page.cmd_stale").to_string()),
                     Err(e) => Err(e),
-                };
+                }
+            };
             let _ = tx.send(InvokeOutcome {
                 ext_id,
                 proc: Some(proc),

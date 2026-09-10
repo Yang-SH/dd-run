@@ -2,7 +2,7 @@
 
 [English](./README.md) | [简体中文](./README.zh-CN.md)
 
-**用 Rust 从零构建的跨平台命令面板 / 启动器。** 设计参考自 [PowerToys Command Palette（CmdPal）](https://github.com/microsoft/PowerToys/tree/main/src/modules/cmdpal) 模块。
+**用 Rust 从零构建的命令面板 / 启动器，核心与平台无关。** 当前仅发行 **Windows** 版（macOS / Linux 计划 v0.2+）。设计参考自 [PowerToys Command Palette（CmdPal）](https://github.com/microsoft/PowerToys/tree/main/src/modules/cmdpal) 模块。
 
 > **当前状态**：MVP 里程碑 M0–M4 已全部关闭并通过真机验收；M5（ueli 风格 UI 重构）已完成；M6（设置与系统集成）已落地并通过真机验收（2026-09-08 M6 集中回归 A–F 全部通过）——设置页、Mica/Acrylic 窗口材质、托盘图标、自定义全局热键、拼音搜索、文件搜索扩展。里程碑进度见 [`docs/implementation.md`](./docs/implementation.md) §5，遗留项台账见其 §6.1。
 
@@ -10,11 +10,11 @@
 
 ## 这是什么
 
-`dd-run` 是一个**跨平台（Windows / macOS / Linux）命令面板 / 启动器**：全局热键唤起，输入即搜，键盘直达，靠扩展生态扩展能力。
+`dd-run` 是一个**用 Rust 从零构建的命令面板 / 启动器**，核心与平台无关：全局热键唤起，输入即搜，键盘直达，靠扩展生态扩展能力。**当前仅发行 Windows 版**——macOS / Linux 的平台层为占位实现，计划 v0.2 落地。
 
 它的架构与扩展契约**提炼自微软 PowerToys 的 CmdPal 模块**，但不是 CmdPal 的移植——CmdPal 深度绑定 Windows（WinRT / COM / XAML），`dd-run` 把其中的平台无关部分（UI 模型、扩展契约、宿主生命周期）抽象出来，换成 Rust 生态的等价实现：
 
-| CmdPal（Windows） | dd-run（跨平台） |
+| CmdPal（Windows） | dd-run（平台无关设计） |
 |---|---|
 | 进程外 COM / WinRT | **子进程 + NDJSON 上的 JSON-RPC**（见 [`docs/protocol.md`](./docs/protocol.md)） |
 | AppExtensionCatalog / 注册表发现 | **清单文件扫描**（`extensions.d/*.json`，见 [`docs/manifest-schema.md`](./docs/manifest-schema.md)） |
@@ -35,7 +35,7 @@
 
 ### 目标
 
-1. **跨平台**：三平台同一套契约与代码，平台差异收敛在适配层。
+1. **跨平台**（计划中，v0.2+；**当前仅 Windows**）：三平台同一套契约与代码，平台差异收敛在适配层。
 2. **键盘优先**：核心路径 100% 可纯键盘完成（验收 A11）。
 3. **快**：冷启动走磁盘缓存的"命令桩"，扩展进程懒加载（frozen / stub 机制，见设计文档 §6.3）。
 4. **可扩展**：第三方扩展是独立进程，崩溃不影响宿主，用文本协议即可接入。

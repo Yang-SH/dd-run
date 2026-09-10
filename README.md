@@ -2,7 +2,7 @@
 
 [English](./README.md) | [简体中文](./README.zh-CN.md)
 
-**A cross-platform command palette / launcher, written in Rust.** Design inspired by the [PowerToys Command Palette (CmdPal)](https://github.com/microsoft/PowerToys/tree/main/src/modules/cmdpal) module.
+**A command palette / launcher written in Rust, built on a platform-agnostic core.** Currently shipping on **Windows** only (macOS / Linux are planned from v0.2). Design inspired by the [PowerToys Command Palette (CmdPal)](https://github.com/microsoft/PowerToys/tree/main/src/modules/cmdpal) module.
 
 > **Status**: MVP milestones M0–M4 are all closed and verified on real hardware. M5 (ueli-style UI redesign) is complete. M6 (settings & system integration) is complete and verified on real hardware (consolidated regression A–F passed, 2026-09-08): settings pages, Mica/Acrylic window material, tray icon, customizable global hotkey, Pinyin search, and a file-search extension. See [`docs/implementation.md`](./docs/implementation.md) §5 for milestone progress and §6.1 for the follow-ups ledger.
 
@@ -10,11 +10,11 @@
 
 ## What is it
 
-`dd-run` is a **cross-platform (Windows / macOS / Linux) command palette / launcher built from scratch in Rust**: summoned by a global hotkey, type-to-search, keyboard-first, extensible through an extension ecosystem.
+`dd-run` is a **command palette / launcher built from scratch in Rust** with a **platform-agnostic core**: summoned by a global hotkey, type-to-search, keyboard-first, extensible through an extension ecosystem. **Current builds run on Windows only** — the macOS / Linux platform layer is stubbed out and is planned for v0.2.
 
 Its architecture and extension contracts are **distilled from Microsoft PowerToys' CmdPal module** — but it is not a port. CmdPal is deeply bound to Windows (WinRT / COM / XAML); `dd-run` abstracts the platform-independent parts (UI model, extension contracts, host lifecycle) and replaces them with Rust-ecosystem equivalents:
 
-| CmdPal (Windows) | dd-run (cross-platform) |
+| CmdPal (Windows) | dd-run (platform-agnostic design) |
 |---|---|
 | Out-of-process COM / WinRT | **Sub-process + JSON-RPC over NDJSON** (see [`docs/protocol.md`](./docs/protocol.md)) |
 | AppExtensionCatalog / registry discovery | **Manifest file scanning** (`extensions.d/*.json`, see [`docs/manifest-schema.md`](./docs/manifest-schema.md)) |
@@ -35,7 +35,7 @@ Its architecture and extension contracts are **distilled from Microsoft PowerToy
 
 ### Goals
 
-1. **Cross-platform**: one contract and one codebase for all three platforms; platform differences are confined to adapter layers.
+1. **Cross-platform** (planned for v0.2+; **Windows-only today**): one contract and one codebase for all three platforms; platform differences are confined to adapter layers.
 2. **Keyboard-first**: the core paths are 100% keyboard-completable (acceptance A11).
 3. **Fast**: cold start reads on-disk command stubs; extension processes load lazily.
 4. **Extensible**: third-party extensions are independent processes that talk a plain text protocol; their crashes never affect the host.

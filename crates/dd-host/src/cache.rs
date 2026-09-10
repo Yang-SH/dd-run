@@ -13,6 +13,7 @@
 
 use std::collections::VecDeque;
 use std::path::PathBuf;
+use std::time::Duration;
 use std::time::Instant;
 
 use dd_protocol::model::CommandItem;
@@ -126,8 +127,9 @@ fn sanitize(s: &str) -> String {
 /// 被弹出的 id 由调用方负责 `close` + 终止进程 + 重新标 stub（**A7**）。
 pub struct LruWarmSet {
     capacity: usize,
-    /// 队首 = 最近使用，队尾 = 最久未用。
-    order: VecDeque<String>,
+    /// 队首 = 最近使用，队尾 = 最久未用；每项带**最后触达时刻**
+    /// （供 [`Self::idle_victims`] 做空闲超时回收判定）。
+    order: VecDeque<(String, Instant)>,
 }
 
 impl LruWarmSet {
@@ -152,28 +154,60 @@ impl LruWarmSet {
     }
 
     pub fn contains(&self, ext_id: &str) -> bool {
-        self.order.iter().any(|id| id == ext_id)
+        self.order.iter().any(|(id, _)| id == ext_id)
     }
 
     /// 触达（访问/保活）某扩展：已存在则移到队首；不存在则入队首。
     /// 若超出容量，弹出队尾（最久未用）并返回其 id，供调用方释放并标 stub。
     /// 返回 `None` 表示未触发驱逐。
     pub fn access(&mut self, ext_id: &str) -> Option<String> {
-        if let Some(pos) = self.order.iter().position(|id| id == ext_id) {
+        self.access_at(ext_id, Instant::now())
+    }
+
+    /// [`Self::access`] 的显式时刻版本（单测注入用，避免依赖真实时钟）。
+    pub fn access_at(&mut self, ext_id: &str, now: Instant) -> Option<String> {
+        if let Some(pos) = self.order.iter().position(|(id, _)| id == ext_id) {
             self.order.remove(pos);
         }
-        self.order.push_front(ext_id.to_string());
+        self.order.push_front((ext_id.to_string(), now));
         if self.order.len() > self.capacity {
-            return self.order.pop_back();
+            return self.order.pop_back().map(|(id, _)| id);
         }
         None
     }
 
     /// 主动移除（如扩展崩溃退出后从保活集剔除）。
     pub fn remove(&mut self, ext_id: &str) {
-        if let Some(pos) = self.order.iter().position(|id| id == ext_id) {
+        if let Some(pos) = self.order.iter().position(|(id, _)| id == ext_id) {
             self.order.remove(pos);
         }
+    }
+
+    /// 该扩展的最后触达时刻（不在集内 → `None`）。
+    pub fn last_access(&self, ext_id: &str) -> Option<Instant> {
+        self.order
+            .iter()
+            .find(|(id, _)| id == ext_id)
+            .map(|(_, t)| *t)
+    }
+
+    /// 空闲超 `ttl` 的扩展 id（**只读**，不改动集合；调用方负责驱逐）。
+    /// 判据 =「最后触达时刻」距 `now` ≥ `ttl`；返回顺序 = 队尾（最久未用）优先。
+    ///
+    /// 用途：warm 进程**空闲超时回收**——`capacity` 大于扩展总数时 LRU 永不触发
+    /// 驱逐，保活集行为上"只增不减"（宿主侧见 `dd-gui` 的 `warm_idle_reclaim`）。
+    pub fn idle_victims_at(&self, now: Instant, ttl: Duration) -> Vec<String> {
+        self.order
+            .iter()
+            .rev()
+            .filter(|(_, last)| now.saturating_duration_since(*last) >= ttl)
+            .map(|(id, _)| id.clone())
+            .collect()
+    }
+
+    /// [`Self::idle_victims_at`] 的当前时刻便捷版。
+    pub fn idle_victims(&self, ttl: Duration) -> Vec<String> {
+        self.idle_victims_at(Instant::now(), ttl)
     }
 }
 
@@ -346,6 +380,67 @@ mod tests {
         lru.remove("a");
         assert!(!lru.contains("a"));
         assert_eq!(lru.len(), 1);
+    }
+
+    /// C 批次（空闲回收）：触达刷新「最后触达时刻」——刚触达者不判空闲。
+    #[test]
+    fn lru_idle_victims_ignores_recently_touched() {
+        let t0 = Instant::now();
+        let mut lru = LruWarmSet::new(4);
+        lru.access_at("a", t0);
+        lru.access_at("b", t0);
+        // a 在 t0+200s 被重新触达 → 只有 b 超时（ttl 120s）
+        lru.access_at("a", t0 + Duration::from_secs(200));
+        assert_eq!(
+            lru.idle_victims_at(t0 + Duration::from_secs(200), Duration::from_secs(120)),
+            vec!["b".to_string()],
+            "仅久未触达者入选；刚触达的 a 不算空闲"
+        );
+    }
+
+    /// C 批次（空闲回收）：边界——恰好等于 ttl 即视为空闲；不足则不动。
+    #[test]
+    fn lru_idle_victims_at_ttl_boundary() {
+        let t0 = Instant::now();
+        let mut lru = LruWarmSet::new(4);
+        lru.access_at("a", t0);
+        let ttl = Duration::from_secs(120);
+        assert!(
+            lru.idle_victims_at(t0 + Duration::from_secs(119), ttl)
+                .is_empty(),
+            "差 1s 未达阈值 → 不回收"
+        );
+        assert_eq!(
+            lru.idle_victims_at(t0 + ttl, ttl),
+            vec!["a".to_string()],
+            "恰好等于 ttl → 回收（≥ 判据）"
+        );
+    }
+
+    /// C 批次：返回顺序 = 队尾（最久未用）优先；`last_access` 与集内状态一致；
+    /// `remove` 后不再参与空闲判定。
+    #[test]
+    fn lru_idle_victims_order_and_last_access() {
+        let t0 = Instant::now();
+        let mut lru = LruWarmSet::new(4);
+        lru.access_at("a", t0);
+        lru.access_at("b", t0 + Duration::from_secs(10));
+        lru.access_at("c", t0 + Duration::from_secs(20));
+        let now = t0 + Duration::from_secs(300);
+        assert_eq!(
+            lru.idle_victims_at(now, Duration::from_secs(60)),
+            vec!["a".to_string(), "b".to_string(), "c".to_string()],
+            "队尾（最久未用）优先返回"
+        );
+        assert_eq!(lru.last_access("a"), Some(t0));
+        assert_eq!(lru.last_access("nope"), None);
+        lru.remove("b");
+        assert!(
+            lru.idle_victims_at(now, Duration::from_secs(60))
+                .iter()
+                .all(|id| id != "b"),
+            "已移除项不再参与空闲判定"
+        );
     }
 
     #[test]

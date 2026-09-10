@@ -24,7 +24,7 @@ use crate::app::ctx_menu::CtxMenuState;
 use crate::app::fallback_flow::FallbackFetchOutcome;
 use crate::app::invoke::InvokeOutcome;
 use crate::app::page::PageOutcome;
-use crate::app::pool::LRU_WARM_CAPACITY;
+use crate::app::pool::{LRU_WARM_CAPACITY, WARM_IDLE_HIDDEN_TICK};
 use crate::app::refresh::RefreshState;
 use crate::app::toast::ConfirmDialog;
 use crate::app::toast::ToastState;
@@ -551,6 +551,11 @@ impl eframe::App for PaletteApp {
         // 聚合未完成时持续请求重绘以驱动本回调（隐藏窗口下否则可能不产生帧）。
         if self.aggregate_rx.is_some() {
             ctx.request_repaint();
+        }
+        // C 批次：隐藏期按 `WARM_IDLE_HIDDEN_TICK` 驱动 warm 空闲回收巡检
+        // （egui 隐藏窗口默认不产帧）；保活集被回收清空后不再请求，恢复静默。
+        if !self.visible && !self.processes.is_empty() {
+            ctx.request_repaint_after(WARM_IDLE_HIDDEN_TICK);
         }
     }
 

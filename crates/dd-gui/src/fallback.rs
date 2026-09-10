@@ -121,6 +121,23 @@ impl FallbackStore {
         }
     }
 
+    /// 该扩展的 `command_id` 是否为其兜底**模板** id（协议 §6.2）。
+    ///
+    /// 用途（L5 修复）：兜底模板**不在**扩展的顶层命令注册表内，而协议 §6.4
+    /// 的 `get_command` 只查顶层命令（`dd-ext/src/lib.rs`）→ 对模板 id 必然
+    /// 返回 `null`。桩复热链路（`start_invoke_reheat` / `fetch_page_reheat`）
+    /// 据此跳过校验直接执行，否则扩展被 LRU 驱逐成 stub 后点兜底项**必然失败**
+    /// （报「命令已失效」且 invoke 根本没发出）。
+    ///
+    /// 仅对 `Ready` 态生效：`Exhausted`（无兜底）/未登记一律 `false`，
+    /// 常规命令保持 §6.4 的陈旧校验语义不变。
+    pub fn contains_template(&self, ext_id: &str, command_id: &str) -> bool {
+        match self.state(ext_id) {
+            Some(ExtState::Ready { templates, .. }) => templates.iter().any(|t| t.id == command_id),
+            _ => false,
+        }
+    }
+
     /// 按当前查询渲染全部 Ready 模板为 [`PanelItem`]（`title` 中 `{query}` →
     /// 真实搜索词）。空查询不调用（调用方保证 query 非空时才展示兜底）。
     /// `lang` 传入为当前生效语言（v4.14 D40：类别徽标随 GUI 语言切换）。
@@ -228,6 +245,39 @@ mod tests {
         assert!(store.is_empty(), "空结果 → 无兜底项");
         assert!(!store.wants("com.ddrun.system"), "已确认无兜底 → 不再拉取");
         assert!(store.render("x", Lang::ZhCn).is_empty());
+    }
+
+    /// L5：模板识别——仅 `Ready` 且 id 精确命中时 true；未登记 / `Exhausted` /
+    /// 常规（非模板）id / 跨扩展一律 false（保持 §6.4 陈旧校验语义不扩大）。
+    #[test]
+    fn contains_template_only_matches_ready_templates() {
+        let mut store = FallbackStore::new();
+        assert!(
+            !store.contains_template("com.ddrun.calc", "calc.eval.query"),
+            "未登记 → false"
+        );
+        store.store(
+            "com.ddrun.calc",
+            "Calculator",
+            vec![template("calc.eval.query", "= {query}")],
+        );
+        assert!(
+            store.contains_template("com.ddrun.calc", "calc.eval.query"),
+            "Ready 且 id 精确命中 → true"
+        );
+        assert!(
+            !store.contains_template("com.ddrun.calc", "calc.open"),
+            "常规（非模板）id → false"
+        );
+        assert!(
+            !store.contains_template("com.ddrun.other", "calc.eval.query"),
+            "跨扩展不误判 → false"
+        );
+        store.store("com.ddrun.shell", "Shell", Vec::new());
+        assert!(
+            !store.contains_template("com.ddrun.shell", "shell.run"),
+            "Exhausted（无兜底）→ false"
+        );
     }
 
     #[test]

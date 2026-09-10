@@ -1,5 +1,6 @@
 //! 崩溃保护：健康巡检、崩溃计数、熔断（协议 §11）。
 
+use crate::app::pool::WARM_IDLE_TTL;
 use crate::app::PaletteApp;
 use dd_gui::aggregator::SourceStatus;
 use dd_gui::robustness::CrashGuard;
@@ -23,9 +24,6 @@ impl PaletteApp {
                 p.exit_status().map(|st| (id.clone(), !st.success()))
             })
             .collect();
-        if exited.is_empty() {
-            return;
-        }
         for (id, crashed) in exited {
             eprintln!(
                 "[dd-gui] 扩展进程已退出：{id}（{}，移除保活，点击命令将重新拉起）",
@@ -39,6 +37,38 @@ impl PaletteApp {
             if crashed {
                 self.record_crash(&id);
             }
+        }
+        // C 批次：warm 空闲超时回收（独立于崩溃巡检——进程仍存活但长期未使用）
+        self.warm_idle_reclaim();
+    }
+
+    /// C 批次（性能打磨）：warm 进程**空闲超时回收**。
+    ///
+    /// 背景：`LRU_WARM_CAPACITY`(8) > 扩展总数(6) → LRU **永不触发驱逐**，保活集
+    /// 行为上"只增不减"（稳态常驻全部扩展，私有工作集约 13MB）。本方法把空闲超
+    /// [`WARM_IDLE_TTL`] 的保活进程按**既有驱逐路径**释放（[`Self::evict_warm`]：
+    /// `close` + 回落 stub），下次点击走桩复热（含 L5 修复后的兜底模板直执行）。
+    ///
+    /// 守卫：① 仅**面板隐藏**时回收——用户正在看列表时不回收，避免"看着就变慢"；
+    /// ② 进程已被 take（in-flight 请求在途）的扩展跳过，等结果归还后再判。
+    pub(crate) fn warm_idle_reclaim(&mut self) {
+        if self.visible || self.processes.is_empty() {
+            return;
+        }
+        for id in self.lru.idle_victims(WARM_IDLE_TTL) {
+            if !self.processes.iter().any(|(pid, _)| pid == &id) {
+                continue; // 在途请求（进程已 take 出保活集）：等归还后再判
+            }
+            let idle = self
+                .lru
+                .last_access(&id)
+                .map(|t| t.elapsed().as_secs())
+                .unwrap_or(0);
+            eprintln!(
+                "[dd-gui] warm 空闲回收：{id}（空闲 {idle}s ≥ {}s，close+释放，回落 stub）",
+                WARM_IDLE_TTL.as_secs()
+            );
+            self.evict_warm(&id);
         }
     }
 
@@ -184,5 +214,81 @@ mod tests {
             0,
             "reset_crash 应清零连续崩溃计数"
         );
+    }
+
+    // ── C 批次：warm 空闲超时回收 ──
+
+    /// 隐藏态下仅回收「空闲 ≥ `WARM_IDLE_TTL`」的保活进程（复用 evict_warm 同路径：
+    /// 保活集 + LRU 移除、源回落 stub）；刚触达者与在途（进程已 take）不受影响。
+    #[test]
+    fn warm_idle_reclaim_evicts_only_idle_when_hidden() {
+        let mut app = make_app();
+        let (idle, fresh, inflight) = (
+            "com.example.idle",
+            "com.example.fresh",
+            "com.example.inflight",
+        );
+        for id in [idle, fresh, inflight] {
+            app.sources.push(SourceSummary {
+                id: id.to_string(),
+                name: id.to_string(),
+                status: SourceStatus::Warm { commands: 2 },
+            });
+            app.processes.push((id.to_string(), dying_process(id)));
+        }
+        let now = std::time::Instant::now();
+        let stale = now - WARM_IDLE_TTL - std::time::Duration::from_secs(5);
+        app.lru.access_at(idle, stale);
+        app.lru.access_at(fresh, now);
+        app.lru.access_at(inflight, stale);
+        // 模拟 in-flight 请求：进程已 take 出保活集（结果未归还）
+        app.processes.retain(|(pid, _)| pid != inflight);
+
+        app.warm_idle_reclaim();
+
+        assert!(
+            app.processes.iter().all(|(id, _)| id != idle),
+            "空闲超阈值者应被回收（移出保活集）"
+        );
+        assert!(
+            app.processes.iter().any(|(id, _)| id == fresh),
+            "刚触达者不应被回收"
+        );
+        assert!(!app.lru.contains(idle), "被回收者应从 LRU 集移除");
+        assert!(app.lru.contains(fresh), "未回收者仍在 LRU 集内");
+        assert!(
+            app.lru.contains(inflight),
+            "在途扩展（无进程）应跳过回收，仍留在 LRU 集"
+        );
+        let s = app.sources.iter().find(|s| s.id == idle).unwrap();
+        assert!(s.status.is_stub(), "被回收者源状态应回落 Stub");
+        let s = app.sources.iter().find(|s| s.id == fresh).unwrap();
+        assert!(!s.status.is_stub(), "未回收者源状态保持 Warm");
+    }
+
+    /// 面板**可见**时不回收（用户正在看列表，避免"看着就变慢"）。
+    #[test]
+    fn warm_idle_reclaim_skipped_when_panel_visible() {
+        let mut app = make_app();
+        let id = "com.example.idle";
+        app.sources.push(SourceSummary {
+            id: id.to_string(),
+            name: id.to_string(),
+            status: SourceStatus::Warm { commands: 1 },
+        });
+        app.processes.push((id.to_string(), dying_process(id)));
+        app.lru.access_at(
+            id,
+            std::time::Instant::now() - WARM_IDLE_TTL - std::time::Duration::from_secs(5),
+        );
+        app.visible = true;
+
+        app.warm_idle_reclaim();
+
+        assert!(
+            app.processes.iter().any(|(pid, _)| pid == id),
+            "可见时不应回收保活进程"
+        );
+        assert!(app.lru.contains(id), "可见时 LRU 记录不变");
     }
 }

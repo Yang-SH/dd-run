@@ -4,6 +4,23 @@
 
 ## [Unreleased]
 
+### 性能（方向 C 打磨：warm 进程空闲超时回收，协议 v1.0 零改动）
+
+- **warm 进程空闲超时回收**：`LRU_WARM_CAPACITY`(8) 大于扩展总数（内置 5 + 官方 sidecar 1 = 6）→ LRU **永不触发驱逐**，保活集行为上"只增不减"（稳态常驻全部扩展）。`LruWarmSet` 增空闲判定：每次触达记录「最后触达时刻」，`idle_victims(ttl)` 只读返回空闲超阈值者；宿主 `warm_idle_reclaim()` **复用既有驱逐路径**（`close` + 回落 stub），下次使用走桩复热。
+- 阈值 `WARM_IDLE_TTL = 120s`；**仅在面板隐藏时**回收（用户正在看列表时不回收）；在途请求（进程已 take 出保活集）跳过；隐藏期以 `WARM_IDLE_HIDDEN_TICK = 15s` 请求重绘驱动巡检（保活集清空后自动停止请求，恢复静默）。
+- 新增单测 6 条：`LruWarmSet` 3 条（触达刷新不判空闲 / `ttl` 边界「≥ 即回收」/ 队尾优先 + `last_access` + `remove` 生效）、宿主 2 条（隐藏态仅回收超阈值者且源回落 Stub、可见态不回收）、兜底模板识别 1 条。
+
+### 修复（L5：LRU 驱逐后点兜底模板必失败，协议 v1.0 零改动）
+
+- **现象**：扩展被驱逐成 stub 后，点击其**兜底（模板）项**必然失败——报「命令已失效」，且 `invoke` 从未发出。
+- **根因**：协议 §6.4 的 `get_command` **只查顶层命令**（`dd-ext/src/lib.rs`），而兜底模板 id（如 `calc.eval.query`）天然不在顶层注册表 → 桩复热链路拿到 `Ok(None)` 即判「陈旧」并短路。
+- **修复**：`FallbackStore` 新增 `contains_template(ext_id, id)`；`dispatch_invoke` / `dispatch_fetch_page` 判定为模板时**跳过 §6.4 校验直接执行**（invoke 侧走 `skip_lookup`，page 侧传 `command_id=None`，等价「无对应命令点击」语义）。**常规命令保持 §6.4 陈旧校验不变**。
+- 该缺陷此前不触发（`LRU=8` > 扩展数 6，永不驱逐）；本次空闲回收让驱逐真实发生，故与上一条**同批修复**。
+
+### 文档
+
+- README 双语修正**跨平台宣称口径**：原文「cross-platform (Windows / macOS / Linux)」是设计目标而非现状，改为「核心与平台无关；**当前仅发行 Windows 版**，macOS / Linux 计划 v0.2+」；对比表表头同步为「平台无关设计」，Goals 首条标注「计划中，当前仅 Windows」。
+
 ## [0.1.1] - 2026-09-10
 
 ### 新增（文件搜索 v3.3 P2：everything-ipc 主通道，es.exe 降级为回落，协议 v1.0 零改动）

@@ -215,6 +215,10 @@ impl PaletteApp {
         if self.processes.iter().any(|(id, _)| id == ext_id) {
             self.fetch_page_warm(ext_id, page_id, search);
         } else if let Some(ext) = self.find_ext(ext_id).cloned() {
+            // L5：兜底模板 id 不在顶层命令注册表内，§6.4 校验必失败 → 等价
+            // GoToPage 的「无对应命令点击」语义（传 None 即跳过校验）。
+            let command_id =
+                command_id.filter(|cid| !self.fallback_store.contains_template(ext_id, cid));
             self.fetch_page_reheat(&ext, page_id, search, command_id);
         } else {
             let page = self.stack.current_mut();
