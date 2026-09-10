@@ -74,9 +74,10 @@ Its architecture and extension contracts are **distilled from Microsoft PowerToy
 |---|---|---|
 | [`cmdpal-platform-agnostic-design.md`](./cmdpal-platform-agnostic-design.md) | **Design reference (upstream source)**: CmdPal's UI model, extension contracts, host model, built-in extension inventory, Rust reference implementation, acceptance criteria A1–A12 | Understand *why* it is designed this way |
 | [`cmdpal-ui-mockups.html`](./cmdpal-ui-mockups.html) | **Interactive UI spec** (v4.13): dark/light theme component gallery — root view, search, list/detail pages, settings cards, context menus, dialogs, toasts, loading skeletons. Later spec batches (v4.14–v4.17a) are recorded in [`docs/implementation.md`](./docs/implementation.md) §7 but not yet back-ported into this HTML | See what it looks like |
-| [`docs/implementation.md`](./docs/implementation.md) | **Implementation plan**: milestones M0–M7, ADR decision records, A1–A12 acceptance mapping, current progress, follow-ups ledger | Write code |
+| [`docs/implementation.md`](./docs/implementation.md) | **Implementation plan**: milestones M0–M8, ADR decision records, A1–A12 acceptance mapping, current progress, follow-ups ledger | Write code |
 | [`docs/protocol.md`](./docs/protocol.md) | **dd-run Extension Protocol v1.0**: NDJSON framing, JSON-RPC envelope, methods, error codes, lifecycle state machine, timeouts and crash recovery | Host or extension authors |
 | [`docs/manifest-schema.md`](./docs/manifest-schema.md) | **Extension manifest schema**: field tables, per-platform config directories, minimal copyable example | Extension authors |
+| [`docs/extensions.md`](./docs/extensions.md) | **Writing an extension**: 10-minute path, the three hard rules, three Windows traps, `host/*` round-trips, self-check (`dd-run-cli --conformance`), debugging cookbook | Extension authors — **start here** |
 | [`docs/search-file.md`](./docs/search-file.md) | **File-search extension plan** (v3.3): Everything IPC upgrade, `more_commands`, `f ` prefix direct entry, performance budget | Extension authors |
 | [`docs/search.md`](./docs/search.md) | **File-search user guide** (v0.1.0+): Everything/es.exe setup, search syntax cheat sheet, troubleshooting | End users |
 

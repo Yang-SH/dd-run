@@ -287,9 +287,13 @@ fn check(b: &Block) {
             assert_eq!(p.context.as_ref().unwrap().query.as_deref(), Some("1+1"));
         }
         ("6.5", 1) => {
-            let r: Resp<InvokeResult> = parse(b, "invoke 响应");
+            // §6.5：信封的 `result` 字段**就是** CommandResult 本体（**不做**二次包裹）。
+            // 曾用 `Resp<InvokeResult>`（result = {"result": CommandResult}）断言过错误
+            // 形状，使宿主/扩展双双按双层实现；M2 在宿主侧修掉后此处仍固化错误，
+            // 直到 M8 的 Python 示例照抄文档才暴露。此处锁定单层形状。
+            let r: Resp<CommandResult> = parse(b, "invoke 响应");
             assert_eq!(
-                r.result.command_result,
+                r.result,
                 CommandResult::ShowToast {
                     message: "= 2".into(),
                     duration_ms: Some(2000)

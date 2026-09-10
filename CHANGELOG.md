@@ -4,6 +4,32 @@
 
 ## [Unreleased]
 
+### 新增（M8 扩展生态验证：非 Rust 扩展走通协议全链路，协议 v1.0 零改动）
+
+- **扩展开发指南** [`docs/extensions.md`](./docs/extensions.md)：面向第三方开发者的「30 秒心智模型 → 10 分钟上手」路径。含**三条铁律**（stdout 只出协议消息 / UTF-8 且行内无裸换行 / 通知不回复）、**三个 Windows 陷阱**（文本模式的 `\n`→`\r\n`；stdout 默认编码可能是 cp936 而非 UTF-8，后者不容忍）、各方法按「值得实现」排序、`host/*` 反向请求（不必阻塞等应答）、自检说明、**调试手册（8 条症状→原因对照）**、崩溃语义与超时预算。只写规范里没有的东西，重复处一律引用 `protocol.md` / `manifest-schema.md` 并声明「冲突以规范为准」。
+- **Python 全表面示例** [`examples/python-minimal/`](./examples/python-minimal/)：仅标准库的 Python 3 扩展，覆盖 7 个 host→ext 方法 + `items_changed` 通知 + 3 种 `host/*` 请求 + `ShowToast`/`Dismiss`/`Confirm`（含确认后重发 `invoke` 的幂等两段式）。附 Windows `.cmd` 启动器——因为清单的 `entry.args` **不支持** `${EXT_DIR}` 展开，无法表达「解释器 + 脚本」两段式命令行；实测宿主 `resolve_executable` 会为无扩展名路径补 `.cmd`，且 Rust `Command` 能直接 spawn `.cmd`。
+- **`dd-run-cli --conformance`**：把扩展自检从 4 步（`--roundtrip`）扩到**全表面**——新增 `fallback_commands` 一致性（非空 ⟺ `has_fallback`）、`get_command` 可复热性（顶层 id 不得返回 `null`）、`get_items` 结构、`invoke` 返回值 ∈ §8.3 八种 `kind`、`host/*` 声明一致性、`close`。逐项输出 `✓ / ⚠ / ✗`，**任一 ✗ 退出码非 0**。新增 `--invoke`（`invoke` 有真实副作用，默认跳过）与 `--ext-id`（目录内有多个扩展时指定）。自检刻意基于**原始 JSON** 而非强类型反序列化——规范约束的是线上形状，强类型成功反而掩盖多字段/错类型问题。新增单测 3 条（兜底一致性四象限 / 8 种 `kind` 无重复 / 诊断截断按字符）。
+- **实证**：`dd-run-cli --conformance --extensions-dir examples/python-minimal --invoke` → **10 项全 ✓（2386 ms）**，即**一个非 Rust 扩展走通了协议全链路**——「协议与语言无关」由声明变为事实。
+
+### 修复（PyMin 示例：GUI 下无法启动 —— 启动器依赖 PATH，2026-09-10 真机反馈）
+
+- **现象**：示例装进扩展目录后能在「设置 → 扩展」看到，但标为**暂时不可用**且点「重试」无效。
+- **根因**：`dd-ext-pymin.cmd` 调用**裸 `python`**，依赖解释器位于 PATH 上；而 **Python 不在 Windows PATH**（`where python` 无输出）。GUI 从资源管理器启动时继承的是**系统 PATH** → cmd 报「'python' 不是内部或外部命令」→ spawn 失败 → 连续 3 次熔断。自检之所以全绿，是因为它从**终端**启动、PATH 里恰好有解释器。
+- **修复**：示例改为**安装脚本生成清单**（`install.py`）——把 `sys.executable` 与脚本的**绝对路径**写进 `entry.command` / `entry.args`（宿主直接 spawn、不经 shell → **零 PATH 依赖**）。移除示例目录里的静态清单（一份固定清单对解释型扩展写不对，且正是假阳性来源）；`.cmd` 降级为**备选**，文件头写明前提与陷阱。
+- **指南同步**：`docs/extensions.md` 第 4 步改为推荐绝对路径清单；§3 由「两个 Windows 陷阱」扩为**三个**（新增「解释器不在 PATH 上」，并点明 `--conformance` 全绿 ≠ GUI 能启动——两者继承的环境不同）；§8 症状表补两行（「暂时不可用 + 重试无效」、「终端全绿但 GUI 启动失败」）。
+- **验证**：把 PATH 摘到只剩 `System32`（**完全无 python**）后 `dd-run-cli --conformance --ext-id com.example.pymin --invoke` → **10 项全 ✓（902 ms）**，证明清单已与 PATH 解耦。
+- **真机确认（2026-09-10）**：用户点「重试」后扩展正常启动，PyMin 命令在 GUI 内可用。
+
+### 修复（invoke 响应形状：同一个错误被文档/类型/单测/自检器四处固化，2026-09-10 真机反馈）
+
+- **现象**：PyMin 示例装好后，`当前时间` / `添加便签` / `清空便签` / `打开文档` 四条命令点击即报 `命令执行失败：非法 JSON-RPC 信封：missing field ``kind```（`便签列表` 是嵌套页命令、不经 `invoke`，故不受影响）。
+- **根因**：§6.5 规定 `invoke` 成功的 JSON-RPC `result` 字段**就是** `CommandResult` 本体（**单层**），但有**四处**都写成了多一层的 `{"result":{"kind":...}}`——`docs/protocol.md` §6.5 与 §14 的示例、`dd-protocol` 的 `InvokeResult` 结构（`result` 域内再嵌一层）、协议一致性单测 `consistency.rs` 的 §6.5 断言、以及 M8 新写的 `docs/extensions.md` 代码示例。M2 已在**宿主侧**修掉（改为直接解析 `CommandResult`），但文档/类型/单测未同步——于是照着文档写的 Python 示例必然踩中。
+- **自检器同样是错的**：`--conformance` 的 `invoke` 判据读的是 `v["result"]["kind"]`，**与错误形状恰好吻合** → 对不合规的扩展判绿。两端互相印证，形成"绿灯骗局"。
+- **修复**：① 示例改为 `reply(mid, result)`（单层）；② 协议文档 §6.5 / §14 示例改单层并加显式告诫；③ **删除虚构的 `InvokeResult`**（工作区内除一致性单测外无引用），单测改为断言 `Resp<CommandResult>`；④ `--conformance` 判据改判内层 `kind`，并抽成纯函数 `command_result_kind`——**显式识别并指名「多包了一层」**；⑤ 指南 §5.4 明确「信封的 `result` 就是 CommandResult 本体」，§8 症状表补该条。
+- **验证**：抓包探针确认四条 `invoke` 响应均为单层；`--conformance --invoke` **10 项全 ✓**；**反向验证**——把示例改回双层后，自检器正确报 `✗ result 被多包了一层...`（修复前对同一份扩展判绿）。新增单测 1 条（单层通过 / 双层被指名 / 缺 `kind` / 非对象）。
+- **教训**：形状类契约一旦「文档 + 类型 + 单测 + 工具」四方同错，就没有任何一处会报红——**必须让至少一个环节面对真实线缆**（本次是抓包探针）。协议 v1.0 零改动（只修错误的描述与断言，不改线上契约）。
+- **真机确认（2026-09-10）**：修复版脚本装入 `dist/extensions.d/` 后，用户实测四条 `invoke` 命令（`当前时间` / `添加便签` / `清空便签` / `打开文档`）在 GUI 内**全部正常执行**。
+
 ### 性能（方向 C 打磨：warm 进程空闲超时回收，协议 v1.0 零改动）
 
 - **warm 进程空闲超时回收**：`LRU_WARM_CAPACITY`(8) 大于扩展总数（内置 5 + 官方 sidecar 1 = 6）→ LRU **永不触发驱逐**，保活集行为上"只增不减"（稳态常驻全部扩展）。`LruWarmSet` 增空闲判定：每次触达记录「最后触达时刻」，`idle_victims(ttl)` 只读返回空闲超阈值者；宿主 `warm_idle_reclaim()` **复用既有驱逐路径**（`close` + 回落 stub），下次使用走桩复热。

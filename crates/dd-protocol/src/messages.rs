@@ -4,7 +4,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::model::{CommandItem, CommandRef, CommandResult, Sender};
+use crate::model::{CommandItem, CommandRef, Sender};
 
 /// §3.2 `jsonrpc` 恒为 `"2.0"`。
 pub const JSONRPC_VERSION: &str = "2.0";
@@ -170,13 +170,6 @@ pub struct InvokeContext {
     /// §8.3 注：Confirm 确认后宿主重新 invoke 时带上
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub confirmed: Option<bool>,
-}
-
-/// §6.5 `invoke` 成功响应：`result` 字段为 §8.3 CommandResult。
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct InvokeResult {
-    #[serde(rename = "result")]
-    pub command_result: CommandResult,
 }
 
 /// §6.1 / §6.2 成功响应：顶层命令或兜底命令列表。

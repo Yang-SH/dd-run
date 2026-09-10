@@ -221,6 +221,11 @@ A9（事件 + 100ms 合并全量拉取 + 真机计数 +1）✅。**下一项**�
 此前未暴露，因为旧示例扩展从未成功响应过 `invoke`（只有失败路径）。已改为直接解析
 `CommandResult`（`fetch_page` 的 `GetItemsResult` 载荷形状一致、本就正确，未动）。
 
+> **后续（2026-09-10，M8）**：本次只修了**宿主**，`docs/protocol.md` §6.5/§14 的示例、
+> `dd-protocol::InvokeResult` 类型与 `consistency.rs` 的 §6.5 断言仍固化了双层形状；
+> 于是 M8 的 Python 示例照抄文档又踩中（真机报 `missing field \`kind\``）。
+> 已把三处一并改为**单层**并**删除** `InvokeResult`（详见 CHANGELOG 同日「修复（invoke 响应形状）」）。
+
 验证：`dd-gui` 23/23、`dd-host` lib 31 + roundtrip 6（**新增 M2 全链路测试**）全绿；
 clippy `-D warnings` 0 告警、`fmt --check` 通过；`dd-gui.exe` / `dd-ext-sample.exe` 均已重编。
 

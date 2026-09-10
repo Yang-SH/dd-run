@@ -2,6 +2,7 @@
 
 > **状态**：草案冻结（v1.0）——M0 期间按本规范实现，变更需走 §13 协议演进规则。  
 > **面向**：写宿主的人与写扩展的人。这是二者之间**唯一的硬契约**。  
+> **上手路径**：第一次写扩展请先读 [`extensions.md`](./extensions.md)（那份是"路径"，本文是"规范"）。  
 > **上游依据**：[`cmdpal-platform-agnostic-design.md`](../cmdpal-platform-agnostic-design.md) §5（扩展契约）、§6（宿主模型）。  
 > **核验基准**：microsoft/PowerToys `v0.101.2362.0`（核验日期 2026-09-01）。本文引用的上游接口名、`CommandResultKind` 成员均以此为基准核验。
 
@@ -352,10 +353,12 @@ discovered → spawned → initializing → ready ⇄ busy ─┤
 | `context.form_data`        | object | ❌  | 表单提交内容（`FormPage` 场景）                                            |
 
 ```json
-{"jsonrpc":"2.0","id":6,"result":{"result":{"kind":"ShowToast","args":{"message":"= 2","duration_ms":2000}}}}
+{"jsonrpc":"2.0","id":6,"result":{"kind":"ShowToast","args":{"message":"= 2","duration_ms":2000}}}
 ```
 
-`result` 字段为 **CommandResult**，见 §8.3（**8 种 Kind**，对应验收 A4）。
+`result` 字段为 **CommandResult 本体**，见 §8.3（**8 种 Kind**，对应验收 A4）。
+**不要**再包一层 `{"result": ...}`——宿主解开 JSON-RPC 信封后直接按 `CommandResult`
+解析，多包一层会报 `missing field \`kind\``（M2 曾因此在宿主侧踩坑，见 m2-record §4.1）。
 
 ### 6.6 `close`
 

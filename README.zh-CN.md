@@ -74,9 +74,10 @@
 |---|---|---|
 | [`cmdpal-platform-agnostic-design.md`](./cmdpal-platform-agnostic-design.md) | **设计参考（上游来源）**：CmdPal 的 UI 模型、扩展契约、宿主模型、内置扩展清单、Rust 参照实现、验收标准 A1–A12 | 想理解"为什么这样设计" |
 | [`cmdpal-ui-mockups.html`](./cmdpal-ui-mockups.html) | **交互设计稿**（v4.13）：亮暗双主题组件库——根视图 / 搜索 / 列表与详情页 / 设置卡片 / 上下文菜单 / Dialog / Toast / Loading 骨架，可键盘走查。后续批次（v4.14–v4.17a）记录于 [`docs/implementation.md`](./docs/implementation.md) §7，尚未回同步到本 HTML | 想看界面长什么样 |
-| [`docs/implementation.md`](./docs/implementation.md) | **实施方案**：里程碑 M0–M7、ADR 决策记录、A1–A12 验收映射、当前进度与遗留项台账 | 要动手写代码 |
+| [`docs/implementation.md`](./docs/implementation.md) | **实施方案**：里程碑 M0–M8、ADR 决策记录、A1–A12 验收映射、当前进度与遗留项台账 | 要动手写代码 |
 | [`docs/protocol.md`](./docs/protocol.md) | **dd-run Extension Protocol v1.0**：NDJSON 成帧、JSON-RPC 信封、方法、错误码、生命周期状态机、超时与崩溃恢复 | 写宿主或写扩展 |
 | [`docs/manifest-schema.md`](./docs/manifest-schema.md) | **扩展清单 schema**：字段表、三平台配置目录、最小可拷贝示例 | 写扩展 |
+| [`docs/extensions.md`](./docs/extensions.md) | **写一个扩展**：10 分钟上手、三条铁律、三个 Windows 陷阱、`host/*` 反向请求、自检（`dd-run-cli --conformance`）、调试手册 | 写扩展 —— **从这里开始** |
 | [`docs/search-file.md`](./docs/search-file.md) | **文件搜索扩展方案**（v3.2）：Everything 优先 Provider、`f ` 前缀直达、速度打磨 | 写扩展 |
 | [`docs/search.md`](./docs/search.md) | **文件搜索用户指南**（v0.1.0+）：Everything/es.exe 配置、语法速查、故障排查 | 最终用户 |
 

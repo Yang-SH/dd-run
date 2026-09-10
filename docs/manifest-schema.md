@@ -1,6 +1,6 @@
 # dd-run 扩展清单 schema v1.0
 
-> **状态**：草案冻结（v1.0）——与 [`protocol.md`](./protocol.md) 配套使用。
+> **状态**：草案冻结（v1.0）——与 [`protocol.md`](./protocol.md) 配套使用；上手路径见 [`extensions.md`](./extensions.md)。
 > **上游依据**：[`cmdpal-platform-agnostic-design.md`](../cmdpal-platform-agnostic-design.md) §6.1（扩展发现，MVP 默认 = 清单文件扫描）、§6.3（frozen）。
 
 ---
