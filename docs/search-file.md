@@ -1,14 +1,33 @@
 # 📋 dd-run 文件搜索执行方案（v3.3：Everything IPC 直连 + more_commands）
 
-> **文档状态（2026-09-09）**：本文上半部分记录 v0.1 已落地基线；本文末尾的
-> **§九 v3.3 变更方案**是基于 [`search-file-update.md`](./search-file-update.md) 的评审后实施计划，
-> **尚未实现**。在 P0/P1/P2 全部验收前，不得把“无需 `es.exe`”或“显示/复制路径”写入当前版本
-> 的用户承诺。
+> **文档状态（2026-09-10 更新）**：本文上半部分记录 v0.1 已落地基线；本文末尾的
+> **§九 v3.3 变更方案**是基于 [`search-file-update.md`](./search-file-update.md) 的评审后实施计划。
+> **实施进度（2026-09-10）**：**P0/P1 已实施**（P0 文案基线 + P1 `more_commands` 三动作随 v3.3 落地）；
+> **P2 代码已实施**（`everything-ipc` 主通道 + `es.exe` 回落，见 §9.2 与 [`CHANGELOG.md`](../CHANGELOG.md)）——
+> L2 冒烟已验证 IPC 主通道真机返回真实结果；**P2 真机验收（A-33-05…A-33-10）待做**。
+> 在 P2 真机验收通过并发布前，仍不得把"无需 `es.exe`"写入当前版本的用户承诺（已发布版本的用户仍依赖 es.exe）；
+> "显示/复制路径"已随 P1 落地并发布，该约束对 P1 部分不再适用。
+>
+> **核对修订（2026-09-10）**：以仓库代码 + `docs/protocol.md`（v1.0 冻结）+ 上游 `everything-ipc`
+> docs.rs 逐条核对本文 §九，结果见 [`search-file-plan-review.md`](./search-file-plan-review.md)。
+> 核对结论：**方案可行、零协议冲突**；但 P2 存在 4 项编码前硬冲突（超时预算倒挂 / client 失效无重建 /
+> `windows 0.62` 与 `windows-sys 0.61` 并存 + `FILETIME` 类型来源 / 默认 feature 可能引入 tokio），
+> 已分别并入 §9.2 P2.1–P2.3、§9.3 L0、§9.4（新增 A-33-10）与 §9.5。执行口径以本文 §九 为唯一来源，
+> [`search-file-update.md`](./search-file-update.md) 收敛为 v2 评审蓝本（历史记录）。
+
+> **🚦 传输层权威定义（2026-09-10，全文档唯一口径）**：本扩展与 Everything 的通信**以
+> `everything-ipc` crate（纯 Rust，WM_COPYDATA / `pipe` 通道，无外部进程、无 DLL 随包）为
+> **主通道**；**`es.exe` 仅作为主通道不可用时的「回落通道」**，不是设计目标、不向用户暴露为前置依赖。
+> - **当前已实现（P0/P1）**：仅含 `es.exe` 单一通道（`run_es()` 调 `es.exe -json ...`）；`everything-ipc`
+>   主通道**尚未实施（P2 待办）**。
+> - **P2 目标**：主通道切到 `everything-ipc`，`es.exe` 降级为回落；届时用户**不再需要安装 `es.exe`**。
+> - **结论**：凡涉及「传输层」的新增 / 修改 / 重构，**一律以 §九 v3.3（everything-ipc 为中心）为准**；
+>   下文 §1–§8 为 v0.1 已落地基线记录（传输层为 `es.exe`），其传输相关描述为「历史现状」，**不得据此新建传输层代码**。
 
 > **现状（核对至 2026-09-08）**：本文档的「便捷 + 速度优化」（§7）与 v0.1 文件搜索核心已随 M6/M7 落地——`crates/dd-ext/src/bin/search.rs`（bin 名 `dd-ext-search`）、宿主 `f ` 前缀自动进页（`crates/dd-gui/src/app/mod.rs`）、免安装 sidecar 分发（`tools/package.sh` → `dist/extensions.d/`，见 [`implementation.md`](./implementation.md) §5 M6/M7 行）。下文 §二 时间线、§三 任务分解、§六 D0–D6 验收清单为 **v3.1 计划期口径**，保留作 v0.1 完整规划与 Release 验收门的原始记录；与落地实现不符处已在文内标注「已落地 / 差异见 §7.x」。v3.3 计划以本文 §九 为准。
 > **v3.1 修订说明（对齐 2026-09-07 同步后的仓库架构）**：原 v3 基于"自创 `search`/`search_status` 方法 + 异步 Provider trait + 独立 Ctrl+F 面板"假设撰写，与当前仓库实际严重冲突。本次修订已逐条核对 [`docs/protocol.md`](./protocol.md)（v1.0 **冻结**）、[`docs/manifest-schema.md`](./manifest-schema.md)（v1.0）、`crates/dd-ext`（同步运行时）、`crates/dd-gui`（宿主）后重写技术章节。核心修正：
 > 1. **不新增协议方法**：v1.0 协议已冻结且无 `search`/`search_status`。本方案完全复用 provider 模型（`initialize`/`top_level_commands`/`fallback_commands`/`invoke`）+ 协议已定义但**运行时尚未实现**的 `get_items`（§6.3）。实现 `get_items` 属于"补齐协议合规"，**不是**协议变更（无需走 §13 演进）。
-> 2. **运行时是同步的**：`dd_ext::run` + `ExtensionSpec`，所有处理器为纯函数 `fn`。原方案的 `async_trait`/`reqwest` 异步/`tokio`/`.await` 无法编译 → 改用标准库 `TcpStream`（HTTP/1.1 `Connection: close`）。
+> 2. **运行时是同步的**：`dd_ext::run` + `ExtensionSpec`，所有处理器为纯函数 `fn`。原方案的 `async_trait`/`reqwest` 异步/`tokio`/`.await` 无法编译 → 改用标准库 `TcpStream`（HTTP/1.1 `Connection: close`）。**⚠️ 此 v3.1 决策已被顶部「v3.3 追注」推翻：v0.1 实际落地未采用 HTTP，改为经 `es.exe` 进程调用；P2 进一步切到 `everything-ipc`。**
 > 3. **扩展落位修正**：作为第 6 个**内置扩展**放入 `crates/dd-ext/src/bin/search.rs`（沿用 apps/calc/websearch 模式），经清单 `com.ddrun.filesearch.json` 注册。M7 批次 7.4/7.5 定案**免安装 sidecar**：清单源码在 `examples/extensions.d/`，由 `tools/package.sh` 归集进 `dist/extensions.d/`，宿主扫描可执行文件同目录的 `extensions.d/`；开发期指向本地构建产物。原 `extensions/dd-ext-search/` + 仓库根 `extensions.d/search.json` 与实际不符。
 > 4. **结果列表改为 `get_items(search_text)`**：当前运行时 `get_items` 返回 `-32005`，故"扩展 `dd_ext` 运行时支持子页"是必备前置（小改动）。文件结果对外一律是 `CommandItem[]`，删除虚构的 `results: SearchResult[]` 协议响应。
 > 5. **打开文件走 `host/open_url`（`file://`）**：协议无 `host/open_file`；删除原 `open::that(path)` 直开假设，改为经宿主打开，并标注需实测 `webbrowser::open` 对 `file://` 的行为。
@@ -16,7 +35,7 @@
 > 7. **跨平台矛盾修正**：Everything 仅 Windows 可用，故 v0.1 **仅 Windows**；原"三平台产物"与"v0.1 依赖 Everything"自相矛盾 → 改为 v0.2（fd Provider）再谈跨平台。
 > 8. **评分/类型 bug 修复**：`SkimMatcherV2::fuzzy_match` 返回 `Option<i64>`，原 `name_score + path_score*0.3` 存在 i64/f64 混算编译错误且 `score` 量级不对 → 归一化到 0~1；`date_modified` 必须规范化为 Unix 秒后再与 `now_7days()` 比较（原文直接比较会错）。
 > 9. **依赖修正**：相对 dd-ext 基线，**本功能新增的第三方依赖仅 `fuzzy-matcher` + `chrono`**（`anyhow`/`serde`/`serde_json` 为既有基线依赖，search.rs 复用）；HTTP 用标准库 `TcpStream`、URL 编码用扩展内手写 `pct_encode`；**不引入** `tokio`、`async-trait`、`reqwest`、`urlencoding`（同步模型 + 最小依赖）。
-> **v3.2 追注**：上列第 2、9 条中「`reqwest::blocking` / `urlencoding`」表述已被 §7.2 落地实现取代（实际 dd-ext 依赖仅 `fuzzy-matcher` / `chrono`，HTTP 用标准库 `TcpStream`、URL 编码用扩展内手写 `pct_encode`）；第 3 条「由安装器写入」已被 M7 批次 7.4/7.5 的**免安装 sidecar** 定案取代（清单源码在 `examples/extensions.d/`，由 `tools/package.sh` 归集进 `dist/extensions.d/`）。其余各条为 v3.1 相对原 v3 的修正记录，保留。
+> **v3.2 追注**：上列第 2、9 条中「`reqwest::blocking` / `urlencoding`」表述已被 §7.2 落地实现取代（实际 dd-ext 依赖仅 `fuzzy-matcher` / `chrono`，URL 编码用扩展内手写 `pct_encode`）；**第 2、9 条的「HTTP 用标准库 TcpStream」亦已被下方 v3.3 追注推翻——v0.1 传输层实际为 `es.exe` 进程调用，P2 进一步切到 `everything-ipc`**。第 3 条「由安装器写入」已被 M7 批次 7.4/7.5 的**免安装 sidecar** 定案取代（清单源码在 `examples/extensions.d/`，由 `tools/package.sh` 归集进 `dist/extensions.d/`）。其余各条为 v3.1 相对原 v3 的修正记录，保留。
 
 > **v3.3 追注（2026-09-08 传输层落地切换）**：v0.1 实际实现**未采用 HTTP**，改为经 Everything 官方命令行工具 **`es.exe`（IPC 通道）** 检索——`run_es()` 启动 `es.exe -json -size -dm -attributes <q>` 并解析其 JSON；`everything_available()` 用 `es.exe -get-everything-version` 探活。**好处**：用户**无需开启 Everything HTTP 服务器**（此前"搜不到文件"的根因正是 HTTP 未开启 + es 输出 GBK 未解码）；仅需 Everything 在运行 + `es.exe` 已安装（`winget install --id=voidtools.Everything.Cli`）。**改动范围**：仅 `search.rs` 内部传输层（HTTP/TCP → 进程调用），协议 / 运行时 `get_items` / 宿主 `f ` 进页**零改动**。es.exe 经管道输出为系统 OEM 代码页（中文 Windows = 936/GBK）而非 UTF-8，已在读取后用 `decode_output()`（`MultiByteToWideChar` + `GetConsoleOutputCP`，复用 `shell.rs` 惯例）按代码页转 UTF-8，单测 `decode_with_codepage_converts_gbk_filename` 覆盖。用户文档 [`search.md`](./search.md) 已同步为 es.exe 方案。
 
@@ -31,7 +50,7 @@
 ```mermaid
 flowchart LR
     subgraph v0.1["v0.1（本方案，5~6天，Windows-only）"]
-        A1["Everything + es.exe IPC<br>唯一 Provider"]
+        A1["Everything IPC<br>everything-ipc 主 / es.exe 回落"]
     end
     subgraph v0.2["v0.2（后续，跨平台）"]
         A2["+ fd Provider<br>（自动下载，兜底未装Everything的用户）"]
@@ -53,8 +72,9 @@ flowchart LR
   └─ 不选中 → 无动作
 ```
 
-> ⚠️ **明确取舍**：v0.1 阶段，未安装 Everything 或 `es.exe` 的用户无法使用文件搜索；
-> 不要求开启 HTTP 服务。Everything 仅 Windows，故 v0.1 仅 Windows 构建与发布。
+> ⚠️ **明确取舍（现状）**：v0.1 已发布版本（P0/P1）要求 Everything 在运行且 `es.exe` 可定位——这是
+> **当前 es.exe 单一通道的临时前置**；P2 切到 `everything-ipc` 主通道后，`es.exe` 降级为回落，
+> 用户**不再需要安装 `es.exe`**。两种情形都不要求开启 HTTP 服务。Everything 仅 Windows，故 v0.1 仅 Windows 构建与发布。
 
 ---
 
@@ -70,7 +90,7 @@ timeline
         D1 : ExtensionSpec + 清单 + NDJSON 联调
         D2 : EverythingProvider（探测/搜索/映射）
     section 阶段二：Everything Provider（第3~4天）
-        D3 : 同步 HTTP 探测 + search 实现
+        D3 : 传输层探测 + search 实现（当前 es.exe / P2 everything-ipc）
         D4 : 字段映射 + date_modified 规范化 + 评分排序
     section 阶段三：联调与UI（第5天）
         D5 : 宿主聚合 + fallback/page 渲染 + 回车打开
@@ -137,8 +157,8 @@ serde_json = "1"
 anyhow = "1"
 fuzzy-matcher = "0.3"          # 提供 skim::SkimMatcherV2（评分归一化，任务 2.3）
 chrono = "0.4"                 # date_modified 规范化（任务 2.2）
-# 注：HTTP 用标准库 std::net::TcpStream、URL 编码用扩展内手写 pct_encode（§7.2 依赖最小）；
-#     不使用 reqwest / urlencoding / tokio / async-trait（同步模型 + 最小依赖）
+# 注：传输层当前用 es.exe 进程调用（std::process），P2 切 everything-ipc（纯 Rust，新增 windows 0.62 依赖）；
+#     URL 编码用扩展内手写 pct_encode（§7.2 依赖最小）；不使用 reqwest / urlencoding / tokio / async-trait（同步模型 + 最小依赖）
 ```
 
 #### 任务 1.2：协议对齐（第 1 天，不新增协议方法）
@@ -225,7 +245,7 @@ fn get_file_items(params: &GetItemsParams) -> GetItemsResult {
         // Everything 未启动：返回单条引导项（title/subtitle 写明开启方法；点击文案见 §7.4）
         return GetItemsResult { items: vec![guide_item()], has_more_items: false, is_loading: false };
     }
-    match search(query, RESULT_LIMIT) {          // HTTP 用标准库 TcpStream（§7.2 依赖最小）
+    match search(query, RESULT_LIMIT) {          // 传输层见 §3.2 任务 2.1：当前 es.exe run_es / P2 everything-ipc（§9.2）
         Ok(entries) => {
             let items: Vec<CommandItem> = score_and_sort(entries, query)
                 .into_iter().map(to_command_item).collect();
@@ -257,51 +277,45 @@ fn main() { run(&spec()); }
 
 ### ✅ 阶段二：Everything Provider（第 3~4 天）
 
-#### 任务 2.1：同步 HTTP 探测与搜索请求（第 3 天）
+#### 任务 2.1：传输层探测与搜索请求契约（第 3 天）
+
+> **⚠️ 传输层权威口径（2026-09-10）**：本任务只定义「拿到 `Vec<FileEntry>`」的**结果与字段契约**，
+> 传输载体按顶部「传输层权威定义」——**当前（P0/P1）实际用 `es.exe` 进程调用**（`run_es()` 启动
+> `es.exe -json -size -dm -attributes <q>` 并解析其 JSON）；**P2 将换成 `everything-ipc` crate 的
+> `EverythingClient::shared()`（WM_COPYDATA / `pipe`）**。下方 `search()` 不绑定具体传输；下游
+> `score_and_sort` / `to_command_item` 对两种传输透明。探测 `everything_available()` 当前走
+> `es.exe -get-everything-version`，P2 走 `EverythingClient::is_ipc_available()` / `is_db_loaded()`。
 
 ```rust
-// crates/dd-ext/src/bin/search.rs（v3.1 计划期 HTTP 草图；v3.3 实际已切换为 es.exe IPC，见顶部 v3.3 追注）
-fn everything_base() -> (String, u16) {
-    // 默认 127.0.0.1:8080；可用环境变量 DDRUN_EVERYTHING_URL=http://host:port 覆盖
-    // （文档「配置项说明」同源；Everything HTTP 默认端口为 80，本扩展默认 8080）
-}
-
 /// Everything 是否在线（availability TTL 3s 缓存：窗口内跳过重复探测）。
-fn everything_available() -> bool {
-    // std::net::TcpStream::connect 最简探测：GET /?json=1&count=1，
-    // 读写超时均 800ms（快速失败）——Everything 侧配置见 2.4
-}
+/// 当前实现：调 `es.exe -get-everything-version`；P2：EverythingClient::is_ipc_available() && is_db_loaded()。
+fn everything_available() -> bool { /* 见 §9.2 P2 适配层：run_es 与 ipc 双实现，主通道优先 IPC */ }
 
-/// 极简 HTTP/1.1 GET（Connection: close → 读到 EOF 即 body 结束，规避分块解析）。
-fn http_get(rel: &str) -> anyhow::Result<String> {
-    // 读超时 3s（Everything 本地通常 <50ms，3s 仅作异常兜底；宿主 get_items 超时 2s，见 §7.4）、
-    // 写超时 800ms；body 从首个 CRLFCRLF 之后截取。
-}
-
-/// 仅编码 URL 不安全字节（RFC 3986 非保留字符保留），供 Everything 查询拼 URL。
+/// 仅编码 URL / CLI 不安全字节（RFC 3986 非保留字符保留），供 Everything 查询拼参数。
 fn pct_encode(input: &str) -> String {
     // 与 urlencoding crate 语义等价：保留 -_.~ 与字母数字，其余 %XX 大写十六进制。
 }
 
+/// 执行搜索，返回归一化的文件条目（不绑定传输层：当前 es.exe JSON，P2 everything-ipc QueryItem）。
 fn search(q: &str, limit: usize) -> anyhow::Result<Vec<FileEntry>> {
-    let rel = format!(
-        "/?search={}&json=1&count={}&path_column=1&size_column=1&date_modified_column=1",
-        pct_encode(q), limit
-    );
-    let body = http_get(&rel)?;
-    // serde 解析 EvResponse{ results: Vec<RawEntry> } → Vec<FileEntry>
+    // 当前：run_es(&format!("es.exe -json -n {limit} -size -dm -attributes {q}")) → 解析 JSON
+    // P2  ：EverythingClient::shared().query_wait(q).max(limit)
+    //         .request_flags(NAME|PATH|SIZE|DATE_MODIFIED|ATTRIBUTES).timeout(1000~1200ms).call()
+    //       → 取 QueryItem 的 name/path/size/date_modified/attributes（见 §9.2 P2.2）
+    // 两者都产出 Vec<FileEntry>，下游 score_and_sort / to_command_item 不变
+    todo!()
 }
 ```
 
-**Everything JSON 响应字段映射（RawEntry → FileEntry）**：
+**Everything 字段映射（→ FileEntry，传输无关）**：
 
-| Everything 字段 | FileEntry 字段 | 说明 |
+| Everything 字段（es.exe JSON `results[]` 或 IPC `QueryItem`） | `FileEntry` 字段 | 说明 |
 | :--- | :--- | :--- |
-| `results[].name` | `name` | 文件名 |
-| `results[].path` | `dir` | 所在目录，需与 `name` 拼接为完整路径 |
-| `results[].size` | `size` | 需开启 `size_column=1`，单位字节 |
-| `results[].date_modified` | `modified` | 见任务 2.2 **必须规范化为 Unix 秒** |
-| `results[].type` | `is_dir` | 目录判定首选（`"folder"`）；缺失时退回「无扩展名且 size==0」启发式（见 2.2） |
+| `name` | `name` | 文件名 |
+| `path`（es.exe）/ `QueryItem::get_str(Path)`（IPC） | `dir` | 所在目录，需与 `name` 拼接为完整路径 |
+| `size` | `size` | 单位字节（es.exe 需 `-size`；IPC 需 `RequestFlags::Size`） |
+| `date_modified` | `modified` | 见任务 2.2 **必须规范化为 Unix 秒**（es.exe 为日期串 / FILETIME；IPC 为 `QueryValue::Time(FILETIME)`，复用 `filetime_to_unix`） |
+| `type`（`"folder"`）/ `attributes`（es.exe `-attributes` / IPC `RequestFlags::Attributes & 0x10`） | `is_dir` | 目录判定首选；缺失时退回「无扩展名且 size==0」启发式（见 2.2） |
 
 > ⚠️ **超时与阻塞**：运行时主循环是同步的，`available()`/`search()` 同步阻塞。Everything 本地响应通常 <50ms，远低于协议 `get_items` 默认 2000ms，可接受。若担心阻塞面板，宿主侧对 `get_items` 已有串行化与超时保护（协议 §10）。
 
@@ -359,12 +373,14 @@ Everything 查询本身毫秒级返回，30 条评分开销可忽略。归一化
 
 #### 任务 2.4：Everything 侧的适配工作（第 4 天，**用户操作清单**）
 
-在你本机完成以下一次性准备（约 2 分钟；**v3.3 起已切换为 es.exe，无需开启 HTTP 服务器**，实际步骤以用户文档 [`search.md`](./search.md) 为准）：
+> **现状 vs P2**：以下步骤是 **v0.1 已发布版（P0/P1，es.exe 单一通道）** 的前置——用户**必须**装 `es.exe`。
+> **P2 切到 `everything-ipc` 主通道后，`es.exe` 降级为回落，普通用户不再需要安装它**；仅当 IPC 不可用时
+> 回落才需要 `es.exe`（用户文档届时更新）。实际步骤以用户文档 [`search.md`](./search.md) 为准。
 
-1. 安装并运行 Everything（1.4+）；dd-run 仅要求 Everything 在运行，不要求开任何服务。
+1. 安装并运行 Everything（1.4+）；dd-run 仅要求 Everything 在运行，不要求开任何服务 / HTTP。
 2. 安装 `es.exe`（Everything 命令行工具，不随 Everything 安装包附带）：`winget install --id=voidtools.Everything.Cli`；或手动放到 Everything 目录（`C:\Program Files\Everything\`）。
 3. 验证：终端执行 `es.exe -get-everything-version`，应返回版本号（确认 IPC 可用）。
-4. 无需任何网络/端口/防火墙配置——es.exe 走本机 IPC，无局域网暴露风险。
+4. 无需任何网络/端口/防火墙配置——`es.exe` 走本机 IPC，无局域网暴露风险。
 
 ### ✅ 阶段三：宿主联调与 UI（第 5 天）
 
@@ -414,7 +430,9 @@ Everything 查询本身毫秒级返回，30 条评分开销可忽略。归一化
 
 1. `bash tools/package.sh`（gnu 工具链）产出 `dist/dd-run-<版本>.exe`（5 内置扩展内嵌）+ 归集 `dist/extensions.d/`（file-search **sidecar**）——免安装绿色包布局。
 2. `docs/search.md`（用户文档）：
-   - 前置条件：Everything 安装 + 开启 HTTP 服务（图文教程，含仅绑定 127.0.0.1 安全提示）
+   - 前置条件：Everything 安装 + **`es.exe` 可定位（IPC 通道）**——⚠️ 此处"开启 HTTP 服务"为
+     **v3.1 计划期旧口径（HTTP/TcpStream 传输层），已被 v3.3 追注（行 21）推翻为 es.exe IPC 方案，
+     实际用户文档 [`search.md`](./search.md) 已同步为 es.exe 方案，无需开启 HTTP**；保留原文仅作规划期记录
    - 常用搜索语法速查表（`ext:rs`、`dm:today`、`path:dd-run` 等）
    - 配置项说明（环境变量 `DDRUN_ES_PATH` / `DDRUN_EVERYTHING_DIR`，默认自动定位，无需 HTTP）
    - 明确标注：**v0.1 仅支持 Windows（依赖 Everything）**；跨平台需等 v0.2 fd Provider
@@ -440,13 +458,13 @@ Everything 查询本身毫秒级返回，30 条评分开销可忽略。归一化
 
 | 风险 | 概率 | 预案 |
 | :--- | :--- | :--- |
-| 用户未安装 `es.exe` / Everything 未运行 | 中（winget 一行装 es.exe） | `get_items` 返回引导项；文档指引装 es.exe + 启动 Everything；v0.2 用 fd 彻底解决 |
+| Everything 未运行 / `everything-ipc` 主通道不可用（当前版还需 `es.exe`） | 中 | `get_items` 返回引导项；当前版文档指引装 `es.exe` + 启动 Everything；**P2 后主通道为 IPC，普通用户不再需 `es.exe`**；v0.2 用 fd 彻底解决 |
 | `date_modified` 格式随 Everything 版本变化 | 中 | D4 用本机真实响应锁定解析；异常置 0 不报错（单测覆盖） |
-| `es.exe` 启动失败 / 不在 PATH | 低 | 引导项提示安装 es.exe；`DDRUN_ES_PATH` 可显式指定路径 |
-| 网络暴露面 | 无 | es.exe 走本机 IPC（命名管道/WM_COPYDATA），不监听端口，无局域网暴露风险 |
+| `es.exe` 启动失败 / 不在 PATH（仅当前版 es.exe 单一通道相关） | 低 | 引导项提示安装 es.exe；`DDRUN_ES_PATH` 可显式指定路径；**P2 后此风险随主通道切 IPC 而消失** |
+| 网络暴露面 | 无 | 传输层走本机 IPC（es.exe 进程 / everything-ipc WM_COPYDATA / `pipe`），不监听端口，无局域网暴露风险 |
 | Everything 查询语法特殊字符与 URL 编码冲突 | 低 | `pct_encode`（扩展内手写 RFC 3986）统一处理 + 特殊字符用例测试（单测已含 `a+b=c`、中文） |
 | **`host/open_url` 对 `file://` 行为不确定** | 中 | **v0.1 实测 `webbrowser::open("file:///...")`**（宿主 `crates/dd-gui/src/app/host_actions.rs`）；若宿主侧不支持，预案为宿主侧改用 `cmd /c start` 相对可执行打开（或扩展侧兜底），仍经现有 `invoke` 链路 |
-| **同步 HTTP 阻塞主循环** | 低 | Everything 本地 <50ms，远低于 `get_items` 2000ms 超时；宿主侧已串行化保护 |
+| **同步传输阻塞主循环** | 低 | Everything 本地 <50ms，远低于 `get_items` 2000ms 超时；宿主侧已串行化保护 |
 
 ---
 > **口径说明**：D0–D6 为 v3.1 计划期验收清单（v0.1 Release 验收门）；v3.2 落地后核心行为由 §7.3 验收清单承接（部分已 [x]）。D 清单中与代码已实现不一致处（引导项点击文案、超时 3s vs 2s）已在 §7.4 已知边界记档，不重复标注。
@@ -478,11 +496,11 @@ Everything 查询本身毫秒级返回，30 条评分开销可忽略。归一化
 
 | 打磨点 | 做法 | 预期 |
 | --- | --- | --- |
-| availability 探测缓存 | `AVAIL` TTL 缓存（默认 3s），窗口内跳过重复 es.exe 进程探测 | 连续按键不每次探测 Everything |
+| availability 探测缓存 | `AVAIL` TTL 缓存（默认 3s），窗口内跳过重复探测（当前为 es.exe 进程探活；P2 为 IPC 探活） | 连续按键不每次探测 Everything |
 | 超时收紧 | 探测 800ms；搜索 3s（Everything 本地通常 <50ms）；⚠️ 宿主 `get_items` 超时仅 2000ms，见 §7.4 | 异常时快速失败，不挂起 UI |
 | 结果数自适应 | 默认取前 30 条，skim 评分排序稳定 | 海量结果只取前 N，列表瞬时填充 |
 | 查询直透 | Everything 全部语法（`ext:`/`dm:`/`path:`/通配符/正则）原样透传 | 扩展侧零解析、零损耗 |
-| 依赖最小 | 传输走 es.exe 进程调用（标准库 `std::process`，无 HTTP/TCP 依赖）；评分用 `fuzzy-matcher`；时间用 `chrono`（FILETIME 换算比日期串更可靠） | 相对 dd-ext 基线**仅新增** fuzzy-matcher/chrono（anyhow/serde/serde_json 复用既有基线），不引入 reqwest/urlencoding 等重依赖 |
+| 依赖最小（当前现状） | 传输走 es.exe 进程调用（标准库 `std::process`，无 HTTP/TCP 依赖）；评分用 `fuzzy-matcher`；时间用 `chrono`（FILETIME 换算比日期串更可靠）。**P2 切 `everything-ipc` 后，传输改为纯 Rust（新增 `windows 0.62` 依赖，无 DLL 随包），`std::process` 调用随之减少** | 相对 dd-ext 基线**仅新增** fuzzy-matcher/chrono（P2 再加 everything-ipc 及其 `windows 0.62` 传递依赖），不引入 reqwest/urlencoding/tokio 等重依赖 |
 
 ### 7.3 验收（acceptance）
 
@@ -518,7 +536,7 @@ graph TD
     T03[T03 Cargo bin+依赖] --> T04
     T03 --> T05[T05 清单json]
     T04 --> T06[T06 探测]
-    T04 --> T07[T07 es.exe 调用 run_es]
+    T04 --> T07[T07 传输层调用（everything-ipc 主 / run_es 回落）]
     T04 --> T08[T08 pct_encode]
     T04 --> T13[T13 路径索引]
     T04 --> T26[T26 契约冒烟]
@@ -578,14 +596,18 @@ graph TD
 | **T-05** | 扩展清单 | `examples/extensions.d/com.ddrun.filesearch.json`（新建） | 照 `docs/manifest-schema.md` 写：`id=com.ddrun.filesearch`、`display_name`、`entry.command` 指向 `dd-ext-search.exe`（`${EXT_DIR}` 相对定位）、`platforms=["windows"]`、`capabilities=["host/open_url","host/show_status"]`。 | `python -m json.tool` 合法；字段与 manifest-schema 一致。 | T-03 |
 | **T-26** | NDJSON 契约冒烟 | `crates/dd-ext/src/bin/search.rs`、`examples/extensions.d/` | 以 stdin/stdout 管道驱动扩展，逐个校验协议 v1.0 契约（**不新增字段**）：`initialize` 返回 `provider.id=com.ddrun.filesearch` / `has_fallback=true` / `capabilities` 含 `host/open_url`；`fallback_commands` 返回含 `Page{files.results}` 的入口项；`get_items` 返回 `GetItemsResult`（空 query→hint、异常→guide）。命令形如 `echo '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}' \| cargo run -p dd-ext --bin dd-ext-search`。 | 三条契约响应字段与 §三 1.2 表逐项一致；`initialize` 的 `id`/`has_fallback` 断言存在（对应 §六 **D2** 验收）。 | T-04, T-05 |
 
-#### P2 · Provider 基础（探测 / HTTP / 编码 / 解析）— 第 3 天
+#### P2 · 传输层（探测 / 编码 / 解析，everything-ipc 主 / es.exe 回落）— 第 3 天
+
+> **⚠️ 传输层说明**：本层任务描述的是 v0.1 实际落地的传输（经 `run_es` 调 `es.exe`，非 v3.1 计划期的
+> HTTP/TcpStream）。**凡新建传输层代码一律以 §九 v3.3 的 `everything-ipc` 设计为准**；下方 T-06/T-07 的
+> 验收口径与解耦要求（解析纯函数、可注入探测）在 P2 的 IPC 实现中同样适用。
 
 | ID | 任务 | 目标文件 | 具体动作（AI 可执行） | 验收 | 依赖 |
 | :--- | :--- | :--- | :--- | :--- | :--- |
-| **T-06** | Everything 可用探测 | `crates/dd-ext/src/bin/search.rs` | 实现 `everything_base()`（默认 `127.0.0.1:8080`，环境变量 `DDRUN_EVERYTHING_URL` 覆盖）；`everything_available()`（`TcpStream::connect` 探测 `GET /?json=1&count=1`，读/写超时 800ms，3s TTL 缓存跳过重复探测）。**探测目标必须可注入**（函数接受 base 地址参数或读 env），以便单测用本地临时 `TcpListener`（`127.0.0.1:0`）模拟 up/down。 | 单测 `everything_available_true_when_up` / `_false_when_down`：**用本地临时 TcpListener 模拟**，不依赖真实 Everything（规则见 §8.4.2）。 | T-04 |
-| **T-07** | 同步 `http_get` | `crates/dd-ext/src/bin/search.rs` | 实现 `http_get(rel)`：标准库 `TcpStream` 发 HTTP/1.1 GET，`Connection: close`，读超时 3s / 写超时 800ms，body 取自首个 `\r\n\r\n` 之后；返回 `anyhow::Result<String>`。连接地址同样需可注入（同 T-06）。 | 单测 `http_get_reads_body_after_crlf`：起本地临时 `TcpListener` 返回固定响应，断言 body 正确截取；另覆盖**连接失败返回 Err 而非 panic**。不依赖真实 Everything。 | T-04 |
+| **T-06** | Everything 可用探测 | `crates/dd-ext/src/bin/search.rs` | 实现 `everything_available()`：当前（P0/P1）经 `es.exe -get-everything-version` 探测（3s TTL 缓存跳过重复探测，读/写超时 800ms）；**P2 改为 `EverythingClient::shared().is_ipc_available() && is_db_loaded()`**。探测逻辑须可注入（env 或参数），单测用假响应 / 临时状态模拟 up/down，不依赖真实 Everything / 真实 es.exe。 | 单测 `everything_available_true_when_up` / `_false_when_down`：**用注入式探测**，不依赖真实 Everything（规则见 §8.4.2）。 | T-04 |
+| **T-07** | 搜索传输（es.exe 现状 / everything-ipc 目标） | `crates/dd-ext/src/bin/search.rs` | 实现 `run_es(args)`：启动 `es.exe -json -n <limit> -size -dm -attributes <q>` 读 stdout、超时 `ES_TIMEOUT=1200ms` 后 kill（不挂起）；解析 JSON → `Vec<FileEntry>`。**P2 新增 `ipc_search(q, limit)`**：经 `EverythingClient::shared().query_wait(q).max(limit).request_flags(NAME|PATH|SIZE|DATE_MODIFIED|ATTRIBUTES).timeout(1000~1200ms).call()` 取 `QueryItem` → `Vec<FileEntry>`（见 §9.2 P2.2）；主通道优先 IPC、回落 `run_es`。传输与解析解耦（见 T-09）。 | 单测 `run_es_parses_json`（`es.exe` JSON fixture，离线）/ `ipc_search_maps_queryitem`（L3 标记，需真实 Everything）；`run_es` 超时返回 Err 不 panic。 | T-04 |
 | **T-08** | `pct_encode` | `crates/dd-ext/src/bin/search.rs` | 实现 `pct_encode(input)`：保留 `-_.~` 与字母数字，其余按 RFC 3986 大写 `%XX` 编码（含 UTF-8 字节）。 | 单测 `pct_encode_keeps_unreserved_and_encodes_rest`（覆盖中文、`a+b=c`、空格）。 | T-04 |
-| **T-09** | `FileEntry` + `search` 解析 | `crates/dd-ext/src/bin/search.rs` | 定义 `RawEntry`/`FileEntry`（`name,dir,size,is_dir,modified`）与 `EvResponse`；实现 `search(q, limit)`：拼 `/?search={pct_encode(q)}&json=1&count={limit}&path_column=1&size_column=1&date_modified_column=1` → `http_get` → 解析 → 映射 `Vec<FileEntry>`（`dir + "\\" + name` 为 `full_path`）。**必须把解析抽为纯函数 `parse_response(&str) -> anyhow::Result<Vec<FileEntry>>`**，与传输解耦以保证可离线单测（§8.4.2 第 2 条）。 | 单测 `search_parses_everything_response` / `parse_response_malformed_returns_err`：以**本机真实响应样例字符串作 fixture**（存入 `#[cfg(test)]` 常量），断言字段映射与 `full_path` 拼接；畸形 JSON 返回 Err 不 panic。 | T-07, T-08 |
+| **T-09** | `FileEntry` + `search` 解析 | `crates/dd-ext/src/bin/search.rs` | 定义 `RawEntry`/`FileEntry`（`name,dir,size,is_dir,modified`）；实现 `search(q, limit)`：当前拼 `es.exe -json -n {limit} -size -dm -attributes {q}` 经 `run_es` 取 JSON → 解析 → 映射 `Vec<FileEntry>`；P2 经 `ipc_search` 取 `QueryItem`（§9.2 P2.2）。**必须把解析抽为纯函数 `parse_response(&str) -> anyhow::Result<Vec<FileEntry>>`**，与传输解耦以保证可离线单测（§8.4.2 第 2 条）。 | 单测 `search_parses_everything_response` / `parse_response_malformed_returns_err`：以**本机真实响应样例字符串作 fixture**（存入 `#[cfg(test)]` 常量），断言字段映射与 `full_path` 拼接；畸形 JSON 返回 Err 不 panic。 | T-07, T-08 |
 
 #### P3 · 字段映射 / 评分 / 路径索引 — 第 4 天
 
@@ -650,17 +672,17 @@ graph TD
 | :--- | :--- | :--- | :--- | :--- |
 | **L1** | 纯函数单测 | `pct_encode` / `parse_everything_date` / `guess_is_dir` / `norm` / `score` / `register_path`+`lookup_path` / `parse_response` / `to_command_item` / `handle_invoke` / `file_search_drill_target` | ❌ 否（**必须可离线运行**） | `cargo test --workspace` |
 | **L2** | 契约测试（NDJSON） | 以 stdin/stdout 管道驱动扩展进程，校验 `initialize` / `top_level_commands` / `fallback_commands` / `get_items` / `invoke` 的请求-响应 | ❌ 否（可注入假响应） | `echo '<json>' \| cargo run -p dd-ext --bin dd-ext-search` |
-| **L3** | 集成测试（真实 Everything） | 端到端：真实 HTTP 探测 → 搜索 → 评分 → 映射 | ✅ 是 | `#[ignore]` + `cargo test -- --ignored` |
+| **L3** | 集成测试（真实 Everything） | 端到端：真实 Everything 探测（es.exe / everything-ipc）→ 搜索 → 评分 → 映射 | ✅ 是 | `#[ignore]` + `cargo test -- --ignored` |
 | **L4** | 真机验收 | GUI 行为：`f ` 进页、↑↓/Enter/Esc、文件打开、长跑、防重 | ✅ 是 | 真机走查（§8.4.5 清单） |
 
 **硬规则**：L1/L2 必须在**无 Everything、无 GUI** 的干净 CI 上全绿；L3/L4 允许被跳过，但被跳过的用例必须在 §8.4.5 清单中被人工执行并勾选，否则不得进入 T-24/T-25。
 
 #### 8.4.2 测试规则（硬性，违反即视为任务未完成）
 
-1. **可离线性**：L1 单测**禁止**发起真实 TCP 连接、禁止依赖 Everything 进程、禁止依赖真实文件系统结果。需要网络语义时用**本地临时 `TcpListener`**（绑定 `127.0.0.1:0`）或**注入 fixture 字符串**。
-2. **解析与传输解耦**：`search()` 必须拆为 `http_get()`（传输）+ `parse_response(&str)`（纯解析）；解析以 `&str` 入参单测，fixture 取自本机 Everything 真实响应样例（存 `#[cfg(test)]` 常量或 `tests/fixtures/`）。
+1. **可离线性**：L1 单测**禁止**发起真实传输连接（TCP / `es.exe` 进程 / IPC 探活）、禁止依赖 Everything 进程、禁止依赖真实文件系统结果。需要传输语义时用**注入 fixture 字符串**模拟 `run_es` / `ipc_search` 的响应。
+2. **解析与传输解耦**：`search()` 的传输层（`run_es` / `ipc_search`）须与 `parse_response(&str)`（纯解析）解耦；解析以 `&str` 入参单测，fixture 取自本机 Everything 真实响应样例（存 `#[cfg(test)]` 常量或 `tests/fixtures/`）。
 3. **命名规范**：`<被测函数>_<场景>_<预期>`，如 `date_parse_invalid_returns_zero`、`pct_encode_keeps_unreserved_and_encodes_rest`。§三「单元测试重点」已列出的名字**保持不变，不得重命名**。
-4. **L3 标记**：依赖真实 Everything 的测试一律 `#[ignore]`，注释写明 `// L3: requires local Everything HTTP server; run with --ignored`。
+4. **L3 标记**：依赖真实 Everything 的测试一律 `#[ignore]`，注释写明 `// L3: requires local Everything running (es.exe / everything-ipc); run with --ignored`。
 5. **禁 panic**：`parse_everything_date` 对异常输入必须返回 `0`，不得 `unwrap()`/`expect()`/`panic!`；单测须覆盖空串、缺字段、FILETIME 数值串、超长输入四类。
 6. **确定性**：评分/排序单测须给出确定输入与确定期望顺序；recency 场景用**固定 `modified` 时间戳**构造，不得依赖"当前真实文件"的修改时间。
 7. **不改协议**：L2 契约测试断言的是**协议 v1.0 已定义字段**；出现新增字段一律视为失败。
@@ -683,7 +705,7 @@ cargo test --workspace
 export PATH="/c/Users/y7398/.rustup/toolchains/stable-x86_64-pc-windows-gnu/lib/rustlib/x86_64-pc-windows-gnu/bin/self-contained:$PATH"
 cargo +stable-x86_64-pc-windows-gnu build -p dd-ext --bin dd-ext-search
 
-# 5) 可选：L3 端到端（需本机 Everything HTTP 服务已开启）
+# 5) 可选：L3 端到端（需本机 Everything 运行：当前 es.exe / P2 everything-ipc）
 cargo test --workspace -- --ignored
 ```
 
@@ -735,9 +757,40 @@ cargo test --workspace -- --ignored
 
 ---
 
-## 九、v3.3 变更方案：IPC 直连与三项高频操作（P0/P1 已实施，P2 待实施）
+## 九、v3.3 变更方案：IPC 直连与三项高频操作（P0/P1/P2 代码已实施；P2 真机验收待做）
 
-> **实施状态（2026-09-09）**：**P0 ✅**（占位项专属文案 + guide subtitle/模块注释对齐 es.exe 通道）；**P1 ✅**（more_commands 三动作 + 宿主 `PanelItem.more_commands` 透传与 `sender=context_menu` 调用链 + spec/manifest `host/set_clipboard` 一致性断言 + L2 NDJSON 冒烟通过）；**P2 待实施**（everything-ipc 直连，硬前置 = 先核 docs.rs 的 `RequestFlags`/`DateModified`）。`Sender::ContextMenu` / `InvokeContext.selected_item_id` 为协议 v1.0 既有定义，零协议改动兑现。
+> **实施状态（2026-09-09，2026-09-10 更新 P2 前置）**：**P0 ✅**（占位项专属文案 + guide subtitle/模块注释对齐 es.exe 通道）；**P1 ✅**（more_commands 三动作 + 宿主 `PanelItem.more_commands` 透传与 `sender=context_menu` 调用链 + spec/manifest `host/set_clipboard` 一致性断言 + L2 NDJSON 冒烟通过）；**P2 ✅ 代码已实施**（everything-ipc 直连主通道 + es.exe 回落，见 §9.2 与 `CHANGELOG.md`；L2 冒烟已验证 IPC 主通道真机生效，**真机验收 A-33-05…A-33-10 待做**）。原「硬前置 = 先核 docs.rs 的 `RequestFlags`/`DateModified`」**已于 2026-09-10 结案**（见 §9.0：两者均存在，分别为 `Attributes` 与 FILETIME）；现硬前置转为 §9.0 的 4 条硬约束（超时 / client 重建 / 依赖形态 / 默认 feature）。`Sender::ContextMenu` / `InvokeContext.selected_item_id` 为协议 v1.0 既有定义，零协议改动兑现。
+
+### 9.0 核对修订（2026-09-10）：P2 的已核实事实与硬约束
+
+> 本节记录本次核对**已落地的事实结论**（来源：上游 `everything-ipc` docs.rs / crates.io、
+> `crates/dd-host/src/process.rs`、`crates/dd-gui/src/app/pool.rs`）。§9.2 起的条目按本节执行。
+
+**已核实（此前标注为"待核实"的项，现予结案）**：
+
+| 项 | 结论 | 证据 |
+| :-- | :-- | :-- |
+| `RequestFlags::Attributes` | **存在**（`RequestFlags` 共 16 个常量，含 `Attributes` / `DateModified` / `DateCreated` / `Size` / `Path` / `FileName`） | docs.rs `everything_ipc::wm::RequestFlags` |
+| 目录判定 | `QueryItem::get_u32(RequestFlags::Attributes) & 0x10` 精确判定目录，IPC 通道**不再依赖** `guess_is_dir` 启发式（`es.exe` 回落通道保留） | `QueryValue::U32(u32)` |
+| `DateModified` 单位 | **FILETIME**（`QueryValue::Time(FILETIME)`）→ 取 `dwHighDateTime/dwLowDateTime` 组合后复用既有 `filetime_to_unix`（`search.rs`） | docs.rs `QueryValue` |
+| `EverythingClient` 线程安全 | **Send + Sync**（docs.rs auto impls）；官方提供 `EverythingClient::shared() -> Result<Arc<Self>, IpcError>` 全局共享实例 | docs.rs `EverythingClient` |
+| 超时能力 | crate **提供** `.timeout(Duration)`（默认 **3000ms**）——推翻 §9.2 原"可能无超时机制"的假设 | `EverythingClientQueryWaitBuilder::timeout` |
+| crate 现状 | `everything-ipc 0.1.4`（2026-07，MIT，Rust 2024 edition），支持 Everything 1.4 / 1.5（含 alpha）；提供 `wm`（WM_COPYDATA）与 `pipe`（1.5+ 命名管道）两套通道 | crates.io / lib.rs |
+
+**硬约束（违反即 P2 阻断）**：
+
+1. **超时预算倒挂**：宿主 `TIMEOUT_GET_ITEMS = 2000ms`（`dd-host/src/process.rs`），而 crate 默认
+   timeout = 3000ms → 必须**显式**设置 1000–1200ms（与现有 `ES_TIMEOUT=1200ms` 同口径），
+   并给探活/回落留余量，使单请求总耗时 ≤2000ms。
+2. **client 必须可失效重建**：宿主 warm 进程池（`dd-gui/src/app/pool.rs`，LRU 8）使 `dd-ext-search`
+   **长驻**，Everything 退出/重启/切换实例后静态持有的 client 会永久失效 → 必须用 `shared()` 的
+   `Arc` 语义（全部引用释放后下次自动重建）+ 探活重建阈值，禁止用自建全局 `LazyLock` 永久持有。
+3. **依赖形态**：crate 依赖 **`windows 0.62`**（非 `windows-sys`），与 dd-ext 现有 `windows-sys 0.61`
+   并存 → 依赖必须写在 `[target.'cfg(windows)'.dependencies]`，且为读取 `FILETIME` 需引入同版本
+   `windows`（仅 `Win32_Foundation` feature）。**正面事实**：`dd-ext-search` 不在 `EMBED_EXES`
+   （`dd-gui/build.rs`，5 个内置扩展），故新增依赖**只增大 sidecar 体积，不影响单文件宿主**。
+4. **默认 feature 须关闭**：`default-features = false`，否则可能拉入 `tokio` / `folder` / `pe`，
+   与"禁止引入异步运行时"（§9.2 P2.1）直接冲突。
 
 ### 9.1 评审结论与范围
 
@@ -779,26 +832,68 @@ cargo test --workspace -- --ignored
 
 #### P2：`everything-ipc` 主通道与 `es.exe` 回落
 
-1. 仅在 P0 第 2 步通过后锁定依赖版本，新增最小 Windows target dependency；禁止引入异步运行时。
-2. 实现可复用的 `EverythingClient`（只有在 crate 明确满足 `Send`/`Sync` 且连接可安全复用时
-   才使用全局实例）：先探测/连接 Everything IPC，失败后调用现有 `run_es`；IPC 查询失败、
-   超时、版本不兼容和窗口不可用都必须可观测并可回落。
-3. 确保 stdin 主循环不被 IPC 阻塞。若 crate 不提供可取消/可限时调用，不得简单套用
-   `recv_timeout` 后丢弃仍阻塞的线程；必须采用 crate 支持的超时方式，或将该能力标记为
-   blocked。超时和异常路径须验证线程、句柄、窗口资源不会持续增长。
+1. 仅在 P0 第 2 步通过后锁定依赖版本；依赖写在 `[target.'cfg(windows)'.dependencies]`，
+   **禁止引入异步运行时**。形态（§9.0 硬约束 3/4）：
+   ```toml
+   everything-ipc = { version = "=0.1.4", default-features = false }  # 精确版本：0.1.x API 不稳定
+   windows        = { version = "0.62", features = ["Win32_Foundation"] }  # 与 crate 同版本，用于 FILETIME
+   ```
+   - `default-features = false` 后逐项核对默认 feature 集，**确认未拉入 `tokio` / `folder` / `pe`**；
+   - crate 传递依赖 `tracing`：无 subscriber 时为零开销，须实测**不向 stdout 输出任何内容**
+     （stdout 是 NDJSON 协议通道，污染即致命）；
+   - `dd-ext-search` 为 sidecar（不在 `EMBED_EXES`），依赖膨胀**只影响 sidecar 体积**，
+     须记录 release 前后 `dist/extensions.d/dd-ext-search.exe` 大小差，单文件宿主体积不受影响。
+2. **client 生命周期（可复用 + 可失效重建）**：使用 crate 自带的
+   `EverythingClient::shared() -> Result<Arc<Self>, IpcError>`——全局 `Arc`，**全部引用释放后
+   下次调用自动重建**；禁止自建全局 `LazyLock` 静态持有（长驻进程 + Everything 重启 = 永久失效）。
+   - 每次查询前经 `is_ipc_available()` / `is_db_loaded()` 探活（`is_db_loaded=false` 表示索引未就绪，
+     返回**引导项**而非空结果，避免"搜不到"误判）；
+   - 连接失败、查询超时、版本不兼容、窗口不可用、完整性级别受限（见第 6 条）均须**可观测**
+     （结构化日志：通道 / 耗时 / 结果数 / 错误码）并回落 `run_es`；
+   - **重建阈值**：连续 N 次失败或超 TTL 即释放 `Arc` 触发重建，使通道能**从回落态恢复到 IPC**
+     （验收见 A-33-10）。**不得**只实现"降级"而不实现"恢复"。
+3. **超时与阻塞**：crate **提供** `.timeout(Duration)`，默认 3000ms > 宿主 `get_items` 2000ms
+   （§9.0 硬约束 1）→ **必须显式**设置 1000–1200ms，且探活 + 查询 + 回落总耗时 ≤2000ms；
+   "未显式设置 timeout"列为 L0 阻断项。超时和异常路径须验证线程、句柄、窗口资源不持续增长；
+   crate 的回复窗口线程由其内部管理，仍须在连续 1000 次查询的时间序列中确认线程/句柄数不增长。
 4. 保留 `es.exe` 的 GBK/代码页解码，仅对 IPC 的 UTF-16 响应走明确的 UTF-16 解码路径；不得
    根据“看起来像 UTF-8”静默猜测编码。
-5. 目录属性和修改时间只在 crate API 已确认单位/字段后接入；否则继续使用现有启发式与转换函数，
-   并记录已知精度边界。P3 自动拉起 Everything 不属于本次范围。
+5. **字段接入（§9.0 已核实，不再是待核实项）**：
+   - 目录：`get_u32(RequestFlags::Attributes) & 0x10` 精确判定；IPC 通道弃用 `guess_is_dir`
+     启发式（`es.exe` 回落通道保留原启发式与其单测）；
+   - 修改时间：`get_time(RequestFlags::DateModified)` 返回 **FILETIME** → 组合
+     `dwHighDateTime/dwLowDateTime` 后复用既有 `filetime_to_unix` 得 Unix 秒，再进入近因加分；
+     记录 FILETIME → Unix 秒的精度边界（100ns → 秒截断）。
+6. **支持矩阵扩展（UIPI / 实例）**：`wm` 通道基于 `WM_COPYDATA`，受 Windows UIPI 限制——
+   Everything 以提升权限或服务方式运行、或与扩展进程完整性级别不同时，消息会被**静默拒绝**。
+   L3 矩阵因此必须覆盖「完整性级别 / 服务实例 / Everything 1.5 实例名（`with_instance`）」三个维度；
+   Everything 1.5 场景可评估 crate 的 `pipe`（命名管道）通道作为备选。
+   - **实例名默认值（对齐 ECP，见 §9.7）**：Everything 1.5a 的默认实例名为 `1.5a`；用户禁用
+     `alpha_instance` 后须置空。1.4 无实例名概念 → 走默认（传 `None`）。
+   - **版本差异**：过滤器（filters）在 1.4 由外部 `filters.toml` 提供、1.5 由 Everything 自身过滤器
+     提供（ECP 同口径）→ 本扩展查询直透、不解析 filters，故不受影响，但需在矩阵中记录行为差异。
+   P3 自动拉起 Everything 不属于本次范围。
+
+> **边界注记（P1.5 与 P2 的区分）**：`file://` 打开走 `ShellExecuteW(verb="open")`（目录→Explorer、
+> 文件→关联程序）属 **P1.5 已落地的宿主侧修复**（见 CHANGELOG v3.3 P1.5 条），与 P2 的
+> everything-ipc 检索通道**互不依赖**：P2 只改"如何从 Everything 拿结果"，不改变"结果如何打开"。
+> 若 P2 落地后打开行为出现回归，回退对象是 P1.5 的宿主分支，而非 IPC 适配层。
 
 ### 9.3 严格测试流程
 
 #### L0：静态与依赖审查
 
 1. `cargo metadata --locked`：确认依赖可解析、锁文件变化仅包含批准的 crate。
-2. 核对 `cargo tree -i everything-ipc`、许可证、MSRV、目标平台和 release 包体差异；任何未批准
-   传递依赖或非 Windows 编译回归均阻断合并。
+2. 核对 `cargo tree -i everything-ipc` 与 `cargo tree -e features -i everything-ipc`、许可证
+   （MIT）、MSRV（Rust 2024 edition → rustc ≥ 1.85）、目标平台、默认 feature 集（**不得含
+   `tokio` / `folder` / `pe`**）和 release 包体差异；任何未批准传递依赖、异步运行时或非 Windows
+   编译回归均阻断合并。
 3. 对协议 v1.0、manifest schema、`more_commands`、`Effect` 和 capability 前置规则做字段级审查。
+4. **超时与生命周期静态审查（P2 硬前置，2026-09-10 新增）**：
+   - 代码中**不存在**未带 `.timeout(...)` 的 `query_wait(...).call()`（默认 3000ms 视为缺陷）；
+   - 不存在自建全局 `LazyLock`/`static` 持有 `EverythingClient`（须用 `shared()` 的 `Arc` 语义）；
+   - 存在探活（`is_ipc_available` / `is_db_loaded`）与重建触发点；
+   - `tracing` 无 subscriber，且无向 stdout 写日志的路径。
 
 #### L1：离线单测（必须全绿）
 
@@ -834,15 +929,92 @@ IPC 可用/不可用、es.exe 存在/缺失、中文和长路径、冷启动/热
 | A-33-02 | 每个结果最多 3 个动作；30 条结果均可生成合法 pid；PATH_INDEX 始终 `<=1024` | 离线测试 + 1000 次压力报告 |
 | A-33-03 | open/reveal/copy 三动作成功率 100%（各 100 次，含空格和 Unicode 路径）；失败均有 Toast 且无错误副作用 | L1/L2/L3 日志和操作录屏 |
 | A-33-04 | manifest 与 `spec` 的能力集合完全相等；宿主拒绝未声明能力时返回可观测错误，扩展不伪造成功 | 契约测试 + 宿主集成测试 |
-| A-33-05 | IPC 热查询 p50 <10ms、p95 <30ms；相对当前 `run_es` 基线 p95 至少降低 50% | 1000 次同机基准，记录硬件/版本 |
-| A-33-06 | IPC 不可用时 100% 回落至 `es.exe`；两者均不可用时 100% 返回引导项，单请求 <=2000ms | 故障注入报告 |
+| A-33-05 | **扩展进程内 IPC 查询阶段** p50 <10ms、p95 <30ms；相对同口径 `run_es` 基线 p95 至少降低 50%。**口径澄清（2026-09-10）**：端到端含宿主 200ms 去抖与渲染，不适用该阈值；端到端另设“输入到首屏 ≤200ms”的感知指标，两者分别测量 | 1000 次同机基准（记录硬件/版本/测量点）+ 端到端计时日志 |
+| A-33-06 | IPC 不可用时 100% 回落至 `es.exe`；两者均不可用时 100% 返回引导项；**单请求总耗时（探活 + 查询 + 回落）<=2000ms** | 故障注入报告（含耗时分解） |
 | A-33-07 | 连续 1000 次查询无扩展崩溃、线程/句柄持续增长或 PATH_INDEX 超限；RSS 增长 <10% | 进程/线程/句柄/RSS 时间序列 |
-| A-33-08 | Windows 10/11 × Everything 1.4/1.5 支持矩阵全部有结果或明确“不支持”记录；不允许静默错误 | 真机矩阵报告 |
+| A-33-08 | Windows 10/11 × Everything 1.4/1.5 **× 完整性级别（普通/提升/服务实例）× 1.5 实例名** 支持矩阵全部有结果或明确“不支持”记录；UIPI 受限场景必须**可观测**地回落，不允许静默错误 | 真机矩阵报告 + 回落日志 |
 | A-33-09 | 全量格式、clippy、workspace 测试、release 打包均 exit 0；协议测试无新增字段/方法 | CI 日志与产物检查 |
+| A-33-10 | **IPC 恢复**：Everything 退出→重启（或切换实例）后，N 次查询内自动回到 IPC 通道；长驻进程不得永久停留在 `es.exe` 回落态 | 重启注入 + 通道切换日志时间戳 |
 
 ### 9.5 不通过时的处理
 
 - 依赖 API、协议字段、Everything 版本兼容性或性能指标任一未验证：P2 标记 blocked，不合并。
+- **未显式设置 `.timeout()`（落到 crate 默认 3000ms）、默认 feature 含 `tokio`、或采用不可重建的
+  全局 client：P2 标记 blocked**（§9.0 硬约束 1/2/4），不合并。
 - P1 任一动作失败：撤销对应 `more_commands` 和 capability 声明，保留打开文件和现有搜索。
+
+### 9.6 核对中发现的既有缺陷（属 P1 已落地代码，独立修复，2026-09-10 记录）
+
+> 以下不属于 P2 范围，但会命中 A-33-03 的用例覆盖，需单独立项修复。
+
+| # | 缺陷 | 位置 | 后果 | 修法 |
+| :-- | :--- | :--- | :--- | :--- |
+| 1 | `file://` 路径**未 percent-encode**，而宿主对 `%XX` **无条件解码** | 扩展侧 `search.rs`（`files.open.{pid}` 的 `format!("file:///{}", …)`） + 宿主 `dd-gui/src/platform.rs::file_url_to_path` | 文件名形如 `report%20final.txt` → 被解成 `report final.txt` → 打开失败 | 二选一：扩展侧做最小 percent-encode（至少 `%` `#` `?`）；或宿主侧改为"先按原串校验存在性，失败再解码"。A-33-03 用例补 `%` / `#` |
+| 2 | `#` / `?` 未做 fragment/query 截断 | 同上 | 含 `#` `?` 的路径被截断或解析错误 | 随第 1 项一并处理 |
+| 3 | UNC 路径不支持 | `file_url_to_path` 对非空 host 返回 `None` | `\\server\share\x` 走不到 ShellExecute | 明确列为已知边界，或扩展侧识别 UNC 后改走 `file://host/...` 并由宿主支持 |
+
+### 9.7 对标核实：lin-ycv/EverythingCommandPalette（ECP，2026-09-10）
+
+> **结论：是，本方案确实参考 ECP，但参考面仅限两点**——① **命令丰富度**（`docs/search-file-update.md`
+> §1/§3.2 明确"对标 ECP，缺口在命令丰富度"；`search.rs` 注释"对齐 ECP 高频三动作"）；
+> ② **传输通道**（ECP 同样不经 HTTP，而是直接用 Everything SDK/IPC，与 P2 方向一致）。
+> 下述 ECP 事实取自其 [README](https://github.com/lin-ycv/EverythingCommandPalette) 与
+> [Features wiki](https://github.com/lin-ycv/EverythingCommandPalette/wiki/Features)。
+
+**ECP 是什么**：PowerToys Command Palette（CmdPal）的扩展（C#/.NET，MSIX 分发），在 CmdPal 内用
+Everything 搜文件；分 ECP（Everything 1.4）与 ECP3（1.5 + SDK3）两个版本。
+
+**ECP 实际传输机制（2026-09-10 核实）**：ECP **不依赖 `es.exe`**。它通过 **Everything SDK
+（`Everything64.dll`）以 C# P/Invoke** 直接与运行中的 Everything 进程通信——`Everything_SetSearchW` /
+`Everything_QueryW` / `Everything_GetResultFullPathNameW` 等均为 `[DllImport("Everything64.dll")]`；
+SDK 底层仍走 Everything 的 IPC（WM_COPYDATA / 1.5 命名管道）。ECP 的 wiki 明确要求"**非 lite 版** Everything，
+lite 不支持 IPC"，正是此机制——`es.exe` 是独立命令行工具，与 SDK 无关。两个版本：ECP 用 1.4 SDK；ECP3（SDK3 标签）
+用 1.5 SDK3，支持命名实例、无需禁用 alpha 实例。
+
+**与 dd-run P2 的等价关系**：两者都是"**不 spawn `es.exe`、直接与 Everything IPC 通信**"的同类方案，仅为封装不同——
+ECP 用原生 DLL + P/Invoke（MSIX 内随包分发 `Everything64.dll`），dd-run P2 用纯 Rust 的 `everything-ipc` crate
+（`windows 0.62` 的 WM_COPYDATA / `pipe` 通道，**无需随包分发任何 C ABI DLL**）。后者对 dd-run 的**单文件分发目标
+（M5 single-file distribution）更友好**：避免把一个原生 DLL 打进 exe sidecar。但 `everything-ipc` 与 ECP 的 SDK
+走的是**同一套 Everything IPC 协议**，因此 §9.0 的 UIPI / 完整性级别 / 服务实例 / 1.5 实例名等边界**同样适用**——
+"换 crate"并未绕开 es.exe 类方案共有的 IPC 限制，只是把"进程外 CLI 调用"换成了"进程内 IPC 调用"。
+
+**ECP 命令集（12 项，含 1 项受宿主限制不可用）与 dd-run 对照**：
+
+| # | ECP 命令 | 快捷键 | dd-run 现状 | 说明 |
+| :-- | :--- | :--- | :--- | :--- |
+| 1 | Open file | Enter | ✅ `files.open.{pid}` | 经 `host/open_url(file://)` + ShellExecuteW |
+| 2 | Browse（页内进入所在目录） | Ctrl+Enter | ❌ | 可由 `get_items` + 路径前缀实现，成本低 |
+| 3 | Open with（非默认程序） | Shift+Enter | ❌ | 需宿主新能力或 `ShellExecuteW(verb="openas")` |
+| 4 | Send to specified | Ctrl+N | ❌ | 需设置项（目标 exe + 参数） |
+| 5 | Run as admin | Ctrl+Shift+Enter | ❌（文件类） | 宿主已有 `run_as_admin`，但静态菜单仅对「应用」类渲染 |
+| 6 | Run as user | Ctrl+Shift+U | ❌ | 低优先 |
+| 7 | Open folder | Ctrl+Shift+E | ✅ `files.reveal.{pid}` | `explorer /select` + `raw_arg` |
+| 8 | Copy（文件本身） | Ctrl+C | ❌ | ECP 侧因 CmdPal 限制**不可用**；dd-run 自建宿主无此限制 |
+| 9 | Copy path | Ctrl+Alt+C | ✅ `files.copy.{pid}` | `host/set_clipboard` |
+| 10 | Open in console（在此打开终端） | Ctrl+Shift+C | ❌ | 低成本，可复用 `shell` 扩展思路 |
+| 11 | Delete（永久删除，带确认） | Ctrl+Del | ❌ | 高危，需 `CommandResult::Confirm` |
+| 12 | Open properties | Alt+Enter | ❌ | 需 `ShellExecuteW(verb="properties")` |
+
+**ECP 设置项**：Instance Name（1.5a 默认 `1.5a`）、Sort（默认 `DATE_MODIFIED_DESCENDING`，ECP3 为
+`RUN_COUNT DESC` 再 `DATE_MODIFIED DESC`；支持 `sort:` 单次覆盖）、Max（默认 10）、Query Prefix、
+Match Path、RegEx、Show More（启动 Everything 查看全部结果）、Everything exe 路径、Send to 目标、
+filters.toml（仅 1.4）。
+
+**覆盖度口径修正（文档错漏）**：`search-file-update.md` 写"ECP 覆盖度从 30% 提升至 70%"——
+按**命令条目数**口径实为 **3/12 = 25%**（打开 / 显示所在目录 / 复制路径）。原文 70% 应理解为
+"高频使用频次的加权覆盖"，**两个口径须同时写明，不得只用加权值**。已对齐的三项确实是 ECP 使用
+频次最高的动作，故 P1 的性价比成立，但**不应据此宣称"ECP 覆盖 70%"**。
+
+**可低成本借鉴（候选 v0.2 增强，不在 P2 范围）**：
+1. **Show more / 在 Everything 中查看**（ECP 同名设置）：结果页尾部加一条 `files.more` 项 + Everything.exe
+   路径设置（ECP 亦需该设置），解决"固定 30 条看不到全部"的边界（现记录于 `search.md` 已知边界）。
+2. **Run as admin 对文件类开放**：宿主 `run_as_admin`（`platform.rs`）已实现，只需把静态菜单的
+   「应用」门控扩展到"可执行文件"，或由扩展按需下发 `more_commands`。
+3. **Open in console / Open properties**：均为单条 `ShellExecuteW`，成本低。
+4. **实例名设置**：见 §9.2 P2.6（1.5a 默认 `1.5a`）。
+
+**dd-run 相对 ECP 的结构性优势（可写入后续路线）**：自建宿主，不受 CmdPal 的两项限制——
+ECP 的「Copy 文件本身」因宿主限制完全不可用、除 Enter/Ctrl+Enter 外的快捷键"已实现但不生效"。
+dd-run 若补齐动作，可做到"有快捷键且真生效"。
 - P2 任一故障：关闭 IPC 优先路径，使用 `es.exe` 回落；不得把“Everything 运行中即可用”
   写入用户文档，直到 A-33-06/A-33-08 通过。

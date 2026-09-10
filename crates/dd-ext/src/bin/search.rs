@@ -1,25 +1,33 @@
 //! dd-ext-search —— 内置「文件搜索」扩展（`com.ddrun.filesearch`，Windows-only）。
 //!
+//! **传输层（P2，2026-09-10）**：以 `everything-ipc` crate 直连 Everything 的 IPC
+//! （WM_COPYDATA，纯 Rust，**无外部进程、无 DLL 随包**）为**主通道**；`es.exe` 仅在
+//! 主通道不可用时作为**回落**（§9.2 P2）。主通道不可用 / 查询失败 / 超时 → 自动回落
+//! `es.exe`；两者均不可用 → 引导项。P0/P1 已发布的 `es.exe` 单通道保留为回落路径。
+//!
 //! 功能（便捷 + 速度优化版）：
 //! - **顶层**：一条「文件搜索」入口（`CommandRef::Page` → `files.results`）；
 //! - **兜底**（§6.2）：每查询一条模板 `files.search.query`（title 含 `{query}`）；
 //! - **子页**（§6.3，运行时 `PageHandler` 补齐）：`get_items(files.results, search_text)`
-//!   经 Everything 官方 `es.exe`（IPC 通道，**免开 HTTP 服务器**）返回前 N 条文件项；
+//!   经 everything-ipc（主）/ `es.exe`（回落）返回前 N 条文件项；
 //! - **invoke**：回车经 `host/open_url`（`file://`）打开文件；上下文菜单三动作
 //!   （v3.3 P1，协议零改动）：打开（默认主命令）/ `files.reveal.{pid}` 显示所在
 //!   目录（扩展进程直接 `explorer /select`）/ `files.copy.{pid}` 复制路径
 //!   （`ShowToast` + `host/set_clipboard`）。
 //!
+//! 图标（v0.1.1）：文件结果**按扩展名显示类别图标**（12 类 Segoe glyph，见
+//! `entry_glyph`），引导/入口项统一搜索图标；协议 `Icon::Glyph` 零改动。
+//!
 //! 速度打磨（扩展侧，零宿主改动即可生效）：
 //! 1. **探测缓存**：`available()` 探测结果按 TTL 缓存（默认 3s），避免每次按键
-//!    都探测 Everything（`es.exe -get-everything-version` IPC 探活）。
-//! 2. **超时收紧**：探测 800ms、搜索 1.2s（宿主 `get_items` 超时 2000ms，留余量）。
+//!    都探测 Everything（IPC 轻量探活优先，回落 `es.exe -get-everything-version`）。
+//! 2. **超时收紧**：探测 800ms、查询 1.2s（宿主 `get_items` 超时 2000ms，留余量）。
 //! 3. **结果数自适应**：默认 30 条，评分排序稳定；海量结果只取前 N。
 //! 4. **查询直透**：Everything 全部搜索语法（`ext:`/`dm:`/`path:`/通配符/正则）
 //!    原样透传，无需扩展侧解析。
 //!
-//! 依赖：仅 `fuzzy-matcher`（纯 Rust）+ `chrono`；查询走 `es.exe` 子进程 IPC，
-//! **不使用 Everything HTTP / TcpStream**（v3.3 起废弃，历史方案见
+//! 依赖：`fuzzy-matcher`（纯 Rust）+ `chrono` + `everything-ipc`（P2，仅 Windows）。
+//! **不使用 Everything HTTP / TcpStream**（v3.1 计划期方案，v3.3 起废弃，历史见
 //! [`docs/search-file.md`](../../docs/search-file.md)）。协议 v1.0 冻结：
 //! **未新增任何协议方法**，完全复用 provider 模型。
 
@@ -91,10 +99,11 @@ struct AvailCache {
 }
 static AVAIL: Mutex<Option<AvailCache>> = Mutex::new(None);
 
-/// Everything（经 es.exe / IPC）是否可用（带 TTL 缓存，避免每次按键都启动进程探测）。
+/// Everything 是否可用（带 TTL 缓存，避免每次按键都探测）。
 ///
-/// `-get-everything-version` 是与 Everything 建立 IPC 的最轻量方式：Everything 未运行时
-/// es 以非 0 退出码失败（8 = 无 IPC 窗口），此处只需判断命令能否成功执行。
+/// **探活顺序（§9.2 P2）**：IPC 轻量探活优先（`FindWindowW` + `is_ipc_available` +
+/// `is_db_loaded`，不建 client、不起线程）；IPC 不可用再回落 `es.exe -get-everything-version`
+/// （Everything 未运行时 es 以非 0 退出码失败，8 = 无 IPC 窗口）。
 fn everything_available() -> bool {
     let now = Instant::now();
     if let Some(c) = AVAIL.lock().unwrap().as_ref() {
@@ -102,12 +111,23 @@ fn everything_available() -> bool {
             return c.ok;
         }
     }
-    let ok = match es_exe_path() {
-        Some(exe) => run_es(&exe, &["-get-everything-version"]).is_ok(),
-        None => false,
-    };
+    let ok = probe_available();
     *AVAIL.lock().unwrap() = Some(AvailCache { ok, at: now });
     ok
+}
+
+/// IPC 优先、es.exe 回落的两级探活（两者都不可用 = false）。
+fn probe_available() -> bool {
+    #[cfg(windows)]
+    {
+        if ipc::probe_available() {
+            return true;
+        }
+    }
+    match es_exe_path() {
+        Some(exe) => run_es(&exe, &["-get-everything-version"]).is_ok(),
+        None => false,
+    }
 }
 
 /// 定位 es.exe（Everything 官方命令行工具，走 IPC，**无需开启 HTTP 服务器**）。
@@ -286,6 +306,37 @@ fn filetime_to_unix(ft: i64) -> i64 {
     }
 }
 
+/// 合并 FILETIME 的高/低 32 位为一个 i64（IPC 通道用；纯函数便于离线单测）。
+/// Windows `FILETIME` = 100ns 间隔、自 1601-01-01 起算的 64 位值，拆为两个 u32。
+fn combine_filetime(high: u32, low: u32) -> i64 {
+    (((high as u64) << 32) | (low as u64)) as i64
+}
+
+/// 由原始字段构造 `FileEntry`——**es.exe 与 IPC 两条通道共用**（纯函数，便于离线单测）。
+/// `attributes` 为 0（通道未提供属性）时退回 `guess_is_dir` 启发式；否则用
+/// `FILE_ATTRIBUTE_DIRECTORY (0x10)` 精确判定。
+fn make_entry(
+    name: String,
+    dir: String,
+    size: u64,
+    attributes: u32,
+    filetime_raw: i64,
+) -> FileEntry {
+    let is_dir = if attributes == 0 {
+        guess_is_dir(&name, size, "")
+    } else {
+        attributes & 0x10 != 0
+    };
+    FileEntry {
+        name,
+        dir,
+        size,
+        modified: filetime_to_unix(filetime_raw),
+        modified_raw: format_filetime(filetime_raw),
+        is_dir,
+    }
+}
+
 /// FILETIME → 本地时间展示串（详情面板用）；无效返回 `-`。
 fn format_filetime(ft: i64) -> String {
     let unix = filetime_to_unix(ft);
@@ -338,26 +389,137 @@ fn parse_response(body: &str) -> anyhow::Result<Vec<FileEntry>> {
         .into_iter()
         .map(|e| {
             let (dir, name) = split_path(&e.filename);
-            // attributes 有效（非 0）时用 FILE_ATTRIBUTE_DIRECTORY(0x10) 精确判定；
-            // 缺失（0）时退回启发式
-            let is_dir = if e.attributes == 0 {
-                guess_is_dir(&name, e.size, "")
-            } else {
-                e.attributes & 0x10 != 0
-            };
-            FileEntry {
-                name,
-                dir,
-                size: e.size,
-                modified: filetime_to_unix(e.date_modified),
-                modified_raw: format_filetime(e.date_modified),
-                is_dir,
-            }
+            make_entry(name, dir, e.size, e.attributes, e.date_modified)
         })
         .collect())
 }
 
+// ─── P2：everything-ipc 主通道（Windows-only）────────────────────────
+/// `everything-ipc` 适配层（§9.2 P2）：直连 Everything IPC，免 spawn es.exe。
+///
+/// - client 经 `EverythingClient::shared()` 获取（全局 Weak 缓存：Arc 全释放后自动重建）；
+/// - 本模块再缓存一个 `Arc` 以避免每次查询重建回复窗口线程；
+/// - **连续失败达阈值即释放缓存 Arc**，使 Everything 重启 / 实例切换后能恢复到 IPC
+///   （只降级不恢复视为不合格，见 §9.4 A-33-10）；
+/// - 超时显式 1200ms（< 宿主 `get_items` 2000ms）；失败返回 `Err` 由上层回落 es.exe。
+#[cfg(windows)]
+mod ipc {
+    use super::{combine_filetime, make_entry, FileEntry};
+    use std::sync::atomic::{AtomicU32, Ordering};
+    use std::sync::{Arc, Mutex};
+    use std::time::Duration;
+
+    use everything_ipc::wm::{EverythingClient, IpcError, QueryItem, RequestFlags};
+
+    /// 单次 IPC 查询超时（宿主 `get_items` 超时 2000ms，须留足余量）。
+    const IPC_TIMEOUT: Duration = Duration::from_millis(1200);
+    /// 连续失败阈值：达到即释放缓存 client，触发下次经 `shared()` 重建。
+    const REBUILD_AFTER_FAILS: u32 = 3;
+    /// 日志前缀（stderr，与 `spec().log_tag` 一致）。
+    const TAG: &str = "dd-ext-filesearch";
+
+    /// 缓存的共享 client。**不能在查询间隙永久持有**——失败达阈值会释放以触发重建。
+    static CLIENT: Mutex<Option<Arc<EverythingClient>>> = Mutex::new(None);
+    /// 连续失败计数（成功清零）。
+    static FAILS: AtomicU32 = AtomicU32::new(0);
+
+    /// IPC 查询请求字段：文件名 / 所在目录 / 大小 / 修改时间 / 属性。
+    fn request_flags() -> RequestFlags {
+        RequestFlags::FileName
+            | RequestFlags::Path
+            | RequestFlags::Size
+            | RequestFlags::DateModified
+            | RequestFlags::Attributes
+    }
+
+    /// 取缓存的共享 client；无则经 `shared()` 创建（Everything 未运行 → `Err`）。
+    fn shared_client() -> Result<Arc<EverythingClient>, IpcError> {
+        let mut guard = CLIENT.lock().unwrap();
+        if let Some(client) = guard.as_ref() {
+            return Ok(Arc::clone(client));
+        }
+        let client = EverythingClient::shared()?;
+        *guard = Some(Arc::clone(&client));
+        Ok(client)
+    }
+
+    /// 释放缓存 client 并清零失败计数：下次查询经 `shared()` 重新连接（IPC 恢复）。
+    fn reset_client() {
+        *CLIENT.lock().unwrap() = None;
+        FAILS.store(0, Ordering::SeqCst);
+    }
+
+    /// IPC 轻量探活：`FindWindowW` + `is_ipc_available()`（minor ≥ 4）+ `is_db_loaded()`。
+    /// **不创建 client**（无回复窗口线程），适合每次按键前的可用性检查。
+    pub fn probe_available() -> bool {
+        match everything_ipc::IpcWindow::new() {
+            Some(window) => window.is_ipc_available() && window.is_db_loaded(),
+            None => false,
+        }
+    }
+
+    /// 记录一条传输层诊断（stderr，不污染 stdout 的 NDJSON 协议）。
+    fn log(msg: &str) {
+        eprintln!("[{TAG}] {msg}");
+    }
+
+    /// IPC 查询；失败按阈值触发 client 重建。返回 `FileEntry` 列表或错误串（由上层回落）。
+    pub fn search(q: &str, limit: usize) -> Result<Vec<FileEntry>, String> {
+        let client = shared_client().map_err(|e| {
+            log(&format!("IPC 不可用（{e}），回落 es.exe"));
+            e.to_string()
+        })?;
+        match client
+            .query_wait(q)
+            .request_flags(request_flags())
+            .max_results(limit as u32)
+            .timeout(IPC_TIMEOUT)
+            .call()
+        {
+            Ok(list) => {
+                FAILS.store(0, Ordering::SeqCst);
+                Ok(list.iter().map(map_item).collect())
+            }
+            Err(e) => {
+                let n = FAILS.fetch_add(1, Ordering::SeqCst) + 1;
+                if n >= REBUILD_AFTER_FAILS {
+                    reset_client();
+                    log(&format!("IPC 连续 {n} 次失败，已释放 client，下次重建"));
+                }
+                Err(e.to_string())
+            }
+        }
+    }
+
+    /// `QueryItem` → `FileEntry`（字段映射见 §9.2 P2）。
+    /// `date_modified` 为 `FILETIME`（windows crate 类型）→ 先合 64 位再转 Unix 秒。
+    fn map_item(item: QueryItem<'_>) -> FileEntry {
+        let name = item.get_string(RequestFlags::FileName).unwrap_or_default();
+        let dir = item.get_string(RequestFlags::Path).unwrap_or_default();
+        let size = item.get_size(RequestFlags::Size).unwrap_or(0);
+        let attributes = item.get_u32(RequestFlags::Attributes).unwrap_or(0);
+        let filetime_raw = item
+            .get_time(RequestFlags::DateModified)
+            .map(|ft| combine_filetime(ft.dwHighDateTime, ft.dwLowDateTime))
+            .unwrap_or(0);
+        make_entry(name, dir, size, attributes, filetime_raw)
+    }
+}
+
+/// 搜索：**IPC 主通道优先**，失败回落 `es.exe`（§9.2 P2）。
 fn search(q: &str, limit: usize) -> anyhow::Result<Vec<FileEntry>> {
+    #[cfg(windows)]
+    {
+        match ipc::search(q, limit) {
+            Ok(entries) => return Ok(entries),
+            Err(e) => eprintln!("[dd-ext-filesearch] IPC 查询失败（{e}），回落 es.exe"),
+        }
+    }
+    search_via_es(q, limit)
+}
+
+/// 回落通道：经 Everything 官方命令行工具 `es.exe`（进程调用，走本机 IPC）检索。
+fn search_via_es(q: &str, limit: usize) -> anyhow::Result<Vec<FileEntry>> {
     let exe =
         es_exe_path().ok_or_else(|| anyhow::anyhow!("未找到 es.exe（Everything 命令行工具）"))?;
     // `-json` 输出 JSON；`-n` 限条数；`-size`/`-dm`/`-attributes` 取大小、修改时间、属性。
@@ -419,11 +581,107 @@ fn human_size(bytes: u64) -> String {
 }
 
 // ─── CommandItem 构造 ──────────────────────────────────────────────
-fn file_glyph(is_dir: bool) -> &'static str {
-    if is_dir {
-        "\u{E8B7}" // 文件夹
+
+// ─── 文件类型图标（Segoe Fluent Icons / MDL2，按扩展名分类）────────────
+//
+// 文件结果按扩展名显示类别图标（12 类，未收录回落 Page 兜底）。宿主
+// `setup_cjk_fonts` 已把图标字体装入字形回退链（Win11 SegoeIcons.ttf →
+// Win10 segmdl2.ttf），协议 `Icon::Glyph` 透传零改动。
+//
+// 码位核验（2026-09-10）：下表全部码位在本机两代字体 cmap(format 4) 中均
+// 存在——segmdl2.ttf（Win10，283820B）与 SegoeIcons.ttf（Win11，471716B），
+// PowerShell 手写 cmap 解析器逐位核验；自校验锚点：E8B7/E7C3（生产已证明
+// 值）= 存在，U+4E2D（CJK）/U+0041（拉丁）= 不存在，解析器行为正确。
+const GLYPH_FOLDER: &str = "\u{E8B7}"; // Folder
+const GLYPH_PAGE: &str = "\u{E7C3}"; // Page（兜底：未收录扩展名/无扩展名）
+const GLYPH_SEARCH: &str = "\u{E721}"; // Search（引导/入口项）
+const GLYPH_DOCUMENT: &str = "\u{E8A5}"; // Document
+const GLYPH_CODE: &str = "\u{E943}"; // Code
+const GLYPH_ZIP: &str = "\u{E8B8}"; // ZipFolder
+const GLYPH_IMAGE: &str = "\u{E8B9}"; // Photo
+const GLYPH_AUDIO: &str = "\u{EC4F}"; // Audio
+const GLYPH_VIDEO: &str = "\u{E714}"; // Video
+const GLYPH_EXE: &str = "\u{E71D}"; // AppIconDefault（可执行/安装包）
+const GLYPH_CONFIG: &str = "\u{E713}"; // Settings（配置文件）
+const GLYPH_FONT: &str = "\u{E8D2}"; // Font
+const GLYPH_EBOOK: &str = "\u{E736}"; // ReadingMode（电子书）
+
+/// 文件类别（扩展名 → 图标类别的中间层；独立枚举便于单测穷举映射）。
+/// 无 `Folder` 变体：目录在 `entry_glyph` 中先行短路（目录名也可能带扩展名）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum FileCategory {
+    Document,
+    Code,
+    Archive,
+    Image,
+    Audio,
+    Video,
+    Executable,
+    Config,
+    Font,
+    Ebook,
+    Other,
+}
+
+/// 按文件名末段扩展名分类（大小写不敏感；dotfile/无扩展名/尾点 → Other）。
+/// 纯函数、零 IO——L1 可离线穷举（§8.4.2 规则 1）。
+fn file_category(name: &str) -> FileCategory {
+    // 点号仅在首字符时属于 dotfile（如 .gitignore），扩展名取最后一个点之后；
+    // 尾点（"abc."）视为无扩展名。
+    let ext = match name.rsplit_once('.') {
+        Some((stem, ext)) if !stem.is_empty() && !ext.is_empty() => ext,
+        _ => return FileCategory::Other,
+    };
+    match ext.to_ascii_lowercase().as_str() {
+        "doc" | "docx" | "xls" | "xlsx" | "ppt" | "pptx" | "pdf" | "txt" | "md" | "rtf" | "wps"
+        | "et" | "dps" | "csv" | "tsv" | "odt" | "ods" | "odp" | "log" => FileCategory::Document,
+        "rs" | "py" | "js" | "mjs" | "cjs" | "ts" | "jsx" | "tsx" | "c" | "h" | "cpp" | "cc"
+        | "cxx" | "hpp" | "hxx" | "cs" | "java" | "kt" | "swift" | "go" | "rb" | "php" | "sh"
+        | "ps1" | "psm1" | "bat" | "cmd" | "lua" | "sql" | "asm" | "vue" | "html" | "htm"
+        | "css" | "scss" | "less" | "dart" | "scala" | "pl" => FileCategory::Code,
+        "zip" | "7z" | "rar" | "tar" | "gz" | "bz2" | "xz" | "zst" | "cab" | "iso" => {
+            FileCategory::Archive
+        }
+        "png" | "jpg" | "jpeg" | "gif" | "bmp" | "webp" | "svg" | "ico" | "tif" | "tiff"
+        | "psd" | "ai" | "raw" | "heic" => FileCategory::Image,
+        "mp3" | "wav" | "flac" | "ogg" | "oga" | "m4a" | "aac" | "wma" | "opus" | "mid" => {
+            FileCategory::Audio
+        }
+        "mp4" | "mkv" | "avi" | "mov" | "wmv" | "flv" | "webm" | "m4v" | "mpg" | "mpeg" | "3gp" => {
+            FileCategory::Video
+        }
+        "exe" | "msi" | "dll" | "sys" | "scr" | "com" | "msix" | "appx" => FileCategory::Executable,
+        "ini" | "cfg" | "conf" | "config" | "yaml" | "yml" | "toml" | "json" | "xml" | "env"
+        | "properties" | "plist" | "reg" => FileCategory::Config,
+        "ttf" | "otf" | "ttc" | "woff" | "woff2" | "eot" | "fon" => FileCategory::Font,
+        "epub" | "mobi" | "azw" | "azw3" | "djvu" | "fb2" => FileCategory::Ebook,
+        _ => FileCategory::Other,
+    }
+}
+
+/// 类别 → Segoe 图标码位（与上表常量一一对应，兜底 Page）。
+fn category_glyph(c: FileCategory) -> &'static str {
+    match c {
+        FileCategory::Document => GLYPH_DOCUMENT,
+        FileCategory::Code => GLYPH_CODE,
+        FileCategory::Archive => GLYPH_ZIP,
+        FileCategory::Image => GLYPH_IMAGE,
+        FileCategory::Audio => GLYPH_AUDIO,
+        FileCategory::Video => GLYPH_VIDEO,
+        FileCategory::Executable => GLYPH_EXE,
+        FileCategory::Config => GLYPH_CONFIG,
+        FileCategory::Font => GLYPH_FONT,
+        FileCategory::Ebook => GLYPH_EBOOK,
+        FileCategory::Other => GLYPH_PAGE,
+    }
+}
+
+/// 文件结果项图标：目录恒为 Folder，文件按扩展名分类。
+fn entry_glyph(entry: &FileEntry) -> &'static str {
+    if entry.is_dir {
+        GLYPH_FOLDER
     } else {
-        "\u{E7C3}" // 文件
+        category_glyph(file_category(&entry.name))
     }
 }
 
@@ -454,7 +712,7 @@ fn to_command_item(entry: &FileEntry) -> CommandItem {
         subtitle: Some(path.clone()),
         icon: Some(Icon {
             kind: IconKind::Glyph,
-            value: file_glyph(entry.is_dir).to_string(),
+            value: entry_glyph(entry).to_string(),
         }),
         section: Some(tr("文件", "Files").to_string()),
         tags: Some(vec!["files".to_string()]),
@@ -497,7 +755,7 @@ fn hint_item() -> CommandItem {
         subtitle: Some(tr("Everything 已就绪", "Everything is ready").into()),
         icon: Some(Icon {
             kind: IconKind::Glyph,
-            value: file_glyph(false).to_string(),
+            value: GLYPH_SEARCH.to_string(),
         }),
         section: Some(tr("文件", "Files").into()),
         tags: None,
@@ -521,7 +779,7 @@ fn guide_item() -> CommandItem {
         ),
         icon: Some(Icon {
             kind: IconKind::Glyph,
-            value: file_glyph(false).to_string(),
+            value: GLYPH_SEARCH.to_string(),
         }),
         section: Some(tr("文件", "Files").into()),
         tags: None,
@@ -539,7 +797,7 @@ fn error_item(msg: &str) -> CommandItem {
         subtitle: Some(msg.to_string()),
         icon: Some(Icon {
             kind: IconKind::Glyph,
-            value: file_glyph(false).to_string(),
+            value: GLYPH_SEARCH.to_string(),
         }),
         section: Some(tr("文件", "Files").into()),
         tags: None,
@@ -586,7 +844,7 @@ fn top_level_commands() -> Vec<CommandItem> {
         ),
         icon: Some(Icon {
             kind: IconKind::Glyph,
-            value: file_glyph(false).to_string(),
+            value: GLYPH_SEARCH.to_string(),
         }),
         section: Some(tr("文件", "Files").into()),
         tags: Some(vec!["files".to_string()]),
@@ -612,7 +870,7 @@ fn fallback_commands() -> Vec<CommandItem> {
         ),
         icon: Some(Icon {
             kind: IconKind::Glyph,
-            value: file_glyph(false).to_string(),
+            value: GLYPH_SEARCH.to_string(),
         }),
         section: Some(tr("文件", "Files").into()),
         tags: Some(vec!["files".to_string()]),
@@ -863,6 +1121,47 @@ mod tests {
         // 非法/缺失值受保护，不 panic
         assert_eq!(filetime_to_unix(0), 0);
         assert_eq!(filetime_to_unix(-1), 0);
+    }
+
+    #[test]
+    fn combine_filetime_packs_hi_lo() {
+        // 高 32 位在左、低 32 位在右（100ns 间隔的 64 位 FILETIME）
+        assert_eq!(combine_filetime(1, 0), 0x1_0000_0000);
+        assert_eq!(combine_filetime(0, 0xFFFF_FFFF), 0xFFFF_FFFF);
+        assert_eq!(combine_filetime(0, 0), 0);
+        // 高位置 1（bit 63）→ i64 负数边界，按位拼接不 panic
+        assert_eq!(combine_filetime(0x8000_0000, 0), i64::MIN);
+    }
+
+    #[test]
+    fn make_entry_uses_directory_attribute_when_present() {
+        // attributes 非 0 → 用 FILE_ATTRIBUTE_DIRECTORY(0x10) 精确判定（不看扩展名）
+        assert!(make_entry("src".into(), "C:\\p".into(), 0, 0x10, 0).is_dir);
+        // 目录名带扩展名也仍是目录
+        assert!(make_entry("a.b".into(), "C:\\p".into(), 0, 0x10, 0).is_dir);
+        // 普通文件（0x20 = FILE_ATTRIBUTE_ARCHIVE）不是目录
+        assert!(!make_entry("main.rs".into(), "C:\\p".into(), 10, 0x20, 0).is_dir);
+    }
+
+    #[test]
+    fn make_entry_without_attributes_falls_back_to_heuristic() {
+        // attributes 为 0（通道未提供）→ guess_is_dir 启发式：无扩展名且 size==0 视为目录
+        assert!(make_entry("node_modules".into(), "C:\\p".into(), 0, 0, 0).is_dir);
+        assert!(!make_entry("main.rs".into(), "C:\\p".into(), 123, 0, 0).is_dir);
+        assert!(!make_entry("empty.txt".into(), "C:\\p".into(), 0, 0, 0).is_dir);
+    }
+
+    #[test]
+    fn make_entry_maps_filetime_to_unix_seconds() {
+        // base(1970-01-01) + 1s（每 10^7 为 1 秒）→ modified == 1
+        const BASE: i64 = 116_444_736_000_000_000;
+        let e = make_entry("a.txt".into(), "C:\\p".into(), 1, 0x20, BASE + 10_000_000);
+        assert_eq!(e.modified, 1);
+        assert_eq!(e.full_path(), "C:\\p\\a.txt");
+        // 无效时间戳 → 0 且展示串为 "-"（不 panic）
+        let bad = make_entry("b".into(), "C:\\p".into(), 0, 0x20, 0);
+        assert_eq!(bad.modified, 0);
+        assert_eq!(bad.modified_raw, "-");
     }
 
     #[test]
@@ -1367,5 +1666,214 @@ mod tests {
             "fallback 入口必须指向 files.results 子页"
         );
         assert!(fb[0].title.contains("{query}"), "入口标题应含 query 占位符");
+    }
+
+    // ─── 文件类型图标（v0.1.1：扩展名 → Segoe glyph 分类映射）──────────
+
+    #[test]
+    fn file_category_maps_common_extensions() {
+        use FileCategory::*;
+        let cases: &[(&str, FileCategory)] = &[
+            ("报告.docx", Document),
+            ("报价单.pdf", Document),
+            ("notes.txt", Document),
+            ("README.md", Document),
+            ("data.csv", Document),
+            ("运行日志.log", Document),
+            ("main.rs", Code),
+            ("app.py", Code),
+            ("index.html", Code),
+            ("style.css", Code),
+            ("run.ps1", Code),
+            ("build.sh", Code),
+            ("archive.zip", Archive),
+            ("备份.7z", Archive),
+            ("pkg.tar", Archive),
+            ("release.gz", Archive),
+            ("os.iso", Archive),
+            ("photo.png", Image),
+            ("壁纸.jpg", Image),
+            ("logo.svg", Image),
+            ("设计.psd", Image),
+            ("song.mp3", Audio),
+            ("无损.flac", Audio),
+            ("录音.wav", Audio),
+            ("movie.mp4", Video),
+            ("clip.mkv", Video),
+            ("动画.avi", Video),
+            ("setup.exe", Executable),
+            ("install.msi", Executable),
+            ("lib.dll", Executable),
+            ("config.ini", Config),
+            ("Cargo.toml", Config),
+            ("pkg.json", Config),
+            ("pipeline.yml", Config),
+            ("settings.reg", Config),
+            ("Inter.ttf", Font),
+            ("宋体.ttc", Font),
+            ("font.woff2", Font),
+            ("icon.otf", Font),
+            ("book.epub", Ebook),
+            ("小说.mobi", Ebook),
+            ("scan.djvu", Ebook),
+        ];
+        for (name, expected) in cases {
+            assert_eq!(
+                file_category(name),
+                *expected,
+                "{name} 应分类为 {expected:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn file_category_is_case_insensitive() {
+        assert_eq!(file_category("REPORT.PDF"), FileCategory::Document);
+        assert_eq!(file_category("Main.RS"), FileCategory::Code);
+        assert_eq!(file_category("IMG.JPG"), FileCategory::Image);
+        assert_eq!(file_category("SETUP.EXE"), FileCategory::Executable);
+        assert_eq!(file_category("DOS.BAT"), FileCategory::Code);
+        assert_eq!(file_category("FONT.TTF"), FileCategory::Font);
+        assert_eq!(file_category("BOOK.EPUB"), FileCategory::Ebook);
+    }
+
+    #[test]
+    fn file_category_dotfile_no_ext_and_trailing_dot_fall_back_to_other() {
+        // dotfile：首点是名字的一部分（无 stem），不得当扩展名分隔
+        assert_eq!(file_category(".gitignore"), FileCategory::Other);
+        assert_eq!(file_category(".env"), FileCategory::Other);
+        // 无扩展名 / 尾点 / 空名
+        assert_eq!(file_category("Makefile"), FileCategory::Other);
+        assert_eq!(file_category("README"), FileCategory::Other);
+        assert_eq!(
+            file_category("abc."),
+            FileCategory::Other,
+            "尾点视为无扩展名"
+        );
+        assert_eq!(file_category(""), FileCategory::Other);
+        // 未知扩展名 / 多重点取末段
+        assert_eq!(file_category("data.xyz123"), FileCategory::Other);
+        assert_eq!(
+            file_category("archive.tar.gz"),
+            FileCategory::Archive,
+            "取末段扩展名"
+        );
+        assert_eq!(file_category("a.b.c.txt"), FileCategory::Document);
+    }
+
+    #[test]
+    fn category_glyph_maps_all_categories_and_glyphs_pairwise_distinct() {
+        let map: [(FileCategory, &str); 11] = [
+            (FileCategory::Document, GLYPH_DOCUMENT),
+            (FileCategory::Code, GLYPH_CODE),
+            (FileCategory::Archive, GLYPH_ZIP),
+            (FileCategory::Image, GLYPH_IMAGE),
+            (FileCategory::Audio, GLYPH_AUDIO),
+            (FileCategory::Video, GLYPH_VIDEO),
+            (FileCategory::Executable, GLYPH_EXE),
+            (FileCategory::Config, GLYPH_CONFIG),
+            (FileCategory::Font, GLYPH_FONT),
+            (FileCategory::Ebook, GLYPH_EBOOK),
+            (FileCategory::Other, GLYPH_PAGE),
+        ];
+        for &(c, g) in &map {
+            assert_eq!(category_glyph(c), g, "{c:?} 应映射到 {g}");
+        }
+        // 全部 13 个 glyph 常量（含 Folder/Page/Search）码位两两互异
+        // ——防复制粘贴同码位导致类别/入口不可区分
+        let glyphs = [
+            GLYPH_FOLDER,
+            GLYPH_PAGE,
+            GLYPH_SEARCH,
+            GLYPH_DOCUMENT,
+            GLYPH_CODE,
+            GLYPH_ZIP,
+            GLYPH_IMAGE,
+            GLYPH_AUDIO,
+            GLYPH_VIDEO,
+            GLYPH_EXE,
+            GLYPH_CONFIG,
+            GLYPH_FONT,
+            GLYPH_EBOOK,
+        ];
+        for i in 0..glyphs.len() {
+            for j in (i + 1)..glyphs.len() {
+                assert_ne!(glyphs[i], glyphs[j], "第 {i} 与第 {j} 个 glyph 码位相同");
+            }
+        }
+    }
+
+    #[test]
+    fn entry_glyph_dir_always_folder_even_with_executable_name() {
+        let dir = FileEntry {
+            name: "setup.exe".into(), // 目录名恰好带扩展名也必须是文件夹图标
+            dir: "C:\\".into(),
+            size: 0,
+            modified: 0,
+            modified_raw: String::new(),
+            is_dir: true,
+        };
+        assert_eq!(entry_glyph(&dir), GLYPH_FOLDER);
+    }
+
+    #[test]
+    fn entry_glyph_file_follows_extension_category() {
+        let entry = |name: &str| FileEntry {
+            name: name.into(),
+            dir: "C:\\d".into(),
+            size: 0,
+            modified: 0,
+            modified_raw: String::new(),
+            is_dir: false,
+        };
+        assert_eq!(entry_glyph(&entry("a.png")), GLYPH_IMAGE);
+        assert_eq!(entry_glyph(&entry("b.zip")), GLYPH_ZIP);
+        assert_eq!(entry_glyph(&entry("c.txt")), GLYPH_DOCUMENT);
+        assert_eq!(
+            entry_glyph(&entry("d.unknownext")),
+            GLYPH_PAGE,
+            "未知扩展名回落 Page"
+        );
+    }
+
+    #[test]
+    fn to_command_item_icon_follows_file_type() {
+        let mut e = sample_entry(); // 报告 2026.txt → 文档
+        assert_eq!(
+            to_command_item(&e).icon.as_ref().map(|i| i.value.as_str()),
+            Some(GLYPH_DOCUMENT)
+        );
+        e.name = "photo.jpg".into();
+        assert_eq!(
+            to_command_item(&e).icon.as_ref().map(|i| i.value.as_str()),
+            Some(GLYPH_IMAGE)
+        );
+        e.is_dir = true;
+        assert_eq!(
+            to_command_item(&e).icon.as_ref().map(|i| i.value.as_str()),
+            Some(GLYPH_FOLDER),
+            "目录恒为文件夹图标"
+        );
+    }
+
+    #[test]
+    fn guide_entry_items_use_search_glyph() {
+        // 独立 fn（非闭包）：单引用签名可省略生命周期，闭包会触发
+        // lifetime-must-outlive 编译错误（clippy 实测）
+        fn glyph(i: &CommandItem) -> &str {
+            i.icon
+                .as_ref()
+                .map(|ic| ic.value.as_str())
+                .expect("入口/引导项必须带图标")
+        }
+        assert_eq!(glyph(&hint_item()), GLYPH_SEARCH);
+        assert_eq!(glyph(&guide_item()), GLYPH_SEARCH);
+        assert_eq!(glyph(&error_item("x")), GLYPH_SEARCH);
+        let top = top_level_commands();
+        assert_eq!(top.len(), 1);
+        assert_eq!(glyph(&top[0]), GLYPH_SEARCH, "顶层入口应为搜索图标");
+        let fb = fallback_commands();
+        assert_eq!(fb.len(), 1);
+        assert_eq!(glyph(&fb[0]), GLYPH_SEARCH, "fallback 入口应为搜索图标");
     }
 }

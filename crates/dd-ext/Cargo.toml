@@ -46,6 +46,13 @@ windows-sys = { version = "0.61", features = [
     "Win32_Graphics_Gdi",
 ] }
 
+# P2（everything-ipc 主通道，§9.2）：search.rs 直接连 Everything 的 IPC（WM_COPYDATA），
+# 免每次按键 spawn es.exe 子进程；es.exe 降级为回落通道。
+# - 仅 Windows：该 crate 直接 `use ::windows::...`，无平台守卫 → 必须放 windows target 段。
+# - default-features=false：默认 feature 为空（不引入 tokio/pe/folder）——显式声明以免日后默认 feature 变化引入异步运行时。
+# - 版本锁 =0.1.4：0.1.x 年更数版、API 可能变；docs.rs 快照存档，避免意外升级破坏编译。
+everything-ipc = { version = "=0.1.4", default-features = false }
+
 [[bin]]
 name = "dd-ext-apps"
 path = "src/bin/apps.rs"

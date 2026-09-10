@@ -1,7 +1,20 @@
 # dd-run 文件搜索扩展升级设计（v2）
+
+> **文档定位（2026-09-10 更新）**：本文是 v3.3 变更方案的**评审蓝本（历史记录）**。
+> **执行口径以 [`search-file.md`](./search-file.md) §九 为唯一来源**（含 §9.0 核对修订）。
+> 本次核对（见 [`search-file-plan-review.md`](./search-file-plan-review.md)）已修正本文中的过时表述：
+> ① `query_wait` **确提供** `.timeout(Duration)`（默认 3000ms，须显式设为 1000–1200ms）；
+> ② `RequestFlags::Attributes` 与 `DateModified`（FILETIME）**均已确认存在**，"待核实项"结案；
+> ③ client 不应使用自建全局 `LazyLock`，改用 crate 的 `EverythingClient::shared()`（可失效重建）；
+> ④ 依赖 `everything-ipc` 需 `default-features = false` 并同版本引入 `windows 0.62`（FILETIME）。
+> 下文的"待核实"与"LazyLock"表述保留作历史记录，**不得据以编码**。
+
 ## 1. 背景与目标
 `dd-run` 已内建文件搜索扩展 `com.ddrun.filesearch`：`frozen:false`、`has_fallback:true`、经 `PageHandler` 供子页 `files.results`，传输走 `es.exe` 子进程 IPC，侧车（sidecar）随绿色包 `dist/extensions.d/` 分发不内嵌。对标 lin-ycv/EverythingCommandPalette（ECP），缺口在**命令丰富度**（仅回车打开，无 reveal/copy）与**传输性能**（每次按键 spawn es.exe）。
 目标：ECP 覆盖度从 30% 提升至 70%（打开/显示/复制三高频动作）；消除每次按键的进程 spawn 开销；**协议 v1.0 零改动**；分发形态不变。
+> **口径修正（2026-09-10 核对）**：按 ECP 命令条目数（12 项）计，本方案实为 **3/12 = 25%**；
+> 原文 30%→70% 属"高频使用加权"口径。两口径须同时写明，详见
+> [`search-file.md`](./search-file.md) §9.7（含 ECP 12 项命令与 dd-run 对照表）。
 ## 2. 方案总览
 | 维度 | A：现状直用 | **B：everything-ipc 直连 + more_commands** | C：HTTP JSON API | D：自研索引 |
 | - | | | |
@@ -36,12 +49,17 @@ Everything 集成范围不符。方案 B 只有在依赖 API、许可证、Every
 Everything WM_COPYDATA 客户端；探测或查询失败时，再走现有 `es.exe` 回落路径。只有在该
 回落链路和兼容性验收通过后，才可宣称用户门槛从“需 `es.exe`”降为“Everything 运行中”。
 实现要点：
-- client 仅在确认连接对象满足 `Send`/`Sync` 且可安全复用后使用全局 `LazyLock`；否则使用受控
-  的短生命周期连接。
-- `query_wait` 不得无条件套用阻塞调用 + `recv_timeout`：若底层调用不可取消，超时后遗留
-  阻塞线程会造成资源增长。必须采用依赖提供的超时/取消机制，或将 P2 标记为 blocked。
+- client 满足 `Send`/`Sync`（已核实）但**不得**用自建全局 `LazyLock` 永久持有：宿主 warm 进程池使
+  扩展长驻，Everything 重启后静态 client 永久失效 → 改用 `EverythingClient::shared()` 的 `Arc`
+  语义（释放后自动重建）+ 探活重建阈值。详见 [`search-file.md`](./search-file.md) §9.2 P2.2。
+- `query_wait` **已确认提供 `.timeout(Duration)`**（默认 3000ms > 宿主 `get_items` 2000ms）→
+  **必须显式设为 1000–1200ms**，未设置即视为缺陷并阻断；不得自行套用 `recv_timeout` 兜底。
 - UTF-16 天然返回：`decode_output` / `split_path` 在 IPC 通道上删除（es.exe 回落通道保留 GBK 解码）。
-- **待核实项（编码前看 docs.rs 确认）**：`RequestFlags` 是否暴露 `Attributes`——若可用则精确判定目录；不可用则回退现有 `guess_is_dir` 启发式（已有单测保护）；`DateModified` 的单位（FILETIME 则复用 `filetime_to_unix`）。
+- **待核实项（已于 2026-09-10 结案）**：`RequestFlags` **暴露** `Attributes`（16 个常量之一）→
+  用 `get_u32(Attributes) & 0x10` 精确判定目录，IPC 通道不再用 `guess_is_dir`（es.exe 回落通道保留）；
+  `DateModified` 单位为 **FILETIME**（`QueryValue::Time(FILETIME)`）→ 复用 `filetime_to_unix`。
+  另需注意：依赖 `windows 0.62`（非 `windows-sys`）→ dd-ext 须同版本引入 `windows`（仅
+  `Win32_Foundation`）才能读取 FILETIME 字段；`dd-ext-search` 为 sidecar，体积影响不波及单文件宿主。
 - Everything 未运行自动拉起（注册表/默认路径定位 `Everything.exe`，spawn 后再试一次 IPC）列为
   **P3 可选**，本次不实现。
 ## 4. 打包与分发
