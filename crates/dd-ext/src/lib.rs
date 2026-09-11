@@ -38,6 +38,11 @@ use dd_protocol::model::{CommandItem, CommandResult};
 /// 内置扩展轻量 i18n（批次 D）：环境注入生效语言，按 zh/en 选文案。
 pub mod i18n;
 
+/// M9：内置扩展集合（集中 5 个 `ExtensionSpec`，运行期按生效语言构造；
+/// 原各 `bin/*.rs` 的 `spec()` 已上移至此）。宿主（dd-gui）经 `builtin_specs()`
+/// 拿到规格做 in-process 调用。
+pub mod builtins;
+
 /// §5.3：扩展回"不高于宿主所发版本"的版本；v1.0 阶段恒为 `"1.0"`。
 pub const PROTOCOL_VERSION: &str = "1.0";
 

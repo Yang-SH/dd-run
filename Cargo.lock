@@ -468,6 +468,7 @@ name = "dd-gui"
 version = "0.1.1"
 dependencies = [
  "arboard",
+ "dd-ext",
  "dd-host",
  "dd-protocol",
  "eframe",

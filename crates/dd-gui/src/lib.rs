@@ -35,6 +35,8 @@ extern crate self as dd_gui;
 
 pub mod aggregator;
 pub mod app;
+/// M9 B2：内置扩展 in-process 适配器（直接 `serve_line`，不 spawn 子进程）。
+pub mod ext_inprocess;
 pub mod embedded;
 pub mod fallback;
 pub mod fuzzy;
