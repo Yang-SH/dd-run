@@ -1,13 +1,15 @@
 //! 首屏聚合：后台收集线程 + `poll_aggregate` 结果落地。
 
 use crate::app::PaletteApp;
+use crate::ext_client::ExtClient;
+use dd_ext::ExtensionSpec;
 use dd_gui::aggregator;
 use dd_gui::aggregator::SourceStatus;
 use dd_gui::navigation::PageState;
 use dd_gui::state::PanelItem;
 use dd_host::cache::FrozenCache;
 use dd_host::manifest::LoadedExtension;
-use dd_host::process::ExtensionProcess;
+use std::collections::HashMap;
 use std::sync::mpsc;
 use std::sync::mpsc::TryRecvError;
 use std::thread;
@@ -17,10 +19,12 @@ use std::time::Instant;
 pub struct AggregatePayload {
     pub(crate) items: Vec<PanelItem>,
     pub(crate) sources: Vec<aggregator::SourceSummary>,
-    /// 保活进程：`(扩展清单 id, 进程)`（仅 warm；frozen 读桩无进程）。
-    pub(crate) processes: Vec<(String, ExtensionProcess)>,
+    /// 保活客户端：`(扩展清单 id, 客户端)`（warm；frozen 读桩无客户端；M9 含内置 in-process）。
+    pub(crate) processes: Vec<(String, ExtClient)>,
     /// 已扫描扩展（含 manifest frozen/entry），供桩复热 spawn（M3）。
     pub(crate) exts: Vec<LoadedExtension>,
+    /// M9：内置 in-process 规格表（`id → ExtensionSpec`），供复热链路重建内置客户端。
+    pub(crate) inproc_specs: HashMap<String, ExtensionSpec>,
     /// 聚合线程内从"开始 scan"到"完成 collect+flatten"耗时（ms）。
     /// 与 [`PaletteApp::cold`] 的"进程启动→首屏就绪"总耗时对照，便于 A2 瓶颈定位
     /// （implementation.md R2：未达标记录实测与瓶颈，不调目标）。
@@ -43,9 +47,16 @@ pub fn spawn_aggregation(
     thread::spawn(move || {
         // A2 拆分计时的"数据平面"：从 scan 起到聚合完成止（不含 GUI/字体加载）
         let agg_start = Instant::now();
+        // M9：in-process 内置共享宿主进程，其文案取 `dd_ext::i18n` 的进程级生效
+        // 语言——须在构造内置规格（`builtin_specs()` 内 `tr()`）**之前**设好，
+        // 否则内置文案会停留在首次读到的语言（设置页切换语言后需重设）。
+        dd_ext::i18n::set_lang(match lang {
+            dd_gui::settings::Lang::EnUs => dd_ext::i18n::Lang::EnUs,
+            _ => dd_ext::i18n::Lang::ZhCn,
+        });
         // note（来源备注）不再进页脚（用户决策 2026-09-04）：丢弃即可，
         // 异常细节已由 load_extension_sources 内部日志输出。
-        let (exts, _note) = aggregator::load_extension_sources();
+        let (exts, inproc_specs, _note) = aggregator::load_extension_sources(lang);
         // M6 批次 6.3：停用扩展只从**聚合采集**中剔除——payload.exts 必须保留
         // 全集（self.exts 驱动设置页「扩展管理」列表，过滤掉会让已停用扩展从
         // 列表消失、无法再从 UI 启用，真机反馈 2026-09-05）。
@@ -65,7 +76,7 @@ pub fn spawn_aggregation(
                 .env
                 .insert("DDRUN_LANG".to_string(), lang_str.clone());
         }
-        let result = aggregator::collect_top_level(&active, cache.as_ref());
+        let result = aggregator::collect_top_level(&active, &inproc_specs, cache.as_ref());
         let (items, sources) = aggregator::flatten(&result.per_ext, lang);
 
         // 进程与 `ExtItems::Ready` 一一对应（collect 时按序 push）；Stub（读桩）无进程
@@ -86,6 +97,7 @@ pub fn spawn_aggregation(
             sources,
             processes,
             exts,
+            inproc_specs,
             agg_ms,
         });
     });
@@ -116,6 +128,7 @@ impl PaletteApp {
                 self.sources = payload.sources;
                 self.processes = payload.processes;
                 self.exts = payload.exts;
+                self.inproc_specs = payload.inproc_specs;
                 self.aggregating = false;
                 self.aggregate_rx = None;
                 // M3：cold-start 保活进程计入 LRU（超出容量即驱逐，一般场景不会触发）

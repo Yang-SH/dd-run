@@ -68,6 +68,11 @@ pub(crate) fn dying_ext(id: &str) -> LoadedExtension {
     }
 }
 
+/// 已退出的**子进程客户端**（M9 起进程池持 [`ExtClient`]，供保活集/复热链路夹具）。
+pub(crate) fn dying_client(id: &str) -> crate::ext_client::ExtClient {
+    crate::ext_client::ExtClient::Subprocess(dying_process(id))
+}
+
 /// spawn 一个已退出的进程（返回前等待其确实退出，确保 refresh_health / poll 稳定检测）。
 pub(crate) fn dying_process(id: &str) -> ExtensionProcess {
     let mut proc = ExtensionProcess::spawn(&dying_ext(id)).expect("spawn 立即退出的进程");

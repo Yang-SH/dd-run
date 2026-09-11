@@ -5,8 +5,9 @@
 //!   **同样走清单注册**（与第三方无特判代码）；MVP 无安装器，故由宿主在启动时
 //!   **内存注册**——把 `exe_dir` 目录里的 `dd-ext-*.exe` 直接构造为
 //!   [`LoadedExtension`]，等效于"安装器写好了清单、扫描恰好扫到"。
-//!   `exe_dir` 的来源见 [`ensure_builtins`] 文档：开发期为宿主 exe 同目录；
-//!   单文件分发为内嵌扩展物化目录。
+//!   `exe_dir` 的来源见 [`ensure_builtins`] 文档：开发期为宿主 exe 同目录，
+//!   单文件分发历史上为「内嵌扩展物化目录」。**M9 起内置扩展改为 in-process**
+//!   （见 [`builtin_registrations`]，不探测 exe 路径），本函数保留给子进程测试场景。
 //! - 5 个内置扩展的元数据（id / name / frozen / capabilities）必须与
 //!   `crates/dd-ext/src/bin/*.rs` 各自的 `spec()` 保持一致（宿主编排侧登记，
 //!   扩展自述侧为准——握手 `initialize` 后宿主会再次拿到真实 `ProviderInfo`）。
@@ -14,9 +15,9 @@
 //! 注册规则：
 //! - **内存构造，零文件写入**（不落 `extensions.d`，不产生清单文件）；
 //! - 只注册**指定目录存在**的 exe（未构建 / 被移除的扩展静默跳过，不视为错误）；
-//!   `exe_dir` 由宿主决定——开发期通常是「宿主 exe 同目录」，打包后的单文件分发
-//!   则是「内嵌扩展物化目录」（`dd-gui::embedded::materialize`，见
-//!   `crates/dd-gui/src/embedded.rs`）；
+//!   `exe_dir` 由宿主决定——开发期通常是「宿主 exe 同目录」。**M9 起内置扩展已
+//!   不走此函数**（生产链路改 [`builtin_registrations`]，in-process 不探测 exe）；
+//!   本函数保留作子进程回归测试与第三方兼容用途；
 //! - `version` 取宿主包版本（内置扩展随宿主分发，宿主升级即桩缓存自然失效）。
 
 use std::path::Path;
@@ -110,31 +111,56 @@ fn builtin_version() -> &'static str {
     env!("CARGO_PKG_VERSION")
 }
 
-/// 在 `exe_dir` 中注册**存在**的内置扩展。
+/// 由注册描述构造一条内置扩展清单（不含 exe 存在性探测）。
+fn build_builtin(spec: &BuiltinSpec, dir: &Path) -> LoadedExtension {
+    from_builtin(
+        dir.join(exe_name(spec.exe)),
+        spec.id,
+        spec.name,
+        spec.host_frozen(), // 宿主缓存策略（含兜底者 fresh，§6.3）
+        spec.capabilities,
+        builtin_version(),
+    )
+}
+
+/// 在 `exe_dir` 中注册**存在**的内置扩展（**子进程**实现，M9 前所用）。
 ///
 /// `exe_dir` 由宿主决定：开发期为宿主 `current_exe` 同目录（workspace 各 bin 同放
-/// 一处）；打包后的单文件分发为内嵌扩展物化目录（`dd-gui::embedded::materialize`，
-/// 见 `crates/dd-gui/src/embedded.rs`）。
+/// 一处）。**M9 起生产链路不再调用本函数**——内置扩展改为 in-process
+/// （见 [`builtin_registrations`]，宿主进程内直接 `serve_line`，不探测 exe、
+/// 不物化内嵌）。本函数保留作子进程回归测试与第三方兼容用途。
 ///
 /// 返回顺序与 [`BUILTINS`] 一致；找不到的 exe 静默跳过。这是纯内存构造，
 /// 不触碰文件系统（除 `is_file` 探测外），可安全在单测中调用。
+///
+/// ⚠️ M9：内置扩展改为 **in-process**（宿主进程内直接 `serve_line`，见
+/// `dd-gui::ext_client::ExtClient`），**不再 spawn 子进程**，因此生产链路已改走
+/// [`builtin_registrations`]（不做 exe 探测）。本函数保留给"确实要以子进程方式
+/// 跑内置 exe 的"场景（dev 调试 / `dd-host` 往返集成测试），语义不变。
 pub fn ensure_builtins(exe_dir: &Path) -> Vec<LoadedExtension> {
     BUILTINS
         .iter()
         .filter_map(|spec| {
-            let exe = exe_name(spec.exe);
-            let command = exe_dir.join(exe);
-            command.is_file().then(|| {
-                from_builtin(
-                    command,
-                    spec.id,
-                    spec.name,
-                    spec.host_frozen(), // 宿主缓存策略（含兜底者 fresh，§6.3）
-                    spec.capabilities,
-                    builtin_version(),
-                )
-            })
+            let command = exe_dir.join(exe_name(spec.exe));
+            command.is_file().then(|| build_builtin(spec, exe_dir))
         })
+        .collect()
+}
+
+/// M9：内置扩展 **in-process** 注册——不探测 exe 存在性（内置**恒可用**，与
+/// 磁盘上是否有 `dd-ext-*.exe` 无关；单文件分发不再内嵌内置 exe，见 M9 D4）。
+///
+/// 返回的 `LoadedExtension` 供宿主侧**元数据**使用（设置页扩展列表、id/名称
+/// 查询、`merge_builtins` 去重）；其 `command` 为**名义路径**（`dd-ext-<name>.exe`
+/// 相对名），**不会被 spawn**——真正执行走 `dd_ext::builtins::builtin_specs()`
+/// 构造的 in-process 规格（`dd-gui::ext_client`）。
+///
+/// 返回顺序与 [`BUILTINS`] 一致。
+pub fn builtin_registrations() -> Vec<LoadedExtension> {
+    let nominal_dir = Path::new("");
+    BUILTINS
+        .iter()
+        .map(|spec| build_builtin(spec, nominal_dir))
         .collect()
 }
 
@@ -289,6 +315,38 @@ mod tests {
         let tmp = TempDir::new("empty");
         let exts = ensure_builtins(&tmp.0);
         assert!(exts.is_empty(), "目录无 exe → 不注册任何内置扩展");
+    }
+
+    /// M9：in-process 注册**不依赖**磁盘 exe——始终返回全部 5 个内置，
+    /// 元数据（id / frozen 策略 / capabilities）与注册表一致。
+    #[test]
+    fn builtin_registrations_needs_no_exe() {
+        let exts = builtin_registrations();
+        let ids: Vec<&str> = exts.iter().map(|e| e.manifest.id.as_str()).collect();
+        assert_eq!(
+            ids,
+            vec![
+                "com.ddrun.apps",
+                "com.ddrun.calc",
+                "com.ddrun.system",
+                "com.ddrun.websearch",
+                "com.ddrun.shell",
+            ],
+            "in-process 注册恒返回全部 5 个内置（无需 exe 存在）"
+        );
+        // 宿主缓存策略口径不变：含兜底者 fresh（§6.3）
+        let frozen: Vec<bool> = exts.iter().map(|e| e.manifest.frozen).collect();
+        assert_eq!(frozen, vec![false, false, true, false, false]);
+        // command 为名义路径（不会被 spawn），与 BUILTINS[*].exe 对齐
+        for (ext, spec) in exts.iter().zip(BUILTINS) {
+            assert_eq!(
+                ext.command.file_name().and_then(|s| s.to_str()),
+                Some(exe_name(spec.exe).as_str()),
+                "{} 名义路径应为 {}",
+                spec.id,
+                exe_name(spec.exe)
+            );
+        }
     }
 
     #[test]

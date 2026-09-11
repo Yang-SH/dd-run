@@ -1,9 +1,11 @@
 # M9 — 内置扩展进程内化（In-process Built-ins）
 
-> 状态：设计稿 **v1.1**（2026-09-11 立项 v1.0；同日后经 `verify-plan-against-code` 核查修订）
+> 状态：设计稿 **v1.2**（2026-09-11 立项 v1.0；同日 `verify-plan-against-code` 核查修订 → v1.1；同日 B3 实施中发现并修复 i18n 缺口 → v1.2）
 > 范围：**仅内置 5 扩展 in-process**；第三方 / sidecar（Python 示例、文件搜索 `dd-ext-search`）**保持子进程**。
 > 崩溃策略：in-process 调用以 `std::panic::catch_unwind` 兜底，单扩展 panic → 该扩展标 Failed、宿主存活。
 > 协议：**v1.0 零改动**（`dd-ext::serve_line` 与 `dd-protocol` 不动）。
+>
+> **里程碑状态：✅ 已关闭（2026-09-11）** —— B1–B5 全部完成，真机复验通过。
 
 ---
 
@@ -19,6 +21,13 @@
 - **B5 验收遗漏** → `--conformance` 当前经 `ExtensionProcess::spawn` 子进程自检（`main.rs:485`）。补：`dd-run-cli` 须同步改造（内置改走 `serve_line`），否则"in-process 路径全绿"不成立。
 - **§5 注释过期** → 补 `embedded.rs` / `build.rs` 顶部 ADR-1 注释同步更新。
 - **bin 数量歧义** → 显式：仅 5 内置上移；`search.rs` 是第 6 个 bin（sidecar），不参与。
+
+## 0.1 修订说明（v1.2，B3 实施发现）
+
+B3 实施中暴露一处 v1.1 未覆盖的**行为缺口**，已随 B3 一并修复（新增决策 D6）：
+
+- **多语言（`DDRUN_LANG`）在 in-process 下失效**。原机制是"宿主 spawn 内置扩展时经 `entry.env` 注入 `DDRUN_LANG`，扩展进程启动时**读一次**并缓存（`dd-ext::i18n` 的 `OnceLock`）"。内置改 in-process 后该 env 落在**宿主进程**上，且设置页切换语言靠"离开设置页 → 重聚合 → 以新 env 重启进程"生效——而 `OnceLock` **无法重设**，内置文案会永久停留在首次读到的语言（中文 UI 切英文后内置仍显示中文）。
+- **修复（D6）**：`dd-ext::i18n` 的生效语言由 `OnceLock` 改为进程级 `AtomicU8` + 新增 `pub fn set_lang(Lang)`；宿主在**每次（重）聚合前**（`app::spawn_aggregation` 起始处）按当前设置页语言显式 `set_lang`，内置文案随语言切换即时生效。子进程扩展仍走 `entry.env` + `Lang::from_env()` 兜底，语义不变。协议零改动。
 
 ---
 
@@ -97,6 +106,14 @@
 - `dd-protocol` 不动；`dd-ext::serve_line` 不动；`protocol.md` v1.0 不变。
 - in-process 仅是"谁调用 `serve_line`"的变化，线上协议形状、能力前置、错误码全不变。
 
+### D6 — 内置生效语言的运行期重设（v1.2 补）
+
+- **缺口**：in-process 内置共享宿主进程，`dd-ext::i18n` 原先用 `OnceLock` 缓存一次 `DDRUN_LANG` → 设置页切换语言后无法重设（见 §0.1）。
+- **落法**：`dd-ext::i18n` 生效语言改用进程级 `AtomicU8`（`UNSET=2` 哨兵，首次访问按 env 解析并 CAS 落缓存）+ 新增 `pub fn set_lang(Lang)` / `pub fn current_lang()`。
+- **宿主接线**：`dd-gui::app::spawn_aggregation` 在**开头**（早于构造 `builtin_specs()`）按 `lang` 调 `set_lang`。因 `tr()` 在**规格构造期**与**handler 调用期**都会读取该值，故一次设置即覆盖两条路径。
+- **兜底不变**：子进程扩展仍由 `ExtensionProcess::spawn` 注入 `entry.env["DDRUN_LANG"]`，进程内 `Lang::from_env()` 首次读取；`FollowSystem` 仍由宿主先解析为具体语言。
+- **单测策略**：翻转进程级语言的测试放在**独立集成测试进程**（`crates/dd-ext/tests/i18n_set_lang.rs`），避免与同进程并行单测（如 calc「无法计算」、shell「超时」文案断言）竞争。
+
 ---
 
 ## 4. 分批实施计划（verify-then-commit，逐批报告）
@@ -105,9 +122,9 @@
 |---|---|---|
 | **B1** | D1：提取 `builtins.rs`（`spec_*()` + 运行期 `builtin_specs()`）+ 各内置 `bin/*.rs` 退化 `main` | ✅ **已实施（2026-09-11）**：`crates/dd-ext/src/builtins/`（apps/calc/system/websearch/shell 5 子模块 + `mod.rs` + `builtin_specs()`）就位，各 `bin/*.rs` 退化为一行 `main`；`cargo build -p dd-ext` 0 warning；`cargo test -p dd-ext` **64/65 通过**（唯一失败 `steam_installed_shown_uninstalled_filtered_root_lnk_shown` 为机器安装状态相关集成守卫，非回归） |
 | **B2** | ✏️ `dd-gui` 加 `dd-ext` 依赖 + `InProcessExtension` + `catch_unwind` 接线 + 抽出共享 `route_messages` | ✅ **已实施（2026-09-11）**：`crates/dd-gui/src/ext_inprocess.rs` 新增 `InProcessExtension`（镜像 `ExtensionProcess` 接口：initialize/top_level/fallback/get_command/get_items/invoke/close + poll_notifications/drain_host_requests）；`dd-gui/Cargo.toml` 加 `dd-ext` 依赖；`call` 直接驱动 `dd_ext::serve_line` 并以 `catch_unwind` 包裹（panic → `ProtocolError::Rpc(INTERNAL_ERROR)`）；**R1 落地**：复用 `dd_host::process::classify`（已是自由函数）路由 serve_line 输出到响应/host/*/通知总线，与 subprocess 终态等价（未抽独立 `route_messages` 自由函数，采用"复用 classify + InProcessExtension 内联路由"——见 D2 ✏️「或」分支，更低回归风险）；`cargo check -p dd-gui --tests` 0 error、`cargo clippy -p dd-gui --tests` **0 告警**、`ext_inprocess` 7 个单测全绿（含逐字节等价 parity + panic 兜底） |
-| **B3** | D3：内置注册切 `InProcessExtension`（选定 D3 的落法）；sidecar 链路由 `materialize` 接管 | `cargo test --workspace` 全绿；内置扩展不再 spawn 子进程（代码路径验证） |
-| **B4** | D4：`build.rs` `EMBED_EXES` 清空 + `package.sh` 不再内嵌 5 内置 | `cargo build --release` 通过；单文件 `dd-run.exe` 体积较 v0.1.1 下降；`dist/extensions.d/dd-ext-search.exe` 仍在 |
-| **B5** | D5 + 全量验收：fmt/clippy/test 绿 + ✏️ `dd-run-cli --conformance` 内置改走 `serve_line` 路径 + 重生成 dist + 真机启动 | 真机：Task Manager 仅 1 个 `dd-run.exe`（无 5 个 `dd-ext-*.exe`）；apps/calc/system/websearch/shell 功能正常；文件搜索 sidecar 正常；`--conformance` 内置 in-process 路径全绿 |
+| **B3** | D3：内置注册切 `InProcessExtension`（选定 D3 的落法）；sidecar 链路由 `materialize` 接管 | ✅ **已实施（2026-09-11）**：落法 = **D3 落法 1（独立注册结构）**——① `dd-host::builtin::builtin_registrations()` 新增（**不探测 exe**，内置恒注册；`command` 为名义路径，不 spawn）；② 新增 `dd-gui/src/ext_client.rs`：`ExtClient { Subprocess(ExtensionProcess) / InProcess(InProcessExtension) }` 把两后端收敛到**同一方法表面**（逐方法镜像），+ `pub fn open(spec, ext)` 分流收口；③ `aggregator::load_extension_sources()` 改返回 `(exts, inproc_specs: HashMap<id, ExtensionSpec>, note)`，`collect_top_level`/`load_one` 按 spec 命中分流——内置 in-process **且不读/不落磁盘桩**；④ 复热链路（`app/invoke.rs` / `app/page.rs`）内置走 `ExtClient::open_builtin`（spec 直调），其余仍 spawn；⑤ `app` 层 `processes: Vec<(String, ExtClient)>`、`fallback::fetch_fallback_commands` 改收 `ExtClient`（调用点逻辑逐字不变）；⑥ 内置不再物化内嵌 exe（`load_extension_sources` 移除 `embedded::materialize()` 调用）；⑦ **B3 附修（D6）**：i18n 生效语言 `OnceLock` → `AtomicU8` + `set_lang`（见 §0.1）。**验证**：`cargo check --workspace --all-targets` 0 warning、`clippy --workspace --all-targets` **0 告警**、`cargo test --workspace` **全部二进制 0 失败**（dd-gui 172、dd-ext 66、dd-ext 集成 1、其余全绿）、`cargo fmt --all --check` **EXIT 0**；新增代码路径单测：`collect_top_level_builtin_uses_in_process_backend`（内置 → `is_in_process()`）/ `collect_top_level_non_builtin_still_uses_subprocess`（第三方 exe 缺失 → Failed）/ `open_with_spec_yields_in_process_client` / `open_without_any_source_errors` |
+| **B4** | D4：`build.rs` `EMBED_EXES` 清空 + `package.sh` 不再内嵌 5 内置 | ✅ **已实施（2026-09-11）**：`build.rs` 的 `EMBED_EXES` 改为 `&[]`（生成 `EMBEDDED` 为空切片，`include_bytes` 计数 **0**，已核验生成的 `embedded.rs`）；`package.sh` 移除「拷 5 内置 exe → assets/embed」步骤、顶部注释改为「内置 in-process，sidecar 保持子进程」；`assets/embed/` 残留 5 个内置 exe 已删除；`embedded.rs`/`builtin.rs` 过时 `materialize` 注释已同步；`cargo fmt --check` / `clippy --workspace --all-targets`（0 告警） / `cargo test --workspace`（全绿）通过。**体积核验 ✅**：`cargo build --release` 通过（工具链缺陷已定位并修复，见下）；`dist/dd-run-0.1.1.exe` = **8,553,984 B（8.2 MB）**，较改动前工件 10,857,984 B（10.4 MB）**↓ 2.2 MB（−21%）**；`dist/extensions.d/dd-ext-search.exe` 仍在。**工具链缺陷根因（2026-09-11 定位并修复）**：rustup self-contained 的 `as.exe` **未随附运行时 DLL**（缺 `libintl-8.dll`/`libzstd.dll`/`zlib1.dll`）→ 启动即 `STATUS_DLL_NOT_FOUND` → 链接期 `dlltool ... as exited with status 53`（此前误判为 Binutils 缺陷）。修复 = 把三个 DLL 放入 self-contained 目录（或让 mingw 运行时在 PATH）；`package.sh` 全链路已跑通 |
+| **B5** | D5 + 全量验收：fmt/clippy/test 绿 + ✏️ `dd-run-cli --conformance` 内置改走 `serve_line` 路径 + 重生成 dist + 真机启动 | 🟡 **部分完成（2026-09-11）**：**CLI 改造 ✅**——`dd-run-cli` 补 `dd-ext`/`dd-protocol` 依赖；新增 CLI 侧 `InProcessExt` + `Backend` 抽象，`--conformance --ext-id <内置 id>`（`com.ddrun.*`）**短路走 in-process**（不扫盘、不 spawn 子进程），磁盘扩展仍子进程；**抽出共享路由 helper `dd_host::process::route_messages`**，dd-gui `InProcessExtension` 与 CLI 共用（落实 D2「共享 route_messages」建议，消除重复实现）。`fmt/clippy/test` 全绿；新增 5 条单测（`route_messages` ×2；CLI 内置解析 / in-process 后端 / `conformance` 分支分发 ×3）——**`conformance` 内置分支端到端返回 `ExitCode::SUCCESS`**（in-process 路径全绿）。**dist + CLI 端到端 ✅（工具链修复后同日完成）**：`bash tools/package.sh` 全链路跑通，`dist/dd-run-0.1.1.exe`（8.2 MB）+ `dist/extensions.d/dd-ext-search.exe` 就位；**实跑 `--conformance --ext-id com.ddrun.{calc,shell,websearch,system,apps}` 5 项全部 `EXIT=0`**（initialize/top_level/fallback/get_command/close 全 ✓，apps 133 命令）。**真机走查（首轮）**：发现 2 处问题——① shell 打开终端起始目录继承宿主 CWD；② 中文模式残留英文（websearch 顶层标题、设置页扩展名）。**均已修复**（新增 4 条单测，见 `implementation.md` §5「真机反馈修复（2026-09-11）」），待复验。**真机 GUI 复验 ✅（2026-09-11 用户确认通过）**——进程模型（Task Manager 仅 1 个 `dd-run.exe`）、apps/calc/system/websearch/shell 功能、文件搜索 sidecar、本轮 2 处修复复验均通过 |
 
 ---
 

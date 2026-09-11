@@ -147,7 +147,7 @@ impl PaletteApp {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_support::{dying_process, make_app};
+    use crate::test_support::{dying_client, make_app};
     use dd_gui::aggregator::SourceSummary;
 
     // ── A8 崩溃恢复接线（进程退出 → 回落 stub + 记崩溃 + 熔断） ──
@@ -162,7 +162,7 @@ mod tests {
             status: SourceStatus::Warm { commands: 5 },
         });
         app.processes
-            .push((ext_id.to_string(), dying_process(ext_id)));
+            .push((ext_id.to_string(), dying_client(ext_id)));
 
         app.refresh_health();
 
@@ -195,13 +195,13 @@ mod tests {
         // 前 N-1 次不熔断
         for _ in 0..(MAX_CONSECUTIVE_CRASHES - 1) {
             app.processes
-                .push((ext_id.to_string(), dying_process(ext_id)));
+                .push((ext_id.to_string(), dying_client(ext_id)));
             app.refresh_health();
             assert!(!app.is_crash_tripped(ext_id), "未达阈值不应熔断");
         }
         // 第 N 次触发熔断
         app.processes
-            .push((ext_id.to_string(), dying_process(ext_id)));
+            .push((ext_id.to_string(), dying_client(ext_id)));
         app.refresh_health();
         assert!(
             app.is_crash_tripped(ext_id),
@@ -280,7 +280,7 @@ mod tests {
                 name: id.to_string(),
                 status: SourceStatus::Warm { commands: 2 },
             });
-            app.processes.push((id.to_string(), dying_process(id)));
+            app.processes.push((id.to_string(), dying_client(id)));
         }
         let now = std::time::Instant::now();
         let stale = now - WARM_IDLE_TTL - std::time::Duration::from_secs(5);
@@ -322,7 +322,7 @@ mod tests {
             name: id.to_string(),
             status: SourceStatus::Warm { commands: 1 },
         });
-        app.processes.push((id.to_string(), dying_process(id)));
+        app.processes.push((id.to_string(), dying_client(id)));
         app.lru.access_at(
             id,
             std::time::Instant::now() - WARM_IDLE_TTL - std::time::Duration::from_secs(5),

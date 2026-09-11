@@ -1,11 +1,10 @@
 //! warm 进程池：LRU 保活、进程取还、桩回落与复热标记。
 
 use crate::app::PaletteApp;
+use crate::ext_client::ExtClient;
 use dd_gui::aggregator::SourceStatus;
 use dd_host::manifest::LoadedExtension;
-use dd_host::process::ExtensionProcess;
-use dd_host::process::TIMEOUT_GET_ITEMS;
-use dd_protocol::messages::{GetItemsParams, GetItemsResult, InvokeParams};
+use dd_protocol::messages::{GetItemsResult, InvokeParams};
 use dd_protocol::model::CommandResult;
 use std::thread;
 use std::time::Duration;
@@ -32,8 +31,8 @@ impl PaletteApp {
 }
 
 impl PaletteApp {
-    /// 进程归还入口（M3）：写回 warm 集 + LRU 触达；超容驱逐最久未用者（A7）。
-    pub(crate) fn store_warm_process(&mut self, ext_id: String, proc: ExtensionProcess) {
+    /// 客户端归还入口（M3）：写回 warm 集 + LRU 触达；超容驱逐最久未用者（A7）。
+    pub(crate) fn store_warm_process(&mut self, ext_id: String, proc: ExtClient) {
         self.processes.push((ext_id.clone(), proc));
         if let Some(victim) = self.lru.access(&ext_id) {
             if victim != ext_id {
@@ -96,35 +95,23 @@ impl PaletteApp {
     }
 }
 
-/// 在给定进程上执行一次 `invoke`（协议 §6.5），返回 `CommandResult` 本体。
+/// 在给定客户端上执行一次 `invoke`（协议 §6.5），返回 `CommandResult` 本体。
 ///
-/// 委托 [`ExtensionProcess::invoke`]（M4 P4：协议方法封装上提至 dd-host，
-/// 序列化/信封解析只写一份）。`call` 已解开 JSON-RPC 信封，内层 `result`
-/// 即 §8.3 `CommandResult` 本体——不能按 `InvokeResult` 再包一层（M2 修复记录）。
+/// 委托 [`ExtClient::invoke`]（内置 in-process / 子进程同语义）。`call` 已解开
+/// JSON-RPC 信封，内层 `result` 即 §8.3 `CommandResult` 本体——不能按
+/// `InvokeResult` 再包一层（M2 修复记录）。
 pub(crate) fn invoke_on(
-    proc: &mut ExtensionProcess,
+    proc: &mut ExtClient,
     params: &InvokeParams,
 ) -> Result<CommandResult, String> {
     proc.invoke(params).map_err(|e| e.to_string())
 }
 
-/// 在给定进程上全量拉取一页（协议 §6.3 `get_items`）。
+/// 在给定客户端上全量拉取一页（协议 §6.3 `get_items`）。
 pub(crate) fn get_items_on(
-    proc: &mut ExtensionProcess,
+    proc: &mut ExtClient,
     page_id: &str,
     search: Option<String>,
 ) -> Result<GetItemsResult, String> {
-    let params = GetItemsParams {
-        page_id: page_id.to_string(),
-        search_text: search,
-    };
-    serde_json::to_value(&params)
-        .map_err(|e| format!("参数序列化失败：{e}"))
-        .and_then(|v| {
-            proc.call("get_items", v, TIMEOUT_GET_ITEMS)
-                .map_err(|e| e.to_string())
-        })
-        .and_then(|v| {
-            serde_json::from_value::<GetItemsResult>(v).map_err(|e| format!("响应解析失败：{e}"))
-        })
+    proc.get_items(page_id, search).map_err(|e| e.to_string())
 }

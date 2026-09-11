@@ -1,7 +1,7 @@
 //! M4 宿主 fallback 轮：兜底模板拉取链路与渲染（协议 §6.2）。
 
 use crate::app::PaletteApp;
-use dd_host::process::ExtensionProcess;
+use crate::ext_client::ExtClient;
 use dd_protocol::model::CommandItem;
 use eframe::egui;
 use std::sync::mpsc;
@@ -11,9 +11,9 @@ use std::thread;
 /// 后台 `fallback_commands` 拉取的结果（M4 宿主 fallback 轮）。
 pub(crate) struct FallbackFetchOutcome {
     pub(crate) ext_id: String,
-    /// `Some` = warm 进程取走后归还；`None` = 桩复热 spawn 场景（拉完即 close，
-    /// 不保活——兜底模板与进程生命周期解耦，见 [`PaletteApp::start_fallback_fetch`]）。
-    pub(crate) proc: Option<ExtensionProcess>,
+    /// `Some` = warm 客户端取走后归还；`None` = 桩复热场景（拉完即丢，
+    /// 不保活——兜底模板与客户端生命周期解耦）。
+    pub(crate) proc: Option<ExtClient>,
     /// 扩展显示名（渲染 section 兜底用；与模板一起存入 store）。
     pub(crate) name: String,
     pub(crate) result: Result<Vec<CommandItem>, String>,
@@ -158,7 +158,7 @@ impl PaletteApp {
 
 #[cfg(test)]
 mod tests {
-    use crate::test_support::{ctx, dying_process, make_app};
+    use crate::test_support::{ctx, dying_client, make_app};
     use dd_gui::state::PanelItem;
     use dd_gui::state::PanelState;
     use dd_protocol::model::{CommandItem, CommandRef};
@@ -254,7 +254,7 @@ mod tests {
 
         // 注入一个死进程（start_fallback_fetch_chain 会 take 它去后台拉取）
         app.processes
-            .push((ext_id.to_string(), dying_process(ext_id)));
+            .push((ext_id.to_string(), dying_client(ext_id)));
 
         app.start_fallback_fetch_chain();
         assert!(app.fallback_rx.is_some(), "应已发起后台拉取");

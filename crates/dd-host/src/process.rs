@@ -179,6 +179,59 @@ pub fn classify(msg: &RawMessage) -> MessageKind {
     }
 }
 
+/// 一批消息（`serve_line` 产出，或子进程 stdout）按 §3.3 分类后的归属。
+///
+/// 子进程路径由后台读线程把消息分别入队（`poll_notifications` / `drain_host_requests`）；
+/// **in-process 无读线程**，调用方直接对 `serve_line` 的返回值跑 [`route_messages`]，
+/// 得到**同构**的归属——这是 M9 R1（两条路径逐字节等价）的单一事实来源。
+#[derive(Debug, Default)]
+pub struct RoutedMessages {
+    /// 与请求 `id` 匹配的响应：`Ok(裸 result)` 或 `Err(RpcError)`。
+    pub response: Option<Result<serde_json::Value, RpcError>>,
+    /// §7.4 扩展 → 宿主的 `host/*` 反向请求。
+    pub host_requests: Vec<RawMessage>,
+    /// §7.1 通知（如 `items_changed`）。
+    pub notifications: Vec<RawMessage>,
+    /// 未匹配到 in-flight 请求的响应 / 非 `host/*` 的带 id 消息 / jsonrpc 版本不符（§3.3）。
+    pub unmatched: Vec<RawMessage>,
+}
+
+/// 把一批消息路由到「响应 / `host/*` 请求 / 通知 / 未匹配」。
+///
+/// - `request_id` = 期望匹配的响应 id（发起方自增计数器）。
+/// - 非法 JSON-RPC 信封（`RawMessage` 反序列化失败）**直接忽略、不致命**（§9.3）。
+/// - 性能提示：`serve_line` 的返回**响应在前、副作用在后**，故本函数不提前返回，
+///   一次遍历把同批次的 `host/*` 与通知全部收齐，与子进程「先收响应、副作用入队」
+///   的终态等价。
+pub fn route_messages(request_id: u64, outputs: Vec<serde_json::Value>) -> RoutedMessages {
+    let mut routed = RoutedMessages::default();
+    for value in outputs {
+        let Ok(msg) = serde_json::from_value::<RawMessage>(value) else {
+            continue; // 非合法信封：忽略不致命（§9.3）
+        };
+        if msg.jsonrpc != JSONRPC_VERSION {
+            routed.unmatched.push(msg);
+            continue;
+        }
+        match classify(&msg) {
+            MessageKind::HostRequest => routed.host_requests.push(msg),
+            MessageKind::Notification => routed.notifications.push(msg),
+            MessageKind::Response(rid) => {
+                if rid == request_id {
+                    routed.response = Some(match msg.error {
+                        Some(err) => Err(err),
+                        None => Ok(msg.result.unwrap_or(serde_json::Value::Null)),
+                    });
+                } else {
+                    routed.unmatched.push(msg);
+                }
+            }
+            MessageKind::Unknown => routed.unmatched.push(msg),
+        }
+    }
+    routed
+}
+
 /// §13 协议版本格式为 `MAJOR.MINOR`（**两段**），与清单 `version` 的 semver
 ///（`MAJOR.MINOR.PATCH`，三段）不同，故不能复用 [`crate::manifest::parse_semver`]。
 pub fn parse_protocol_version(s: &str) -> Option<(u64, u64)> {
@@ -736,6 +789,66 @@ mod tests {
             result: None,
             error: None,
         }
+    }
+
+    /// M9：`route_messages` 把一批消息正确切到「响应 / host 请求 / 通知 / 未匹配」。
+    #[test]
+    fn route_messages_splits_by_kind() {
+        let mut resp = response(7);
+        resp.result = Some(serde_json::json!({ "ok": true }));
+        let outputs = vec![
+            serde_json::to_value(resp).unwrap(),
+            serde_json::to_value(request(1, "host/set_clipboard")).unwrap(),
+            serde_json::to_value(notification("items_changed")).unwrap(),
+            serde_json::to_value(response(99)).unwrap(), // id 不符 → unmatched
+            serde_json::json!({ "garbage": true }),      // 非法信封 → 忽略
+        ];
+        let routed = route_messages(7, outputs);
+        let ok = match routed.response {
+            Some(Ok(v)) => v,
+            _ => panic!("应有成功响应"),
+        };
+        assert_eq!(ok, serde_json::json!({ "ok": true }));
+        assert_eq!(routed.host_requests.len(), 1);
+        assert_eq!(
+            routed.host_requests[0].method.as_deref(),
+            Some("host/set_clipboard")
+        );
+        assert_eq!(routed.notifications.len(), 1);
+        assert_eq!(
+            routed.notifications[0].method.as_deref(),
+            Some("items_changed")
+        );
+        assert_eq!(routed.unmatched.len(), 1, "id 不符的响应进 unmatched");
+        assert_eq!(routed.unmatched[0].id, Some(99));
+    }
+
+    /// M9：错误响应映射为 `Err(RpcError)`，且**不影响**同批次副作用的路由
+    /// （`serve_line` 响应在前、副作用在后）。
+    #[test]
+    fn route_messages_maps_error_response_and_keeps_effects() {
+        let mut err = response(3);
+        err.result = None;
+        err.error = Some(RpcError {
+            code: -32005,
+            message: "Page not found".to_string(),
+            data: None,
+        });
+        let outputs = vec![
+            serde_json::to_value(err).unwrap(),
+            serde_json::to_value(notification("items_changed")).unwrap(),
+        ];
+        let routed = route_messages(3, outputs);
+        let code = match routed.response {
+            Some(Err(e)) => e.code,
+            _ => panic!("应为 Err(RpcError)"),
+        };
+        assert_eq!(code, -32005);
+        assert_eq!(
+            routed.notifications.len(),
+            1,
+            "错误响应同批次的副作用仍被路由"
+        );
     }
 
     #[test]

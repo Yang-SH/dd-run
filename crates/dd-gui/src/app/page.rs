@@ -2,12 +2,12 @@
 
 use crate::app::pool::get_items_on;
 use crate::app::PaletteApp;
+use crate::ext_client::ExtClient;
 use dd_gui::aggregator;
 use dd_gui::navigation::PageState;
 use dd_gui::state::PanelItem;
 use dd_gui::state::PanelState;
 use dd_host::manifest::LoadedExtension;
-use dd_host::process::ExtensionProcess;
 use dd_protocol::messages::GetItemsResult;
 use std::sync::mpsc;
 use std::sync::mpsc::TryRecvError;
@@ -16,8 +16,8 @@ use std::thread;
 /// 后台 `get_items` 的结果。
 pub(crate) struct PageOutcome {
     pub(crate) ext_id: String,
-    /// 同 [`InvokeOutcome::proc`]。
-    pub(crate) proc: Option<ExtensionProcess>,
+    /// 同 `InvokeOutcome::proc`（客户端随结果归还主线程）。
+    pub(crate) proc: Option<ExtClient>,
     pub(crate) page_id: String,
     /// 发起本次 `get_items` 时携带的 search 文本：落地时与页内当前 query 比对，
     /// 不一致说明「请求期间用户又输入了」→ 本次结果已过期，重新武装去抖补拉。
@@ -279,11 +279,13 @@ impl PaletteApp {
         let ext = ext.clone();
         let ext_id = ext.manifest.id.clone();
         let page_id = page_id.to_string();
+        // M9：内置扩展按 in-process 重建（spec 直调），其余 spawn 子进程。
+        let spec = self.inproc_specs.get(&ext_id).cloned();
         let (tx, rx) = mpsc::channel();
         let lang = self.lang_effective; // 线程闭包无法借 self：按值捕获生效语言
         thread::spawn(move || {
-            let mut proc = match aggregator::spawn_and_initialize(&ext) {
-                Ok(p) => p,
+            let mut proc = match crate::ext_client::open(spec, Some(&ext)) {
+                Ok((p, _init)) => p,
                 Err(e) => {
                     let _ = tx.send(PageOutcome {
                         ext_id,

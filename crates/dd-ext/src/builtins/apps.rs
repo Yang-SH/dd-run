@@ -44,7 +44,6 @@ fn from_utf16le_lossy(bytes: &[u8]) -> String {
     String::from_utf16_lossy(&v)
 }
 
-
 pub fn spec() -> ExtensionSpec {
     ExtensionSpec {
         id: "com.ddrun.apps",

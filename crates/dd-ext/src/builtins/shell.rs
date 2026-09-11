@@ -10,6 +10,10 @@
 //! 说明：面板内执行任意 shell 命令与在 CmdPal Shell 中一致——命令以当前用户
 //! 权限运行、无沙箱；危险命令（如 `shutdown`）由用户自行负责，扩展不设拦。
 //!
+//! 工作目录：**打开终端与无头执行都统一在用户主目录**（`USERPROFILE`）——
+//! 避免继承宿主进程不确定的 CWD（真机反馈：从任意目录启动宿主时，终端起始目录
+//! 与相对路径命令的结果都会随启动位置漂移）。
+//!
 //! 平台策略（P4 决策：Windows 优先）：Windows 实现 `cmd`；macOS / Linux
 //! （`sh`/`$SHELL`）为**编译恒成立占位**，待对应平台轮实现。
 //! 参考实现：[`docs/m4-record.md`](../../docs/m4-record.md) P4 决策。
@@ -23,7 +27,6 @@ use dd_protocol::model::{CommandItem, CommandRef, CommandResult, Icon, IconKind}
 const EXEC_TIMEOUT_MS: u64 = 3_000;
 /// 结果摘要最大长度（超出截断 + 省略号）。
 const MAX_SUMMARY: usize = 120;
-
 
 pub fn spec() -> ExtensionSpec {
     ExtensionSpec {
@@ -77,6 +80,14 @@ mod sys {
     use std::process::{Command, Stdio};
     use std::time::{Duration, Instant};
 
+    /// 用户主目录（终端起始目录）：Windows 取 `USERPROFILE`，其余取 `HOME`。
+    /// 与「双击/开始菜单打开终端」的默认目录一致，避免继承宿主 CWD。
+    fn home_dir() -> Option<std::path::PathBuf> {
+        std::env::var_os("USERPROFILE")
+            .or_else(|| std::env::var_os("HOME"))
+            .map(std::path::PathBuf::from)
+    }
+
     pub fn top_level_commands() -> Vec<CommandItem> {
         vec![CommandItem {
             id: "shell.open_terminal".to_string(),
@@ -98,12 +109,19 @@ mod sys {
     pub fn handle_invoke(params: &InvokeParams) -> (CommandResult, Vec<Effect>) {
         match params.id.as_str() {
             "shell.open_terminal" => {
-                // start 新窗口中的 cmd（CREATE_NO_WINDOW 隐藏 start 自身控制台）
+                // start 新窗口中的 cmd（CREATE_NO_WINDOW 隐藏 start 自身控制台）。
+                //
+                // ⚠️ 必须**显式指定起始目录**：否则 `start` 继承宿主进程的 CWD——
+                // 从任意目录启动 dd-run 时终端会落在该目录（真机反馈：宿主在
+                // `G:\AI\dd-test` 启动 → 终端也在那），与「双击/开始菜单打开终端」
+                // （默认 `%USERPROFILE%`）不一致。统一为**用户主目录**。
                 use std::os::windows::process::CommandExt;
-                let spawned = Command::new("cmd.exe")
-                    .args(["/C", "start", "", "cmd"])
-                    .creation_flags(0x0800_0000)
-                    .spawn();
+                let mut command = Command::new("cmd.exe");
+                command.args(["/C", "start", "", "cmd"]);
+                if let Some(dir) = home_dir() {
+                    command.current_dir(dir);
+                }
+                let spawned = command.creation_flags(0x0800_0000).spawn();
                 match spawned {
                     Ok(_) => (CommandResult::Dismiss, Vec::new()),
                     Err(e) => (
@@ -169,13 +187,19 @@ mod sys {
     }
 
     /// 无头执行并捕获输出：轮询等待（超时 kill）→ 读管道 → 合并 stdout/stderr。
+    ///
+    /// 工作目录统一为**用户主目录**（与 `shell.open_terminal` 一致）——否则会继承
+    /// 宿主进程不确定的 CWD，相对路径命令结果随启动位置漂移。
     fn run_capture(program: &str, args: &[&str]) -> Result<String, String> {
-        let mut child = Command::new(program)
+        let mut command = Command::new(program);
+        command
             .args(args)
             .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
-            .map_err(|e| format!("spawn 失败：{e}"))?;
+            .stderr(Stdio::piped());
+        if let Some(dir) = home_dir() {
+            command.current_dir(dir);
+        }
+        let mut child = command.spawn().map_err(|e| format!("spawn 失败：{e}"))?;
 
         // 轮询退出，超时则 kill（进程退出后管道写端关闭，wait_with_output 不会死锁）
         let deadline = Instant::now() + Duration::from_millis(EXEC_TIMEOUT_MS);
@@ -278,6 +302,14 @@ mod sys {
     mod tests {
         use super::*;
 
+        /// 终端起始目录：Windows 应能解析出 `USERPROFILE`（否则退回继承 CWD，
+        /// 即真机反馈的「与手动打开不一致」）。
+        #[test]
+        #[cfg(windows)]
+        fn home_dir_resolves_user_profile() {
+            assert!(home_dir().is_some(), "Windows 应能解析 USERPROFILE");
+        }
+
         #[test]
         fn summarize_handles_empty_long_and_multiline() {
             assert_eq!(summarize("   \n\t "), "执行完成（无输出）");
@@ -294,6 +326,19 @@ mod sys {
             // cmd 必存在于 Windows；echo 输出应包含 hello
             let out = run_capture("cmd.exe", &["/C", "echo hello"]).expect("echo 应成功");
             assert!(out.contains("hello"), "got {out}");
+        }
+
+        /// 无头执行的工作目录 = 用户主目录（与「打开终端」统一，不继承宿主 CWD）。
+        #[test]
+        #[cfg(windows)]
+        fn run_capture_runs_in_home_dir() {
+            let out = run_capture("cmd.exe", &["/C", "cd"]).expect("cd 应成功");
+            let home = home_dir().expect("应有主目录");
+            assert!(
+                out.trim()
+                    .eq_ignore_ascii_case(home.to_string_lossy().trim()),
+                "无头执行应在主目录，实得：{out:?}，期望：{home:?}"
+            );
         }
 
         #[test]

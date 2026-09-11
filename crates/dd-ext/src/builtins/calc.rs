@@ -19,7 +19,6 @@ use crate::{i18n::tr, Effect, ExtensionSpec};
 use dd_protocol::messages::InvokeParams;
 use dd_protocol::model::{CommandItem, CommandRef, CommandResult, Icon, IconKind};
 
-
 pub fn spec() -> ExtensionSpec {
     ExtensionSpec {
         id: "com.ddrun.calc",

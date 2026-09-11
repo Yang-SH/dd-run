@@ -14,7 +14,7 @@
 //! 的扩展后台拉模板 → [`Self::store`] 回填 → [`Self::render`] 出列表展示；
 //! Enter 走既有 `confirm_selected`（`invoke_params` 已带 `context.query`）。
 
-use dd_host::process::ExtensionProcess;
+use crate::ext_client::ExtClient;
 use dd_protocol::messages::error_codes;
 use dd_protocol::model::CommandItem;
 use std::time::Duration;
@@ -178,10 +178,10 @@ pub fn render_title(template: &str, query: &str) -> String {
     template.replace("{query}", effective)
 }
 
-/// 在给定进程上拉取一次兜底模板（协议 §6.2）。供 main.rs 后台线程调用。
+/// 在给定客户端上拉取一次兜底模板（协议 §6.2）。供 main.rs 后台线程调用。
 ///
 /// `Err` = 协议/超时/进程故障；`Ok(空)` = 该扩展无兜底能力（正常结果）。
-pub fn fetch_fallback_commands(proc: &mut ExtensionProcess) -> Result<Vec<CommandItem>, String> {
+pub fn fetch_fallback_commands(proc: &mut ExtClient) -> Result<Vec<CommandItem>, String> {
     proc.fallback_commands()
         .map_err(|e| match e.as_rpc_error() {
             Some(rpc) if rpc.code == error_codes::EXTENSION_TIMEOUT => {

@@ -3,10 +3,9 @@
 use crate::app::pool::invoke_on;
 use crate::app::toast::ToastKind;
 use crate::app::PaletteApp;
-use dd_gui::aggregator;
+use crate::ext_client::ExtClient;
 use dd_gui::result;
 use dd_host::manifest::LoadedExtension;
-use dd_host::process::ExtensionProcess;
 use dd_protocol::messages::InvokeParams;
 use dd_protocol::model::{CommandRef, CommandResult};
 use eframe::egui;
@@ -14,12 +13,12 @@ use std::sync::mpsc;
 use std::sync::mpsc::TryRecvError;
 use std::thread;
 
-/// 后台 `invoke` 的结果（进程随结果归还主线程）。
+/// 后台 `invoke` 的结果（客户端随结果归还主线程）。
 pub(crate) struct InvokeOutcome {
     pub(crate) ext_id: String,
-    /// `Some` = 进程对象（成功或链路内错误都归还，由 poll 按 `stub_reheat` 决定取舍）；
-    /// `None` = 复热 spawn 本身失败（无进程可归还）。
-    pub(crate) proc: Option<ExtensionProcess>,
+    /// `Some` = 客户端对象（成功或链路内错误都归还，由 poll 按 `stub_reheat` 决定取舍）；
+    /// `None` = 复热打开本身失败（无客户端可归还）。
+    pub(crate) proc: Option<ExtClient>,
     pub(crate) result: Result<CommandResult, String>,
     /// 本次是否由**桩复热**发起（spawn 的新进程）：失败时不归还进程、回退 stub。
     pub(crate) stub_reheat: bool,
@@ -196,11 +195,13 @@ impl PaletteApp {
         self.inflight.insert(ext.manifest.id.clone());
         let ext = ext.clone();
         let ext_id = ext.manifest.id.clone();
+        // M9：内置扩展按 in-process 重建（spec 直调），其余 spawn 子进程。
+        let spec = self.inproc_specs.get(&ext_id).cloned();
         let (tx, rx) = mpsc::channel();
         let lang = self.lang_effective; // 线程闭包无法借 self：按值捕获生效语言
         thread::spawn(move || {
-            let mut proc = match aggregator::spawn_and_initialize(&ext) {
-                Ok(p) => p,
+            let mut proc = match crate::ext_client::open(spec, Some(&ext)) {
+                Ok((p, _init)) => p,
                 Err(e) => {
                     // spawn/握手失败：无进程可归还，直接报错
                     let _ = tx.send(InvokeOutcome {
@@ -237,7 +238,7 @@ impl PaletteApp {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_support::{ctx, dying_process, make_app};
+    use crate::test_support::{ctx, dying_client, make_app};
     use dd_gui::aggregator::{SourceStatus, SourceSummary};
 
     #[test]
@@ -252,13 +253,13 @@ mod tests {
         });
         // 保活集放一个死进程（供 drop_source_to_stub 移除断言）
         app.processes
-            .push((ext_id.to_string(), dying_process(ext_id)));
+            .push((ext_id.to_string(), dying_client(ext_id)));
 
         // 构造「调用期间进程崩溃」的 InvokeOutcome（proc 为另一个死进程）
         let (tx, rx) = mpsc::channel();
         let _ = tx.send(InvokeOutcome {
             ext_id: ext_id.to_string(),
-            proc: Some(dying_process(ext_id)),
+            proc: Some(dying_client(ext_id)),
             result: Err("进程在调用期间崩溃".to_string()),
             stub_reheat: false,
         });

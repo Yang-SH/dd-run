@@ -260,6 +260,9 @@ const I18N: &[(&str, &str, &str)] = &[
         "No extensions found (check the extensions.d manifest directory)",
     ),
     ("set.ext.retry", "重试", "Retry"),
+    // 宿主自有 sidecar 的显示名（清单 `name` 无 i18n 字段；内置名取自 dd-ext 规格
+    // 自述，见 `aggregator::apply_owned_names`）。
+    ("ext.name.filesearch", "文件搜索", "File Search"),
     // ── 托盘（10C.2；菜单每次右键即席创建，经 TRAY_LANG 原子量取语言）──
     ("tray.toggle", "显示/隐藏面板\tWin+Alt+Space", "Show/Hide panel\tWin+Alt+Space"),
     ("tray.settings", "设置", "Settings"),

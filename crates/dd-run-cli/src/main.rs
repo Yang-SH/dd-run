@@ -7,6 +7,11 @@
 //! | `--roundtrip` | 完成判据第 3 条 | spawn → `initialize` → `top_level_commands` → `close` 全链路自检 |
 //! | `--conformance` | **M8（扩展生态验证）** | **全表面**一致性自检：在 `--roundtrip` 基础上补 `fallback_commands` / `get_command` / `get_items` / `invoke` / `host/*` 往返 —— 第三方扩展「绿灯即合规」 |
 //!
+//! **M9 B5**：`--conformance --ext-id <内置 id>`（`com.ddrun.*`）改走 **in-process**
+//! （直驱 `dd_ext::serve_line`，不 spawn 子进程），与 GUI 宿主的内置运行方式一致；
+//! 磁盘扩展（第三方 / sidecar）仍走子进程。两条路径共用 `dd_host::process::route_messages`
+//! 的路由规则，故判据一致。
+//!
 //! 契约来源：[`docs/manifest-schema.md`](../../docs/manifest-schema.md)（扫描与校验）、
 //! [`docs/protocol.md`](../../docs/protocol.md)（握手与全链路）。
 
@@ -14,10 +19,16 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::time::{Duration, Instant};
 
+use dd_ext::builtins::builtin_specs;
+use dd_ext::{serve_line, ExtensionSpec};
 use dd_host::manifest::{
     self, LoadedExtension, ScanOptions, ScanOutcome, SkipReason, HOST_CAPABILITIES,
 };
-use dd_host::process::{self, ExtensionProcess};
+use dd_host::process::{self, route_messages, ExtensionProcess};
+use dd_protocol::framing::DEFAULT_MAX_MESSAGE_BYTES;
+use dd_protocol::messages::{
+    HostInfo, InitializeParams, InitializeResult, RawMessage, TransportInfo, JSONRPC_VERSION,
+};
 use serde_json::Value;
 
 /// 协议版本（§5.1：宿主发送它支持的**最高**版本）。
@@ -123,7 +134,8 @@ fn print_usage() {
          \x20 --roundtrip         spawn 首个可用扩展，走 initialize → top_level_commands → close\n\
          \x20 --conformance       全表面一致性自检（补 fallback / get_command / get_items / invoke / host/*）\n\
          \x20 --invoke            --conformance 时也执行一次 invoke（**有真实副作用**，默认跳过）\n\
-         \x20 --ext-id <ID>       指定要自检的扩展 id（目录内有多个时用）\n\
+         \x20 --ext-id <ID>       指定要自检的扩展 id（目录内有多个时用；内置 id 如\n\
+         \x20                     com.ddrun.calc → --conformance 走 in-process，不 spawn 子进程）\n\
          \x20 --extensions-dir    覆盖扫描目录（默认 {SAMPLE_DIR}，不存在时回落到平台目录）"
     );
 }
@@ -373,6 +385,172 @@ fn pick_extension(
     builtin_sample().map(|ext| (ext, true))
 }
 
+/// 按 id 查内置扩展规格（M9 B5）：命中即用 in-process `serve_line` 自检。
+///
+/// 内置扩展不在磁盘上（B1 起规格上移到 `dd_ext::builtins`，B3 起宿主 in-process），
+/// 故 `--conformance --ext-id com.ddrun.<x>` 无法经目录扫描找到——这里优先解析。
+fn builtin_spec_by_id(ext_id: Option<&str>) -> Option<ExtensionSpec> {
+    let wanted = ext_id?;
+    builtin_specs().into_iter().find(|spec| spec.id == wanted)
+}
+
+/// 取出 `catch_unwind` 的 panic 载荷为可读字符串。
+fn panic_message(payload: &(dyn std::any::Any + Send)) -> String {
+    if let Some(s) = payload.downcast_ref::<&str>() {
+        (*s).to_string()
+    } else if let Some(s) = payload.downcast_ref::<String>() {
+        s.clone()
+    } else {
+        "未知 panic 载荷".to_string()
+    }
+}
+
+// ── M9 B5：in-process 后端（内置扩展）──────────────────────────────────
+
+/// CLI 侧 in-process 扩展客户端（内置 5 扩展）。
+///
+/// 与 `dd-gui::InProcessExtension` **同路由规则**——直接驱动 [`dd_ext::serve_line`]
+/// 并把批次输出经共享的 [`dd_host::process::route_messages`] 路由，两条路径因此
+/// 语义一致（M9 R1）。仅暴露 `--conformance` 所需表面（返回**原始 JSON**）。
+///
+/// 崩溃策略：每次 `serve_line` 以 [`std::panic::catch_unwind`] 包裹，扩展 panic →
+/// 该次调用返回 `Err`，CLI 存活（M9 R2）。
+struct InProcessExt {
+    spec: ExtensionSpec,
+    next_id: u64,
+    /// 累计的 `host/*` 反向请求（§7.4），由 `--conformance` 第 8 步取走。
+    host_requests: Vec<RawMessage>,
+}
+
+impl InProcessExt {
+    fn new(spec: ExtensionSpec) -> Self {
+        Self {
+            spec,
+            next_id: 1,
+            host_requests: Vec::new(),
+        }
+    }
+
+    /// §5.1 握手（与子进程 `ExtensionProcess::initialize` 同语义）。
+    fn initialize(
+        &mut self,
+        protocol_version: &str,
+        host_version: &str,
+    ) -> Result<InitializeResult, String> {
+        let params = InitializeParams {
+            protocol_version: protocol_version.to_string(),
+            host: HostInfo {
+                name: "dd-run".to_string(),
+                version: host_version.to_string(),
+                platform: manifest::current_platform().to_string(),
+            },
+            transport: TransportInfo {
+                framing: "ndjson".to_string(),
+                max_message_bytes: DEFAULT_MAX_MESSAGE_BYTES as u64,
+            },
+            capabilities: HOST_CAPABILITIES.iter().map(|s| (*s).to_string()).collect(),
+            locale: None,
+        };
+        let value = self.call_json(
+            "initialize",
+            serde_json::to_value(params).map_err(|e| e.to_string())?,
+        )?;
+        serde_json::from_value(value).map_err(|e| e.to_string())
+    }
+
+    /// 发起一次请求并返回匹配响应的**裸 `result`**（与子进程 `call` 同语义）。
+    fn call_json(&mut self, method: &str, params: Value) -> Result<Value, String> {
+        let id = self.next_id;
+        self.next_id += 1;
+        let request = serde_json::json!({
+            "jsonrpc": JSONRPC_VERSION,
+            "id": id,
+            "method": method,
+            "params": params,
+        });
+        let line = serde_json::to_string(&request).map_err(|e| e.to_string())?;
+        let outputs = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            serve_line(&self.spec, &line)
+        }))
+        .map_err(|payload| format!("内置扩展 panic：{}", panic_message(&*payload)))?
+        .0;
+        // 路由规则与子进程路径**共用** `dd_host::process::route_messages`（单一事实来源）。
+        let routed = route_messages(id, outputs);
+        self.host_requests.extend(routed.host_requests);
+        match routed.response {
+            Some(Ok(value)) => Ok(value),
+            Some(Err(err)) => Err(format!("协议错误 {}：{}", err.code, err.message)),
+            None => Err("serve_line 未返回匹配的响应".to_string()),
+        }
+    }
+
+    /// 取走并清空累计的 `host/*` 请求。
+    fn drain_host_requests(&mut self) -> Vec<RawMessage> {
+        std::mem::take(&mut self.host_requests)
+    }
+
+    /// §6.6 关闭：in-process 无进程可退，触发一次 close 以贴合协议后返回。
+    fn close(self) -> Result<(), String> {
+        let line = serde_json::to_string(&serde_json::json!({
+            "jsonrpc": JSONRPC_VERSION,
+            "id": 0,
+            "method": "close",
+            "params": {},
+        }))
+        .map_err(|e| e.to_string())?;
+        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            serve_line(&self.spec, &line)
+        }));
+        Ok(())
+    }
+}
+
+/// 自检后端（M9 B5）：子进程（第三方 / sidecar）或 in-process（内置 5 扩展）。
+///
+/// `conformance` 对后端无感知——两种后端语义一致，路由差异由共享的
+/// [`dd_host::process::route_messages`] 与 [`call_json`] 分发抹平。
+enum Backend {
+    Subprocess(ExtensionProcess),
+    InProcess(InProcessExt),
+}
+
+impl Backend {
+    fn initialize(
+        &mut self,
+        protocol_version: &str,
+        host_version: &str,
+    ) -> Result<InitializeResult, String> {
+        match self {
+            Backend::Subprocess(p) => p
+                .initialize(protocol_version, host_version)
+                .map_err(|e| e.to_string()),
+            Backend::InProcess(p) => p.initialize(protocol_version, host_version),
+        }
+    }
+
+    fn drain_host_requests(&mut self) -> Vec<RawMessage> {
+        match self {
+            Backend::Subprocess(p) => p.drain_host_requests(),
+            Backend::InProcess(p) => p.drain_host_requests(),
+        }
+    }
+
+    /// 子进程扩展的 stderr 末尾诊断；in-process 无子进程 → 空串。
+    fn stderr(&self) -> String {
+        match self {
+            Backend::Subprocess(p) => p.stderr(),
+            Backend::InProcess(_) => String::new(),
+        }
+    }
+
+    fn close(self) -> Result<(), String> {
+        match self {
+            Backend::Subprocess(p) => p.close().map_err(|e| e.to_string()),
+            Backend::InProcess(p) => p.close(),
+        }
+    }
+}
+
 // ── M8：`--conformance` 全表面一致性自检 ────────────────────────────────
 
 /// 自检结果计数器：任何 `✗` 都让退出码非 0；`⚠` 仅提示，不算失败。
@@ -395,18 +573,20 @@ impl Check {
     }
 }
 
-/// 发起一次请求并取回 `result` 的**原始 JSON**。
+/// 发起一次请求并取回 `result` 的**原始 JSON**（后端无关：子进程 / in-process）。
 ///
 /// `--conformance` 刻意不用强类型封装：一致性检查的对象是**线上的 JSON 形状**
 /// （协议 §6/§8 逐字规定），强类型反序列化成功反而会掩盖「多字段/错类型」类问题。
 fn call_json(
-    proc: &mut ExtensionProcess,
+    backend: &mut Backend,
     method: &str,
     params: Value,
     timeout: Duration,
 ) -> Result<Value, String> {
-    proc.call(method, params, timeout)
-        .map_err(|e| e.to_string())
+    match backend {
+        Backend::Subprocess(p) => p.call(method, params, timeout).map_err(|e| e.to_string()),
+        Backend::InProcess(p) => p.call_json(method, params),
+    }
 }
 
 /// §6.2 一致性判据：`fallback_commands` **非空** ⟺ `provider.has_fallback`。
@@ -454,6 +634,28 @@ fn conformance(
     do_invoke: bool,
     ext_id: Option<&str>,
 ) -> ExitCode {
+    // M9 B5：内置扩展（in-process）优先——`--ext-id` 命中内置 id 即走 `serve_line` 直调，
+    // 与 GUI 宿主的内置运行方式一致；其余（第三方 / sidecar）仍走子进程。
+    if let Some(spec) = builtin_spec_by_id(ext_id) {
+        let expected_id = spec.id;
+        println!("目标：内置扩展（M9 in-process）：{expected_id}");
+        println!("契约：docs/protocol.md · docs/manifest-schema.md");
+        let check = Check { failures: 0 };
+        let started = Instant::now();
+        check.pass(
+            "1) open",
+            format!("内置 {expected_id} · in-process（不 spawn 子进程）"),
+        );
+        return conformance_after_open(
+            Backend::InProcess(InProcessExt::new(spec)),
+            check,
+            started,
+            do_invoke,
+            expected_id,
+        );
+    }
+
+    // —— 磁盘扩展（第三方 / sidecar）：子进程 ——
     println!("扩展目录：{}", dir.display());
     let outcome = manifest::scan_dir(dir, opts);
     print_scan(&outcome);
@@ -482,7 +684,7 @@ fn conformance(
     let started = Instant::now();
 
     // ① spawn（§4 discovered → spawned）
-    let mut proc = match ExtensionProcess::spawn(&ext) {
+    let proc = match ExtensionProcess::spawn(&ext) {
         Ok(p) => {
             check.pass("1) spawn", ext.command.display().to_string());
             p
@@ -493,12 +695,30 @@ fn conformance(
         }
     };
 
+    conformance_after_open(
+        Backend::Subprocess(proc),
+        check,
+        started,
+        do_invoke,
+        &ext.manifest.id,
+    )
+}
+
+/// 自检主体（步骤 ②–⑨），**后端无关**：子进程与 in-process 共用同一套判据，
+/// 路由差异由 [`Backend`] 抹平（M9 B5）。
+fn conformance_after_open(
+    mut backend: Backend,
+    mut check: Check,
+    started: Instant,
+    do_invoke: bool,
+    expected_id: &str,
+) -> ExitCode {
     // ② initialize（§5 握手 + §5.3 版本协商）
-    let init = match proc.initialize(PROTOCOL_VERSION, HOST_VERSION) {
+    let init = match backend.initialize(PROTOCOL_VERSION, HOST_VERSION) {
         Ok(r) => r,
         Err(e) => {
-            check.fail("2) initialize", e.to_string());
-            let err = proc.stderr();
+            check.fail("2) initialize", e);
+            let err = backend.stderr();
             if !err.trim().is_empty() {
                 println!("     扩展 stderr 末尾：{}", tail(&err, 400));
             }
@@ -515,12 +735,12 @@ fn conformance(
             init.provider.has_fallback
         ),
     );
-    if init.provider.id != ext.manifest.id {
+    if init.provider.id != expected_id {
         check.warn(
             "2a) provider.id",
             format!(
                 "`{}` 与清单 `{}` 不一致（宿主以清单为准并记警告，§7 规则注释）",
-                init.provider.id, ext.manifest.id
+                init.provider.id, expected_id
             ),
         );
     }
@@ -535,7 +755,7 @@ fn conformance(
 
     // ③ top_level_commands（§6.1）+ 结构校验（§8.1 / §8.2）
     let commands = match call_json(
-        &mut proc,
+        &mut backend,
         "top_level_commands",
         serde_json::json!({}),
         process::TIMEOUT_TOP_LEVEL_COMMANDS,
@@ -600,7 +820,7 @@ fn conformance(
 
     // ④ fallback_commands（§6.2）—— 非空 ⟺ has_fallback
     let fallback = match call_json(
-        &mut proc,
+        &mut backend,
         "fallback_commands",
         serde_json::json!({}),
         process::TIMEOUT_FALLBACK_COMMANDS,
@@ -656,7 +876,7 @@ fn conformance(
             continue;
         }
         match call_json(
-            &mut proc,
+            &mut backend,
             "get_command",
             serde_json::json!({ "id": id }),
             process::TIMEOUT_GET_COMMAND,
@@ -704,7 +924,7 @@ fn conformance(
         let mut problems: Vec<String> = Vec::new();
         for page_id in &pages {
             match call_json(
-                &mut proc,
+                &mut backend,
                 "get_items",
                 serde_json::json!({ "page_id": page_id }),
                 process::TIMEOUT_GET_ITEMS,
@@ -760,7 +980,7 @@ fn conformance(
                     "sender": "top_level",
                     "context": { "query": "dd-run-conformance" }
                 });
-                match call_json(&mut proc, "invoke", params, process::TIMEOUT_INVOKE) {
+                match call_json(&mut backend, "invoke", params, process::TIMEOUT_INVOKE) {
                     // 注意：`call` 已解开信封，直接拿内层 result 判 `kind`
                     // （**不是** `result.kind`——那正是漏检过的错误形状）。
                     Ok(v) => match command_result_kind(&v) {
@@ -783,7 +1003,7 @@ fn conformance(
     }
 
     // ⑧ host/* 反向请求（§7）—— dd-host 已自动应答（已声明回 {}，未声明回 -32601）
-    let used = proc.drain_host_requests();
+    let used = backend.drain_host_requests();
     if used.is_empty() {
         check.pass(
             "8) host/*",
@@ -819,9 +1039,9 @@ fn conformance(
     }
 
     // ⑨ close（§6.6）
-    match proc.close() {
-        Ok(()) => check.pass("9) close", "进程已优雅退出"),
-        Err(e) => check.fail("9) close", e.to_string()),
+    match backend.close() {
+        Ok(()) => check.pass("9) close", "连接已优雅关闭"),
+        Err(e) => check.fail("9) close", e),
     }
 
     summarize(check, started)
@@ -852,6 +1072,70 @@ fn tail(text: &str, n: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// M9 B5：内置 id 解析——命中返回规格；未知 id / 无 id → `None`。
+    #[test]
+    fn builtin_spec_resolves_only_known_ids() {
+        let spec = builtin_spec_by_id(Some("com.ddrun.calc")).expect("calc 应为内置");
+        assert_eq!(spec.id, "com.ddrun.calc");
+        assert!(builtin_spec_by_id(Some("com.ddrun.nope")).is_none());
+        assert!(builtin_spec_by_id(Some("com.example.sample")).is_none());
+        assert!(builtin_spec_by_id(None).is_none());
+    }
+
+    /// M9 B5：in-process 后端对内置扩展跑通「握手 → 顶层命令 → 关闭」，
+    /// 全程不 spawn 子进程（直驱 `serve_line`）。
+    #[test]
+    fn in_process_backend_conforms_on_builtin() {
+        let spec = builtin_spec_by_id(Some("com.ddrun.calc")).expect("calc 应为内置");
+        let mut backend = Backend::InProcess(InProcessExt::new(spec));
+
+        let init = backend
+            .initialize(PROTOCOL_VERSION, HOST_VERSION)
+            .expect("in-process initialize");
+        assert_eq!(init.protocol_version, "1.0");
+        assert_eq!(init.provider.id, "com.ddrun.calc");
+
+        let top = call_json(
+            &mut backend,
+            "top_level_commands",
+            serde_json::json!({}),
+            process::TIMEOUT_TOP_LEVEL_COMMANDS,
+        )
+        .expect("top_level_commands");
+        assert!(
+            top.get("commands").and_then(Value::as_array).is_some(),
+            "应返回 commands 数组（§6.1）"
+        );
+
+        assert!(backend.stderr().is_empty(), "in-process 无子进程 stderr");
+        assert!(backend.close().is_ok(), "in-process close 应成功（noop）");
+    }
+
+    /// M9 B5：`conformance` 对内置扩展端到端**走 in-process 分支**并返回成功。
+    ///
+    /// 给一个不存在的目录 + `explicit_dir=true`，证明内置分支在**扫描磁盘之前**短路
+    /// （否则会因目录空/不存在而失败），即确实没有 spawn 子进程、没有扫盘。
+    #[test]
+    fn conformance_dispatch_routes_builtin_in_process() {
+        let opts = ScanOptions {
+            platform: manifest::current_platform().to_string(),
+            host_version: HOST_VERSION.to_string(),
+            home: manifest::home_dir().unwrap_or_default(),
+        };
+        let code = conformance(
+            Path::new("no-such-dir-for-builtin"),
+            &opts,
+            true,
+            false,
+            Some("com.ddrun.calc"),
+        );
+        assert_eq!(
+            code,
+            ExitCode::SUCCESS,
+            "内置 calc 的 in-process 自检应全绿"
+        );
+    }
 
     /// §6.2 一致性判据的四象限——两个「不一致」方向都必须被拦下。
     ///

@@ -8,9 +8,9 @@ use crate::ExtensionSpec;
 
 pub mod apps;
 pub mod calc;
+pub mod shell;
 pub mod system;
 pub mod websearch;
-pub mod shell;
 
 /// 运行期构造全部内置扩展规格（按生效语言 `DDRUN_LANG` 选文案）。
 pub fn builtin_specs() -> Vec<ExtensionSpec> {

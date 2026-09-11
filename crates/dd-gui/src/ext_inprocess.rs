@@ -32,12 +32,12 @@ use std::panic::AssertUnwindSafe;
 
 use dd_ext::{serve_line, ExtensionSpec};
 use dd_host::manifest::{current_platform, HOST_CAPABILITIES};
-use dd_host::process::{classify, CloseError, MessageKind, ProtocolError};
+use dd_host::process::{route_messages, CloseError, ProtocolError};
 use dd_protocol::framing::DEFAULT_MAX_MESSAGE_BYTES;
 use dd_protocol::messages::{
     error_codes, CommandListResult, GetCommandParams, GetCommandResult, GetItemsParams,
-    GetItemsResult, InitializeParams, InitializeResult, InvokeParams, ItemsChangedParams,
-    RawMessage, RpcError, TransportInfo, HostInfo, JSONRPC_VERSION,
+    GetItemsResult, HostInfo, InitializeParams, InitializeResult, InvokeParams, ItemsChangedParams,
+    RawMessage, RpcError, TransportInfo, JSONRPC_VERSION,
 };
 use dd_protocol::model::{CommandItem, CommandResult};
 
@@ -225,44 +225,17 @@ impl InProcessExtension {
             }
         };
 
-        let mut matched: Option<Result<serde_json::Value, ProtocolError>> = None;
-        for value in outputs {
-            let msg: RawMessage = match serde_json::from_value(value) {
-                Ok(m) => m,
-                Err(_) => continue, // 非合法 JSON-RPC 信封：忽略不致命（§9.3）
-            };
-            if msg.jsonrpc != JSONRPC_VERSION {
-                self.unmatched.push(msg);
-                continue;
-            }
-            match classify(&msg) {
-                MessageKind::HostRequest => {
-                    // §7.4：记录反向请求，UI 层执行真实副作用。in-process 无子进程
-                    // stdin 可应答，但扩展侧 `run` 本就忽略 host 响应（见 lib.rs
-                    // `serve_line` 对"无 method 有 id"消息直接 discard），故无需应答。
-                    self.host_requests.push(msg);
-                }
-                MessageKind::Notification => {
-                    self.notifications.push(msg);
-                }
-                MessageKind::Response(rid) => {
-                    if rid == id {
-                        matched = Some(match msg.error {
-                            Some(err) => Err(ProtocolError::Rpc(err)),
-                            None => Ok(msg.result.unwrap_or(serde_json::Value::Null)),
-                        });
-                        // 不立即 return：继续路由同批次的 host/* / 通知副作用
-                    } else {
-                        self.unmatched.push(msg);
-                    }
-                }
-                MessageKind::Unknown => {
-                    self.unmatched.push(msg);
-                }
-            }
-        }
-        match matched {
-            Some(r) => r,
+        // 路由规则与子进程路径**共用** `dd_host::process::route_messages`（单一事实
+        // 来源；M9 R1 逐字节等价由此保证）。`serve_line` 响应在前、副作用在后，故先把
+        // 同批次的 host/* 与通知全部并入总线，再决定返回值。
+        let routed = route_messages(id, outputs);
+        self.host_requests.extend(routed.host_requests);
+        self.notifications.extend(routed.notifications);
+        self.unmatched.extend(routed.unmatched);
+
+        match routed.response {
+            Some(Ok(value)) => Ok(value),
+            Some(Err(err)) => Err(ProtocolError::Rpc(err)),
             None => Err(ProtocolError::Rpc(RpcError {
                 code: error_codes::INTERNAL_ERROR,
                 message: "serve_line 未返回匹配的响应".to_string(),
@@ -273,10 +246,7 @@ impl InProcessExtension {
 }
 
 /// `catch_unwind` 包装的 [`serve_line`]：返回 `Ok((消息, 退出标志))` 或 `Err(panic 信息)`。
-fn catch(
-    spec: &ExtensionSpec,
-    line: &str,
-) -> Result<(Vec<serde_json::Value>, bool), String> {
+fn catch(spec: &ExtensionSpec, line: &str) -> Result<(Vec<serde_json::Value>, bool), String> {
     std::panic::catch_unwind(AssertUnwindSafe(|| serve_line(spec, line))).map_err(|payload| {
         // panic 载荷通常是 &str 或 String；尽量取出可读信息。
         if let Some(s) = payload.downcast_ref::<&str>() {
@@ -293,6 +263,7 @@ fn catch(
 mod tests {
     use super::*;
     use dd_ext::Effect;
+    use dd_host::process::{classify, MessageKind};
     use dd_protocol::model::{CommandRef, Icon, IconKind, Sender};
 
     /// 测试用最小 spec：顶层 2 命令、fallback 1 模板、invoke 分发（含 host 请求与

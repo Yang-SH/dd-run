@@ -4,12 +4,13 @@
 //! 与 [`docs/implementation.md`](../../docs/implementation.md) M1「首屏聚合」任务：
 //! - **并行**：每扩展一个线程（进程对象线程独占），互不阻塞（A12 能力调用不阻塞 UI）；
 //! - **错误隔离**：单个扩展失败只记入 [`SourceSummary`]，不影响其他扩展与整体渲染；
-//! - **内置扩展常驻**（M4 P4 `ensure_builtins`）：`dd-ext-apps/calc/system/websearch/shell`
+//! - **内置扩展常驻**（M4 P4 → M9 in-process）：`dd-ext-apps/calc/system/websearch/shell`
 //!   由宿主**内存自注册**（manifest-schema §10：内置同样走清单注册，MVP 无安装器 →
-//!   宿主启动时直接构造 `LoadedExtension`）。其可执行文件来源见
-//!   [`load_extension_sources`]：打包后走**内嵌物化**（单文件 `dd-run.exe`），
-//!   开发期回退宿主 exe 同目录；
-//!   扩展目录中的第三方清单与其**并存**，同 id 以内置优先。
+//!   宿主启动时直接构造 `LoadedExtension`）。**M9 起内置扩展以 in-process 方式运行**
+//!   （宿主进程内直接调 `dd_ext::serve_line`，见 [`crate::ext_client`]），注册不再
+//!   依赖磁盘 `dd-ext-*.exe`（[`dd_host::builtin::builtin_registrations`]），也
+//!   不再物化内嵌 exe；第三方 / sidecar 仍为子进程，扩展目录中的清单与其**并存**，
+//!   同 id 以内置优先。
 //! - **扩展清单扫描双位置**（M7 批次 7.5）：用户数据目录 `extensions.d/`（manifest-schema
 //!   §2 主位置）+ **宿主 exe 同目录 `extensions.d/` 便携 sidecar**（免安装 zip「解压即用」）；
 //!   两处按 id 去重——用户目录优先覆盖分发版，sidecar 独有追加，内置仍最优先。
@@ -23,16 +24,19 @@
 //!   保证进程恒 warm 可响应 `fallback_commands`；
 //! - 源状态三态：Warm（进程活）/ Stub（仅桩）/ Failed（失败），供页脚展示与 A6 观察。
 
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::thread;
 
-use dd_host::builtin::{ensure_builtins, merge_builtins};
+use dd_ext::ExtensionSpec;
+use dd_host::builtin::merge_builtins;
 use dd_host::cache::{FrozenCache, FrozenSnapshot};
 use dd_host::manifest::{self, LoadedExtension, ScanOptions};
 use dd_host::process::ExtensionProcess;
 use dd_protocol::messages::InitializeResult;
 use dd_protocol::model::CommandItem;
 
+use crate::ext_client::ExtClient;
 use crate::state::PanelItem;
 use crate::text;
 use dd_gui::settings::Lang;
@@ -66,9 +70,10 @@ pub enum ExtItems {
 
 /// 一次聚合的完整结果。
 pub struct CollectResult {
-    /// 成功拉取后**保活的进程**（顺序与 [`ExtItems::Ready`] 一一对应，
+    /// 成功拉取后**保活的客户端**（顺序与 [`ExtItems::Ready`] 一一对应，
     /// 供 M2 的 `invoke` 复用；不手动 `close`，随宿主退出由 Drop 清理）。
-    pub processes: Vec<ExtensionProcess>,
+    /// M9：包含内置 in-process 与第三方子进程两类后端（[`ExtClient`]）。
+    pub processes: Vec<ExtClient>,
     /// 每个扩展的拉取结果（含失败项）。
     pub per_ext: Vec<ExtItems>,
 }
@@ -142,50 +147,68 @@ pub fn inject_websearch_env(exts: &mut [LoadedExtension], engines_json: &str) {
     }
 }
 
-/// 扫描扩展目录并**合并内置扩展**（M4 P4 `ensure_builtins`）。
+/// 扫描扩展目录并**合并内置扩展**（M4 P4 → M9 in-process）。
 ///
-/// 返回 `(扩展列表, 备注)`。内置 5 个（exe 存在者）**恒注册**，扩展目录中的
-/// 第三方清单与其并存（同 id 以内置优先，`merge_builtins` 去重）。
-/// 备注仅在异常时非空（找不到内置 exe / 目录不可读），供 UI 提示。
-///
-/// 内置扩展的可执行文件来源（单文件分发后）：
-/// - **优先**：宿主内嵌的扩展 exe（经 [`crate::embedded::materialize`] 物化到
-///   `%APPDATA%/dd-run/cache/embedded/`）——这是打包后的 `dd-run.exe` 路径；
-/// - **回退**：与宿主 exe 同目录的 `dd-ext-*.exe`（开发期 / 未打包的多文件部署）。
-pub fn load_extension_sources() -> (Vec<LoadedExtension>, String) {
-    // 内置扩展目录：先尝试内嵌物化目录，其次宿主 exe 同目录（cargo 把 workspace
-    // 所有 bin 放同一目录，供开发期直接 cargo run / 测试使用）。
-    let exe_dir: Option<PathBuf> = crate::embedded::materialize().or_else(|| {
-        std::env::current_exe()
-            .ok()
-            .and_then(|p| p.parent().map(|d| d.to_path_buf()))
-    });
-    let mut note = String::new();
-    let builtins = match &exe_dir {
-        Some(d) => {
-            let exts = ensure_builtins(d);
-            if exts.is_empty() {
-                note = format!(
-                    "未找到内置扩展可执行文件（{} 下无 dd-ext-*.exe）",
-                    d.display()
-                );
-            }
-            exts
-        }
-        None => {
-            note = "无法定位内置扩展可执行文件目录，内置扩展未注册".to_string();
-            Vec::new()
-        }
-    };
+/// 返回 `(扩展列表, 内置 in-process 规格表, 备注)`：
+/// - **扩展列表**：内置 5 个（**恒注册，不依赖磁盘 exe**）+ 扩展目录中的第三方
+///   清单（同 id 以内置优先，`merge_builtins` 去重）。列表用于 UI 展示与
+///   id/名称查询；内置项的 `command` 为名义路径，**不会被 spawn**。
+/// - **规格表**：`id → ExtensionSpec`，仅内置 5 个。宿主据此以 in-process 方式
+///   驱动内置扩展（[`crate::ext_client::ExtClient::open_builtin`]）。
+/// - **备注**：仅在异常时非空（目录不可读），供 UI 提示。M9 起内置恒可用，
+///   不再有"找不到内置 exe"类备注。
+pub fn load_extension_sources(
+    lang: Lang,
+) -> (Vec<LoadedExtension>, HashMap<String, ExtensionSpec>, String) {
+    // M9：内置扩展恒注册（in-process，无需 exe / 无需物化内嵌 exe）。
+    let builtins = dd_host::builtin::builtin_registrations();
+    // 运行期规格（按生效语言构造；宿主已在聚合前经 `dd_ext::i18n::set_lang` 设语言）。
+    let specs: HashMap<String, ExtensionSpec> = dd_ext::builtins::builtin_specs()
+        .into_iter()
+        .map(|s| (s.id.to_string(), s))
+        .collect();
 
-    let merged = merge_builtins(
+    let mut note = String::new();
+    let mut merged = merge_builtins(
         builtins,
         merge_sidecar_scan(manifest::extensions_dir(), &mut note),
     );
+    // 显示名本地化：清单 `name` 是单串、无 i18n（schema v1.0 冻结），故宿主自有
+    // 扩展的名称在注册后统一覆盖（内置取自述 display_name）。
+    apply_owned_names(&mut merged, &specs, lang);
     if merged.is_empty() && note.is_empty() {
         note = "无可用扩展（内置与扩展目录均为空）".to_string();
     }
-    (merged, note)
+    (merged, specs, note)
+}
+
+/// 覆盖**宿主自有扩展**的显示名（本地化）。
+///
+/// - **内置 5 个**：用扩展自述的 `display_name`（`dd_ext::builtins::builtin_specs()`
+///   已按生效语言构造）——宿主不重复维护名称（单一事实来源）。
+/// - **随包 sidecar**（非内置，如文件搜索 `com.ddrun.filesearch`）：清单 `name`
+///   无 i18n 字段（manifest-schema v1.0 冻结），故对宿主自有 id 用宿主文案表覆盖。
+/// - **第三方清单名按作者提供原样**——宿主不臆测翻译。
+fn apply_owned_names(
+    exts: &mut [LoadedExtension],
+    specs: &HashMap<String, ExtensionSpec>,
+    lang: Lang,
+) {
+    for ext in exts {
+        if let Some(spec) = specs.get(&ext.manifest.id) {
+            ext.manifest.name = spec.display_name.to_string();
+        } else if let Some(key) = owned_sidecar_name_key(&ext.manifest.id) {
+            ext.manifest.name = text::t(lang, key).to_string();
+        }
+    }
+}
+
+/// 宿主自有 sidecar（随包分发、非内置）的本地化名文案键。
+fn owned_sidecar_name_key(id: &str) -> Option<&'static str> {
+    match id {
+        "com.ddrun.filesearch" => Some("ext.name.filesearch"),
+        _ => None,
+    }
 }
 
 /// 便携 sidecar 扩展目录：宿主 exe 同目录的 `extensions.d/`（M7 批次 7.5）。
@@ -250,10 +273,10 @@ fn push_note(note: &mut String, msg: &str) {
     note.push_str(msg);
 }
 
-/// 单个扩展线程的原始结果（携带进程，跨线程回传）。
+/// 单个扩展线程的原始结果（携带客户端，跨线程回传）。
 enum ExtOutcome {
     Ready {
-        proc: Box<ExtensionProcess>,
+        proc: Box<ExtClient>,
         id: String,
         name: String,
         items: Vec<CommandItem>,
@@ -271,19 +294,24 @@ enum ExtOutcome {
     },
 }
 
-/// 并行收集首屏：每扩展一个线程，进程对象线程独占，join 回传。
+/// 并行收集首屏：每扩展一个线程，客户端对象线程独占，join 回传。
 ///
-/// M3 分流（见模块文档）：frozen + 磁盘桩命中 → [`ExtOutcome::Stub`]（不 spawn）；
-/// frozen 无桩（首启）→ spawn 拉取并落盘；fresh → spawn 拉取不落盘。
+/// M3 分流（见模块文档，**仅子进程**）：frozen + 磁盘桩命中 → [`ExtOutcome::Stub`]
+/// （不 spawn）；frozen 无桩（首启）→ spawn 拉取并落盘；fresh → spawn 拉取不落盘。
+/// M9：内置扩展（`specs` 命中者）走 in-process，**无 spawn / 无桩**（纯函数调用恒瞬时）。
 /// `cache` 用 scoped thread 共享只读借用（`FrozenCache` 仅含目录路径，无内部状态）。
-pub fn collect_top_level(exts: &[LoadedExtension], cache: Option<&FrozenCache>) -> CollectResult {
-    let mut processes = Vec::new();
+pub fn collect_top_level(
+    exts: &[LoadedExtension],
+    specs: &HashMap<String, ExtensionSpec>,
+    cache: Option<&FrozenCache>,
+) -> CollectResult {
+    let mut processes: Vec<ExtClient> = Vec::new();
     let mut per_ext = Vec::with_capacity(exts.len());
     thread::scope(|scope| {
         let mut handles = Vec::with_capacity(exts.len());
         for ext in exts {
             let ext = ext.clone();
-            handles.push(scope.spawn(move || load_one(ext, cache)));
+            handles.push(scope.spawn(move || load_one(ext, specs, cache)));
         }
         for handle in handles {
             match handle.join() {
@@ -347,15 +375,23 @@ fn detail_suffix(detail: Option<String>) -> String {
     detail.map(|d| format!("（诊断：{d}）")).unwrap_or_default()
 }
 
-/// 一个扩展的完整链路：M3 分流后 spawn → initialize → top_level_commands（+落盘）。
-fn load_one(ext: LoadedExtension, cache: Option<&FrozenCache>) -> ExtOutcome {
+/// 一个扩展的完整链路：M3 分流（仅子进程）后 open → initialize → top_level_commands（+落盘）。
+///
+/// M9：内置扩展（`specs` 命中）走 in-process——不 spawn、不读/落磁盘桩（调用为纯
+/// 函数，恒"瞬时可用"，`SourceStatus::Warm`），顶层命令拉到即 Ready。
+fn load_one(
+    ext: LoadedExtension,
+    specs: &HashMap<String, ExtensionSpec>,
+    cache: Option<&FrozenCache>,
+) -> ExtOutcome {
     let id = ext.manifest.id.clone();
     let name = ext.manifest.name.clone();
     let version = ext.manifest.version.clone();
+    let in_process = specs.contains_key(&id);
 
-    // M3：frozen 且磁盘桩命中（键 = id + version，`FrozenCache::load` 已按当前
-    // version 精确定位）→ **不拉起进程**（A6），首屏直接渲染桩。
-    if ext.manifest.frozen {
+    // M3（仅子进程）：frozen 且磁盘桩命中（键 = id + version，`FrozenCache::load`
+    // 已按当前 version 精确定位）→ **不拉起进程**（A6），首屏直接渲染桩。
+    if !in_process && ext.manifest.frozen {
         if let Some(snap) = cache.and_then(|c| c.load(&id, &version)) {
             return ExtOutcome::Stub {
                 id,
@@ -365,37 +401,41 @@ fn load_one(ext: LoadedExtension, cache: Option<&FrozenCache>) -> ExtOutcome {
         }
     }
 
-    // 无桩（frozen 首启）或 fresh：spawn → initialize → top_level_commands。
-    let (mut spawned, init) = match spawn_and_initialize_with_info(&ext) {
+    // 无桩（frozen 首启）/ fresh / 内置 in-process：open → initialize → top_level_commands。
+    let (mut client, init) = match crate::ext_client::open(specs.get(&id).cloned(), Some(&ext)) {
         Ok(pair) => pair,
         Err(e) => return ExtOutcome::Failed { id, name, error: e },
     };
     // §6.3：含兜底能力者一律视为 fresh——不落桩；若历史桩存在则清除，
     // 避免下次冷启动读桩（无进程 → fallback_commands 拉不到）。
     let has_fallback = init.provider.has_fallback;
-    match spawned.top_level_commands() {
+    match client.top_level_commands() {
         Ok(items) => {
-            if ext.manifest.frozen && !has_fallback {
-                // M3：frozen 成功拉取 → 落盘桩（下次冷启动读桩不拉起）。
-                // 先清同 id 的旧版本桩，避免旧文件残留；落盘失败不致命（本次仍 warm 服务，
-                // 仅下次冷启动退化为再拉一次）。
-                if let Some(c) = cache {
-                    c.invalidate_if_version_changed(&id, &version);
-                    let snap = FrozenSnapshot {
-                        ext_id: id.clone(),
-                        version: version.clone(),
-                        commands: items.clone(),
-                    };
-                    let _ = c.save(&snap);
-                }
-            } else if has_fallback {
-                // fresh（含兜底）：确保磁盘上没有它的桩文件
-                if let Some(c) = cache {
-                    let _ = c.remove(&id);
+            // M9：内置 in-process 不参与磁盘桩缓存（无 spawn 成本，读桩反而多一次
+            // 文件读取且可能拿到旧文案）；仅子进程走 M3 落桩/清桩。
+            if !in_process {
+                if ext.manifest.frozen && !has_fallback {
+                    // M3：frozen 成功拉取 → 落盘桩（下次冷启动读桩不拉起）。
+                    // 先清同 id 的旧版本桩，避免旧文件残留；落盘失败不致命（本次仍 warm
+                    // 服务，仅下次冷启动退化为再拉一次）。
+                    if let Some(c) = cache {
+                        c.invalidate_if_version_changed(&id, &version);
+                        let snap = FrozenSnapshot {
+                            ext_id: id.clone(),
+                            version: version.clone(),
+                            commands: items.clone(),
+                        };
+                        let _ = c.save(&snap);
+                    }
+                } else if has_fallback {
+                    // fresh（含兜底）：确保磁盘上没有它的桩文件
+                    if let Some(c) = cache {
+                        let _ = c.remove(&id);
+                    }
                 }
             }
             ExtOutcome::Ready {
-                proc: Box::new(spawned),
+                proc: Box::new(client),
                 id,
                 name,
                 items,
@@ -406,7 +446,7 @@ fn load_one(ext: LoadedExtension, cache: Option<&FrozenCache>) -> ExtOutcome {
             name,
             error: format!(
                 "top_level_commands 失败：{e}{}",
-                detail_suffix(spawned.failure_detail())
+                detail_suffix(client.failure_detail())
             ),
         },
     }
@@ -594,6 +634,126 @@ mod tests {
             command: PathBuf::from(format!(r"{tag}\ext.exe")),
             cwd: PathBuf::from(tag),
         }
+    }
+
+    /// M9 修复：宿主自有扩展的显示名被本地化覆盖——**内置**取扩展自述
+    /// `display_name`（不依赖具体语言）；**随包 sidecar** 取宿主文案键；
+    /// **第三方**保持清单原样（宿主不臆造翻译）。
+    #[test]
+    fn apply_owned_names_localizes_only_owned_extensions() {
+        let specs: HashMap<String, dd_ext::ExtensionSpec> = dd_ext::builtins::builtin_specs()
+            .into_iter()
+            .map(|s| (s.id.to_string(), s))
+            .collect();
+        let mut exts = vec![
+            loaded_ext("com.ddrun.calc", "builtin"),
+            loaded_ext("com.ddrun.filesearch", "sidecar"),
+            loaded_ext("com.example.thirdparty", "user"),
+        ];
+        apply_owned_names(&mut exts, &specs, Lang::ZhCn);
+
+        // 内置：覆盖为规格 display_name（与语言无关的等价断言）
+        let calc_name = specs.get("com.ddrun.calc").unwrap().display_name;
+        assert_eq!(exts[0].manifest.name, calc_name);
+        assert_ne!(
+            exts[0].manifest.name, "Ext com.ddrun.calc",
+            "内置名应被自述 display_name 覆盖"
+        );
+        // 随包 sidecar：宿主文案键（中文模式）
+        assert_eq!(exts[1].manifest.name, "文件搜索");
+        // 第三方：清单名原样
+        assert_eq!(exts[2].manifest.name, "Ext com.example.thirdparty");
+        // 英文模式（sidecar 名随语言切换）
+        apply_owned_names(&mut exts, &specs, Lang::EnUs);
+        assert_eq!(exts[1].manifest.name, "File Search");
+    }
+
+    /// 宿主自有 sidecar 的本地化名映射只覆盖随包扩展。
+    #[test]
+    fn owned_sidecar_name_key_maps_bundled_only() {
+        assert_eq!(
+            owned_sidecar_name_key("com.ddrun.filesearch"),
+            Some("ext.name.filesearch")
+        );
+        assert_eq!(owned_sidecar_name_key("com.example.x"), None);
+    }
+
+    /// M9 B3：内置扩展（spec 命中）走 **in-process** —— 聚合产出 Ready、且保活集
+    /// 中必须是 in-process 后端（**不 spawn 子进程**，与 D3 验收"代码路径验证"对齐）；
+    /// 同时无磁盘桩（即使 `frozen=true` 也不读桩）。
+    #[test]
+    fn collect_top_level_builtin_uses_in_process_backend() {
+        use dd_ext::ExtensionSpec;
+        use dd_protocol::model::CommandRef;
+
+        let spec = ExtensionSpec {
+            id: "com.ddrun.fixture",
+            display_name: "Fixture",
+            description: "单测夹具",
+            frozen: true,
+            has_fallback: false,
+            capabilities: &[],
+            log_tag: "dd-ext-fixture",
+            top_level: || {
+                vec![CommandItem {
+                    id: "fix.hello".into(),
+                    title: "Hello".into(),
+                    subtitle: None,
+                    icon: None,
+                    section: None,
+                    tags: None,
+                    details: None,
+                    text_to_suggest: None,
+                    more_commands: None,
+                    command: CommandRef::Invoke,
+                }]
+            },
+            fallback: None,
+            invoke: |_| (dd_protocol::model::CommandResult::Dismiss, Vec::new()),
+            pages: None,
+        };
+        let ext = dd_host::manifest::from_builtin(
+            PathBuf::from("dd-ext-fixture.exe"), // 名义路径：不存在也无妨（不 spawn）
+            "com.ddrun.fixture",
+            "Fixture",
+            true,
+            &[],
+            "0.1.1",
+        );
+        let mut specs = HashMap::new();
+        specs.insert("com.ddrun.fixture".to_string(), spec);
+
+        let result = collect_top_level(std::slice::from_ref(&ext), &specs, None);
+
+        assert_eq!(result.per_ext.len(), 1);
+        assert!(
+            result.per_ext[0].is_ready(),
+            "内置 in-process 应直接 Ready（无 spawn / 无桩），实际 {:?}",
+            result.per_ext[0]
+        );
+        assert_eq!(result.processes.len(), 1);
+        assert!(
+            result.processes[0].is_in_process(),
+            "内置扩展必须走 in-process 后端（不再 spawn 子进程）"
+        );
+    }
+
+    /// 对照：`specs` 未命中（第三方/sidecar）仍走子进程——exe 不存在 → Failed
+    /// （不 panic、不误判为 Ready）。
+    #[test]
+    fn collect_top_level_non_builtin_still_uses_subprocess() {
+        let ext = loaded_ext("com.example.third", "user");
+        let specs: HashMap<String, ExtensionSpec> = HashMap::new();
+
+        let result = collect_top_level(std::slice::from_ref(&ext), &specs, None);
+
+        assert_eq!(result.per_ext.len(), 1);
+        assert!(
+            matches!(result.per_ext[0], ExtItems::Failed { .. }),
+            "非内置、exe 不存在 → spawn 失败 → Failed，实际 {:?}",
+            result.per_ext[0]
+        );
+        assert!(result.processes.is_empty(), "失败项无保活客户端");
     }
 
     #[test]

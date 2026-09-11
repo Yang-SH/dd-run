@@ -162,7 +162,6 @@ fn home_of(template: &str) -> String {
     }
 }
 
-
 pub fn spec() -> ExtensionSpec {
     ExtensionSpec {
         id: "com.ddrun.websearch",
@@ -188,7 +187,8 @@ fn top_level_commands() -> Vec<CommandItem> {
         .iter()
         .map(|e| CommandItem {
             id: format!("websearch.{}", e.suffix),
-            title: format!("Search with {}", e.name),
+            // 与 subtitle 一致走 `tr`（此前硬编码英文 → 中文模式标题仍显示英文）。
+            title: tr("使用 {name} 搜索", "Search with {name}").replace("{name}", &e.name),
             subtitle: Some(
                 tr(
                     "打开 {name}（输入关键词后选「在 {name} 搜索 …」结果项）",
@@ -385,6 +385,29 @@ mod tests {
         );
         // 顶层与兜底命令集 = 2 × 引擎数
         assert_eq!(top_level_commands().len(), active_engines().len());
+    }
+
+    /// 顶层标题走 `tr()`（此前硬编码 `"Search with X"` → 中文模式仍显示英文）。
+    /// 默认（中文）语言下校验标题已本地化；非中文环境直接跳过（不误报）。
+    #[test]
+    fn top_level_title_is_localized() {
+        if crate::i18n::current_lang() != crate::i18n::Lang::ZhCn {
+            return;
+        }
+        let cmds = top_level_commands();
+        assert!(!cmds.is_empty());
+        for c in &cmds {
+            assert!(
+                c.title.contains("搜索"),
+                "中文模式标题应本地化：{}",
+                c.title
+            );
+            assert!(
+                !c.title.starts_with("Search with "),
+                "标题不应残留硬编码英文：{}",
+                c.title
+            );
+        }
     }
 
     // ── 可配置引擎（DD_WEBSEARCH_ENGINES）──

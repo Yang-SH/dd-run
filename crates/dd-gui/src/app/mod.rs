@@ -28,7 +28,9 @@ use crate::app::pool::{LRU_WARM_CAPACITY, WARM_IDLE_HIDDEN_TICK};
 use crate::app::refresh::RefreshState;
 use crate::app::toast::ConfirmDialog;
 use crate::app::toast::ToastState;
+use crate::ext_client::ExtClient;
 use crate::ui::settings_view::SettingsCategory;
+use dd_ext::ExtensionSpec;
 use dd_gui::aggregator;
 use dd_gui::hotkey::HotkeyThread;
 use dd_gui::navigation::PageStack;
@@ -39,7 +41,6 @@ use dd_host::cache::ColdStartTimer;
 use dd_host::cache::FrozenCache;
 use dd_host::cache::LruWarmSet;
 use dd_host::manifest::LoadedExtension;
-use dd_host::process::ExtensionProcess;
 use dd_protocol::messages::InvokeParams;
 use eframe::egui;
 use std::collections::{HashMap, HashSet};
@@ -189,11 +190,16 @@ pub struct PaletteApp {
     pub(crate) aggregating: bool,
     /// 扩展源状态（健康检查/LRU 复热逻辑用；**页脚不再展示**，用户决策 2026-09-04）。
     pub(crate) sources: Vec<aggregator::SourceSummary>,
-    /// 保活进程：`(扩展 id, 进程)`。发起请求时 take、结果归还，
-    /// 保证同一进程同一时刻最多 1 个 in-flight 请求（协议 §4 串行化）。
-    pub(crate) processes: Vec<(String, ExtensionProcess)>,
+    /// 保活客户端：`(扩展 id, 客户端)`。发起请求时 take、结果归还，
+    /// 保证同一扩展同一时刻最多 1 个 in-flight 请求（协议 §4 串行化）。
+    /// M9：可能是内置 in-process 客户端（无子进程）或第三方子进程客户端。
+    pub(crate) processes: Vec<(String, ExtClient)>,
     /// 已扫描扩展（含 manifest frozen/entry），供桩复热 spawn（M3）。
+    /// M9：内置扩展条目也在其中（元数据/展示用；其 `command` 为名义路径）。
     pub(crate) exts: Vec<LoadedExtension>,
+    /// M9：内置 in-process 规格表（`id → ExtensionSpec`）——复热链路据此重建
+    /// 内置客户端（`ExtClient::open_builtin`），不依赖 `exts` 里的名义 exe 路径。
+    pub(crate) inproc_specs: HashMap<String, ExtensionSpec>,
     /// M3 LRU 保活集（容量 [`LRU_WARM_CAPACITY`]）：超容驱逐 → close + 命令回落 stub（A7）。
     pub(crate) lru: LruWarmSet,
     /// M3 冷启动计时（A2 实测：`spawn_start` → 首屏数据就绪）。
@@ -386,6 +392,7 @@ impl PaletteApp {
             sources: Vec::new(),
             processes: Vec::new(),
             exts: Vec::new(),
+            inproc_specs: HashMap::new(),
             lru: LruWarmSet::new(LRU_WARM_CAPACITY),
             cold,
             inflight: HashSet::new(),
