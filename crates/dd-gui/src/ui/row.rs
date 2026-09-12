@@ -70,11 +70,19 @@ pub(crate) fn draw_item_row(
                     .unwrap_or(0.0);
                 let title_avail =
                     (ui.available_width() - if cat_w > 0.0 { cat_w + 12.0 } else { 0.0 }).max(1.0);
-                // 标题：占满中列，过长截断。
-                ui.add_sized(
-                    egui::vec2(title_avail, 16.0),
-                    egui::Label::new(egui::RichText::new(&item.title).size(14.0)).truncate(),
+                // 标题：占满中列，过长截断。**左对齐贴图标**——`add_sized` 默认
+                // centered_and_justified 会把短标题居中（真机反馈 2026-09-12），
+                // 改为 allocate_exact_size 预留中列矩形 + child Ui
+                // left_to_right 布局（与页脚/引擎行同一惯用法）。
+                let (title_box, _) =
+                    ui.allocate_exact_size(egui::vec2(title_avail, 16.0), egui::Sense::hover());
+                let mut title_ui = ui.new_child(
+                    egui::UiBuilder::new()
+                        .max_rect(title_box)
+                        .layout(egui::Layout::left_to_right(egui::Align::Center)),
                 );
+                title_ui
+                    .add(egui::Label::new(egui::RichText::new(&item.title).size(14.0)).truncate());
                 // 类型标签：贴右最右。
                 if let Some(cat) = &item.result_category {
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -109,11 +117,15 @@ pub(crate) fn draw_item_row(
         );
     }
 
-    let hit_resp = ui.interact(
-        frame_resp.rect,
-        ui.id().with(("hit", &item.id)),
-        egui::Sense::click().union(egui::Sense::hover()),
-    );
+    let hit_resp = ui
+        .interact(
+            frame_resp.rect,
+            ui.id().with(("hit", &item.id)),
+            egui::Sense::click().union(egui::Sense::hover()),
+        )
+        // 行不是文本输入区：Label 悬停默认 I 形（Text）光标，整行改回箭头
+        //（真机反馈 2026-09-12）。
+        .on_hover_cursor(egui::CursorIcon::Default);
     // B5：信息不丢——整行 hover tooltip。标题被截断时给全文；副标题
     // （应用 = exe/lnk 路径）行内已不渲染，在此展示。两者都没有则不挂。
     let tip = match (title_truncated, item.subtitle.is_empty()) {
