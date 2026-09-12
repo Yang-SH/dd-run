@@ -54,6 +54,8 @@ use std::time::Instant;
 /// 2026-09-06 用户要求 +20；原 560×460 作废）。
 /// 实际有效尺寸 = 基准或记忆值（`settings.panel_size`）按光标所在屏工作区
 /// clamp（[`root_panel_size`]）；`show()` 居中定位与启动 `with_inner_size` 用。
+/// B8（v5.2 方案）：高度基准仅作**回落**——用户无记忆值且取得到显示器信息时，
+/// 基准高改由工作区推导（[`base_height_for_workarea`]）。
 pub const APP_W: f32 = 650.0;
 
 pub const APP_H: f32 = 440.0;
@@ -96,16 +98,42 @@ pub(crate) fn clamp_to_workarea(w: f32, h: f32, work_w: f32, work_h: f32) -> (f3
     ((w * scale).max(PANEL_MIN_W), (h * scale).max(PANEL_MIN_H))
 }
 
+/// B8（v5.2 方案）：无记忆值时的基准高度推导——面板 chrome 固定占用 =
+/// 顶行 52（padding 8 + 搜索栏 40 + 下方 4）+ 页脚 36 + 列表区纵向边距 4。
+pub(crate) const SIZE_BASE_CHROME: f32 = 92.0;
+
+/// 基准行数下限/上限（B8）：9 行 ≈ 原 440 基准的最小体验（小屏不再低于它）；
+/// 12 行为大屏收益上限（更多结果以滚动承担，launcher 保持克制）。
+pub(crate) const BASE_ROWS_MIN: f32 = 9.0;
+pub(crate) const BASE_ROWS_MAX: f32 = 12.0;
+
+/// B8：无记忆值时按光标屏工作区推导基准高度。`work_h` = 工作区高（逻辑点），
+/// 内部口径与 [`clamp_to_workarea`] 一致（先减 [`WORKAREA_MARGIN`]）：
+/// `rows = clamp(floor((avail_h − 92) × 0.5 ÷ 40), 9, 12)`，返回 rows×40 + 92。
+/// 1080p → 11 行 532；1440p+ → 12 行 572；768p → 9 行 452。
+pub(crate) fn base_height_for_workarea(work_h: f32) -> f32 {
+    let avail_h = (work_h - WORKAREA_MARGIN).max(0.0);
+    let rows = ((avail_h - SIZE_BASE_CHROME) * 0.5 / dd_gui::theme::ROW_H).floor();
+    rows.clamp(BASE_ROWS_MIN, BASE_ROWS_MAX) * dd_gui::theme::ROW_H + SIZE_BASE_CHROME
+}
+
 /// v4.12 D37 ③：根页有效尺寸 = 记忆值（`settings.panel_size`；`None` =
-/// 从未手动拉伸，用基准 `APP_W/APP_H`），再按光标所在屏工作区 clamp。
-/// `work` 为 `None`（取不到显示器信息）时不 clamp，原样返回。
+/// 从未手动拉伸——B8 起基准高按光标屏工作区推导、宽仍用基准），再按
+/// 光标所在屏工作区 clamp。`work` 为 `None`（取不到显示器信息）时不
+/// 推导不 clamp，原样返回（高度回落 [`APP_H`]）。
 pub(crate) fn root_panel_size(
     work: Option<(f32, f32)>,
     remembered: Option<(u32, u32)>,
 ) -> (f32, f32) {
     let (w, h) = remembered
         .map(|(w, h)| (w as f32, h as f32))
-        .unwrap_or((APP_W, APP_H));
+        .unwrap_or_else(|| {
+            let h = match work {
+                Some((_, wh)) => base_height_for_workarea(wh),
+                None => APP_H,
+            };
+            (APP_W, h)
+        });
     match work {
         Some((ww, wh)) => clamp_to_workarea(w, h, ww, wh),
         None => (w, h),
@@ -722,12 +750,13 @@ mod size_tests {
 
     #[test]
     fn baseline_used_when_workarea_plentiful() {
-        // G1：工作区充裕（1080p / 4K / 2K）→ 基准 650×440 原样使用
-        for (ww, wh) in [(1920.0, 1040.0), (3840.0, 2160.0), (2560.0, 1440.0)] {
-            assert_close(root_panel_size(Some((ww, wh)), None), (APP_W, APP_H));
-        }
-        // 800×600 小本屏：可用区 (784, 584) 仍容得下基准
-        assert_close(root_panel_size(Some((800.0, 600.0)), None), (APP_W, APP_H));
+        // G1（B8 修订）：无记忆值时基准高按工作区推导（宽恒基准 650）——
+        // 1080p → 11 行 532；2K / 4K → 12 行上限 572
+        assert_close(root_panel_size(Some((1920.0, 1040.0)), None), (650.0, 532.0));
+        assert_close(root_panel_size(Some((2560.0, 1440.0)), None), (650.0, 572.0));
+        assert_close(root_panel_size(Some((3840.0, 2160.0)), None), (650.0, 572.0));
+        // 800×600 小本屏：可用区 (784, 584) → 9 行下限 452 原样容纳
+        assert_close(root_panel_size(Some((800.0, 600.0)), None), (650.0, 452.0));
     }
 
     #[test]
@@ -744,20 +773,23 @@ mod size_tests {
 
     #[test]
     fn workarea_insufficient_shrinks_proportionally() {
-        // G1：工作区不足 → 等比收缩（每轴留 16 边距）
-        // work (660, 470)：可用 (644, 454)；scale = min(644/650=0.99077, 454/440=1.0318)
-        //   = 0.99077 → (644.0, 435.94)（宽先触界）
+        // G1：工作区不足 → 等比收缩（每轴留 16 边距）。
+        // B8 起无记忆值时基准高先按工作区推导（本组样本均落 9 行下限 452）。
+        // work (660, 470)：推导 rows=(454−92)×0.5÷40=4.525 → 9 行 → 基准 452；
+        // 可用 (644, 454)；scale = min(644/650=0.99077, 454/452=1.00442)
+        //   = 0.99077 → (644.0, 447.83)（宽先触界）
         assert_close(
             root_panel_size(Some((660.0, 470.0)), None),
-            (644.0, 440.0 * 644.0 / 650.0),
+            (644.0, 452.0 * 644.0 / 650.0),
         );
-        // 换高度先触界的 (700, 470)：可用 (684, 454)；scale = min(684/650=1.0523, 454/440=1.0318)
-        //   = 1.0318 → 未缩（684≥650 且 454≥440 → scale 用 1.0？不：min(>1,>1)=1 → 原样）
-        assert_close(root_panel_size(Some((700.0, 470.0)), None), (APP_W, APP_H));
-        // 真高度触界 (660, 456)：可用 (644, 440)；scale = min(0.99077, 1.0) = 0.99077
+        // (700, 470)：基准 452；可用 (684, 454)；scale = min(1.0523, 1.0044) = 1.0
+        //   → 未缩（宽 684≥650 且高 454≥452）
+        assert_close(root_panel_size(Some((700.0, 470.0)), None), (650.0, 452.0));
+        // 真高度触界 (660, 456)：推导基准 452；可用 (644, 440)；
+        // scale = min(0.99077, 440/452) = 0.97345 → (632.74, 440.0)
         assert_close(
             root_panel_size(Some((660.0, 456.0)), None),
-            (644.0, 440.0 * 644.0 / 650.0),
+            (650.0 * 0.97345, 452.0 * 0.97345),
         );
         // 记忆值超屏同样等比收缩：work (800,800)，记忆 (900,700)
         // 可用 (784,784)；scale = 784/900 = 0.87111 → (784, 609.78)
@@ -802,6 +834,28 @@ mod size_tests {
         assert_close(
             clamp_to_workarea(650.0, 420.0, 1920.0, 1040.0),
             (650.0, 420.0),
+        );
+    }
+
+    #[test]
+    fn base_height_derives_rows_from_workarea() {
+        let close = |a: f32, b: f32| assert!((a - b).abs() < 0.5, "{a} != {b}");
+        // B8：无记忆值时基准高按工作区推导（avail_h = work_h − 16）
+        // 1080p（工作区 1040）：(1024−92)×0.5÷40 = 11.65 → 11 行 → 532
+        close(base_height_for_workarea(1040.0), 532.0);
+        // 1440p / 4K（充裕）：12 行上限 → 572
+        close(base_height_for_workarea(1400.0), 572.0);
+        close(base_height_for_workarea(2100.0), 572.0);
+        // 768 小屏（工作区 728）：7.75 → 9 行下限 → 452
+        close(base_height_for_workarea(728.0), 452.0);
+        // 极小工作区：同样落 9 行下限（最终由 clamp 兜底 460×400）
+        close(base_height_for_workarea(120.0), 452.0);
+        // 派生接入根页：无记忆值 + 充裕屏 → (650, 572)
+        assert_close(root_panel_size(Some((2560.0, 1440.0)), None), (650.0, 572.0));
+        // 记忆值优先：推导不参与
+        assert_close(
+            root_panel_size(Some((2560.0, 1440.0)), Some((650, 440))),
+            (650.0, 440.0),
         );
     }
 }
