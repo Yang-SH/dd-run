@@ -177,11 +177,18 @@ impl PaletteApp {
             let label = crate::text::t(self.lang_effective, label_key);
             let (item_rect, resp) =
                 nav_ui.allocate_exact_size(egui::vec2(NAV_W, NAV_ITEM_H), egui::Sense::click());
+            let resp = resp.on_hover_cursor(egui::CursorIcon::PointingHand);
             let radius = egui::CornerRadius::same(4);
+            // B7 悬停语言：选中项不铺 hover（避免盖过选中语义，沿用原分支）；
+            // 未选项 hover = row_hover、按下 = row_pressed。
             if selected {
                 nav_ui
                     .painter()
                     .rect_filled(item_rect, radius, p.row_selected);
+            } else if resp.is_pointer_button_down_on() {
+                nav_ui
+                    .painter()
+                    .rect_filled(item_rect, radius, p.row_pressed);
             } else if resp.hovered() {
                 nav_ui.painter().rect_filled(item_rect, radius, p.row_hover);
             }
@@ -197,7 +204,12 @@ impl PaletteApp {
                     .rect_filled(indicator, egui::CornerRadius::same(2), p.accent);
             }
             // 图标 16px：内边距 12 + 槽位 16 居中；文字：图标右 12 起（左+40）。
-            let fg = if selected { p.text } else { p.text2 };
+            // B7：未选项 hover 时图标/文字 text2→text 提亮。
+            let fg = if selected || resp.hovered() {
+                p.text
+            } else {
+                p.text2
+            };
             let cy = item_rect.center().y;
             nav_ui.painter().text(
                 egui::pos2(item_rect.left() + 20.0, cy),
@@ -1284,7 +1296,8 @@ pub(crate) fn draw_radio_card(
 
 /// 功能态 ToggleSwitch（§08.1 v4.7「材质开关」行；v4.9 放大到 Fluent 规格
 /// 40×20、滑块 16）：开 = accent 填充底 + 白滑块居右；关 = input_fill 底 +
-/// 1px border-strong 描边 + text-2 滑块居左。返回是否被点击。
+/// 1px border-strong 描边 + text-2 滑块居左。B7 悬停：开 = accent_hover 底、
+/// 关 = row_hover 底（命令语义控件，光标保持默认箭头）。返回是否被点击。
 pub(crate) fn draw_switch_fn(ui: &mut egui::Ui, on: bool, p: &theme::Palette) -> bool {
     let (rect, resp) = ui.allocate_exact_size(egui::vec2(40.0, 20.0), egui::Sense::click());
     let radius = egui::CornerRadius::same(10);
@@ -1294,14 +1307,24 @@ pub(crate) fn draw_switch_fn(ui: &mut egui::Ui, on: bool, p: &theme::Palette) ->
         rect.left() + 2.0 + 8.0
     };
     if on {
-        ui.painter().rect_filled(rect, radius, p.accent);
+        let fill = if resp.hovered() {
+            p.accent_hover
+        } else {
+            p.accent
+        };
+        ui.painter().rect_filled(rect, radius, fill);
         ui.painter().circle_filled(
             egui::pos2(knob_cx, rect.center().y),
             8.0,
             egui::Color32::WHITE,
         );
     } else {
-        ui.painter().rect_filled(rect, radius, p.input_fill);
+        let fill = if resp.hovered() {
+            p.row_hover
+        } else {
+            p.input_fill
+        };
+        ui.painter().rect_filled(rect, radius, fill);
         ui.painter().rect_stroke(
             rect,
             radius,

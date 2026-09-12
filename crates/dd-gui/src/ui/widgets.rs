@@ -59,52 +59,64 @@ pub(crate) fn keys_width(ui: &egui::Ui, lang: Lang) -> f32 {
     sum + theme::FOOTER_GAP * (KEY_GROUPS.len() - 1) as f32
 }
 
-/// 页脚最左**设置按钮**（设计稿 §6.1 line 970）：齿轮 `\u{E713}`、16px、
-/// 颜色恒为 `--text-2`（fg2 = 暗 #d6d6d6 / 亮 #424242，**hover 不变色**）、
-/// hover 加 `bg1Hover` 圆角背景、24×24 热区。返回是否被点击。
-///
-/// glyph 经图标字体渲染（`SegoeIcons.ttf` → `segmdl2.ttf` 已在字体回退链，
-/// 与列表行图标同链路）；键盘可达经 `Ctrl+,` 快捷键（批次 4.0 决策）。
-pub(crate) fn draw_settings_gear(ui: &mut egui::Ui, p: &theme::Palette) -> bool {
-    let (rect, resp) = ui.allocate_exact_size(
-        egui::vec2(theme::GEAR_SIZE, theme::GEAR_SIZE),
-        egui::Sense::click(),
-    );
-    // hover 反馈按设计稿 §6.1 line 970："hover 不变色、仅加深背景 = bg1Hover"——
-    // 圆角 4 圆角矩形底，圆心不变，glyph 始终 text2。
-    if resp.hovered() {
+/// 统一**小图标按钮**（B7 悬停体系，v5.2 方案）：`size`×`size` 热区 +
+/// `glyph` 16px 图标字体 + `shrink` 内缩的 hover 底。悬停语言：
+/// hover = `row_hover` 底 + glyph text2→text 提亮；按下 = `row_pressed`；
+/// PointingHand 光标（导航语义——齿轮/返回键均为"跳转到另一视图"）。
+/// 返回是否被点击。
+pub(crate) fn draw_icon_button(
+    ui: &mut egui::Ui,
+    p: &theme::Palette,
+    size: f32,
+    glyph: char,
+    shrink: f32,
+) -> bool {
+    let (rect, resp) = ui.allocate_exact_size(egui::vec2(size, size), egui::Sense::click());
+    let resp = resp.on_hover_cursor(egui::CursorIcon::PointingHand);
+    // 三态底：hover 底缩进 `shrink`（返回键 28×28 热区视觉 24 的历史口径），
+    // 齿轮 24×24 恰好满格传 0。
+    let fill = if resp.is_pointer_button_down_on() {
+        Some((p.row_pressed, shrink))
+    } else if resp.hovered() {
+        Some((p.row_hover, shrink))
+    } else {
+        None
+    };
+    if let Some((fill, inset)) = fill {
         ui.painter()
-            .rect_filled(rect, egui::CornerRadius::same(4), p.row_hover);
+            .rect_filled(rect.shrink(inset), egui::CornerRadius::same(4), fill);
     }
+    let fg = if resp.hovered() || resp.is_pointer_button_down_on() {
+        p.text
+    } else {
+        p.text2
+    };
     ui.painter().text(
         rect.center(),
         egui::Align2::CENTER_CENTER,
-        theme::GEAR_GLYPH,
+        glyph,
         egui::FontId::proportional(theme::GEAR_FONT),
-        p.text2,
+        fg,
     );
     resp.clicked()
 }
 
-/// 设置页顶行返回按钮（设计稿 §07.1 line 1121 + §08.1）：28×28 热区、
-/// ChevronLeft `\u{E72B}` 16px、颜色恒为 `--text-2`、hover 加 `bg1Hover`
-/// 圆角 4 背景。返回是否被点击。
+/// 页脚最左**设置按钮**（设计稿 §6.1 line 970）：齿轮 `\u{E713}`、16px、
+/// 24×24 热区；悬停语言统一走 [`draw_icon_button`]（B7：hover 底 + glyph
+/// 提亮 + 手型光标）。返回是否被点击。
 ///
-/// 与 `draw_settings_gear` 同链路（统一字体与 token 取色）。
+/// glyph 经图标字体渲染（`SegoeIcons.ttf` → `segmdl2.ttf` 已在字体回退链，
+/// 与列表行图标同链路）；键盘可达经 `Ctrl+,` 快捷键（批次 4.0 决策）。
+pub(crate) fn draw_settings_gear(ui: &mut egui::Ui, p: &theme::Palette) -> bool {
+    draw_icon_button(ui, p, theme::GEAR_SIZE, theme::GEAR_GLYPH, 0.0)
+}
+
+/// 设置页顶行返回按钮（设计稿 §07.1 line 1121 + §08.1）：28×28 热区、
+/// ChevronLeft `\u{E72B}` 16px、hover 底内缩 2（视觉 24）。与
+/// [`draw_settings_gear`] 同链路（统一悬停语言与 token 取色）。
+/// 返回是否被点击。
 pub(crate) fn draw_back_btn(ui: &mut egui::Ui, p: &theme::Palette) -> bool {
-    let (rect, resp) = ui.allocate_exact_size(egui::vec2(28.0, 28.0), egui::Sense::click());
-    if resp.hovered() {
-        ui.painter()
-            .rect_filled(rect.shrink(2.0), egui::CornerRadius::same(4), p.row_hover);
-    }
-    ui.painter().text(
-        rect.center(),
-        egui::Align2::CENTER_CENTER,
-        '\u{E72B}',
-        egui::FontId::proportional(16.0),
-        p.text2,
-    );
-    resp.clicked()
+    draw_icon_button(ui, p, 28.0, '\u{E72B}', 2.0)
 }
 
 // ── 现有页脚键位区 ────────────────────────────────────────────────
