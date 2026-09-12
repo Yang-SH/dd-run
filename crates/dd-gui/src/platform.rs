@@ -53,6 +53,21 @@ pub fn trim_working_set() {}
 /// 已知取舍（记档）：若用户在字体就绪前（约 2.5s 内）唤起面板，CJK 文本
 /// 短暂显示方块后自动恢复（字体热替换为原子操作，无半新半旧帧）。
 pub fn setup_cjk_fonts(ctx: &egui::Context) {
+    // B1 语义字重：先**同步**注册 semibold 族（映射到 egui 默认 Proportional
+    // 链）——字体后台热替换（~2.5s）完成前，首帧若引用未知族 egui 无法回退；
+    // 注册后前期以默认字体渲染，热替换后自动获得真实 semibold 字形。
+    let mut fonts = egui::FontDefinitions::default();
+    let prop = fonts
+        .families
+        .get(&egui::FontFamily::Proportional)
+        .cloned()
+        .unwrap_or_default();
+    fonts.families.insert(
+        egui::FontFamily::Name(crate::theme::SEMIBOLD_FAMILY.into()),
+        prop,
+    );
+    ctx.set_fonts(fonts);
+
     let ctx = ctx.clone();
     std::thread::Builder::new()
         .name("cjk-fonts".into())
@@ -214,6 +229,39 @@ fn load_cjk_font_definitions() -> Option<egui::FontDefinitions> {
     } else {
         eprintln!("[dd-gui] 未找到图标字体（SegoeIcons/segmdl2）；glyph 图标将显示为方块");
     }
+
+    // B1 语义字重：semibold 族主字（拉丁 = Segoe UI Semibold，Win7+ 必装；
+    // CJK = 微软雅黑 Bold msyhbd.ttc）。任一缺失仅记日志、跳过——族内缺主字
+    // 时该脚本回落 regular 观感，不影响启动。mmap 载入策略与 msyh.ttc 相同
+    // （msyhbd.ttc ~19MB，文件页常驻不计私有提交）。
+    let semibold_candidates = [
+        (r"C:\Windows\Fonts\seguisb.ttf", "seguisb"),
+        (r"C:\Windows\Fonts\msyhbd.ttc", "cjkbd"),
+    ];
+    let mut semibold_chain: Vec<String> = Vec::new();
+    for (path, key) in semibold_candidates {
+        if let Some(data) = load_font_file(path) {
+            fonts
+                .font_data
+                .insert(key.to_owned(), std::sync::Arc::new(data));
+            semibold_chain.push(key.to_owned());
+        } else {
+            eprintln!("[dd-gui] 未找到 semibold 字体 {path}（对应脚本以 regular 字重渲染）");
+        }
+    }
+    // 后援链与 Proportional 一致（◌ U+25CC 等缺字形继续落 sym/segoe；
+    // Latin/CJK 已由 seguisb/cjkbd 覆盖，排在后面的 regular 主字不会截胡）。
+    if let Some(prop) = fonts
+        .families
+        .get(&egui::FontFamily::Proportional)
+        .cloned()
+    {
+        semibold_chain.extend(prop);
+    }
+    fonts.families.insert(
+        egui::FontFamily::Name(crate::theme::SEMIBOLD_FAMILY.into()),
+        semibold_chain,
+    );
 
     if !any_loaded {
         eprintln!("[dd-gui] 未找到任何 CJK 字体，中文可能显示为方块");

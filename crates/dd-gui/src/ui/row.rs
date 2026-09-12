@@ -59,7 +59,7 @@ pub(crate) fn draw_item_row(
                 // 图标列（20px；无图标/url 也占位，各行对齐——设计稿 04）
                 draw_icon_cell(ui, icon);
                 ui.add_space(12.0); // CSS `.row` gap 12px
-                let font14 = egui::FontId::proportional(14.0);
+                let font14 = dd_gui::theme::semibold(14.0); // B1：行名 500 字重（设计稿 `.name`）
                 let font12 = egui::FontId::proportional(12.0);
                 // 类型标签宽（caption1 12px，最长 90px 截断）先测出，从标题
                 // 可用宽中扣除；标签与标题间留 12px 间隙。

@@ -38,6 +38,18 @@ pub const KEYCAP_DESC_GAP: f32 = 6.0;
 pub const DOT_SIZE: f32 = 6.0; // `.dot` 6×6
 pub const DOT_GAP: f32 = 5.0; // `.dot` margin-right 5px
 
+// ── B1 语义字重：semibold 字体族 ─────────────────────────────────────────
+/// semibold 族名（platform.rs 注册：拉丁 = seguisb.ttf、CJK = msyhbd.ttc，
+/// 后援链同 Proportional；启动时先同步注册默认字体映射，热替换后生效）。
+pub const SEMIBOLD_FAMILY: &str = "semibold";
+
+/// semibold `FontId`（B1）：分组标题 / 行名 / 空态标题 / 设置卡头等
+/// 设计稿标注 500–600 字重的文本。egui `.strong()` 只变色不改字重，
+/// 真实字重经独立字体族实现；字体文件缺失/热替换前回落 regular 观感。
+pub fn semibold(size: f32) -> eframe::egui::FontId {
+    eframe::egui::FontId::new(size, eframe::egui::FontFamily::Name(SEMIBOLD_FAMILY.into()))
+}
+
 // ── 设置按钮（设计稿 §6.1，批次 4.0）─────────────────────────────────────
 /// 齿轮热区边长：24×24 px（视觉 16px + 8px 可点击扩展）。
 pub const GEAR_SIZE: f32 = 24.0;

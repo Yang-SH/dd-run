@@ -433,14 +433,14 @@ impl PaletteApp {
                     for (section, group_items) in &groups {
                         if !section.is_empty() {
                             // 分组标题（CSS `.section-label` v4/D14：caption1Strong
-                            // 12/16·600、text-3、上方留白 12、下方 4；组间留白无分隔线）
+                            // 12/16·600、text-3、上方留白 12、下方 4；组间留白无分隔线）。
+                            // B1：600 字重经 semibold 字体族真实呈现（原 .strong() 只变色）。
                             ui.add_space(12.0);
                             ui.horizontal(|ui| {
                                 ui.add_space(10.0);
                                 ui.label(
                                     egui::RichText::new(section)
-                                        .size(12.0)
-                                        .strong()
+                                        .font(theme::semibold(12.0))
                                         .color(p.text3),
                                 );
                             });

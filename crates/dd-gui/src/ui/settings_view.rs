@@ -115,12 +115,12 @@ impl PaletteApp {
         let back_clicked = draw_back_btn(&mut back_ui, &p);
 
         // 页标题：painter 直绘锚定 cy（v4.9：16 → 18，真机反馈"整体文字偏小"；
-        // Fluent subtitle 档，40px 顶行内仍居中）
+        // Fluent subtitle 档，40px 顶行内仍居中）。B1：semibold 族真实字重。
         ui.painter().text(
             egui::pos2(back_rect.right() + 8.0, cy),
             egui::Align2::LEFT_CENTER,
             self.tr("page.settings"),
-            egui::FontId::proportional(18.0),
+            dd_gui::theme::semibold(18.0),
             p.text,
         );
 
@@ -288,6 +288,7 @@ impl PaletteApp {
                     ui.set_min_height(36.0);
                     ui.label(
                         egui::RichText::new(crate::text::t(lang, "set.theme.name"))
+                            .font(dd_gui::theme::semibold(14.0))
                             .size(14.0)
                             .color(p.text),
                     );
@@ -377,6 +378,7 @@ impl PaletteApp {
                     ui.set_min_height(36.0);
                     ui.label(
                         egui::RichText::new(crate::text::t(lang, "set.backdrop.name"))
+                            .font(dd_gui::theme::semibold(14.0))
                             .size(14.0)
                             .color(p.text),
                     );
@@ -475,6 +477,7 @@ impl PaletteApp {
                     ui.set_min_height(36.0);
                     ui.label(
                         egui::RichText::new(crate::text::t(lang, "set.openview.name"))
+                            .font(dd_gui::theme::semibold(14.0))
                             .size(14.0)
                             .color(p.text),
                     );
@@ -547,6 +550,7 @@ impl PaletteApp {
                     ui.set_min_height(36.0);
                     ui.label(
                         egui::RichText::new(crate::text::t(lang, "set.hotkey.name"))
+                            .font(dd_gui::theme::semibold(14.0))
                             .size(14.0)
                             .color(p.text),
                     );
@@ -643,6 +647,7 @@ impl PaletteApp {
                     ui.set_min_height(36.0);
                     ui.label(
                         egui::RichText::new(crate::text::t(lang, "set.autostart.name"))
+                            .font(dd_gui::theme::semibold(14.0))
                             .size(14.0)
                             .color(p.text),
                     );
@@ -712,6 +717,7 @@ impl PaletteApp {
                             ui.set_min_height(36.0);
                             ui.label(
                                 egui::RichText::new(crate::text::t(lang_eff, "settings.lang.name"))
+                                    .font(dd_gui::theme::semibold(14.0))
                                     .size(14.0)
                                     .color(p.text),
                             );
@@ -796,6 +802,7 @@ impl PaletteApp {
                     ui.set_min_height(36.0);
                     ui.label(
                         egui::RichText::new(self.tr("set.search.name"))
+                            .font(dd_gui::theme::semibold(14.0))
                             .size(14.0)
                             .color(p.text),
                     );
@@ -1049,6 +1056,7 @@ impl PaletteApp {
                     ui.set_min_height(36.0);
                     ui.label(
                         egui::RichText::new(crate::text::t(lang, "set.ext.name"))
+                            .font(dd_gui::theme::semibold(14.0))
                             .size(14.0)
                             .color(p.text),
                     );
