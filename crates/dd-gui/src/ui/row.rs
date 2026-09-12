@@ -130,7 +130,7 @@ pub(crate) fn draw_item_row(
                 ),
             ),
             egui::CornerRadius::same(2),
-            p.accent,
+            p.accent_stroke, // B2：线状小元素用 accent_stroke（暗色 brand[100]）
         );
     }
 

@@ -201,7 +201,7 @@ impl PaletteApp {
                 );
                 nav_ui
                     .painter()
-                    .rect_filled(indicator, egui::CornerRadius::same(2), p.accent);
+                    .rect_filled(indicator, egui::CornerRadius::same(2), p.accent_stroke);
             }
             // 图标 16px：内边距 12 + 槽位 16 居中；文字：图标右 12 起（左+40）。
             // B7：未选项 hover 时图标/文字 text2→text 提亮。
@@ -917,14 +917,15 @@ impl PaletteApp {
                     egui::StrokeKind::Inside,
                 );
                 if url_focused {
-                    // Fluent 聚焦态：底边 2px accent 下划线（内缩 1px 避让描边）
+                    // Fluent 聚焦态：底边 2px accent 下划线（内缩 1px 避让描边）。
+                    // B2：线状小元素走 accent_stroke。
                     ui.painter().rect_filled(
                         egui::Rect::from_min_max(
                             egui::pos2(box_rect.left() + 1.0, box_rect.bottom() - 3.0),
                             egui::pos2(box_rect.right() - 1.0, box_rect.bottom() - 1.0),
                         ),
                         egui::CornerRadius::same(1),
-                        p.accent,
+                        p.accent_stroke,
                     );
                 }
                 // frameless TextEdit 内嵌于自绘外框（egui 0.36 `.frame()` 传入
@@ -1228,9 +1229,9 @@ pub(crate) fn draw_radio_card(
         ui.painter()
             .rect_filled(rect.shrink(1.0), radius, p.row_hover);
     }
-    // 边框
+    // 边框（B2：2px 选中边框为线状小元素，走 accent_stroke）
     let stroke = if selected {
-        egui::Stroke::new(2.0, p.accent)
+        egui::Stroke::new(2.0, p.accent_stroke)
     } else {
         egui::Stroke::new(1.0, p.border_strong)
     };
@@ -1246,10 +1247,10 @@ pub(crate) fn draw_radio_card(
         ui.painter().circle_stroke(
             egui::pos2(dot_cx, dot_cy),
             6.0,
-            egui::Stroke::new(1.5, p.accent),
+            egui::Stroke::new(1.5, p.accent_stroke),
         );
         ui.painter()
-            .circle_filled(egui::pos2(dot_cx, dot_cy), 3.5, p.accent);
+            .circle_filled(egui::pos2(dot_cx, dot_cy), 3.5, p.accent_stroke);
     } else {
         ui.painter().circle_stroke(
             egui::pos2(dot_cx, dot_cy),

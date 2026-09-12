@@ -640,7 +640,7 @@ pub(crate) fn draw_searchbar(
             egui::pos2(rect.right(), rect.bottom()),
         );
         ui.painter()
-            .rect_filled(bottom_bar, egui::CornerRadius::same(2), p.accent);
+            .rect_filled(bottom_bar, egui::CornerRadius::same(2), p.accent_stroke);
     }
 
     resp

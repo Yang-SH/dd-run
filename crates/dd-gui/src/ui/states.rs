@@ -116,7 +116,7 @@ pub(crate) fn draw_loading_state(
             })
             .collect();
         ui.painter()
-            .add(egui::Shape::line(pts, egui::Stroke::new(2.5, p.accent)));
+            .add(egui::Shape::line(pts, egui::Stroke::new(2.5, p.accent_stroke)));
         ui.add_space(12.0);
         ui.label(
             egui::RichText::new(crate::text::t(lang, "panel.loading"))

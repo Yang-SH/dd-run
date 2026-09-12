@@ -81,6 +81,12 @@ pub struct Palette {
     /// 暗 brand[80] #2886de / 亮 brand[70] #115ea3——与 colorBrandBackgroundHover
     /// 同阶，亮暗取值互换同 v4.13 口径）
     pub accent_hover: Color32,
+    /// 小面积强调色（B2，v5.2 方案）：3px 选中指示条 / 2px 聚焦下划线 /
+    /// Spinner 弧 / 导航指示条 / radio-card 选中边框等**线状小元素**专用。
+    /// Fluent colorBrandStroke1 语义：暗 = brand[100] #479ef5（对 #292929
+    /// 对比度 5.2:1；brand[70] 仅 2.2:1 几乎不可辨）、亮 = brand[80] #0f6cbd
+    /// （= 原值不变）。大面积 accent 底色（主按钮等）仍用 [`Self::accent`]。
+    pub accent_stroke: Color32,
     /// 成功语义色（05 `colorStatusSuccessForeground1`；暗色待核，暂用派生值）
     pub success: Color32,
     /// 危险语义色（05 `colorStatusDangerForeground1`；暗色待核，暂用派生值）
@@ -116,6 +122,7 @@ impl Palette {
             card_hover: rgb(0x3d_3d_3d),
             accent: rgb(0x11_5e_a3), // brand[70] · colorBrandBackground（暗；#479ef5=brand[100] 属 Foreground/Compound 系）
             accent_hover: rgb(0x28_86_de), // brand[80] · colorBrandBackgroundHover（暗，v4 CSS --accent-hover）
+            accent_stroke: rgb(0x47_9e_f5), // brand[100] · colorBrandStroke1（暗，2026-09 按 @fluentui/tokens 口径）
             success: rgb(0x54_b0_54), // green[tint30] · colorStatusSuccessForeground1（暗，2026-09 按 @fluentui/tokens 核实）
             danger: rgb(0xdc_62_6d),  // cranberry[tint30] · colorStatusDangerForeground1（暗）
             row_hover: rgb(0x3d_3d_3d),
@@ -142,6 +149,7 @@ impl Palette {
             card_hover: rgb(0xf5_f5_f5), // 亮卡面 grey[98] → hover grey[96]（Fluent 卡面 hover 同族偏移）
             accent: rgb(0x0f_6c_bd),
             accent_hover: rgb(0x11_5e_a3), // brand[70] · colorBrandBackgroundHover（亮，v4 CSS --accent-hover）
+            accent_stroke: rgb(0x0f_6c_bd), // brand[80] · colorBrandStroke1（亮 = 原 --accent 值不变）
             success: rgb(0x0e_70_0e), // green[shade10] · colorStatusSuccessForeground1（亮；#107c10 实为 primary）
             danger: rgb(0xb1_0e_1c), // cranberry[shade10] · colorStatusDangerForeground1（亮；#c50f1f 实为 primary）
             row_hover: rgb(0xf5_f5_f5),
@@ -369,6 +377,11 @@ mod tests {
             rgb(0x28_86_de),
             "--accent-hover 暗 = brand[80]（colorBrandBackgroundHover）"
         );
+        assert_eq!(
+            p.accent_stroke,
+            rgb(0x47_9e_f5),
+            "--accent-stroke 暗 = brand[100]（colorBrandStroke1）"
+        );
         assert_eq!(p.success, rgb(0x54_b0_54), "--success 暗 = green[tint30]");
         assert_eq!(p.danger, rgb(0xdc_62_6d), "--danger 暗 = cranberry[tint30]");
         assert_eq!(
@@ -429,6 +442,11 @@ mod tests {
             p.accent_hover,
             rgb(0x11_5e_a3),
             "--accent-hover 亮 = brand[70]（colorBrandBackgroundHover）"
+        );
+        assert_eq!(
+            p.accent_stroke,
+            rgb(0x0f_6c_bd),
+            "--accent-stroke 亮 = brand[80]（colorBrandStroke1，= 原 --accent 值）"
         );
         assert_eq!(p.success, rgb(0x0e_70_0e), "--success 亮 = green[shade10]");
         assert_eq!(
