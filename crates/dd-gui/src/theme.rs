@@ -290,9 +290,25 @@ pub fn visuals(dark: bool, panel_transparent: bool) -> Visuals {
 /// `panel_transparent`（v4.7 D31）：材质生效时为 true——亮暗两套 Style **都**
 /// 带透明 panel_fill 注册，保证「跟随系统」在系统亮暗切换 re-resolve 后
 /// 透明性不丢失。
+///
+/// B3（v5.2 方案）：floating 滚动条 Fluent 化调参（两主题一致）——静默时
+/// 细条 4px 低透明，悬停展开到 8px 便于拖拽。字段口径按 egui 0.36.1
+/// `ScrollStyle`（style.rs:494）：把手颜色随 `foreground_color`（floating
+/// 默认高对比），不做任意取色。
 pub fn apply(ctx: &Context, pref: ThemePreference, panel_transparent: bool) {
     ctx.set_visuals_of(Theme::Dark, visuals(true, panel_transparent));
     ctx.set_visuals_of(Theme::Light, visuals(false, panel_transparent));
+    ctx.all_styles_mut(|style| {
+        let scroll = &mut style.spacing.scroll;
+        // egui floating 默认：bar_width 10 / floating_width 2 / dormant handle 0.0
+        // ——静默完全隐形、悬停展开偏宽。Fluent 口径：静默可见的 4px 细条
+        // （handle 0.35），hover 展开到 8px（bar_width）并提亮到 0.6。
+        scroll.bar_width = 8.0;
+        scroll.floating_width = 4.0;
+        scroll.dormant_handle_opacity = 0.35;
+        scroll.active_handle_opacity = 0.6;
+        scroll.interact_handle_opacity = 1.0;
+    });
     ctx.set_theme(pref);
 }
 
