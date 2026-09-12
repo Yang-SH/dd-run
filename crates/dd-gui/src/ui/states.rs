@@ -55,12 +55,12 @@ pub(crate) fn draw_empty_state(
 
 // ── Loading 态（设计稿 §07.2，C 组批次 C2）────────────────────────────
 
-/// 骨架行三段宽度占行宽比例（行 `idx` 决定、确定性）。设计稿 §07 mockup：
-/// 三行 name 34%（CSS 默认）/26%/30%，desc 20%（CSS 默认）/20%/14%。
-pub(crate) fn skeleton_fractions(idx: usize) -> (f32, f32) {
+/// 骨架行名称条宽度占行宽比例（行 `idx` 决定、确定性）。设计稿 §07 mockup：
+/// 三行 name 34%（CSS 默认）/26%/30%。B5：行内两段式后骨架行只保留名称条
+/// （右列描述条移除，保证 Loading → 内容无布局跳动，A3 口径）。
+pub(crate) fn skeleton_name_fraction(idx: usize) -> f32 {
     const NAME: [f32; 3] = [0.34, 0.26, 0.30];
-    const DESC: [f32; 3] = [0.20, 0.20, 0.14];
-    (NAME[idx % 3], DESC[idx % 3])
+    NAME[idx % 3]
 }
 
 /// 两色按 `s`（0..1）线性插值。
@@ -125,9 +125,10 @@ pub(crate) fn draw_loading_state(
         );
     });
 
-    // ── 3 条骨架行（`.skel-row`：min-height 40、padding 8 10 8 8、gap 12） ──
+    // ── 3 条骨架行（`.skel-row`：min-height 40、padding 8 10 8 8、gap 12）──
+    // B5：与结果行两段式同构——图标块 + 名称条，无右列描述条。
     for idx in 0..3usize {
-        let (name_frac, desc_frac) = skeleton_fractions(idx);
+        let name_frac = skeleton_name_fraction(idx);
         let c = shimmer_color(p, time + idx as f64 * 0.18); // 各行相位微错开
         let (row, _) = ui.allocate_exact_size(
             egui::vec2(ui.available_width(), theme::ROW_H),
@@ -148,13 +149,6 @@ pub(crate) fn draw_loading_state(
         );
         ui.painter()
             .rect_filled(name_rect, egui::CornerRadius::same(3), c);
-        // 描述条 10px 高、右对齐（margin-left auto + padding-right 10）
-        let desc_rect = egui::Rect::from_min_max(
-            egui::pos2(row.right() - 10.0 - row.width() * desc_frac, cy - 5.0),
-            egui::pos2(row.right() - 10.0, cy + 5.0),
-        );
-        ui.painter()
-            .rect_filled(desc_rect, egui::CornerRadius::same(3), c);
     }
 }
 
@@ -165,12 +159,15 @@ mod tests {
     // ── C 组批次 C2：Loading 骨架（§07.2，验收 A3） ────────────────
 
     #[test]
-    fn skeleton_fractions_are_deterministic_and_in_design_range() {
-        // 设计稿 §07 mockup：name 34/26/30、desc 20/20/14
-        let expected = [(0.34, 0.20), (0.26, 0.20), (0.30, 0.14)];
+    fn skeleton_name_fraction_is_deterministic_and_in_design_range() {
+        // 设计稿 §07 mockup：name 34/26/30（B5：描述条移除，仅保留名称条）
+        let expected = [0.34, 0.26, 0.30];
         for idx in 0..6usize {
-            let (n, d) = skeleton_fractions(idx);
-            assert_eq!((n, d), expected[idx % 3], "行 {idx} 宽度确定且符合设计稿");
+            assert_eq!(
+                skeleton_name_fraction(idx),
+                expected[idx % 3],
+                "行 {idx} 宽度确定且符合设计稿"
+            );
         }
     }
 
