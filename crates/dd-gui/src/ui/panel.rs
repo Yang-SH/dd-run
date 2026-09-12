@@ -632,12 +632,18 @@ pub(crate) fn draw_searchbar(
         });
     }
 
-    // 6) 聚焦指示（filled-darker）：仅聚焦时底部 2px accent 下划线；
-    //    未聚焦无任何描边（Fluent 外观规范，与旧 border-strong 底边区分）。
-    if resp.has_focus() {
+    // 6) 聚焦指示（filled-darker）：底部 2px accent_stroke 下划线；
+    //    B4：宽度 0→1 以 0.12s 过渡（`animate_value_with_time`，egui 按需
+    //    重绘只在过渡期生效，空闲无额外帧）。未聚焦且过渡结束后不画。
+    let underline_t = ui.ctx().animate_value_with_time(
+        egui::Id::new("dd-searchbar-focus-underline"),
+        if resp.has_focus() { 1.0 } else { 0.0 },
+        0.12,
+    );
+    if underline_t > 0.001 {
         let bottom_bar = egui::Rect::from_min_max(
             egui::pos2(rect.left(), rect.bottom() - 2.0),
-            egui::pos2(rect.right(), rect.bottom()),
+            egui::pos2(rect.left() + rect.width() * underline_t, rect.bottom()),
         );
         ui.painter()
             .rect_filled(bottom_bar, egui::CornerRadius::same(2), p.accent_stroke);
