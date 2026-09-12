@@ -109,7 +109,7 @@ impl PaletteApp {
             HostAction::Hide => self.hide_keep_state(ctx),
             HostAction::GoHome => self.stack.go_home(),
             HostAction::GoBack => {
-                self.stack.go_back();
+                self.go_back_focused(); // 返回 + 聚焦回落后页面的搜索框
             }
             HostAction::KeepOpen => {}
             HostAction::GoToPage { page_id } => {

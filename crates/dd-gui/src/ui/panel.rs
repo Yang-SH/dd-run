@@ -143,7 +143,7 @@ impl PaletteApp {
                     }
                 }
                 if go_back_clicked {
-                    self.stack.go_back();
+                    self.go_back_focused(); // 返回 + 聚焦回落后页面的搜索框
                 }
                 // v3.3：页内二次输入 → 去抖重拉 get_items（嵌套页边打边搜）。
                 // set_query 内部 q == self.state.query 时早退，故 query 未变（非按键帧）
@@ -163,7 +163,9 @@ impl PaletteApp {
                     // 动画驱动：egui 按需重绘，加载期间 ~30fps 轮询重绘。
                     let dark = ui.visuals().dark_mode;
                     let time = ui.ctx().time();
-                    draw_loading_state(ui, self.lang_effective, &p, dark, time);
+                    // F2：骨架行与结果行同源密度（与 draw_list 内一致）
+                    let metrics = theme::ListMetrics::of(self.settings.density);
+                    draw_loading_state(ui, self.lang_effective, &p, dark, time, metrics);
                     ui.ctx()
                         .request_repaint_after(std::time::Duration::from_millis(33));
                 } else {
@@ -340,6 +342,8 @@ impl PaletteApp {
     pub(crate) fn draw_list(&mut self, ui: &mut egui::Ui) {
         // M5 批次 3：本帧主题色板（组件色统一经 Palette，不写裸色值）
         let p = theme::Palette::of(ui.visuals().dark_mode);
+        // F2：列表密度档 → 行几何/排印指标（行高/字号/图标格一档联动）
+        let metrics = theme::ListMetrics::of(self.settings.density);
         // 本帧鼠标指针屏幕坐标（用于区分「鼠标真的动了」vs「内容在静止鼠标下滚动」）。
         let current_hover_pos = ui.input(|i| i.pointer.hover_pos());
 
@@ -364,7 +368,7 @@ impl PaletteApp {
             // 动画驱动：egui 按需重绘，加载期间 ~30fps 轮询重绘。
             let dark = ui.visuals().dark_mode;
             let time = ui.ctx().time();
-            draw_loading_state(ui, self.lang_effective, &p, dark, time);
+            draw_loading_state(ui, self.lang_effective, &p, dark, time, metrics);
             ui.ctx()
                 .request_repaint_after(std::time::Duration::from_millis(33));
             return;
@@ -455,6 +459,7 @@ impl PaletteApp {
                                 Some(*idx) == selected,
                                 icon_views.get(idx),
                                 hover_visual,
+                                metrics,
                             );
                             row_rects.push((*idx, resp.rect));
                             if Some(*idx) == selected {

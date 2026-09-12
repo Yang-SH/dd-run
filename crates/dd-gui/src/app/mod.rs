@@ -108,28 +108,31 @@ pub(crate) const BASE_ROWS_MIN: f32 = 9.0;
 pub(crate) const BASE_ROWS_MAX: f32 = 12.0;
 
 /// B8：无记忆值时按光标屏工作区推导基准高度。`work_h` = 工作区高（逻辑点），
-/// 内部口径与 [`clamp_to_workarea`] 一致（先减 [`WORKAREA_MARGIN`]）：
-/// `rows = clamp(floor((avail_h − 92) × 0.5 ÷ 40), 9, 12)`，返回 rows×40 + 92。
-/// 1080p → 11 行 532；1440p+ → 12 行 572；768p → 9 行 452。
-pub(crate) fn base_height_for_workarea(work_h: f32) -> f32 {
+/// `row_h` = 当前列表行高（F2 密度档，标准档 40）。内部口径与
+/// [`clamp_to_workarea`] 一致（先减 [`WORKAREA_MARGIN`]）：
+/// `rows = clamp(floor((avail_h − 92) × 0.5 ÷ row_h), 9, 12)`，返回 rows×row_h + 92。
+/// 标准档：1080p → 11 行 532；1440p+ → 12 行 572；768p → 9 行 452。
+pub(crate) fn base_height_for_workarea(work_h: f32, row_h: f32) -> f32 {
     let avail_h = (work_h - WORKAREA_MARGIN).max(0.0);
-    let rows = ((avail_h - SIZE_BASE_CHROME) * 0.5 / dd_gui::theme::ROW_H).floor();
-    rows.clamp(BASE_ROWS_MIN, BASE_ROWS_MAX) * dd_gui::theme::ROW_H + SIZE_BASE_CHROME
+    let rows = ((avail_h - SIZE_BASE_CHROME) * 0.5 / row_h).floor();
+    rows.clamp(BASE_ROWS_MIN, BASE_ROWS_MAX) * row_h + SIZE_BASE_CHROME
 }
 
 /// v4.12 D37 ③：根页有效尺寸 = 记忆值（`settings.panel_size`；`None` =
 /// 从未手动拉伸——B8 起基准高按光标屏工作区推导、宽仍用基准），再按
 /// 光标所在屏工作区 clamp。`work` 为 `None`（取不到显示器信息）时不
-/// 推导不 clamp，原样返回（高度回落 [`APP_H`]）。
+/// 推导不 clamp，原样返回（高度回落 [`APP_H`]）。`row_h` = 当前列表行高
+/// （F2 密度档 `theme::ListMetrics::of(density).row_h`，标准档 40）。
 pub(crate) fn root_panel_size(
     work: Option<(f32, f32)>,
     remembered: Option<(u32, u32)>,
+    row_h: f32,
 ) -> (f32, f32) {
     let (w, h) = remembered
         .map(|(w, h)| (w as f32, h as f32))
         .unwrap_or_else(|| {
             let h = match work {
-                Some((_, wh)) => base_height_for_workarea(wh),
+                Some((_, wh)) => base_height_for_workarea(wh, row_h),
                 None => APP_H,
             };
             (APP_W, h)
@@ -145,8 +148,9 @@ pub(crate) fn root_panel_size(
 pub(crate) fn settings_panel_size(
     work: Option<(f32, f32)>,
     remembered: Option<(u32, u32)>,
+    row_h: f32,
 ) -> (f32, f32) {
-    let (rw, rh) = root_panel_size(work, remembered);
+    let (rw, rh) = root_panel_size(work, remembered, row_h);
     let (w, h) = (rw.max(SETTINGS_W), rh.max(SETTINGS_H));
     match work {
         Some((ww, wh)) => clamp_to_workarea(w, h, ww, wh),
@@ -489,8 +493,9 @@ impl PaletteApp {
     }
 
     /// 文件搜索"直达前缀"：根页输入以 `f ` 开头且扩展可用时，自动进页到
-    /// 文件结果页并回填剩余查询，省去"fallback 模板 → 选中 → 进页"的第二次 Enter。
-    /// 仅在栈顶为 Root 时触发；同一查询已进页（file_drill 命中）不再重复进页。
+    /// 文件结果页并回填剩余查询（搜索框回填由 open_page 统一处理），省去
+    /// "fallback 模板 → 选中 → 进页"的第二次 Enter。仅在栈顶为 Root 时触发；
+    /// 同一查询已进页（file_drill 命中）不再重复进页。
     pub(crate) fn maybe_drill_file_search(&mut self) {
         if !self.stack.at_root() {
             return;
@@ -500,13 +505,7 @@ impl PaletteApp {
             file_search_drill_target(&q, self.file_drill.as_deref(), self.file_search_present())
         {
             self.file_drill = Some(q.clone());
-            self.open_page(
-                FILE_SEARCH_EXT_ID,
-                FILE_SEARCH_PAGE_ID,
-                Some(rest.clone()),
-                None,
-            );
-            self.stack.current_mut().list.set_query(rest.clone());
+            self.open_page(FILE_SEARCH_EXT_ID, FILE_SEARCH_PAGE_ID, Some(rest), None);
             // 标记首次落地需回填搜索框（poll_page 消耗），避免结果回来后框被清空
             self.file_drill_armed = true;
         } else if !q.starts_with(FILE_SEARCH_PREFIX) {
@@ -653,9 +652,17 @@ impl eframe::App for PaletteApp {
         if want_settings != self.settings_sized {
             self.settings_sized = want_settings;
             let (w, h) = if want_settings {
-                settings_panel_size(self.last_work_area, self.settings.panel_size)
+                settings_panel_size(
+                    self.last_work_area,
+                    self.settings.panel_size,
+                    dd_gui::theme::ListMetrics::of(self.settings.density).row_h,
+                )
             } else {
-                root_panel_size(self.last_work_area, self.settings.panel_size)
+                root_panel_size(
+                    self.last_work_area,
+                    self.settings.panel_size,
+                    dd_gui::theme::ListMetrics::of(self.settings.density).row_h,
+                )
             };
             ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(egui::vec2(w, h)));
             // v4.15 真机反馈修（2026-09-06）：程序性尺寸变化（进/出设置页）
@@ -746,6 +753,18 @@ mod size_tests {
             (a.0 - b.0).abs() < 0.01 && (a.1 - b.1).abs() < 0.01,
             "{a:?} != {b:?}"
         );
+    }
+
+    // F2：尺寸推导函数新增 row_h 参数（密度档）。测试便捷包装 = 标准档 40
+    // （F2 前唯一行为）；本地定义遮蔽 `use super::*` 的 glob 导入。
+    fn root_panel_size(work: Option<(f32, f32)>, remembered: Option<(u32, u32)>) -> (f32, f32) {
+        super::root_panel_size(work, remembered, dd_gui::theme::ROW_H)
+    }
+    fn settings_panel_size(work: Option<(f32, f32)>, remembered: Option<(u32, u32)>) -> (f32, f32) {
+        super::settings_panel_size(work, remembered, dd_gui::theme::ROW_H)
+    }
+    fn base_height_for_workarea(work_h: f32) -> f32 {
+        super::base_height_for_workarea(work_h, dd_gui::theme::ROW_H)
     }
 
     #[test]
@@ -869,5 +888,41 @@ mod size_tests {
             root_panel_size(Some((2560.0, 1440.0)), Some((650, 440))),
             (650.0, 440.0),
         );
+    }
+
+    #[test]
+    fn base_height_follows_density_row_h() {
+        // F2：行高随密度档联动。工作区 1040 → avail 1024 → 折算空间 466：
+        // 紧凑 36 → floor(466/36)=12 行 → 524；宽松 44 → floor(466/44)=10 行 → 532。
+        let close = |a: f32, b: f32| assert!((a - b).abs() < 0.5, "{a} != {b}");
+        close(
+            super::base_height_for_workarea(
+                1040.0,
+                dd_gui::theme::ListMetrics::of(dd_gui::settings::ListDensity::Compact).row_h,
+            ),
+            524.0,
+        );
+        close(
+            super::base_height_for_workarea(
+                1040.0,
+                dd_gui::theme::ListMetrics::of(dd_gui::settings::ListDensity::Relaxed).row_h,
+            ),
+            532.0,
+        );
+    }
+
+    #[test]
+    fn file_drill_prefix_still_works() {
+        // `f ` 前缀：去前缀后整词作为搜索词；同查询去重；扩展缺失不进页。
+        assert_eq!(
+            super::file_search_drill_target("f 测试", None, true),
+            Some("测试".to_string())
+        );
+        assert_eq!(
+            super::file_search_drill_target("f 测试", Some("f 测试"), true),
+            None,
+            "同查询已进页 → 去重"
+        );
+        assert_eq!(super::file_search_drill_target("f 测试", None, false), None);
     }
 }

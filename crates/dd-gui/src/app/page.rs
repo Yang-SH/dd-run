@@ -104,11 +104,12 @@ impl PaletteApp {
                                 }
                             }
                             // v3.3 过期补偿：请求期间用户又输入了 → 本次结果是旧查询的，重新武装去抖
-                            //（200ms 静默后按最新 query 补拉）。仅在页内**已有输入**且与请求
-                            // search 不一致时触发——页内框为空属合法初始态（open_page 会把
-                            // Root 查询作为 search 传入而页内框初始为空，如点「在文件中搜索」），
-                            // 不补拉以保留扩展的初始过滤结果。set_query 幂等 + 去抖刷新式调度，
-                            // 不构成循环；直到「query 稳定 ∧ 结果与 query 对应」才收敛。
+                            //（200ms 静默后按最新 query 补拉）。页内框为空属合法初始态
+                            //（GoToPage 等无查询进页路径），不补拉以保留扩展的初始过滤
+                            // 结果；带查询进页（如点「文件搜索」）时 open_page 已把根查询
+                            // 回填页内框，落地后 cur_query == req_search 同样不补拉。
+                            // set_query 幂等 + 去抖刷新式调度，不构成循环；直到
+                            // 「query 稳定 ∧ 结果与 query 对应」才收敛。
                             let cur_query = self.stack.current().list.query().to_owned();
                             if !cur_query.is_empty() && Some(cur_query) != req_search {
                                 self.schedule_page_query_debounce();
@@ -173,6 +174,18 @@ impl PaletteApp {
 }
 
 impl PaletteApp {
+    /// 返回上一级（页面栈出栈）并聚焦回落后页面的搜索框（真机 2026-09-12：
+    /// 从文件搜索页返回后输入框失焦，无法直接键入——进页时 `open_page` 置位
+    /// 的 `want_focus` 只在落地时消费一次，返回路径需重新置位）。
+    /// 返回 `None` = 已在 Root（调用方决定隐藏，§4.3），不置位。
+    pub(crate) fn go_back_focused(&mut self) -> Option<dd_gui::navigation::PageState> {
+        let popped = self.stack.go_back();
+        if popped.is_some() {
+            self.want_focus = true;
+        }
+        popped
+    }
+
     /// 进入嵌套页（页面入栈 + loading），并按 warm/桩选择取数路径。
     ///
     /// `command_id` = 被点击的 `Page` 命令 id（桩复热时按协议 §6.4 先 `get_command` 校验）；
@@ -189,6 +202,16 @@ impl PaletteApp {
         self.stack.current_mut().is_loading = true;
         // 进嵌套页即聚焦搜索框（截图反馈：进入文件搜索后输入框无光标 → 无法直接键入）
         self.want_focus = true;
+        // 根页查询回填页内搜索框（真机 2026-09-12：输入「测试」后点「文件搜索」，
+        // 落地页输入框为空——根页查询虽已作为 search 传给 get_items，但页内框
+        // 不见 query，用户须重打一遍）。与 `f ` 前缀 drill 的回填语义对齐；
+        // 落地后 poll_page 的 v3.3 保留逻辑沿用此值（cur_query == req_search
+        // → 不触发过期补偿重拉）。
+        if let Some(q) = search.as_deref() {
+            if !q.is_empty() {
+                self.stack.current_mut().list.set_query(q.to_string());
+            }
+        }
         self.dispatch_fetch_page(ext_id, page_id, search, command_id);
     }
 

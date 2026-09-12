@@ -81,8 +81,8 @@ impl PaletteApp {
         }
 
         if esc {
-            // 非 Root 先返回上一级，Root 再隐藏（§4.3）
-            if self.stack.go_back().is_none() {
+            // 非 Root 先返回上一级（并聚焦回落后页面的搜索框），Root 再隐藏（§4.3）
+            if self.go_back_focused().is_none() {
                 self.hide(ctx);
             }
             return;
@@ -379,6 +379,19 @@ impl PaletteApp {
         } else {
             dd_gui::state::EmptyQueryView::WithoutApps
         });
+        self.settings.save();
+        ctx.request_repaint();
+    }
+
+    /// 设置页改「搜索应用」（2026-09-12）：立即重算根页可见表（空查询与
+    /// 关键词匹配两条分支都在 `set_apps_hidden` 内重算）+ 持久化。
+    pub(crate) fn apply_search_apps(&mut self, ctx: &egui::Context, on: bool) {
+        if self.settings.search_apps == on {
+            return;
+        }
+        eprintln!("[dd-gui] 搜索应用：{on}");
+        self.settings.search_apps = on;
+        self.stack.root_mut().list.set_apps_hidden(!on);
         self.settings.save();
         ctx.request_repaint();
     }

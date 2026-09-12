@@ -4,6 +4,36 @@
 
 ## [Unreleased]
 
+### 修复（返回后搜索框失焦：嵌套页返回重新聚焦，2026-09-12 真机反馈）
+
+- **现象**：从文件搜索页（或任意嵌套页/设置页）返回后，搜索框没有焦点——无法直接键入，须先点一下输入框。
+- **修复**：新增 `PaletteApp::go_back_focused()`（出栈成功即置位 `want_focus`，由搜索框绘制统一消费），Esc、嵌套页「←」按钮、设置页返回、扩展 `GoBack` 动作四条返回路径统一走它；已在 Root 时返回 `None`（隐藏语义不变）。
+
+### 撤销（「优先搜索文件」开关：同日加入、同日移除，用户反馈）
+
+- **原因**：自动进页会**劫持常规搜索**——开启后输入任意关键词都被弹进文件结果页，应用/网页搜索被遮蔽，交互过强。
+- **移除范围**：`Settings.prioritize_files` 字段与 JSON 读写、`file_search_drill_target` 的优先模式分支（回到纯 `f ` 前缀语义）、设置页开关行、i18n 文案。**保留**：`f ` 前缀直达文件搜索、进页回填（上一条修复）、「搜索应用」开关。配置中残留的 `prioritize_files` 字段按未知字段忽略，零迁移。
+
+### 修复（搜索引擎配置失效：M9 in-process 后环境变量通道断裂，2026-09-12 真机反馈）
+
+- **现象**：设置页删除引擎后（如只留 Bing），返回首屏「网络搜索」仍显示**全部 5 个引擎**。
+- **根因**：M9 把内置 websearch 从 spawn 子进程改为 **in-process**（`serve_line` 直调），但引擎配置通道是进程环境变量 `DD_WEBSEARCH_ENGINES`——宿主只把它写进 manifest `entry.env`（**spawn 子进程路径才消费**），in-process 扩展在宿主进程里 `std::env::var` 永远读不到 → 配置被静默忽略、恒回落内置全表。
+- **修复**：dd-ext 新增**内存注入通道** `websearch::set_configured_engines_json(Option<String>)`（`RwLock`，优先级：内存注入 → 环境变量 → 内置默认）；dd-gui 聚合线程（首启与重聚合同路径）在 collect 前注入 `Settings::search_engines_env()`。独立 exe 运行（无宿主注入）仍走环境变量，通道②保持兼容。
+- **语义修正**：引擎 JSON 为**合法空数组**时原会回落内置全表（「全部关闭」关不干净）——现返回空表尊重用户意图；仅非法 JSON / 非空数组条目全非法才回落默认。
+- **验证**：`cargo test -p dd-ext` 77 通过（新增 resolve 优先级 / 注入往返清除 / 空数组语义 3 条），`cargo clippy` 0 警告。
+
+### 修复（文件搜索进页回填：根查询不再丢失，2026-09-12 真机反馈）
+
+- **现象**：根页输入「测试」后点「文件搜索」进入 `files.results` 页，页内搜索框**为空**——根查询虽已作为 `search` 传给 `get_items`（扩展按其过滤），但页内输入框不显示，用户须重打一遍。
+- **修复**：`open_page` 统一回填——带非空查询进页时把查询写入页内搜索框（`f ` 前缀 drill 原有的单独回填随之收编为同一路径）。落地后 `poll_page` 的 v3.3 保留逻辑沿用该值：页内 query 与请求 `search` 一致 → 不触发过期补偿重拉（零多余请求）。所有 `Page` 进页路径（列表点击/Enter、`f ` 前缀、页内嵌套进页）语义一致。
+
+### 新增（搜索行为设置：「搜索应用」开关 + 默认仅 Google，2026-09-12 用户决策；「优先搜索文件」后撤销见上）
+
+- **设置 → 搜索新增「搜索应用」开关卡**（开关行，排版同「窗口材质」卡）：
+  - **搜索应用**（默认开）：关闭后「应用」类项在根页空查询首屏与关键词匹配中**均排除**（`PanelState::set_apps_hidden`，两条可见表分支都过滤；聚合落地与应用内切换两处接线）。`Settings.search_apps` 持久化；旧配置缺字段/类型损坏回落默认。
+- **默认搜索引擎只开 Google**：`Settings::default().search_engines` 由预设 5 引擎改为**仅 Google**（新增 `default_search_engines()`；`preset_search_engines()` 保留为设置页「添加引擎」下拉的可添加目录）。已落盘配置（含完整引擎列表）不受影响——只改默认值。
+- **验证**：`cargo test -p dd-gui` 通过（新增：apps 隐藏过滤 1 条、search_apps JSON 往返 1 条、Google 默认 1 条改写），`cargo clippy` 0 警告。
+
 ### 新增（图标与字体展示优化：参考 DeskBox 的「图标/文字大小可调」，方案 [`docs/icons-typography-plan.md`](./docs/icons-typography-plan.md)）
 
 - **列表密度三档（F2）**：设置 → 外观新增「列表密度」卡（紧凑/标准/宽松），一档联动行高（36/40/44）、行名与标签字号（13/14/15、11/12/13）、图标格与 glyph 字号（20/24/28、16/20/24）——`theme::ListMetrics` 单点定义，标准档硬性等于既有常量（parity 单测守卫，默认观感与上一版逐像素一致）。`Settings.density` 持久化（手工 JSON 读写沿用 `label/as_str/parse` 枚举模式，旧配置缺字段/未知值回落标准档，零迁移）。**关键联动**：面板默认高度折算 `base_height_for_workarea` / `root_panel_size` / `settings_panel_size` 增 `row_h` 参数（`lifecycle.rs` 唤起与 `ui()` 页面 diff 两处调用点接线），宽/松档默认窗口不会一行显示不下；Loading 骨架行随档同源，加载完成无布局跳动。设置页三选 pill 复用 radio-card 视觉口径（选中 accent_soft + 2px accent_stroke，hover `control_hover` B7 几何判定），zh/en 文案各 5 条。

@@ -202,6 +202,15 @@ const I18N: &[(&str, &str, &str)] = &[
         "Acrylic：半透明模糊，视觉更通透、GPU 开销略高",
         "Acrylic: translucent blur — clearer look, slightly higher GPU cost",
     ),
+    ("set.density.name", "列表密度", "List density"),
+    (
+        "set.density.desc",
+        "行高与图标、字号一档联动；面板默认高度在下次唤起时生效",
+        "Row height, icon and text size change together; the default panel size applies the next time the panel opens",
+    ),
+    ("set.density.compact", "紧凑", "Compact"),
+    ("set.density.standard", "标准", "Standard"),
+    ("set.density.relaxed", "宽松", "Relaxed"),
     // ── 设置页 · 常规 ──
     ("set.openview.name", "打开面板时显示", "Shown when the panel opens"),
     (
@@ -246,6 +255,15 @@ const I18N: &[(&str, &str, &str)] = &[
         "set.search.err_url",
         "URL 须以 http(s):// 开头且包含 {q} 占位符",
         "URL must start with http(s):// and contain a {q} placeholder",
+    ),
+    // ── 设置页 · 搜索行为开关（2026-09-12）──
+    // （「优先搜索文件」开关同日加入、同日撤销：自动进页劫持常规搜索，
+    // 用户反馈后移除——`f ` 前缀直达保留。）
+    ("set.search.apps.name", "搜索应用", "Search apps"),
+    (
+        "set.search.apps.desc",
+        "关闭后，本机应用不再出现在首屏与搜索结果中",
+        "When off, installed apps no longer appear on the main screen or in search results",
     ),
     // ── 设置页 · 扩展管理 ──
     ("set.ext.name", "扩展管理", "Extensions"),

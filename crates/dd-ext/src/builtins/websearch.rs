@@ -8,11 +8,14 @@
 //! - **invoke**：按命令 id 定位引擎 → 对 `context.query` 做 URL 百分号编码 →
 //!   拼搜索 URL → 发 `host/open_url` 请求（§7.4，capabilities 已声明）→ `Dismiss`。
 //!
-//! **可配置引擎**（2026-09-05）：宿主 spawn 前注入环境变量
-//! `DD_WEBSEARCH_ENGINES`（JSON 数组 `[{"name":"...","template":"https://…{q}"}]`，
-//! 见 dd-gui `Settings::search_engines_env`）——扩展按其构建引擎表；未注入 /
-//! 解析失败 / 全部条目非法时回落内置默认 5 引擎。配置走进程环境
-//! （manifest `entry.env` 既有机制），协议 v1.0 冻结零字段新增。
+//! **可配置引擎**（2026-09-05；2026-09-12 通道修正）：两条配置通道按优先级——
+//! ①宿主 **in-process 内存注入** `set_configured_engines_json`（M9 内置扩展
+//! 进程内化后主通道；manifest `entry.env` 仅对 spawn 子进程生效，in-process
+//! 读不到进程环境 → 曾被静默忽略）；②进程环境变量 `DD_WEBSEARCH_ENGINES`
+//! （JSON 数组 `[{"name":"...","template":"https://…{q}"}]`，见 dd-gui
+//! `Settings::search_engines_env`；独立 exe 运行用）。合法 JSON 数组即生效
+//! （**空数组 = 全部关闭**，不回落）；非法 JSON / 全部条目非法 / 两者皆缺省
+//! 时回落内置默认 5 引擎。协议 v1.0 冻结零字段新增。
 //!
 //! 编码为手写 RFC 3986 percent-encode（UTF-8），无第三方依赖。
 //! 参考实现：[`docs/m4-record.md`](../../docs/m4-record.md) P4 决策（扩展侧先行）。
@@ -74,20 +77,60 @@ fn builtin_engines() -> Vec<Engine> {
     .collect()
 }
 
-/// 生效引擎表：宿主注入的 `DD_WEBSEARCH_ENGINES` 优先，否则内置默认。
-/// 每次调用现读现解析（进程内配置恒定，开销可忽略）。
+/// 生效引擎表（解析顺序）：宿主 **in-process 内存注入**（[`set_configured_engines_json`]）
+/// → 进程环境变量 `DD_WEBSEARCH_ENGINES` → 内置默认。
+///
+/// M9 内置扩展进程内化后，manifest `entry.env`（spawn 子进程才注入）对
+/// in-process 扩展失效——宿主进程环境从未设置过 `DD_WEBSEARCH_ENGINES`，
+/// 配置被静默忽略、永远回落内置全表（2026-09-12 真机反馈）。故新增内存
+/// 通道：宿主聚合前直接写入；独立 exe（`bin/websearch.rs`）无宿主注入，
+/// 仍走环境变量。每次调用现读现解析（开销可忽略）。
 fn active_engines() -> Vec<Engine> {
-    std::env::var("DD_WEBSEARCH_ENGINES")
-        .ok()
-        .and_then(|text| engines_from_json(&text))
+    resolve_engines(
+        configured_engines_json(),
+        std::env::var("DD_WEBSEARCH_ENGINES").ok(),
+    )
+}
+
+/// 纯解析（便于单测）：`configured` = 宿主内存注入；`env` = 进程环境变量。
+/// 注入的合法 JSON 数组**即生效**（含空数组 = 用户全部关闭，不回落默认）；
+/// 非法 JSON 才回落下一优先级。
+fn resolve_engines(configured: Option<String>, env: Option<String>) -> Vec<Engine> {
+    if let Some(text) = configured {
+        // 宿主注入的必为自身序列化的合法数组；极端损坏时回落内置表
+        return engines_from_json(&text).unwrap_or_else(builtin_engines);
+    }
+    env.and_then(|text| engines_from_json(&text))
         .unwrap_or_else(builtin_engines)
 }
 
+/// 宿主 in-process 注入的引擎配置（`None` = 未注入/已清除）。
+static CONFIGURED_ENGINES_JSON: std::sync::RwLock<Option<String>> = std::sync::RwLock::new(None);
+
+/// 宿主注入/清除引擎配置（in-process 专用；`None` = 清除，回落环境变量/内置表）。
+/// 聚合前调用即可，后续 `top_level_commands`/`fallback_commands`/`invoke` 现读。
+pub fn set_configured_engines_json(text: Option<String>) {
+    *CONFIGURED_ENGINES_JSON.write().expect("引擎配置锁未中毒") = text;
+}
+
+/// 读取当前内存注入的引擎配置快照。
+fn configured_engines_json() -> Option<String> {
+    CONFIGURED_ENGINES_JSON
+        .read()
+        .expect("引擎配置锁未中毒")
+        .clone()
+}
+
 /// 解析宿主注入的引擎配置 JSON（`[{"name","template"}]`）：
-/// 非法条目跳过、suffix 去重；数组为空或全部非法 → `None`（回落默认）。
+/// 非法条目跳过、suffix 去重；**合法 JSON 数组即生效**——空数组返回
+/// `Some(空)`（用户全部关闭，尊重意图不回落默认）；非空数组条目**全部**
+/// 非法或非数组/非法 JSON → `None`（回落默认，疑似配置错误）。
 fn engines_from_json(text: &str) -> Option<Vec<Engine>> {
     let value = serde_json::from_str::<serde_json::Value>(text).ok()?;
     let arr = value.as_array()?;
+    if arr.is_empty() {
+        return Some(Vec::new());
+    }
     let engines: Vec<Engine> = arr
         .iter()
         .filter_map(|e| {
@@ -439,10 +482,50 @@ mod tests {
         .expect("存在合法条目");
         assert_eq!(engines.len(), 1);
         assert_eq!(engines[0].suffix, "good");
-        // 全部非法 / 空数组 / 非法 JSON → None（回落内置默认）
+        // 空数组 = 用户全部关闭（尊重意图，**不**回落内置默认，2026-09-12 语义修正）
+        assert!(engines_from_json("[]").unwrap().is_empty());
+        // 非空数组但条目全部非法 / 非数组 / 非法 JSON → None（回落内置默认）
         assert!(engines_from_json(r#"[{"name":"NoQ","template":"https://b.com/"}]"#).is_none());
-        assert!(engines_from_json("[]").is_none());
         assert!(engines_from_json("not json").is_none());
+        assert!(engines_from_json(r#"{"name":"X"}"#).is_none());
+    }
+
+    #[test]
+    fn resolve_engines_prefers_inprocess_injection_then_env() {
+        // ①宿主内存注入优先；②其次环境变量；③皆缺省回落内置默认
+        let builtin_len = builtin_engines().len();
+        assert_eq!(
+            resolve_engines(None, None).len(),
+            builtin_len,
+            "皆缺省 → 内置默认表"
+        );
+        let cfg = r#"[{"name":"Injected","template":"https://inj.example/?q={q}"}]"#.to_string();
+        let env = r#"[{"name":"FromEnv","template":"https://env.example/?q={q}"}]"#.to_string();
+        assert_eq!(
+            resolve_engines(Some(cfg.clone()), Some(env.clone()))[0].name,
+            "Injected"
+        );
+        assert_eq!(resolve_engines(None, Some(env.clone()))[0].name, "FromEnv");
+        // 注入的空数组 = 全部关闭（不回落默认/环境变量）
+        assert!(resolve_engines(Some("[]".to_string()), Some(env)).is_empty());
+        // 注入非法 JSON（理论不发生：宿主序列化自身配置）→ 回落内置表
+        assert_eq!(
+            resolve_engines(Some("garbage".to_string()), None).len(),
+            builtin_len
+        );
+    }
+
+    #[test]
+    fn configured_engines_json_roundtrip_and_clear() {
+        // 内存注入通道：写入 → 可读 → None 清除（不触碰进程环境变量，
+        // 与并行测试无共享状态）
+        assert_eq!(configured_engines_json(), None);
+        set_configured_engines_json(Some(
+            r#"[{"name":"T","template":"https://t.example/?q={q}"}]"#.into(),
+        ));
+        assert!(configured_engines_json().is_some());
+        set_configured_engines_json(None);
+        assert_eq!(configured_engines_json(), None);
     }
 
     #[test]

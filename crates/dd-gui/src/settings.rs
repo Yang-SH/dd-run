@@ -174,6 +174,50 @@ impl Lang {
     }
 }
 
+/// 列表密度档（icons-typography-plan.md F2，参考 DeskBox「图标/文字大小可调」）。
+/// 一档联动行高/标题字号/标签字号/图标格/glyph 字号五值——具体数值见
+/// `dd_gui::theme::ListMetrics`（标准档 = 既有常量，parity 单测守卫）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ListDensity {
+    /// 紧凑（行高 36，一屏更多结果）。
+    Compact,
+    /// 标准（默认；行高 40，D8 几何契约）。
+    #[default]
+    Standard,
+    /// 宽松（行高 44，触控友好）。
+    Relaxed,
+}
+
+impl ListDensity {
+    /// 设置页显示标签。
+    pub fn label(self) -> &'static str {
+        match self {
+            ListDensity::Compact => "紧凑",
+            ListDensity::Standard => "标准",
+            ListDensity::Relaxed => "宽松",
+        }
+    }
+
+    /// JSON 序列化值（稳定标识，与显示标签解耦）。
+    pub fn as_str(self) -> &'static str {
+        match self {
+            ListDensity::Compact => "compact",
+            ListDensity::Standard => "standard",
+            ListDensity::Relaxed => "relaxed",
+        }
+    }
+
+    /// JSON 值反解；未知值返回 `None`（调用方回落默认）。
+    pub fn parse(s: &str) -> Option<Self> {
+        match s {
+            "compact" => Some(ListDensity::Compact),
+            "standard" => Some(ListDensity::Standard),
+            "relaxed" => Some(ListDensity::Relaxed),
+            _ => None,
+        }
+    }
+}
+
 /// 搜索引擎配置（2026-09-05 新增设置项：可配置搜索引擎）。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SearchEngine {
@@ -202,7 +246,7 @@ impl SearchEngine {
     }
 }
 
-/// 常用预设引擎（设置页勾选项；与 `dd-ext-websearch` 内置默认表保持一致——
+/// 常用预设引擎（设置页下拉可添加项；与 `dd-ext-websearch` 内置默认表保持一致——
 /// 两侧各自定义，扩展侧为环境变量缺失时的回落值）。
 pub fn preset_search_engines() -> Vec<SearchEngine> {
     [
@@ -215,6 +259,13 @@ pub fn preset_search_engines() -> Vec<SearchEngine> {
     .iter()
     .map(|(n, t)| SearchEngine::new(n, t).expect("预设引擎模板合法"))
     .collect()
+}
+
+/// 默认启用的引擎（2026-09-12 用户决策：默认**只开 Google**，其余预设仍可在
+/// 设置页「搜索」栏手动添加）。与 [`preset_search_engines`]（可添加目录）解耦。
+pub fn default_search_engines() -> Vec<SearchEngine> {
+    let presets = preset_search_engines();
+    vec![presets[0].clone()]
 }
 
 /// 宿主本地设置（主题偏好 + 首屏视图 + 搜索引擎 + 窗口材质 + 热键/自启/扩展；
@@ -244,6 +295,13 @@ pub struct Settings {
     /// 界面语言偏好（v4.13 D38：默认 FollowSystem；只存用户偏好——
     /// 运行时解析后的生效语言存 `PaletteApp.lang_effective`）。
     pub lang: Lang,
+    /// 列表密度（F2：默认标准 = D8 40px 行；缺失/未知值回落标准，旧配置零迁移）。
+    pub density: ListDensity,
+    /// 搜索应用（2026-09-12 新增）：关闭后根页结果不包含「应用」类项
+    /// （空查询首屏与关键词匹配均排除）；默认开（保持既有行为）。
+    /// （「优先搜索文件」开关同日加入、同日撤销：自动进页劫持常规搜索，
+    /// 用户反馈后移除——`f ` 前缀直达保留。）
+    pub search_apps: bool,
 }
 
 /// 全局热键默认修饰键：Win + Alt（MOD_* 值：ALT=1/CONTROL=2/SHIFT=4/WIN=8，
@@ -260,7 +318,7 @@ impl Default for Settings {
         Self {
             theme: ThemePref::default(),
             open_view: OpenView::default(),
-            search_engines: preset_search_engines(),
+            search_engines: default_search_engines(),
             backdrop: Backdrop::default(),
             hotkey_mods: HOTKEY_MODS_DEFAULT,
             hotkey_vk: HOTKEY_VK_DEFAULT,
@@ -268,6 +326,8 @@ impl Default for Settings {
             disabled_extensions: Vec::new(),
             panel_size: None,
             lang: Lang::default(),
+            density: ListDensity::default(),
+            search_apps: true,
         }
     }
 }
@@ -379,23 +439,32 @@ impl Settings {
                 s.lang = lang;
             }
         }
-        // 搜索引擎：字段缺失（旧版本配置）→ 预设 5 引擎；字段存在 → 逐条
-        // 校验，非法条目跳过（空数组 = 用户全部关闭，尊重其意图）。
-        match v.get("search_engines") {
-            None => s.search_engines = preset_search_engines(),
-            Some(val) => {
-                if let Some(arr) = val.as_array() {
-                    s.search_engines = arr
-                        .iter()
-                        .filter_map(|e| {
-                            SearchEngine::new(
-                                e.get("name").and_then(|x| x.as_str())?,
-                                e.get("template").and_then(|x| x.as_str())?,
-                            )
-                        })
-                        .collect();
-                }
+        // 列表密度（F2）：字段缺失（旧版本配置）/ 未知值 → 默认标准档。
+        if let Some(t) = v.get("density").and_then(|t| t.as_str()) {
+            if let Some(d) = ListDensity::parse(t) {
+                s.density = d;
             }
+        }
+        // 搜索引擎：字段缺失（旧版本配置）→ 默认（仅 Google，2026-09-12 用户
+        // 决策）；字段存在 → 逐条校验，非法条目跳过（空数组 = 用户全部关闭，
+        // 尊重其意图）。
+        if let Some(val) = v.get("search_engines") {
+            if let Some(arr) = val.as_array() {
+                s.search_engines = arr
+                    .iter()
+                    .filter_map(|e| {
+                        SearchEngine::new(
+                            e.get("name").and_then(|x| x.as_str())?,
+                            e.get("template").and_then(|x| x.as_str())?,
+                        )
+                    })
+                    .collect();
+            }
+        }
+        // 搜索应用（2026-09-12）：字段缺失（旧版本配置）/ 类型损坏 → 默认开。
+        // （「优先搜索文件」已撤销：配置中的历史字段按未知字段忽略。）
+        if let Some(b) = v.get("search_apps").and_then(|b| b.as_bool()) {
+            s.search_apps = b;
         }
         s
     }
@@ -421,6 +490,8 @@ impl Settings {
                 None => serde_json::Value::Null,
             },
             "lang": self.lang.as_str(),
+            "density": self.density.as_str(),
+            "search_apps": self.search_apps,
         })
         .to_string()
     }
@@ -562,16 +633,20 @@ mod tests {
     }
 
     #[test]
-    fn search_engines_default_is_preset_five() {
-        let presets = preset_search_engines();
-        assert_eq!(Settings::default().search_engines, presets);
-        assert_eq!(presets.len(), 5);
-        assert_eq!(Settings::parse_json("{}").search_engines, presets);
-        // 旧版本配置（无 search_engines 字段）→ 回落预设
+    fn search_engines_default_is_google_only() {
+        // 2026-09-12 用户决策：默认只启用 Google；其余预设可在设置页手动添加。
+        let defaults = Settings::default().search_engines;
+        assert_eq!(defaults.len(), 1);
+        assert_eq!(defaults[0].name, "Google");
+        // 配置缺字段（含 "{}" 与旧版本配置）→ 同样回落仅 Google
+        assert_eq!(Settings::parse_json("{}").search_engines, defaults);
         assert_eq!(
             Settings::parse_json(r#"{"theme":"dark"}"#).search_engines,
-            presets
+            defaults
         );
+        // 可添加目录仍是完整 5 预设（设置页下拉用）
+        assert_eq!(preset_search_engines().len(), 5);
+        assert_eq!(default_search_engines(), defaults);
     }
 
     #[test]
@@ -602,10 +677,10 @@ mod tests {
         assert!(Settings::parse_json(r#"{"search_engines":[]}"#)
             .search_engines
             .is_empty());
-        // 字段类型损坏（非数组）→ 保持默认
+        // 字段类型损坏（非数组）→ 保持默认（仅 Google）
         assert_eq!(
             Settings::parse_json(r#"{"search_engines":42}"#).search_engines,
-            preset_search_engines()
+            default_search_engines()
         );
     }
 
@@ -737,6 +812,58 @@ mod tests {
         assert_eq!(Lang::parse("nope"), None);
         assert_eq!(Lang::ZhCn.as_str(), "zh_cn");
         assert_eq!(Lang::EnUs.as_str(), "en_us");
+    }
+
+    #[test]
+    fn density_default_missing_and_roundtrip() {
+        // F2：默认标准档；字段缺失（旧版本配置）/ 未知值 / 类型损坏 → 标准档
+        assert_eq!(Settings::default().density, ListDensity::Standard);
+        assert_eq!(Settings::parse_json("{}").density, ListDensity::Standard);
+        let old = Settings::parse_json(r#"{"lang":"en_us"}"#);
+        assert_eq!(old.density, ListDensity::Standard, "旧配置无该字段");
+        assert_eq!(old.lang, Lang::EnUs, "其余字段解析不受影响");
+        assert_eq!(
+            Settings::parse_json(r#"{"density":"roomy"}"#).density,
+            ListDensity::Standard
+        );
+        assert_eq!(
+            Settings::parse_json(r#"{"density":3}"#).density,
+            ListDensity::Standard
+        );
+        // 三档往返一致
+        for d in [
+            ListDensity::Compact,
+            ListDensity::Standard,
+            ListDensity::Relaxed,
+        ] {
+            let s = Settings {
+                density: d,
+                ..Settings::default()
+            };
+            let parsed = Settings::parse_json(&s.to_json_string());
+            assert_eq!(parsed, s, "{} 往返一致", d.label());
+        }
+        assert_eq!(ListDensity::parse("compact"), Some(ListDensity::Compact));
+        assert_eq!(ListDensity::parse("relaxed"), Some(ListDensity::Relaxed));
+        assert_eq!(ListDensity::parse("nope"), None);
+    }
+
+    #[test]
+    fn search_apps_roundtrip() {
+        // 2026-09-12：默认开；字段缺失（旧版本配置）/ 类型损坏 → 默认开；
+        // 显式值往返一致。（「优先搜索文件」已撤销——配置中残留的该字段按
+        // 未知字段忽略，不报错。）
+        assert!(Settings::default().search_apps);
+        assert!(Settings::parse_json("{}").search_apps);
+        assert!(Settings::parse_json(r#"{"prioritize_files":true}"#).search_apps);
+        let s = Settings {
+            search_apps: false,
+            ..Settings::default()
+        };
+        let parsed = Settings::parse_json(&s.to_json_string());
+        assert_eq!(parsed, s, "search_apps 往返一致");
+        // 类型损坏（非布尔）→ 回落默认开
+        assert!(Settings::parse_json(r#"{"search_apps":1}"#).search_apps);
     }
 
     #[test]

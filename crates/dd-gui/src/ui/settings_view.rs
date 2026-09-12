@@ -142,7 +142,7 @@ impl PaletteApp {
         draw_version_chip(&mut chip_ui, env!("CARGO_PKG_VERSION"), &p);
 
         if back_clicked {
-            self.stack.go_back();
+            self.go_back_focused(); // 返回 + 聚焦回落后页面的搜索框
         }
         ui.add_space(8.0); // 顶行 padding-bottom
 
@@ -262,9 +262,14 @@ impl PaletteApp {
             SettingsCategory::Appearance => {
                 self.draw_appearance_card(ui, &p);
                 self.draw_material_card(ui, &p, &ctx);
+                self.draw_density_card(ui, &p);
             }
             SettingsCategory::General => self.draw_general_cards(ui, &p),
-            SettingsCategory::Search => self.draw_search_engine_card(ui, &p, &ctx),
+            SettingsCategory::Search => {
+                self.draw_search_behavior_card(ui, &p);
+                ui.add_space(8.0); // 卡片间距 8px（§08.1）
+                self.draw_search_engine_card(ui, &p, &ctx);
+            }
             SettingsCategory::Extensions => self.draw_extensions_card(ui, &p),
         });
     }
@@ -461,6 +466,87 @@ impl PaletteApp {
         }
     }
 
+    /// 外观栏：「列表密度」卡（F2，icons-typography-plan.md；参考 DeskBox
+    /// 「图标/文字大小可调」）——紧凑/标准/宽松三选 pill，一档联动行高、
+    /// 字号与图标格（`theme::ListMetrics`）。点击即落盘；面板默认高度在
+    /// 下次唤起时按新档推导（`base_height_for_workarea`）。
+    fn draw_density_card(&mut self, ui: &mut egui::Ui, p: &theme::Palette) {
+        let dark = ui.visuals().dark_mode;
+        let lang = self.lang_effective;
+        let current = self.settings.density;
+        let mut pick: Option<dd_gui::settings::ListDensity> = None;
+        draw_settings_card_frame(ui, p, |card| {
+            // 卡头：图标 + 名称 + 描述（同主题/材质卡口径）
+            card.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = 0.0;
+                let (icon_rect, _) =
+                    ui.allocate_exact_size(egui::vec2(16.0, 16.0), egui::Sense::hover());
+                ui.painter().text(
+                    icon_rect.center(),
+                    egui::Align2::CENTER_CENTER,
+                    '\u{E8FD}', // BulletedList（Segoe MDL2/Fluent，列表语义）
+                    egui::FontId::proportional(16.0),
+                    p.text2,
+                );
+                ui.add_space(12.0);
+                ui.vertical(|ui| {
+                    ui.set_min_height(36.0);
+                    ui.label(
+                        egui::RichText::new(crate::text::t(lang, "set.density.name"))
+                            .font(dd_gui::theme::semibold(14.0))
+                            .size(14.0)
+                            .color(p.text),
+                    );
+                    ui.add(
+                        egui::Label::new(
+                            egui::RichText::new(crate::text::t(lang, "set.density.desc"))
+                                .size(12.0)
+                                .color(p.text3),
+                        )
+                        .wrap(),
+                    );
+                });
+            });
+            card.add_space(8.0);
+            // 三选 pill 行（同 radio-card 行的宽度口径：item_spacing.x 清零，
+            // 间隙 8px 手动控制，宽度 = (内宽 − 2×gap)/3）
+            let gap = 8.0;
+            card.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = 0.0;
+                let avail = ui.available_width();
+                let pill_w = (avail - 2.0 * gap) / 3.0;
+                for (i, (density, key)) in [
+                    (
+                        dd_gui::settings::ListDensity::Compact,
+                        "set.density.compact",
+                    ),
+                    (
+                        dd_gui::settings::ListDensity::Standard,
+                        "set.density.standard",
+                    ),
+                    (
+                        dd_gui::settings::ListDensity::Relaxed,
+                        "set.density.relaxed",
+                    ),
+                ]
+                .into_iter()
+                .enumerate()
+                {
+                    if i > 0 {
+                        ui.add_space(gap);
+                    }
+                    let selected = current == density;
+                    if draw_density_pill(ui, pill_w, crate::text::t(lang, key), selected, p, dark) {
+                        pick = Some(density);
+                    }
+                }
+            });
+        });
+        if let Some(density) = pick {
+            self.settings.density = density;
+            self.settings.save();
+        }
+    }
     /// 常规栏（v4.8 功能态 + v4.9 Fluent 控件化）：「打开面板时显示」+
     /// 「全局热键」（可改：更改 = 捕获模式、恢复默认 = Win+Alt+Space 一键还原）+
     /// 「开机自启」（功能态开关）+「语言」（v4.13 D38，ComboBox 三选）。
@@ -764,6 +850,49 @@ impl PaletteApp {
         });
         if let Some(l) = lang_picked {
             self.apply_lang(l);
+        }
+    }
+
+    /// 搜索栏：「搜索应用」卡（2026-09-12）——开关行（名称 + 描述 + 贴右
+    /// 功能态开关），排版同「窗口材质」卡的开关行。关闭后「应用」类项不进
+    /// 首屏与搜索结果。变更经 apply_search_apps 即时生效 + 落盘。
+    /// （「优先搜索文件」开关同日加入、同日撤销：自动进页劫持常规搜索，
+    /// 用户反馈后移除——`f ` 前缀直达保留。）
+    fn draw_search_behavior_card(&mut self, ui: &mut egui::Ui, p: &theme::Palette) {
+        // 开关状态在闭包外读取、闭包内只收集点击结果（避免闭包内 &mut self 冲突）。
+        let apps_on = self.settings.search_apps;
+        let lang = self.lang_effective;
+        let mut apps_toggled = false;
+        draw_settings_card_frame(ui, p, |card| {
+            card.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = 0.0;
+                // 与其他卡卡头图标对齐的 16px 空槽位
+                ui.allocate_exact_size(egui::vec2(16.0, 16.0), egui::Sense::hover());
+                ui.add_space(12.0);
+                ui.vertical(|ui| {
+                    ui.set_min_height(36.0);
+                    ui.label(
+                        egui::RichText::new(crate::text::t(lang, "set.search.apps.name"))
+                            .size(14.0)
+                            .color(p.text),
+                    );
+                    ui.add_space(4.0); // name ↔ desc 间距（材质卡口径）
+                    ui.add(
+                        egui::Label::new(
+                            egui::RichText::new(crate::text::t(lang, "set.search.apps.desc"))
+                                .size(12.0)
+                                .color(p.text3),
+                        )
+                        .wrap(),
+                    );
+                });
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    apps_toggled = draw_switch_fn(ui, apps_on, p);
+                });
+            });
+        });
+        if apps_toggled {
+            self.apply_search_apps(ui.ctx(), !apps_on);
         }
     }
 
@@ -1402,6 +1531,47 @@ pub(crate) fn draw_radio_card(
         egui::vec2(rect.width() - 24.0, 34.0),
     );
     draw_theme_thumb(ui, thumb, thumb_rect, p);
+    resp.clicked()
+}
+
+/// 密度三选 pill（F2）：radio-card 的无缩略图变体——选中 = accent_soft 底 +
+/// 2px accent_stroke 边框；未选 = input_fill + 1px border_strong，hover 叠
+/// control_hover（B7 几何判定口径）。返回是否被点击。
+pub(crate) fn draw_density_pill(
+    ui: &mut egui::Ui,
+    w: f32,
+    label: &str,
+    selected: bool,
+    p: &theme::Palette,
+    dark: bool,
+) -> bool {
+    let h = 32.0;
+    let (rect, resp) = ui.allocate_exact_size(egui::vec2(w, h), egui::Sense::click());
+    let radius = egui::CornerRadius::same(6);
+    if selected {
+        ui.painter().rect_filled(rect, radius, accent_soft(dark, p));
+    } else {
+        ui.painter().rect_filled(rect, radius, p.input_fill);
+        if ui.rect_contains_pointer(rect) {
+            ui.painter()
+                .rect_filled(rect.shrink(1.0), radius, p.control_hover);
+        }
+    }
+    // 边框同 radio-card：选中 2px 走 accent_stroke（B2 线状小元素口径）
+    let stroke = if selected {
+        egui::Stroke::new(2.0, p.accent_stroke)
+    } else {
+        egui::Stroke::new(1.0, p.border_strong)
+    };
+    ui.painter()
+        .rect_stroke(rect, radius, stroke, egui::StrokeKind::Inside);
+    ui.painter().text(
+        rect.center(),
+        egui::Align2::CENTER_CENTER,
+        label,
+        egui::FontId::proportional(12.0),
+        if selected { p.text } else { p.text2 },
+    );
     resp.clicked()
 }
 

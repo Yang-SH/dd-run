@@ -66,6 +66,10 @@ pub fn spawn_aggregation(
             .cloned()
             .collect();
         aggregator::inject_websearch_env(&mut active, &engines_json);
+        // M9 内置 websearch 为 in-process（无子进程，进程环境变量对它无效）：
+        // 引擎配置经内存通道直接注入扩展（2026-09-12 修复——此前配置被静默
+        // 忽略、面板永远显示内置全表）。独立 exe / spawn 路径仍走 entry.env。
+        dd_ext::builtins::websearch::set_configured_engines_json(Some(engines_json.clone()));
         // 批次 D（2026-09-06）：注入生效语言到各扩展进程环境——扩展侧经
         // `DDRUN_LANG` 选 zh/en 文案。`lang` 已是 FollowSystem 解析后的具体语言
         // （zh_cn / en_us）；扩展解析未知值回落 zh_cn。
@@ -124,6 +128,9 @@ impl PaletteApp {
                         dd_gui::state::EmptyQueryView::WithoutApps
                     },
                 );
+                // 「搜索应用」关（2026-09-12）：根页排除「应用」类项
+                //（空查询首屏与关键词匹配均排除；默认开 = 不过滤）
+                root.list.set_apps_hidden(!self.settings.search_apps);
                 *self.stack.root_mut() = root;
                 self.sources = payload.sources;
                 self.processes = payload.processes;

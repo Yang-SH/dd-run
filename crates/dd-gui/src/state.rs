@@ -136,6 +136,9 @@ pub struct PanelState {
     selected: Selected,
     /// 空查询首屏显示范围（设置项；仅影响空查询分支，见 [`Self::recompute_visible`]）。
     empty_view: EmptyQueryView,
+    /// 是否隐藏「应用」类项（设置项「搜索应用」关；空查询与关键词匹配**均**
+    /// 排除，2026-09-12）。嵌套页 passthrough 分支不受影响（页内无应用类项）。
+    apps_hidden: bool,
     /// 嵌套页是否跳过宿主本地二次过滤（`true` = 扩展 `get_items` 已按查询过滤/排序完毕，
     /// 宿主 `visible` 直接 = 全部 `items`，保持扩展返回顺序）。Root 页恒为 `false`。
     passthrough: bool,
@@ -163,6 +166,7 @@ impl PanelState {
             fallback: Vec::new(),
             selected: Selected::None,
             empty_view,
+            apps_hidden: false,
             passthrough: false,
         };
         s.recompute_visible();
@@ -180,6 +184,17 @@ impl PanelState {
             self.recompute_visible();
             self.clamp_selection();
         }
+    }
+
+    /// 切换「搜索应用」开关（设置页变更时调用；`true` = 隐藏应用类项）：
+    /// 空查询与关键词匹配两条分支都重算可见表。
+    pub fn set_apps_hidden(&mut self, hidden: bool) {
+        if self.apps_hidden == hidden {
+            return;
+        }
+        self.apps_hidden = hidden;
+        self.recompute_visible();
+        self.clamp_selection();
     }
 
     pub fn items(&self) -> &[PanelItem] {
@@ -343,8 +358,10 @@ impl PanelState {
         }
         if self.query.trim().is_empty() {
             // 空查询：按首屏视图过滤（WithoutApps = 隐藏「应用」类项，
-            // 默认功能视图——应用仍可通过输入查询命中）
+            // 默认功能视图——应用仍可通过输入查询命中）；「搜索应用」关时
+            // 应用类项在空查询下同样排除（2026-09-12）。
             self.visible = (0..n)
+                .filter(|&i| self.apps_shown(i))
                 .filter(|&i| {
                     self.empty_view != EmptyQueryView::WithoutApps
                         || self.items[i].result_category.as_deref() != Some("应用")
@@ -357,6 +374,8 @@ impl PanelState {
             .items
             .iter()
             .enumerate()
+            // 「搜索应用」关：应用类项不参与关键词匹配（2026-09-12）
+            .filter(|&(i, _)| self.apps_shown(i))
             .filter_map(|(i, it)| fm.score(it).map(|s| (i, s)))
             .collect();
         // `sort_by_key` 为稳定排序：同分项保持原始顺序（切片 2 行为测试守卫）
@@ -376,6 +395,11 @@ impl PanelState {
         } else {
             Selected::None
         };
+    }
+
+    /// 第 `i` 项是否受「搜索应用」开关排除（关 = 隐藏「应用」类项）。
+    fn apps_shown(&self, i: usize) -> bool {
+        !self.apps_hidden || self.items[i].result_category.as_deref() != Some("应用")
     }
 
     /// 选中索引夹紧到 [0, visible_count)，越界则归零；空列表置 None。
@@ -484,6 +508,31 @@ mod tests {
         assert_eq!(s.visible_count(), 2);
         s.set_empty_view(EmptyQueryView::WithoutApps);
         assert_eq!(s.visible_count(), 1, "切换后空查询立即重算");
+    }
+
+    /// 「搜索应用」开关（2026-09-12）：关闭后应用类项在空查询与关键词
+    /// 匹配下**均**排除；重新开启即恢复。
+    #[test]
+    fn apps_hidden_excludes_app_category_from_match() {
+        let mut app = PanelItem::new("7-Zip File Manager");
+        app.result_category = Some("应用".into());
+        let calc = PanelItem::new("= 表达式");
+        let items = vec![app, calc];
+
+        let mut s = PanelState::new(items);
+        s.set_apps_hidden(true);
+        // 空查询：应用类项隐藏（即使 All 视图）
+        assert_eq!(s.visible_count(), 1, "关「搜索应用」后空查询排除应用");
+        // 关键词命中应用名：同样排除
+        s.set_query("7-zip");
+        assert_eq!(s.visible_count(), 0, "关「搜索应用」后应用不参与匹配");
+
+        // 重新开启：恢复（空查询 + 查询两条分支都重算）
+        s.set_apps_hidden(false);
+        s.set_query("");
+        assert_eq!(s.visible_count(), 2, "重新开启后空查询恢复全量");
+        s.set_query("7-zip");
+        assert_eq!(s.visible_count(), 1, "重新开启后应用恢复参与匹配");
     }
 
     #[test]
