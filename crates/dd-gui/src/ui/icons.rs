@@ -7,11 +7,12 @@ use dd_protocol::model::IconKind;
 use eframe::egui;
 use std::collections::HashMap;
 
-/// 列表行图标列边长（设计稿 v2：`.row .icon` 20×20）。
-pub(crate) const ICON_CELL: f32 = 20.0;
+/// 列表行图标列边长（设计稿 v2 `.row .icon` 20×20 → 真机反馈 2026-09-12
+/// 放大到 24×24，恰好填满行内容区 40−16）。
+pub(crate) const ICON_CELL: f32 = 24.0;
 
-/// glyph 图标字号（设计稿 v2：`.row .icon` font-size 16px）。
-pub(crate) const ICON_GLYPH_PT: f32 = 16.0;
+/// glyph 图标字号（随单元格放大：20/24 比例，原 16/20）。
+pub(crate) const ICON_GLYPH_PT: f32 = 20.0;
 
 /// path 图标解码失败时的占位 glyph（Segoe MDL2 "Page" U+E7C3；
 /// 设计稿 04：加载失败回落占位 glyph）。
@@ -145,10 +146,10 @@ impl PaletteApp {
     }
 }
 
-/// 渲染 20×20 图标单元格（行首固定列，垂直居中）。
+/// 渲染 24×24 图标单元格（行首固定列，垂直居中）。
 /// - `None` / [`IconView::Empty`]：透明占位（保持图标列对齐）；
 /// - [`IconView::Glyph`]：码位文本（图标字体渲染，失败占位同此）；
-/// - [`IconView::Texture`]：纹理贴满 20×20（UV 缩放，不裁剪、不变形）。
+/// - [`IconView::Texture`]：纹理贴满 24×24（UV 缩放，不裁剪、不变形）。
 pub(crate) fn draw_icon_cell(ui: &mut egui::Ui, icon: Option<&IconView>) {
     let (rect, _) = ui.allocate_exact_size(egui::vec2(ICON_CELL, ICON_CELL), egui::Sense::hover());
     let Some(icon) = icon else {
@@ -172,7 +173,7 @@ pub(crate) fn draw_icon_cell(ui: &mut egui::Ui, icon: Option<&IconView>) {
             if *dark && ui.visuals().dark_mode {
                 let bg = egui::Rect::from_center_size(
                     rect.center(),
-                    egui::vec2(ICON_CELL + 4.0, ICON_CELL + 4.0),
+                    egui::vec2(ICON_CELL + 2.0, ICON_CELL + 2.0),
                 );
                 ui.painter().rect_filled(
                     bg,

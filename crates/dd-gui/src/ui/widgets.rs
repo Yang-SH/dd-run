@@ -64,6 +64,10 @@ pub(crate) fn keys_width(ui: &egui::Ui, lang: Lang) -> f32 {
 /// hover = `row_hover` 底 + glyph text2→text 提亮；按下 = `row_pressed`；
 /// PointingHand 光标（导航语义——齿轮/返回键均为"跳转到另一视图"）。
 /// 返回是否被点击。
+///
+/// 真机 2026-09-12 修订：`Response::hovered()` 在本应用上不生效（列表行
+/// 同款几何判定 [`Ui::rect_contains_pointer`] 已验证有效——两者同为 egui
+/// hover 链路，唯独后者工作），悬停/按下态改用几何判定。
 pub(crate) fn draw_icon_button(
     ui: &mut egui::Ui,
     p: &theme::Palette,
@@ -72,13 +76,18 @@ pub(crate) fn draw_icon_button(
     shrink: f32,
 ) -> bool {
     let (rect, resp) = ui.allocate_exact_size(egui::vec2(size, size), egui::Sense::click());
-    let resp = resp.on_hover_cursor(egui::CursorIcon::PointingHand);
+    let hovered_now = ui.rect_contains_pointer(rect);
+    if hovered_now {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+    }
     // 三态底：hover 底缩进 `shrink`（返回键 28×28 热区视觉 24 的历史口径），
-    // 齿轮 24×24 恰好满格传 0。
-    let fill = if resp.is_pointer_button_down_on() {
+    // 齿轮 24×24 恰好满格传 0。按下态仅在指针仍位于按钮上时呈现。
+    // B7 修订：亮色 row_hover(#f5f5f5) 与底部同灰阶不可辨 → control_hover。
+    let pressed_now = hovered_now && resp.is_pointer_button_down_on();
+    let fill = if pressed_now {
         Some((p.row_pressed, shrink))
-    } else if resp.hovered() {
-        Some((p.row_hover, shrink))
+    } else if hovered_now {
+        Some((p.control_hover, shrink))
     } else {
         None
     };
@@ -86,7 +95,7 @@ pub(crate) fn draw_icon_button(
         ui.painter()
             .rect_filled(rect.shrink(inset), egui::CornerRadius::same(4), fill);
     }
-    let fg = if resp.hovered() || resp.is_pointer_button_down_on() {
+    let fg = if hovered_now || pressed_now {
         p.text
     } else {
         p.text2

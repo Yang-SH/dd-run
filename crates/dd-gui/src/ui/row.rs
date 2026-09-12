@@ -128,6 +128,7 @@ pub(crate) fn draw_item_row(
         .on_hover_cursor(egui::CursorIcon::Default);
     // B5：信息不丢——整行 hover tooltip。标题被截断时给全文；副标题
     // （应用 = exe/lnk 路径）行内已不渲染，在此展示。两者都没有则不挂。
+    // B7 修订：tooltip 改几何判定（on_hover_text 依赖的 hovered() 链路失效）。
     let tip = match (title_truncated, item.subtitle.is_empty()) {
         (true, false) => format!("{}\n{}", item.title, item.subtitle),
         (true, true) => item.title.clone(),
@@ -137,6 +138,9 @@ pub(crate) fn draw_item_row(
     if tip.is_empty() {
         hit_resp
     } else {
-        hit_resp.on_hover_text(tip)
+        if ui.rect_contains_pointer(frame_resp.rect) {
+            hit_resp.show_tooltip_text(tip);
+        }
+        hit_resp
     }
 }

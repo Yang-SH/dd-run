@@ -177,7 +177,13 @@ impl PaletteApp {
             let label = crate::text::t(self.lang_effective, label_key);
             let (item_rect, resp) =
                 nav_ui.allocate_exact_size(egui::vec2(NAV_W, NAV_ITEM_H), egui::Sense::click());
-            let resp = resp.on_hover_cursor(egui::CursorIcon::PointingHand);
+            // B7 真机修订（2026-09-12）：`Response::hovered()` 在本应用不生效，
+            // 悬停/光标改用与列表行同款的几何判定（rect_contains_pointer）。
+            let hovered_now = nav_ui.rect_contains_pointer(item_rect);
+            if hovered_now && !selected {
+                nav_ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+            }
+            let pressed_now = hovered_now && resp.is_pointer_button_down_on();
             let radius = egui::CornerRadius::same(4);
             // B7 悬停语言：选中项不铺 hover（避免盖过选中语义，沿用原分支）；
             // 未选项 hover = row_hover、按下 = row_pressed。
@@ -185,12 +191,14 @@ impl PaletteApp {
                 nav_ui
                     .painter()
                     .rect_filled(item_rect, radius, p.row_selected);
-            } else if resp.is_pointer_button_down_on() {
+            } else if pressed_now {
                 nav_ui
                     .painter()
                     .rect_filled(item_rect, radius, p.row_pressed);
-            } else if resp.hovered() {
-                nav_ui.painter().rect_filled(item_rect, radius, p.row_hover);
+            } else if hovered_now {
+                nav_ui
+                    .painter()
+                    .rect_filled(item_rect, radius, p.control_hover);
             }
             if selected {
                 // 左缘 3×16 accent 指示条（radius 2，垂直居中）——与列表行选中
@@ -207,7 +215,7 @@ impl PaletteApp {
             }
             // 图标 16px：内边距 12 + 槽位 16 居中；文字：图标右 12 起（左+40）。
             // B7：未选项 hover 时图标/文字 text2→text 提亮。
-            let fg = if selected || resp.hovered() {
+            let fg = if selected || hovered_now {
                 p.text
             } else {
                 p.text2
@@ -830,9 +838,14 @@ impl PaletteApp {
                     egui::vec2(card.available_width(), 32.0),
                     egui::Sense::hover(),
                 );
-                if row_resp.hovered() {
-                    card.painter()
-                        .rect_filled(row_rect, egui::CornerRadius::same(4), p.row_hover);
+                // B7 修订：几何判定 + control_hover（亮色 row_hover 与卡底不可辨）
+                let hovered_now = card.rect_contains_pointer(row_rect);
+                if hovered_now {
+                    card.painter().rect_filled(
+                        row_rect,
+                        egui::CornerRadius::same(4),
+                        p.control_hover,
+                    );
                 }
                 let mut row_ui = card.new_child(
                     egui::UiBuilder::new()
@@ -867,8 +880,9 @@ impl PaletteApp {
                         remove_name = Some(e.name.clone());
                     }
                 });
-                if template_truncated {
-                    row_resp.on_hover_text(e.template.clone());
+                // tooltip 同样转几何判定（on_hover_text 依赖的 hovered() 链路失效）
+                if template_truncated && hovered_now {
+                    row_resp.show_tooltip_text(e.template.clone());
                 }
             }
             if enabled.is_empty() {
@@ -1101,13 +1115,16 @@ impl PaletteApp {
                         // 被尝试的命令路径，熔断带退出码与 stderr 末行（2026-09-10 增补）。
                         if let Some(reason) = &row.failed_reason {
                             ui.add_space(2.0);
-                            ui.add(
+                            let reason_resp = ui.add(
                                 egui::Label::new(
                                     egui::RichText::new(reason).size(11.0).color(p.danger),
                                 )
                                 .truncate(),
-                            )
-                            .on_hover_text(reason.clone());
+                            );
+                            // B7 修订：tooltip 几何判定（on_hover_text 链路失效）
+                            if ui.rect_contains_pointer(reason_resp.rect) {
+                                reason_resp.show_tooltip_text(reason.clone());
+                            }
                         }
                     });
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -1326,10 +1343,11 @@ pub(crate) fn draw_radio_card(
     } else {
         ui.painter().rect_filled(rect, radius, p.input_fill);
     }
-    // hover（未选）：叠加 row_hover 暗示可点
-    if !selected && resp.hovered() {
+    // hover（未选）：叠加 control_hover 暗示可点（B7 修订：几何判定 +
+    // 亮色可辨灰阶）
+    if !selected && ui.rect_contains_pointer(rect) {
         ui.painter()
-            .rect_filled(rect.shrink(1.0), radius, p.row_hover);
+            .rect_filled(rect.shrink(1.0), radius, p.control_hover);
     }
     // 边框（B2：2px 选中边框为线状小元素，走 accent_stroke）
     let stroke = if selected {
@@ -1393,6 +1411,8 @@ pub(crate) fn draw_radio_card(
 /// 关 = row_hover 底（命令语义控件，光标保持默认箭头）。返回是否被点击。
 pub(crate) fn draw_switch_fn(ui: &mut egui::Ui, on: bool, p: &theme::Palette) -> bool {
     let (rect, resp) = ui.allocate_exact_size(egui::vec2(40.0, 20.0), egui::Sense::click());
+    // B7 真机修订（2026-09-12）：hovered() 不生效，几何判定同列表行。
+    let hovered_now = ui.rect_contains_pointer(rect);
     let radius = egui::CornerRadius::same(10);
     let knob_cx = if on {
         rect.right() - 2.0 - 8.0
@@ -1400,7 +1420,7 @@ pub(crate) fn draw_switch_fn(ui: &mut egui::Ui, on: bool, p: &theme::Palette) ->
         rect.left() + 2.0 + 8.0
     };
     if on {
-        let fill = if resp.hovered() {
+        let fill = if hovered_now {
             p.accent_hover
         } else {
             p.accent
@@ -1412,16 +1432,25 @@ pub(crate) fn draw_switch_fn(ui: &mut egui::Ui, on: bool, p: &theme::Palette) ->
             egui::Color32::WHITE,
         );
     } else {
-        let fill = if resp.hovered() {
-            p.row_hover
+        let fill = if hovered_now {
+            p.control_hover
         } else {
             p.input_fill
         };
         ui.painter().rect_filled(rect, radius, fill);
+        // 关态悬停：描边转 accent_stroke（input_fill 与 control_hover 同为
+        // 浅灰、仅靠填充不可辨，描边变化提供明确反馈）
         ui.painter().rect_stroke(
             rect,
             radius,
-            egui::Stroke::new(1.0, p.border_strong),
+            egui::Stroke::new(
+                1.0,
+                if hovered_now {
+                    p.accent_stroke
+                } else {
+                    p.border_strong
+                },
+            ),
             egui::StrokeKind::Inside,
         );
         ui.painter()
@@ -1456,10 +1485,12 @@ fn fluent_button_sized(
     let w = (text_width(ui, text, font.clone()) + 2.0 * pad_x).max(h + 8.0);
     let (rect, resp) = ui.allocate_exact_size(egui::vec2(w, h), egui::Sense::click());
     let radius = egui::CornerRadius::same(4);
-    let fill = if resp.is_pointer_button_down_on() {
+    // B7 修订：几何判定 + control_hover（亮色 row_hover 与 card 底不可辨）
+    let hovered_now = ui.rect_contains_pointer(rect);
+    let fill = if hovered_now && resp.is_pointer_button_down_on() {
         p.row_pressed
-    } else if resp.hovered() {
-        p.row_hover
+    } else if hovered_now {
+        p.control_hover
     } else {
         p.card
     };
@@ -1547,12 +1578,14 @@ fn draw_fluent_dropdown(
     // ── 按钮：rect_filled + 描边 + 文字 + ▼ ──
     let (rect, resp) = ui.allocate_exact_size(egui::vec2(width, h), egui::Sense::click());
     let radius = egui::CornerRadius::same(4);
+    // B7 修订：几何判定 + control_hover
+    let hovered_now = ui.rect_contains_pointer(rect);
     let (fill, text_color, arrow_color) = if !enabled {
         (p.card, p.text3, p.text3)
-    } else if resp.is_pointer_button_down_on() {
+    } else if hovered_now && resp.is_pointer_button_down_on() {
         (p.row_pressed, p.text, p.text2)
-    } else if resp.hovered() {
-        (p.row_hover, p.text, p.text2)
+    } else if hovered_now {
+        (p.control_hover, p.text, p.text2)
     } else {
         (p.card, p.text, p.text2)
     };
@@ -1613,8 +1646,8 @@ fn draw_fluent_dropdown(
                     ui.allocate_exact_size(egui::vec2(item_w, 28.0), egui::Sense::click());
                 let item_fill = if is_sel {
                     p.row_selected
-                } else if item_resp.hovered() {
-                    p.row_hover
+                } else if ui.rect_contains_pointer(item_rect) {
+                    p.control_hover
                 } else {
                     egui::Color32::TRANSPARENT
                 };

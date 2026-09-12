@@ -93,6 +93,12 @@ pub struct Palette {
     /// 暗 brand[80] #2886de / 亮 brand[70] #115ea3——与 colorBrandBackgroundHover
     /// 同阶，亮暗取值互换同 v4.13 口径）
     pub accent_hover: Color32,
+    /// 小控件悬停底（B7 真机修订 2026-09-12）：齿轮/返回键/导航项/设置行等
+    /// 小面积控件的 hover 填充。亮色主题 row_hover(#f5f5f5) 与面板/卡片底
+    /// 同灰阶不可辨（真机反馈"没有悬浮效果"的根因），取 grey[94] #f0f0f0
+    /// ——介于 bg1Hover(#f5f5f5) 与 bg1Selected(#ebebeb) 之间，与选中态可区分；
+    /// 暗色沿用 row_hover #3d3d3d（对 #292929 明显）。
+    pub control_hover: Color32,
     /// 小面积强调色（B2，v5.2 方案）：3px 选中指示条 / 2px 聚焦下划线 /
     /// Spinner 弧 / 导航指示条 / radio-card 选中边框等**线状小元素**专用。
     /// Fluent colorBrandStroke1 语义：暗 = brand[100] #479ef5（对 #292929
@@ -135,6 +141,7 @@ impl Palette {
             accent: rgb(0x11_5e_a3), // brand[70] · colorBrandBackground（暗；#479ef5=brand[100] 属 Foreground/Compound 系）
             accent_hover: rgb(0x28_86_de), // brand[80] · colorBrandBackgroundHover（暗，v4 CSS --accent-hover）
             accent_stroke: rgb(0x47_9e_f5), // brand[100] · colorBrandStroke1（暗，2026-09 按 @fluentui/tokens 口径）
+            control_hover: rgb(0x3d_3d_3d), // = row_hover（暗色对 #292929 足够可辨）
             success: rgb(0x54_b0_54), // green[tint30] · colorStatusSuccessForeground1（暗，2026-09 按 @fluentui/tokens 核实）
             danger: rgb(0xdc_62_6d),  // cranberry[tint30] · colorStatusDangerForeground1（暗）
             row_hover: rgb(0x3d_3d_3d),
@@ -162,6 +169,7 @@ impl Palette {
             accent: rgb(0x0f_6c_bd),
             accent_hover: rgb(0x11_5e_a3), // brand[70] · colorBrandBackgroundHover（亮，v4 CSS --accent-hover）
             accent_stroke: rgb(0x0f_6c_bd), // brand[80] · colorBrandStroke1（亮 = 原 --accent 值不变）
+            control_hover: rgb(0xf0_f0_f0), // grey[94]（亮：介于 bg1Hover #f5f5f5 与 bg1Selected #ebebeb 之间）
             success: rgb(0x0e_70_0e), // green[shade10] · colorStatusSuccessForeground1（亮；#107c10 实为 primary）
             danger: rgb(0xb1_0e_1c), // cranberry[shade10] · colorStatusDangerForeground1（亮；#c50f1f 实为 primary）
             row_hover: rgb(0xf5_f5_f5),
@@ -410,6 +418,11 @@ mod tests {
             rgb(0x47_9e_f5),
             "--accent-stroke 暗 = brand[100]（colorBrandStroke1）"
         );
+        assert_eq!(
+            p.control_hover,
+            rgb(0x3d_3d_3d),
+            "--control-hover 暗 = row_hover（bg1Hover）"
+        );
         assert_eq!(p.success, rgb(0x54_b0_54), "--success 暗 = green[tint30]");
         assert_eq!(p.danger, rgb(0xdc_62_6d), "--danger 暗 = cranberry[tint30]");
         assert_eq!(
@@ -475,6 +488,11 @@ mod tests {
             p.accent_stroke,
             rgb(0x0f_6c_bd),
             "--accent-stroke 亮 = brand[80]（colorBrandStroke1，= 原 --accent 值）"
+        );
+        assert_eq!(
+            p.control_hover,
+            rgb(0xf0_f0_f0),
+            "--control-hover 亮 = grey[94]（可辨且区别于 selected #ebebeb）"
         );
         assert_eq!(p.success, rgb(0x0e_70_0e), "--success 亮 = green[shade10]");
         assert_eq!(

@@ -142,10 +142,10 @@ pub(crate) fn draw_loading_state(
             egui::Sense::hover(),
         );
         let cy = row.center().y;
-        // 图标块 20×20 圆角 6
+        // 图标块 24×24 圆角 6（随结果行 ICON_CELL 放大到 24 同步，2026-09-12）
         let icon_rect = egui::Rect::from_min_size(
-            egui::pos2(row.min.x + 8.0, cy - 10.0),
-            egui::vec2(20.0, 20.0),
+            egui::pos2(row.min.x + 8.0, cy - 12.0),
+            egui::vec2(24.0, 24.0),
         );
         ui.painter()
             .rect_filled(icon_rect, egui::CornerRadius::same(6), c);

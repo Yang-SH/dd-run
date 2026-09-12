@@ -202,8 +202,10 @@ pub(crate) fn draw_dialog_button(
         egui::Id::new(("dd-dialog-btn", label)),
         egui::Sense::click(),
     );
-    let hover_fill = theme::Palette::of(ui.visuals().dark_mode).row_hover;
-    let bg = if resp.hovered() && stroked {
+    let p = theme::Palette::of(ui.visuals().dark_mode);
+    // B7 修订：几何判定 + control_hover（亮色 row_hover 与卡底不可辨）
+    let hover_fill = p.control_hover;
+    let bg = if ui.rect_contains_pointer(rect) && stroked {
         hover_fill
     } else {
         fill
@@ -214,10 +216,7 @@ pub(crate) fn draw_dialog_button(
         ui.painter().rect_stroke(
             rect,
             egui::CornerRadius::same(4),
-            egui::Stroke::new(
-                1.0,
-                theme::Palette::of(ui.visuals().dark_mode).border_strong,
-            ),
+            egui::Stroke::new(1.0, p.border_strong),
             egui::StrokeKind::Inside,
         );
     }
