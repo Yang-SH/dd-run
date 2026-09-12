@@ -1,0 +1,857 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>dd-run UI 优化方案 v5.2 — 八批增量优化效果页</title>
+<style>
+  /* ============================================================
+     v5.1 优化方案效果页
+     基线：cmdpal-ui-mockups.html v4.13（Fluent 2 alias token），
+     全部 token 原样沿用；本页只新增 1 个 token（--accent-stroke，B2），
+     不改任何既有值。默认暗色，右上角可切亮色。
+     ============================================================ */
+  :root[data-theme="dark"] {
+    color-scheme: dark;
+    --page: #141414;
+    --panel: #292929;
+    --panel-2: #1f1f1f;
+    --card: #333333;
+    --border: #525252;
+    --border-strong: #666666;
+    --text: #ffffff;
+    --text-2: #d6d6d6;
+    --text-3: #adadad;
+    --text-4: #999999;
+    --accent: #115ea3;
+    --accent-hover: #2886de;
+    --accent-stroke: #479ef5;      /* v5 新增 · B2：小面积强调（暗 = brand[100]） */
+    --success: #54b054;
+    --danger: #dc626d;
+    --row-hover: #3d3d3d;
+    --row-selected: #383838;
+    --input-fill: #141414;
+    --chip-bg: #333333;
+    --shadow: 0 32px 64px rgba(0,0,0,.28), 0 0 2px rgba(0,0,0,.20);
+    --shadow-16: 0 8px 16px rgba(0,0,0,.28), 0 0 2px rgba(0,0,0,.20);
+  }
+  :root[data-theme="light"] {
+    color-scheme: light;
+    --page: #f0f0f0;
+    --panel: #ffffff;
+    --panel-2: #fafafa;
+    --card: #fafafa;
+    --border: #e0e0e0;
+    --border-strong: #d1d1d1;
+    --text: #242424;
+    --text-2: #424242;
+    --text-3: #616161;
+    --text-4: #707070;
+    --accent: #0f6cbd;
+    --accent-hover: #115ea3;
+    --accent-stroke: #0f6cbd;      /* B2：亮色 = brand[80]，与现值一致不变 */
+    --success: #0e700e;
+    --danger: #b10e1c;
+    --row-hover: #f5f5f5;
+    --row-selected: #ebebeb;
+    --input-fill: #f5f5f5;
+    --chip-bg: #f5f5f5;
+    --shadow: 0 32px 64px rgba(0,0,0,.24), 0 0 8px rgba(0,0,0,.20);
+    --shadow-16: 0 8px 16px rgba(0,0,0,.14), 0 0 2px rgba(0,0,0,.12);
+  }
+  * { box-sizing: border-box; margin: 0; }
+  body {
+    background: var(--page);
+    color: var(--text);
+    font-family: "Segoe UI Variable Text", "Segoe UI", "Microsoft YaHei UI", "Microsoft YaHei", sans-serif;
+    font-size: 14px; line-height: 1.5;
+    padding: 40px 24px 80px;
+    transition: background .2s ease, color .2s ease;
+  }
+  .wrap { max-width: 1120px; margin: 0 auto; }
+
+  /* ── 页头 ── */
+  header { display: flex; align-items: baseline; gap: 16px; flex-wrap: wrap; margin-bottom: 8px; }
+  h1 { font-size: 22px; font-weight: 600; }
+  header .ver { color: var(--text-3); font-size: 13px; }
+  .theme-btn {
+    margin-left: auto; font: inherit; font-size: 13px; color: var(--text-2);
+    background: var(--card); border: 1px solid var(--border); border-radius: 6px;
+    padding: 5px 14px; cursor: pointer;
+  }
+  .theme-btn:hover { background: var(--row-hover); }
+  .lede { color: var(--text-3); font-size: 13px; max-width: 76ch; margin-bottom: 28px; }
+  h2 { font-size: 17px; font-weight: 600; margin-bottom: 6px; }
+  .detail > p { color: var(--text-3); font-size: 13px; margin-bottom: 16px; max-width: 84ch; }
+  .detail { margin-top: 48px; }
+
+  /* ── 对比区 ── */
+  .compare { display: flex; gap: 40px; flex-wrap: wrap; justify-content: center; align-items: flex-start; }
+  .col { width: 460px; max-width: 100%; }
+  .col-head { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; padding-left: 2px; }
+  .col-head .tag {
+    font-size: 12px; font-weight: 600; padding: 2px 10px; border-radius: 10px;
+    border: 1px solid var(--border); color: var(--text-3);
+  }
+  .col-head .tag.new { color: var(--accent-stroke); border-color: var(--accent-stroke); }
+  .col-head .note { font-size: 12px; color: var(--text-4); }
+
+  /* ── 面板复刻（v4 几何：搜索栏 40 / 行 40 / 页脚 36）── */
+  .panel {
+    width: 460px; max-width: 100%;
+    background: var(--panel); border: 1px solid var(--border-strong);
+    border-radius: 8px; box-shadow: var(--shadow);
+    overflow: hidden; position: relative;
+  }
+  .panel .top { padding: 8px 12px 4px; }
+  .searchbar {
+    position: relative; height: 40px; border-radius: 4px; background: var(--input-fill);
+    display: flex; align-items: center; gap: 8px; padding: 0 12px;
+  }
+  .searchbar .glyph { font-family: "Segoe Fluent Icons", "Segoe MDL2 Assets"; font-size: 16px; color: var(--text-2); }
+  .searchbar input {
+    flex: 1; background: none; border: 0; outline: 0; color: var(--text);
+    font: inherit; font-size: 14px; caret-color: var(--text);
+  }
+  .searchbar input::placeholder { color: var(--text-3); }
+  .searchbar .underline {
+    position: absolute; left: 0; bottom: 0; height: 2px; border-radius: 2px;
+    background: var(--accent);
+  }
+  .panel.before .searchbar .underline { width: 100%; }
+  .panel.after  .searchbar .underline { width: 100%; background: var(--accent-stroke);
+    animation: underline-in .24s ease-out both; }
+  @keyframes underline-in { from { width: 0; } to { width: 100%; } }
+
+  .results { padding: 6px 6px 8px; max-height: 302px; overflow-y: auto; }
+  /* B3 滚动条对比：before = 现状 egui 默认粗条；after = Fluent 细条 */
+  .panel.before .results { scrollbar-width: auto; scrollbar-color: var(--border-strong) transparent; }
+  .panel.before .results::-webkit-scrollbar { width: 12px; }
+  .panel.before .results::-webkit-scrollbar-thumb { background: var(--border-strong); border-radius: 0; }
+  .panel.before .results::-webkit-scrollbar-track { background: transparent; }
+  .panel.after .results { scrollbar-width: thin; scrollbar-color: color-mix(in srgb, var(--text-3) 55%, transparent) transparent; }
+  .panel.after .results::-webkit-scrollbar { width: 4px; }
+  .panel.after .results::-webkit-scrollbar-thumb { background: color-mix(in srgb, var(--text-3) 55%, transparent); border-radius: 2px; }
+  .panel.after .results::-webkit-scrollbar-thumb:hover { background: color-mix(in srgb, var(--text-3) 85%, transparent); }
+  .panel.after .results::-webkit-scrollbar-track { background: transparent; }
+
+  .section-label { font-size: 12px; color: var(--text-3); margin: 12px 10px 4px; }
+  .panel.before .section-label { font-weight: 400; }           /* 现状：egui .strong() 仅变色，字重无法表达 */
+  .panel.after  .section-label { font-weight: 600; }           /* B1：semibold 字体族真实 600 */
+  .row {
+    position: relative; height: 40px; border-radius: 6px;
+    display: flex; align-items: center; gap: 12px; padding: 0 10px 0 8px;
+  }
+  .row:hover { background: var(--row-hover); }
+  .row.selected { background: var(--row-selected); }
+  .row.selected::before {           /* B2：选中指示条 */
+    content: ""; position: absolute; left: 0; top: 8px; bottom: 8px; width: 3px; border-radius: 2px;
+    background: var(--accent);
+  }
+  .panel.after .row.selected::before { background: var(--accent-stroke); }
+  .icon { width: 20px; height: 20px; border-radius: 5px; flex: none;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 11px; font-weight: 600; color: #fff; }
+  .i-calc { background: #4f6bed; } .i-cmd { background: #4a4a4a; }
+  .i-code { background: #0f6cbd; } .i-set { background: #5d5d5d; }
+  .i-note { background: #2f7d5d; } .i-web  { background: #0f6cbd; }
+  .row .name { font-size: 14px; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; flex: 1; }
+  .panel.before .row .name { flex: 0 1 auto; font-weight: 400; }   /* 现状：标题后仍有副标题列 */
+  .panel.after  .row .name { font-weight: 500; }                   /* B1 + B5：标题独占中列 */
+  .row .desc { font-size: 12px; color: var(--text-3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; flex: 1; }
+  .row .cat { font-size: 12px; color: var(--text-3); flex: none; margin-left: auto; }
+
+  /* B5 / B4：tooltip——行悬停显示被移除的副标题 / 截断标题全文（仅 after）*/
+  .panel.after .row[data-tip]:hover::after,
+  .panel.after .row .name[data-full]:hover::after {
+    content: attr(data-tip);
+    position: absolute; left: 40px; top: calc(100% + 2px); z-index: 3;
+    background: var(--card); border: 1px solid var(--border); border-radius: 4px;
+    box-shadow: var(--shadow-16);
+    color: var(--text-2); font-size: 12px; font-weight: 400;
+    padding: 4px 10px; white-space: nowrap; pointer-events: none;
+  }
+  .panel.after .row .name[data-full]:hover::after { content: attr(data-full); }
+
+  .footer {
+    display: flex; align-items: center; gap: 16px;
+    background: var(--panel-2); border-top: 1px solid var(--border);
+    padding: 8px 16px; height: 36px; font-size: 12px; color: var(--text-2);
+  }
+  .footer .gear { font-family: "Segoe Fluent Icons", "Segoe MDL2 Assets"; font-size: 16px; color: var(--text-2); flex: none; }
+  .footer .action { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .footer .keys { margin-left: auto; display: flex; gap: 16px; align-items: center; flex: none; color: var(--text-3); }
+  .keycap {
+    display: inline-block; min-width: 20px; text-align: center;
+    border: 1px solid var(--border); border-bottom-width: 2px; border-radius: 5px;
+    background: var(--chip-bg); color: var(--text-2);
+    font-size: 12px; line-height: 18px; padding: 0 8px;
+  }
+
+  /* ── 批次标注徽标 ── */
+  .ann {
+    position: absolute; z-index: 4; width: 18px; height: 18px; border-radius: 9px;
+    background: var(--accent-stroke); color: #fff; font-size: 11px; font-weight: 600;
+    display: flex; align-items: center; justify-content: center;
+    box-shadow: 0 0 0 2px var(--panel); cursor: default;
+  }
+  .a1 { top: 128px; right: 10px; }    /* 行名字重 */
+  .a2 { top: 205px; right: 6px; }     /* 选中指示条 */
+  .a3 { top: 96px; right: 6px; }      /* 滚动条 */
+  .a4 { top: 34px; right: 6px; }      /* 聚焦下划线 */
+  @media (max-width: 1040px) { .ann { right: 4px !important; } }
+
+  /* ── B5 行解剖图 ── */
+  .anatomy { display: flex; gap: 40px; flex-wrap: wrap; margin-top: 4px; }
+  .anat-box { flex: 1; min-width: 300px; max-width: 440px; }
+  .anat-box p { font-size: 12px; color: var(--text-4); margin-bottom: 8px; }
+  .anat-row {
+    height: 40px; border-radius: 6px; background: var(--panel);
+    border: 1px solid var(--border); display: flex; align-items: center;
+    gap: 12px; padding: 0 10px 0 8px; font-size: 14px;
+  }
+  .anat-row .lbl { font-size: 11px; color: var(--text-4); font-family: Cascadia Mono, Consolas, monospace; }
+  .seg-note { font-size: 12px; color: var(--text-3); margin: 4px 0 0; }
+  .seg-note b { color: var(--text-2); font-weight: 600; }
+
+  /* ── B6 设置页演示 ── */
+  .set-grid { display: flex; gap: 40px; flex-wrap: wrap; align-items: flex-start; }
+  .set-col { flex: 1; min-width: 300px; max-width: 460px; }
+  .set-col p.cap { font-size: 12px; color: var(--text-4); margin-bottom: 8px; }
+  .set-card {
+    background: var(--card); border: 1px solid var(--border); border-radius: 8px;
+    padding: 12px; margin-bottom: 12px;
+  }
+  .set-card .card-head { display: flex; gap: 12px; margin-bottom: 10px; }
+  .set-card .card-head .ic { font-family: "Segoe Fluent Icons", "Segoe MDL2 Assets"; font-size: 16px; color: var(--text-2); }
+  .set-card .card-head .t { font-size: 14px; color: var(--text); }
+  .set-card .card-head .d { font-size: 12px; color: var(--text-3); }
+  .radio-row { display: flex; gap: 8px; }
+  .radio-card {
+    flex: 1; border-radius: 4px; padding: 8px; text-align: center; cursor: pointer;
+    border: 1px solid var(--border-strong); background: var(--input-fill); font-size: 12px; color: var(--text-2);
+  }
+  .radio-card.sel { border: 2px solid var(--accent-stroke); background: color-mix(in srgb, var(--accent) 14%, var(--input-fill)); color: var(--text); }
+  .radio-card .sw { height: 34px; border-radius: 3px; margin-bottom: 6px; border: 1px solid rgba(128,128,128,.35); display: flex; overflow: hidden; }
+  .radio-card .sw i { flex: 1; }
+  /* 迷你面板缩略图（B6④）：搜索栏条 + 两行条 */
+  .mini { height: 34px; border-radius: 3px; margin-bottom: 6px; border: 1px solid rgba(128,128,128,.35);
+    background: var(--panel); padding: 4px 5px; display: flex; flex-direction: column; gap: 3px; }
+  .mini .m-bar { height: 6px; border-radius: 2px; background: var(--input-fill); border: 1px solid var(--border); }
+  .mini .m-row { height: 5px; border-radius: 2px; background: color-mix(in srgb, var(--text-3) 45%, transparent); width: 70%; }
+  .mini .m-row.r2 { width: 50%; }
+  .mini .m-row.sel { background: var(--accent-stroke); width: 62%; }
+  .ext-line { display: flex; align-items: center; gap: 12px; padding: 6px 0 6px 0; border-top: 1px solid var(--border); }
+  .ext-line:first-of-type { border-top: 0; }
+  .ext-line .nm { font-size: 14px; color: var(--text); }
+  .ext-line .meta { font-size: 10px; color: var(--text-3); font-family: Cascadia Mono, Consolas, monospace; }
+  .ext-line .err { font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; flex: 1; }
+  .err.raw  { color: #c42b1c; }                 /* B6① 现状：裸色值，亮色主题下过艳 */
+  .err.tok  { color: var(--danger); }           /* B6① 修复：p.danger 随主题 */
+  .switch { margin-left: auto; width: 40px; height: 20px; border-radius: 10px; flex: none; position: relative; border: 1px solid var(--border-strong); background: var(--input-fill); }
+  .switch::after { content: ""; position: absolute; top: 2px; left: 2px; width: 14px; height: 14px; border-radius: 7px; background: var(--text-2); }
+  .switch.on { background: var(--accent); border-color: var(--accent); }
+  .switch.on::after { left: auto; right: 2px; background: #fff; }
+  .btn-s { font-size: 12px; border: 1px solid var(--border-strong); border-radius: 4px; padding: 2px 10px; color: var(--text-2); background: var(--card); flex: none; }
+  .dot { width: 6px; height: 6px; border-radius: 3px; flex: none; }
+
+  /* ── 表格 ── */
+  table { border-collapse: collapse; width: 100%; font-size: 13px; }
+  th, td { text-align: left; vertical-align: top; padding: 10px 12px; border: 1px solid var(--border); }
+  th { background: var(--panel-2); font-weight: 600; color: var(--text-2); white-space: nowrap; }
+  td code, p code {
+    font-family: Cascadia Mono, Consolas, monospace; font-size: 12px;
+    background: var(--input-fill); border: 1px solid var(--border); border-radius: 3px; padding: 1px 5px;
+  }
+  td .sw { display: inline-block; width: 12px; height: 12px; border-radius: 3px; vertical-align: -1px; margin-right: 5px; border: 1px solid rgba(128,128,128,.4); }
+
+  /* 色板对比条 */
+  .swatches { display: flex; gap: 12px; flex-wrap: wrap; margin: 20px 0 4px; }
+  .sw-card { background: var(--panel); border: 1px solid var(--border-strong); border-radius: 8px; padding: 14px 16px; min-width: 210px; }
+  .sw-card h3 { font-size: 12px; font-weight: 600; color: var(--text-3); margin-bottom: 10px; }
+  .sw-line { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--text-2); margin: 6px 0; }
+  .sw-line .chip { width: 40px; height: 16px; border-radius: 3px; border: 1px solid rgba(128,128,128,.4); }
+  .sw-line.dim { color: var(--text-4); text-decoration: line-through; }
+
+  /* 聚焦动画演示 */
+  .demo { margin-top: 20px; display: flex; gap: 40px; flex-wrap: wrap; }
+  .demo-box { flex: 1; min-width: 300px; max-width: 460px; }
+  .demo-box p { font-size: 12px; color: var(--text-4); margin-bottom: 8px; }
+  .demo-box .searchbar input:focus ~ .underline,
+  .demo-box .searchbar:focus-within .underline { width: 100%; }
+  .demo-box .searchbar .underline { width: 0; background: var(--accent-stroke); transition: width .12s ease-out; }
+
+  /* ── B7 悬停演示 ── */
+  .hov-grid { display: flex; gap: 40px; flex-wrap: wrap; align-items: flex-start; }
+  .hov-col { flex: 1; min-width: 280px; max-width: 440px; }
+  .hov-col p.cap { font-size: 12px; color: var(--text-4); margin-bottom: 8px; }
+  .hov-strip { background: var(--panel); border: 1px solid var(--border-strong); border-radius: 8px;
+    padding: 14px 16px; display: flex; gap: 14px; align-items: center; }
+  .gear {
+    width: 24px; height: 24px; border-radius: 4px; flex: none;
+    display: flex; align-items: center; justify-content: center;
+    font-family: "Segoe Fluent Icons", "Segoe MDL2 Assets"; font-size: 16px; color: var(--text-2);
+    cursor: default;
+  }
+  .gear.after { cursor: pointer; transition: background .08s, color .08s; }
+  .gear.after:hover { background: var(--row-hover); color: var(--text); }
+  .gear.after:active { background: var(--row-selected); }
+  .nav-demo { background: var(--panel); border: 1px solid var(--border-strong); border-radius: 8px; padding: 8px; width: 168px; }
+  .nav-item { height: 36px; border-radius: 4px; display: flex; align-items: center; gap: 12px;
+    padding: 0 12px 0 20px; font-size: 14px; color: var(--text-2); cursor: default; }
+  .nav-item .nic { font-family: "Segoe Fluent Icons", "Segoe MDL2 Assets"; font-size: 16px; }
+  .nav-item.after { cursor: pointer; transition: background .08s, color .08s; }
+  .nav-item.after:hover { background: var(--row-hover); color: var(--text); }
+  .nav-item.after:hover .nic { color: var(--text); }
+  .nav-item.after:active { background: var(--row-selected); }
+  .nav-item.sel { background: var(--row-selected); color: var(--text); position: relative; }
+  .nav-item.sel::before { content: ""; position: absolute; left: 0; top: 10px; bottom: 10px; width: 3px; border-radius: 2px; background: var(--accent-stroke); }
+  .switch2 { width: 40px; height: 20px; border-radius: 10px; flex: none; position: relative; border: 1px solid var(--border-strong); background: var(--input-fill); cursor: default; }
+  .switch2::after { content: ""; position: absolute; top: 2px; left: 2px; width: 14px; height: 14px; border-radius: 7px; background: var(--text-2); }
+  .switch2.on { background: var(--accent); border-color: var(--accent); }
+  .switch2.on::after { left: auto; right: 2px; background: #fff; }
+  .switch2.after { cursor: pointer; transition: background .08s, border-color .08s; }
+  .switch2.after:hover { background: var(--row-hover); }
+  .switch2.on.after:hover { background: var(--accent-hover); border-color: var(--accent-hover); }
+
+  /* ── B8 尺寸自适应示意 ── */
+  .size-grid { display: flex; gap: 24px; flex-wrap: wrap; align-items: flex-end; }
+  .size-card { background: var(--panel); border: 1px solid var(--border-strong); border-radius: 8px;
+    box-shadow: var(--shadow-16); overflow: hidden; }
+  .size-card .s-top { height: 20px; border-bottom: 1px solid var(--border); display: flex; align-items: center; padding: 0 8px; gap: 5px; }
+  .size-card .s-top i { display: block; height: 7px; border-radius: 2px; background: var(--input-fill); border: 1px solid var(--border); width: 55%; }
+  .size-card .s-row { height: 12px; margin: 4px 8px 0; border-radius: 2px; background: color-mix(in srgb, var(--text-3) 40%, transparent); }
+  .size-card .s-row.sq { background: color-mix(in srgb, var(--accent-stroke) 55%, transparent); width: 60%; }
+  .size-card .s-foot { height: 10px; margin-top: 6px; background: var(--panel-2); border-top: 1px solid var(--border); }
+  .size-card figcaption, .size-cap { font-size: 12px; color: var(--text-3); margin-top: 8px; text-align: center; }
+</style>
+</head>
+<body data-theme="dark">
+<div class="wrap">
+
+  <header>
+    <h1>dd-run UI 优化方案 v5.2</h1>
+    <span class="ver">基线 v4.13 · 八批增量 · 只新增 2 个 token，不改既有值</span>
+    <button class="theme-btn" id="themeBtn">切换亮 / 暗</button>
+  </header>
+  <p class="lede">
+    本页是优化方案的视觉契约：左列为当前实现（v4.13 真机渲染态），右列为优化后效果。
+    八批改动全部在现有 egui + Fluent 2 token 体系内完成——不改协议、不加依赖、不动设置持久化，
+    每批独立可交付、可回退。v5.1 新增：B5 结果行去掉名称与类型标签之间的路径/描述列（信息转悬停提示）、
+    B6 设置页四处优化。v5.2 新增：B7 悬停反馈体系（齿轮 / 导航项 / 开关）、B8 面板宽高按显示器工作区自适应。
+    悬停右列被截断的标题或选中行可预览 tooltip（B4/B5）；把鼠标放到 B7 演示区的按钮 / 开关上体验新悬停态。
+  </p>
+
+  <!-- ── 主面板对比 ── -->
+  <div class="compare">
+
+    <!-- 当前实现 -->
+    <div class="col">
+      <div class="col-head"><span class="tag">当前实现</span><span class="note">v4.13 真机渲染态</span></div>
+      <div class="panel before">
+        <div class="top">
+          <div class="searchbar">
+            <span class="glyph">&#xE721;</span>
+            <input value="calc" readonly>
+            <span class="underline"></span>
+          </div>
+        </div>
+        <div class="results">
+          <div class="section-label">应用</div>
+          <div class="row">
+            <div class="icon i-calc">计</div>
+            <span class="name">计算器</span>
+            <span class="desc">应用 · Windows 附件</span>
+            <span class="cat">应用</span>
+          </div>
+          <div class="row selected">
+            <div class="icon i-cmd">&gt;_</div>
+            <span class="name">命令提示符</span>
+            <span class="desc">C:\Windows\system32\cmd.exe</span>
+            <span class="cat">应用</span>
+          </div>
+          <div class="row">
+            <div class="icon i-code">VS</div>
+            <span class="name">Visual Studio Code</span>
+            <span class="desc">Microsoft Visual Studio Code — 编辑器</span>
+            <span class="cat">应用</span>
+          </div>
+          <div class="row">
+            <div class="icon i-set">S</div>
+            <span class="name">设置</span>
+            <span class="desc">Windows 系统设置</span>
+            <span class="cat">应用</span>
+          </div>
+          <div class="row">
+            <div class="icon i-note">记</div>
+            <span class="name">记事本</span>
+            <span class="desc">Windows 附件</span>
+            <span class="cat">应用</span>
+          </div>
+          <div class="row">
+            <div class="icon i-web">B</div>
+            <span class="name">Bing 搜索</span>
+            <span class="desc">在 Bing 中搜索 “calc”</span>
+            <span class="cat">网页搜索</span>
+          </div>
+          <div class="section-label">其他</div>
+          <div class="row">
+            <div class="icon i-cmd">⚙</div>
+            <span class="name">计算器（系统）</span>
+            <span class="desc">Windows.Security.Launcher</span>
+            <span class="cat">系统</span>
+          </div>
+        </div>
+        <div class="footer">
+          <span class="gear">&#xE713;</span>
+          <span class="action">打开 命令提示符</span>
+          <span class="keys">
+            <span>执行 <span class="keycap">Enter</span></span>
+            <span>返回·隐藏 <span class="keycap">Esc</span></span>
+          </span>
+        </div>
+      </div>
+    </div>
+
+    <!-- 优化后 -->
+    <div class="col">
+      <div class="col-head"><span class="tag new">本方案 v5.1</span><span class="note">①–④ 标注见下方规格表</span></div>
+      <div class="panel after">
+        <span class="ann a4">④</span>
+        <span class="ann a3">③</span>
+        <span class="ann a1">①</span>
+        <span class="ann a2">②</span>
+        <div class="top">
+          <div class="searchbar">
+            <span class="glyph">&#xE721;</span>
+            <input value="calc" readonly>
+            <span class="underline"></span>
+          </div>
+        </div>
+        <div class="results">
+          <div class="section-label">应用</div>
+          <div class="row" data-tip="C:\Windows\system32\cmd.exe">
+            <div class="icon i-calc">计</div>
+            <span class="name">计算器</span>
+            <span class="cat">应用</span>
+          </div>
+          <div class="row selected" data-tip="C:\Windows\system32\cmd.exe">
+            <div class="icon i-cmd">&gt;_</div>
+            <span class="name">命令提示符</span>
+            <span class="cat">应用</span>
+          </div>
+          <div class="row">
+            <div class="icon i-code">VS</div>
+            <span class="name" data-full="Visual Studio Code（标题截断时悬停显示全文）">Visual Studio Code</span>
+            <span class="cat">应用</span>
+          </div>
+          <div class="row">
+            <div class="icon i-set">S</div>
+            <span class="name">设置</span>
+            <span class="cat">应用</span>
+          </div>
+          <div class="row">
+            <div class="icon i-note">记</div>
+            <span class="name">记事本</span>
+            <span class="cat">应用</span>
+          </div>
+          <div class="row">
+            <div class="icon i-web">B</div>
+            <span class="name">Bing 搜索</span>
+            <span class="cat">网页搜索</span>
+          </div>
+          <div class="section-label">其他</div>
+          <div class="row">
+            <div class="icon i-cmd">⚙</div>
+            <span class="name">计算器（系统）</span>
+            <span class="cat">系统</span>
+          </div>
+        </div>
+        <div class="footer">
+          <span class="gear">&#xE713;</span>
+          <span class="action">打开 命令提示符</span>
+          <span class="keys">
+            <span>执行 <span class="keycap">Enter</span></span>
+            <span>返回·隐藏 <span class="keycap">Esc</span></span>
+          </span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── B5 行解剖 ── -->
+  <div class="detail">
+    <h2>B5 · 结果行结构：移除中间的路径/描述列</h2>
+    <p>
+      现状行内三段（标题 → 副标题/路径 → 类型标签）在应用结果里中间一段几乎总是
+      exe / lnk 路径，挤占标题宽度、拉低扫读效率。优化后行内只保留
+      <b>图标 + 标题 + 类型标签</b>；被移除的信息不丢——整行悬停时以 tooltip 呈现
+      （标题全文 + 副标题，两行）。加载骨架行右侧的描述条同步移除，保证 Loading →
+      内容无布局跳动（A3 口径）。
+    </p>
+    <div class="anatomy">
+      <div class="anat-box">
+        <p>现状：三段式，路径挤在中间</p>
+        <div class="anat-row">
+          <div class="icon i-cmd">&gt;_</div>
+          <span>命令提示符</span>
+          <span class="lbl">C:\Windows\…\cmd.exe</span>
+          <span class="lbl" style="margin-left:auto">应用</span>
+        </div>
+        <p class="seg-note"><b>标题</b> 14px · <b>路径</b> 12px 挤占中列 · <b>类型</b> 贴右</p>
+      </div>
+      <div class="anat-box">
+        <p>优化后：两段式，路径入 tooltip（悬停本行体验）</p>
+        <div class="anat-row" style="position:relative" title="悬停显示：C:\Windows\system32\cmd.exe">
+          <div class="icon i-cmd">&gt;_</div>
+          <span style="font-weight:500">命令提示符</span>
+          <span class="lbl" style="margin-left:auto">应用</span>
+        </div>
+        <p class="seg-note"><b>标题</b> 14px 中列占满 · <b>类型</b> 贴右；tooltip = 标题全文 + 副标题</p>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── B6 设置页 ── -->
+  <div class="detail">
+    <h2>B6 · 设置页优化（三处）</h2>
+    <p>
+      ① 错误文案裸色值 token 化：搜索引擎卡的报错写死 <code>#C42B1C</code>
+      （settings_view.rs，违反「绘制层不写裸色值」契约且亮色主题下过艳）→ 改用
+      <code>Palette::danger</code> 随主题。② 搜索引擎模板截断加 tooltip + 行 hover。
+      ③ 主题三选 radio-card 的双色块 swatch 升级为迷你面板缩略图（搜索栏条 + 两行条，
+      纯 rect 绘制）；「跟随系统」卡 = 亮暗左右拼接缩略图、亮/暗卡 = 对应单色缩略图。
+      （v5.2 核对撤回原④：页脚文案实值已是通用口径，见规格表批注。）
+    </p>
+    <div class="set-grid">
+      <div class="set-col">
+        <p class="cap">现状</p>
+        <div class="set-card">
+          <div class="card-head"><span class="ic">&#xE790;</span><div><div class="t">主题</div><div class="d">选择面板的明暗外观，跟随系统时自动切换</div></div></div>
+          <div class="radio-row">
+            <div class="radio-card"><div class="sw"><i style="background:#fff"></i><i style="background:#1b1b1b"></i></div>跟随系统</div>
+            <div class="radio-card"><div class="sw"><i style="background:#fff"></i><i style="background:#f4f4f4"></i></div>亮色</div>
+            <div class="radio-card sel"><div class="sw"><i style="background:#292929"></i><i style="background:#1f1f1f"></i></div>暗色</div>
+          </div>
+        </div>
+        <div class="set-card">
+          <div class="card-head"><span class="ic">&#xE74E;</span><div><div class="t">扩展管理</div><div class="d">启用或停用已安装的扩展</div></div></div>
+          <div class="ext-line">
+            <div><div class="nm">应用</div><div class="meta">v0.1.0 · com.ddrun.apps</div></div>
+            <div class="switch on"></div>
+          </div>
+          <div class="ext-line">
+            <div style="min-width:0"><div class="nm">文件搜索</div><div class="meta">v0.1.0 · com.ddrun.filesearch</div>
+              <div class="err raw">扩展进程连续崩溃，已熔断：exit code 0xC0000135</div></div>
+            <span class="btn-s">重试</span><div class="switch on"></div>
+          </div>
+        </div>
+        <div class="set-card">
+          <div class="card-head"><span class="ic">&#xE721;</span><div><div class="t">搜索引擎</div><div class="d">管理结果里出现的网页搜索引擎</div></div></div>
+          <div class="ext-line">
+            <div class="nm" style="font-size:14px">DuckDuckGo</div>
+            <div class="err" style="font-family:Cascadia Mono,Consolas,monospace;color:var(--text-3)">https://duckduckgo.com/?q={q}&amp;ia=web</div>
+            <span class="btn-s">删除</span>
+          </div>
+        </div>
+      </div>
+      <div class="set-col">
+        <p class="cap">优化后</p>
+        <div class="set-card">
+          <div class="card-head"><span class="ic">&#xE790;</span><div><div class="t">主题</div><div class="d">选择面板的明暗外观，跟随系统时自动切换</div></div></div>
+          <div class="radio-row">
+            <div class="radio-card"><div class="mini"><div class="m-bar"></div><div class="m-row"></div><div class="m-row r2"></div></div>跟随系统</div>
+            <div class="radio-card"><div class="mini"><div class="m-bar"></div><div class="m-row"></div><div class="m-row r2"></div></div>亮色</div>
+            <div class="radio-card sel"><div class="mini"><div class="m-bar"></div><div class="m-row sel"></div><div class="m-row r2"></div></div>暗色</div>
+          </div>
+        </div>
+        <div class="set-card">
+          <div class="card-head"><span class="ic">&#xE74E;</span><div><div class="t">扩展管理</div><div class="d">启用或停用已安装的扩展</div></div></div>
+          <div class="ext-line">
+            <div><div class="nm">应用</div><div class="meta">v0.1.0 · com.ddrun.apps</div></div>
+            <div class="switch on"></div>
+          </div>
+          <div class="ext-line">
+            <div style="min-width:0"><div class="nm">文件搜索</div><div class="meta">v0.1.0 · com.ddrun.filesearch</div>
+              <div class="err tok">扩展进程连续崩溃，已熔断：exit code 0xC0000135</div></div>
+            <span class="btn-s">重试</span><div class="switch on"></div>
+          </div>
+        </div>
+        <div class="set-card">
+          <div class="card-head"><span class="ic">&#xE721;</span><div><div class="t">搜索引擎</div><div class="d">管理结果里出现的网页搜索引擎</div></div></div>
+          <div class="ext-line" style="border-radius:4px" title="行 hover：row_hover 底 + 模板全文 tooltip">
+            <div class="nm" style="font-size:14px">DuckDuckGo</div>
+            <div class="err" style="font-family:Cascadia Mono,Consolas,monospace;color:var(--text-3)">https://duckduckgo.com/?q={q}&amp;i…</div>
+            <span class="btn-s">删除</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── B7 悬停反馈 ── -->
+  <div class="detail">
+    <h2>B7 · 悬停反馈体系（齿轮 / 设置导航项 / 开关）</h2>
+    <p>
+      现状：齿轮与导航项虽画了 <code>row_hover</code> 底，但暗色下与面板底色差小、图标不提亮、
+      光标不变化，感知上等于没有悬停效果（用户 2026-09-12 反馈）；开关
+      <code>draw_switch_fn</code> 则完全没有悬停态。优化 = 统一小控件悬停语言：
+      <b>hover = row_hover 底 + 图标/文字 text2→text；按下 = row_pressed</b>，
+      开关 hover 走 <code>accent_hover</code>（开）/ row_hover（关）。
+      光标分级：齿轮 / 导航项（导航语义）用 PointingHand，开关 / Fluent 按钮（命令语义）
+      保持默认箭头（Win32/Fluent 惯例）；选中导航项悬停不铺 row_hover。
+      新增 <code>accent_hover</code> token（暗 #2886de / 亮 #115ea3，值来自既有设计稿 CSS），
+      真机复验原报告，若仍无悬停再定位事件链。
+      把鼠标放到下面两组控件上对比体验（左 = 现状，右 = 优化后）：
+    </p>
+    <div class="hov-grid">
+      <div class="hov-col">
+        <p class="cap">现状：无可见悬停反馈</p>
+        <div class="hov-strip" style="margin-bottom:12px">
+          <span class="gear">&#xE713;</span>
+          <span style="font-size:12px;color:var(--text-4)">设置按钮（hover 无变化）</span>
+        </div>
+        <div class="nav-demo">
+          <div class="nav-item"><span class="nic">&#xE790;</span>外观</div>
+          <div class="nav-item"><span class="nic">&#xE713;</span>常规</div>
+          <div class="nav-item sel"><span class="nic">&#xE721;</span>搜索</div>
+          <div class="nav-item"><span class="nic">&#xE74E;</span>扩展</div>
+        </div>
+        <div class="hov-strip" style="margin-top:12px">
+          <span class="switch2 on"></span>
+          <span style="font-size:12px;color:var(--text-4)">开关（hover 无变化）</span>
+        </div>
+      </div>
+      <div class="hov-col">
+        <p class="cap">优化后：底色 + 提亮 + 手型光标</p>
+        <div class="hov-strip" style="margin-bottom:12px">
+          <span class="gear after">&#xE713;</span>
+          <span style="font-size:12px;color:var(--text-4)">设置按钮（悬停我）</span>
+        </div>
+        <div class="nav-demo">
+          <div class="nav-item after"><span class="nic">&#xE790;</span>外观</div>
+          <div class="nav-item after"><span class="nic">&#xE713;</span>常规</div>
+          <div class="nav-item after sel"><span class="nic">&#xE721;</span>搜索</div>
+          <div class="nav-item after"><span class="nic">&#xE74E;</span>扩展</div>
+        </div>
+        <div class="hov-strip" style="margin-top:12px">
+          <span class="switch2 on after"></span>
+          <span class="switch2 after" style="margin-left:8px"></span>
+          <span style="font-size:12px;color:var(--text-4)">开关（悬停试开 / 关两态）</span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── B8 尺寸自适应 ── -->
+  <div class="detail">
+    <h2>B8 · 面板宽高按显示器工作区自适应</h2>
+    <p>
+      现状：基准恒为 650×440，仅当工作区不足时等比收缩（D37）——在小笔记本上没问题，
+      但 2K / 4K 竖向空间充裕时面板仍只显示 9 行结果，屏幕利用率低；多显示器（混合分辨率 /
+      缩放）下换屏唤起已有逐次 clamp。优化（记忆值优先原则不变——用户手动拉伸过就以用户为准）：
+    </p>
+    <div class="size-grid" style="margin-bottom:14px">
+      <div>
+        <div class="size-card" style="width:163px">
+          <div class="s-top"><i></i></div>
+          <div style="padding:4px 0 0">
+            <div class="s-row sq"></div><div class="s-row"></div><div class="s-row"></div>
+            <div class="s-row"></div><div class="s-row"></div><div class="s-row"></div>
+            <div class="s-row"></div><div class="s-row"></div><div class="s-row"></div>
+          </div>
+          <div class="s-foot"></div>
+        </div>
+        <div class="size-cap">小屏 / 768p：9 行（下限）· 452</div>
+      </div>
+      <div>
+        <div class="size-card" style="width:180px">
+          <div class="s-top"><i></i></div>
+          <div style="padding:4px 0 0">
+            <div class="s-row sq"></div><div class="s-row"></div><div class="s-row"></div>
+            <div class="s-row"></div><div class="s-row"></div><div class="s-row"></div>
+            <div class="s-row"></div><div class="s-row"></div><div class="s-row"></div>
+            <div class="s-row"></div><div class="s-row"></div>
+          </div>
+          <div class="s-foot"></div>
+        </div>
+        <div class="size-cap">1080p：11 行 · 532</div>
+      </div>
+      <div>
+        <div class="size-card" style="width:196px">
+          <div class="s-top"><i></i></div>
+          <div style="padding:4px 0 0">
+            <div class="s-row sq"></div><div class="s-row"></div><div class="s-row"></div>
+            <div class="s-row"></div><div class="s-row"></div><div class="s-row"></div>
+            <div class="s-row"></div><div class="s-row"></div><div class="s-row"></div>
+            <div class="s-row"></div><div class="s-row"></div><div class="s-row"></div>
+            <div class="s-row"></div>
+          </div>
+          <div class="s-foot"></div>
+        </div>
+        <div class="size-cap">1440p 及以上：12 行（上限）· 572</div>
+      </div>
+    </div>
+    <table>
+      <tr><th>规则</th><th>内容</th></tr>
+      <tr>
+        <td><b>高度推导</b>（仅无记忆值时）</td>
+        <td><code>rows = clamp(floor((avail_h − 92) × 0.5 ÷ 40), 9, 12)</code>，面板高 = rows×40 + 92（顶行 52 + 页脚 36 + 边距 4）；宽恒 650。92/40 等常数即现有几何，无新概念</td>
+      </tr>
+      <tr>
+        <td><b>记忆值优先</b></td>
+        <td><code>settings.panel_size</code> 有值时原逻辑不变（基准推导不参与）</td>
+      </tr>
+      <tr>
+        <td><b>设置页联动</b></td>
+        <td>沿用现规则 <code>max(650×640, 根页有效尺寸)</code> → 工作区 clamp；根页变高后设置页仍 ≥ 640 高，左栏 168 + 内容区布局不变</td>
+      </tr>
+      <tr>
+        <td><b>多屏 / 缩放验收矩阵</b></td>
+        <td>4K + 1080p 双屏各唤起一次（clamp 逐屏生效）；125% / 150% / 200% 缩放（egui 逻辑点自适应，图标 48px 源已覆盖到 240%）；竖屏（宽 clamp 优先）；工作区小于基准（等比收缩 + 460×400 下限）；缩放热切换后再次唤起尺寸正确</td>
+      </tr>
+      <tr>
+        <td><b>不做</b></td>
+        <td>逐帧内容自适应高度（结果数驱动窗口 resize 有抖动风险，launcher 以稳定为第一体验）</td>
+      </tr>
+    </table>
+  </div>
+
+  <!-- ── B2 色板对比 ── -->
+  <div class="detail">
+    <h2>B2 · 小面积强调色（暗色主题）</h2>
+    <p>
+      现状：暗色下选中指示条与聚焦下划线用 <code>#115ea3</code>（brand[70]，colorBrandBackground 语义），
+      在 <code>#292929</code> 面板上对比度仅约 2.2:1，几乎与背景融为一体。
+      Fluent 2 对小面积元素另有 colorBrandStroke1 语义：暗 = brand[100]、亮 = brand[80]（与现值相同，不受影响）。
+      新增 <code>--accent-stroke</code> token，仅替换 3px 指示条 / 2px 下划线 / Spinner 弧 / 开关选中 / 设置导航指示条等
+      线状小元素；大面积 accent 底色（主按钮等）维持 brand[70] 不变。
+    </p>
+    <div class="swatches">
+      <div class="sw-card">
+        <h3>暗色主题</h3>
+        <div class="sw-line dim"><span class="chip" style="background:#115ea3"></span>现状指示条 #115ea3 · 对比度 2.2:1</div>
+        <div class="sw-line"><span class="chip" style="background:#479ef5"></span>新指示条 #479ef5 · 对比度 5.2:1</div>
+        <div class="sw-line"><span class="chip" style="background:#2886de"></span>accent-hover #2886de（不变）</div>
+      </div>
+      <div class="sw-card">
+        <h3>亮色主题（不变）</h3>
+        <div class="sw-line"><span class="chip" style="background:#0f6cbd"></span>指示条 #0f6cbd · brand[80]</div>
+        <div class="sw-line"><span class="chip" style="background:#115ea3"></span>accent-hover #115ea3</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── B4 动画演示 ── -->
+  <div class="detail" style="margin-top:24px">
+    <h2>B4 · 聚焦下划线过渡（0.12s）</h2>
+    <div class="demo">
+      <div class="demo-box">
+        <p>点击 / 移开输入框，观察下划线 0.12s 宽度过渡（egui 侧用 animate_value_with_time 实现，仅过渡期间请求重绘，不影响空闲功耗）：</p>
+        <div class="searchbar">
+          <span class="glyph">&#xE721;</span>
+          <input placeholder="输入任意内容试试…">
+          <span class="underline"></span>
+        </div>
+      </div>
+      <div class="demo-box">
+        <p>范围之外（明确不做，避免复杂化）：</p>
+        <table>
+          <tr><td>面板唤出缩放/淡入动画</td><td>与 A2 冷启动目标冲突，launcher 以瞬时为第一体验</td></tr>
+          <tr><td>列表滚动渐隐遮罩</td><td>egui 下成本高、收益小</td></tr>
+          <tr><td>分组标题吸顶</td><td>egui ScrollArea 无低成本实现</td></tr>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── 规格表 ── -->
+  <div class="detail">
+    <h2>规格与实现落点</h2>
+    <table>
+      <tr>
+        <th>批次</th><th>改动</th><th>设计值</th><th>egui 落点</th><th>验收</th><th>风险 / 回退</th>
+      </tr>
+      <tr>
+        <td><b>B7</b> 悬停反馈体系</td>
+        <td>统一小控件悬停语言：hover = row_hover 底 + 图标/文字 text2→text；按下 = row_pressed；开关补 hover（开 = accent_hover、关 = row_hover）。<b>光标分级</b>：齿轮 / 导航项（导航语义）= PointingHand；开关 / Fluent 按钮（命令语义）保持默认箭头（Win32/Fluent 惯例）。<b>选中导航项悬停不铺 row_hover</b>（避免盖过选中语义，维持现分支）</td>
+        <td>新增 <code>accent_hover</code> token：暗 <span class="sw" style="background:#2886de"></span><code>#2886de</code> brand[80] · 亮 <span class="sw" style="background:#115ea3"></span><code>#115ea3</code> brand[70]（值 = 既有设计稿 CSS --accent-hover，非新造）</td>
+        <td><code>widgets.rs</code> 新原语 draw_icon_button（齿轮 / 返回按钮迁移）+ <code>settings_view.rs</code> 导航项与 draw_switch_fn + <code>theme.rs</code> token + parity 单测</td>
+        <td>真机复验 2026-09-12 原报告：齿轮 / 导航项悬停可感知（底 + 提亮 + 光标）；开关悬停有反馈；暗亮两主题截图</td>
+        <td>若复验仍无悬停 = 事件链问题而非视觉问题，本批内定位修复；回退 = 单点移除</td>
+      </tr>
+      <tr>
+        <td><b>B8</b> 宽高自适应</td>
+        <td>无记忆值时基准高度按光标屏工作区推导（9–12 行）；记忆值 / 设置页联动 / 多屏 clamp 规则不变</td>
+        <td><code>rows = clamp(floor((avail_h−92)×0.5÷40), 9, 12)</code>，<b>avail_h = 工作区高 − WORKAREA_MARGIN(16)，与 clamp_to_workarea 同口径</b>（1080p 实算 = (1024−92)×0.5÷40 = 11.65 → 11 行 532）；宽恒 650；下限 460×400 恒成立</td>
+        <td><code>app/mod.rs</code> root_panel_size（纯函数）+ 单测样本（768p / 1080p / 4K / 竖屏 / 微型工作区）</td>
+        <td>验收矩阵：双屏混合分辨率逐屏 clamp、125/150/200% 缩放、竖屏、缩放热切换后再次唤起</td>
+        <td>纯函数改动；回退 = 基准写死 440</td>
+      </tr>
+      <tr>
+        <td><b>B2</b> 强调色校正</td>
+        <td>新增 <code>accent_stroke</code> token，替换线状小元素的 accent 取色</td>
+        <td>暗 <span class="sw" style="background:#479ef5"></span><code>#479ef5</code> brand[100] · 亮 <span class="sw" style="background:#0f6cbd"></span><code>#0f6cbd</code> brand[80]（= 现值）；实施时按 @fluentui/tokens 复核 colorBrandStroke1</td>
+        <td><code>theme.rs</code> Palette 增字段 + parity 单测；调用点：row.rs 指示条 / panel.rs 聚焦下划线 / states.rs Spinner 弧 / settings_view.rs 导航指示条 + radio-card 选中 2px 边框 + 引擎 URL 框聚焦下划线 / widgets.rs 同类</td>
+        <td>parity 单测绿；暗色真机截图：选中条 / 下划线清晰可辨（对 #292929 对比度 5.2:1）</td>
+        <td>只动取色不动布局；回退 = token 值改回 brand[70]</td>
+      </tr>
+      <tr>
+        <td><b>B4</b> 微交互</td>
+        <td>聚焦下划线 0.12s 宽度过渡；截断标题 hover 全文 tooltip</td>
+        <td>过渡 0.12s ease-out；tooltip 用 egui on_hover_text（系统超时后浮现）。<b>截断判定</b> = 项目已有 <code>text_width()</code> 量宽与可用宽比较（egui 0.36.1 无 <code>Response::truncated()</code>，勿用）</td>
+        <td>panel.rs draw_searchbar（animate_value_with_time，API 已核实 context.rs:3261）+ row.rs（title_w 超宽时挂 tooltip——行宽预算本就先算 text_width，零新依赖）</td>
+        <td>聚焦 / 失焦下划线平滑展开收起，无闪烁；截断行 hover 显示全文，未截断不显示</td>
+        <td>过渡仅过渡期重绘；回退 = 各自移除单点调用</td>
+      </tr>
+      <tr>
+        <td><b>B5</b> 结果行去副标题</td>
+        <td>行内移除标题与类型标签之间的副标题列（应用场景 = exe/lnk 路径）；信息转整行 hover tooltip；骨架行右列描述条同步移除</td>
+        <td>行内 = 图标 + 标题（中列占满）+ 类型标签贴右；tooltip = 标题全文 +（如有）副标题；标题获得全部中列宽度，截断概率大降</td>
+        <td><code>row.rs</code>（删 subtitle 渲染分支 + avail 预算简化；行响应挂 tooltip）+ <code>states.rs</code>（骨架行删 desc 条）；<code>PanelItem.subtitle</code> 数据字段与协议不动</td>
+        <td>真机截图：应用行无路径中列；hover 行显示路径；Loading → 内容无跳动；单测更新（skeleton_fractions 仅 name）</td>
+        <td>信息可发现性依赖悬停（用户决策 2026-09-12）；回退 = 恢复 row.rs subtitle 分支</td>
+      </tr>
+      <tr>
+        <td><b>B3</b> 滚动条 Fluent 化</td>
+        <td>floating 滚动条调参：未悬停细条 4px、悬停展开 8px、降低 dormant 不透明度</td>
+        <td>egui 0.36.1 ScrollStyle（已核实 style.rs:494）：默认即 floating；可调 <code>floating_width</code> / <code>bar_width</code> / <code>dormant·active·interact_*_opacity</code>；把手颜色仅 <code>foreground_color</code> 布尔可选，<b>不能指定任意色</b>（原「text3@55%」写法作废）</td>
+        <td><code>theme.rs</code> visuals()/apply() 内集中设置 <code>style.spacing.scroll</code></td>
+        <td>长列表滚动条静默时 4px 低透明、hover 展开 8px 可拖拽；两主题截图</td>
+        <td>纯样式；回退 = 删除该段设置恢复 egui 默认</td>
+      </tr>
+      <tr>
+        <td><b>B6</b> 设置页 ×3</td>
+        <td>① 报错文案 <code>#C42B1C</code> 裸色值 → <code>Palette::danger</code>；② 引擎模板截断加 tooltip + 行 hover 底；③ 主题三选双色块 → 迷你面板缩略图（跟随系统 = 亮暗左右拼接、亮/暗 = 单色）</td>
+        <td>缩略图 = 34px 高圆角块内 3 条横条，配色全部取自现有 token；无新 token</td>
+        <td><code>settings_view.rs</code>（报错行 / draw_search_engine_card 模板行 / draw_radio_card）</td>
+        <td>亮色主题下报错文字为 cranberry 深红可读；引擎模板 hover 见全文；主题卡缩略图与实际主题观感一致</td>
+        <td><b>批注</b>：原④「页脚文案泛化」经核实撤回——text.rs:121 实值已是通用口径（panel.rs 注释过时导致误判）；其余回退 = 单点恢复</td>
+      </tr>
+      <tr>
+        <td><b>B1</b> 语义字重</td>
+        <td>注册 semibold 字体族，替换现 <code>.strong()</code> 变色假字重</td>
+        <td>拉丁 = Segoe UI Semibold（seguisb.ttf，Win7+ 必装）；CJK = msyhbd.ttc；后援链与 proportional 相同</td>
+        <td><code>platform.rs</code> load_cjk_font_definitions（后台热替换同路径，mmap 载入）+ <code>theme.rs</code> 增 <code>FontId::semibold()</code>；调用点：row.rs 行名 / panel.rs 分组标题 / states.rs 空态标题 / settings_view.rs 卡头</td>
+        <td>真机截图：分组标题与行名呈现真实字重，CJK 无缺字；热替换前（前 ~2.5s）不 panic（先注册回退族）</td>
+        <td>字体文件缺失自动跳过回落 regular；无协议/依赖变更；回退 = 移除 FontId::semibold 调用点</td>
+      </tr>
+    </table>
+    <p style="margin-top:14px">
+      交付顺序建议 <b>B7 → B2 → B4 → B5 → B3 → B6 → B8 → B1</b>（B7/B2/B4/B5 主面板与悬停一天内可完成并真机验收；B8 纯函数 + 真机矩阵；B1 涉及字体加载链，放最后单独回归 IME / 多语言 / 冷启动三项）。
+      每批一个 commit，全部附带 theme.rs parity 单测或既有测试回归（当前基线 176+ 全绿）。
+    </p>
+  </div>
+</div>
+
+<script>
+  const btn = document.getElementById('themeBtn');
+  btn.addEventListener('click', () => {
+    const b = document.body;
+    b.dataset.theme = b.dataset.theme === 'dark' ? 'light' : 'dark';
+    document.documentElement.dataset.theme = b.dataset.theme;
+  });
+  document.documentElement.dataset.theme = 'dark';
+</script>
+</body>
+</html>
