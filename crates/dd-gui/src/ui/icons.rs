@@ -1,19 +1,15 @@
 //! 图标：IconView 解析、纹理缓存、glyph/path 绘制。
 
 use crate::app::PaletteApp;
-use crate::ui::states::weak_text_color;
 use dd_gui::state::PanelItem;
+use dd_gui::theme;
 use dd_protocol::model::IconKind;
 use eframe::egui;
 use std::collections::HashMap;
 
-/// 列表行图标列边长（设计稿 v2 `.row .icon` 20×20 → 真机反馈 2026-09-12
-/// 放大到 24×24，恰好填满行内容区 40−16）。
-pub(crate) const ICON_CELL: f32 = 24.0;
-
-/// glyph 图标字号（随单元格放大：20/24 比例，原 16/20）。
-pub(crate) const ICON_GLYPH_PT: f32 = 20.0;
-
+/// 图标格边长/glyph 字号按密度档运行时传入（`theme::ListMetrics`；标准档
+/// 锚点 = `theme::LIST_ICON_CELL` 24 / `LIST_GLYPH_PT` 20，原真机反馈
+/// 2026-09-12 从 20×20 放大到 24×24）。F2 前为本模块常量，随 F2 上移。
 /// path 图标解码失败时的占位 glyph（Segoe MDL2 "Page" U+E7C3；
 /// 设计稿 04：加载失败回落占位 glyph）。
 pub(crate) const PLACEHOLDER_GLYPH: char = '\u{E7C3}';
@@ -23,7 +19,9 @@ pub(crate) const PLACEHOLDER_GLYPH: char = '\u{E7C3}';
 /// 在 `ScrollArea` 闭包之外统一解析（需要 `&mut self` 写纹理缓存与 `ctx`），
 /// 闭包内只读借用本表渲染，避免借用冲突。
 pub(crate) enum IconView {
-    /// 无图标 / url（本态暂缓）：占 20px 空列，保持各行图标列对齐。
+    /// 无图标 / url（本态暂缓）：弱色占位 glyph（I1：与解码失败占位区分层级
+    /// ——「本来就没有」用 text4 极弱色，「加载失败」走 Glyph 态 text2 色），
+    /// 占满图标格保持各行对齐。
     Empty,
     /// glyph 码位文本（§8.6 glyph 值本身；path 解码失败回落占位 glyph 也走此态）。
     Glyph { text: String },
@@ -80,8 +78,9 @@ impl PaletteApp {
     /// - `glyph` → 原文直接渲染（图标字体已在 `setup_cjk_fonts` 装入字形回退链）；
     /// - `path` → 查 [`Self::icon_cache`]；未命中则读盘 + [`decode_icon_image`] +
     ///   `ctx.load_texture` 入缓存；读盘/解码失败 → 占位 glyph（[`PLACEHOLDER_GLYPH`]）；
-    /// - `url` → 留接口暂缓（M5 决策：不做网络下载），空列；
-    /// - 无 icon → 空列（设计稿 04：无图标项保留 20px 空列对齐）。
+    /// - `url` → 留接口暂缓（M5 决策：不做网络下载），弱色占位 glyph（I1）；
+    /// - 无 icon → 弱色占位 glyph（I1 修订设计稿 04：原「空列」改为占位符，
+    ///   对齐不变、观感不再像「图标缺失」）。
     pub(crate) fn resolve_icons(
         &mut self,
         ctx: &egui::Context,
@@ -146,34 +145,44 @@ impl PaletteApp {
     }
 }
 
-/// 渲染 24×24 图标单元格（行首固定列，垂直居中）。
-/// - `None` / [`IconView::Empty`]：透明占位（保持图标列对齐）；
-/// - [`IconView::Glyph`]：码位文本（图标字体渲染，失败占位同此）；
-/// - [`IconView::Texture`]：纹理贴满 24×24（UV 缩放，不裁剪、不变形）。
-pub(crate) fn draw_icon_cell(ui: &mut egui::Ui, icon: Option<&IconView>) {
-    let (rect, _) = ui.allocate_exact_size(egui::vec2(ICON_CELL, ICON_CELL), egui::Sense::hover());
-    let Some(icon) = icon else {
-        return;
-    };
+/// 渲染列表行图标单元格（边长 `m.icon_cell`，行首固定列，垂直居中）。
+/// - `None` / [`IconView::Empty`]：弱色占位 glyph（I1：保持图标列对齐，观感
+///   为「本来就没有」，与解码失败的 text2 占位区分层级）；
+/// - [`IconView::Glyph`]：码位文本（图标字体渲染，I2：text2 次级色——与彩色
+///   path 图标视觉重量对齐；已核 091c765 visuals.weak_text_color = text2，
+///   本处显式取 token，行为等价）；
+/// - [`IconView::Texture`]：纹理贴满图标格（UV 缩放，不裁剪、不变形）。
+pub(crate) fn draw_icon_cell(ui: &mut egui::Ui, icon: Option<&IconView>, m: theme::ListMetrics) {
+    let p = theme::Palette::of(ui.visuals().dark_mode);
+    let (rect, _) =
+        ui.allocate_exact_size(egui::vec2(m.icon_cell, m.icon_cell), egui::Sense::hover());
     match icon {
-        IconView::Empty => {}
-        IconView::Glyph { text } => {
+        None | Some(IconView::Empty) => {
+            ui.painter().text(
+                rect.center(),
+                egui::Align2::CENTER_CENTER,
+                PLACEHOLDER_GLYPH.to_string(),
+                egui::FontId::proportional(m.glyph_pt),
+                p.text4,
+            );
+        }
+        Some(IconView::Glyph { text }) => {
             ui.painter().text(
                 rect.center(),
                 egui::Align2::CENTER_CENTER,
                 text,
-                egui::FontId::proportional(ICON_GLYPH_PT),
-                weak_text_color(ui),
+                egui::FontId::proportional(m.glyph_pt),
+                p.text2,
             );
         }
-        IconView::Texture { tex, dark } => {
+        Some(IconView::Texture { tex, dark }) => {
             // 暗色主题 + 暗色本体图标：垫浅色圆角底（ueli/Start 菜单式白底 tile），
             // 否则黑 glyph 贴暗背景不可见（真机反馈 ChatGPT 图标）。亮色主题不需要
             // （浅底上深 glyph 本就清晰）。底比图标区外扩 2px、圆角 4，贴近 Fluent。
             if *dark && ui.visuals().dark_mode {
                 let bg = egui::Rect::from_center_size(
                     rect.center(),
-                    egui::vec2(ICON_CELL + 2.0, ICON_CELL + 2.0),
+                    egui::vec2(m.icon_cell + 2.0, m.icon_cell + 2.0),
                 );
                 ui.painter().rect_filled(
                     bg,
@@ -181,7 +190,7 @@ pub(crate) fn draw_icon_cell(ui: &mut egui::Ui, icon: Option<&IconView>) {
                     egui::Color32::from_rgb(0xf5, 0xf5, 0xf5),
                 );
             }
-            // uv = 全图 [0,1]×[0,1]；超出 20px 的原图由渲染缩放，不做预缩放
+            // uv = 全图 [0,1]×[0,1]；大于图标格的原图由渲染缩放，不做预缩放
             let uv = egui::Rect::from_min_max(egui::Pos2::ZERO, egui::pos2(1.0, 1.0));
             ui.painter().image(tex.id(), rect, uv, egui::Color32::WHITE);
         }

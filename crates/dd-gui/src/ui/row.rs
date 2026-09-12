@@ -13,14 +13,13 @@ pub(crate) fn draw_item_row(
     selected: bool,
     icon: Option<&IconView>,
     hover_enabled: bool,
+    m: theme::ListMetrics,
 ) -> egui::Response {
     let p = theme::Palette::of(ui.visuals().dark_mode);
 
     // 预算行矩形（本帧指针测试 → 同帧 hover 填充，无帧延迟）
-    let row_rect = egui::Rect::from_min_size(
-        ui.cursor().min,
-        egui::vec2(ui.available_width(), theme::ROW_H),
-    );
+    let row_rect =
+        egui::Rect::from_min_size(ui.cursor().min, egui::vec2(ui.available_width(), m.row_h));
     // v4.17a：`hover_enabled=false` = 鼠标自面板唤起后尚未动过（指针停在唤起
     // 前的残留位置）→ 不画 hover，避免与"第一项 keyboard 选中"抢视觉。
     let hovered_now = hover_enabled && ui.rect_contains_pointer(row_rect);
@@ -48,25 +47,25 @@ pub(crate) fn draw_item_row(
             bottom: 8,
         })
         .show(ui, |ui| {
-            // 内容区固定 40 - 16 = 24px 高（垂直居中图标与文字）
-            ui.set_min_height(theme::ROW_H - 16.0);
+            // 内容区固定 行高 - 16 = 24px 高（垂直居中图标与文字；上下 margin 8 不随档变）
+            ui.set_min_height(m.row_h - 16.0);
             // B5：行内两段式——**标题占满中列 + 类型标签贴右**；副标题（应用 =
             // exe/lnk 路径）不再渲染在行内，转整行 hover tooltip（信息不丢，
             // 用户决策 2026-09-12）。item_spacing.x 清零，间距全部显式控制，
             // 类型标签的贴右位置才能精确预算。
             ui.spacing_mut().item_spacing.x = 0.0;
             ui.horizontal(|ui| {
-                // 图标列（20px；无图标/url 也占位，各行对齐——设计稿 04）
-                draw_icon_cell(ui, icon);
-                ui.add_space(12.0); // CSS `.row` gap 12px
-                let font14 = dd_gui::theme::semibold(14.0); // B1：行名 500 字重（设计稿 `.name`）
-                let font12 = egui::FontId::proportional(12.0);
-                // 类型标签宽（caption1 12px，最长 90px 截断）先测出，从标题
+                // 图标列（m.icon_cell；无图标/url 渲染弱色占位 glyph 保持各行对齐——I1）
+                draw_icon_cell(ui, icon, m);
+                ui.add_space(theme::LIST_ICON_GAP); // CSS `.row` gap 12px
+                let font_title = theme::semibold(m.title_pt); // B1：行名 500 字重（设计稿 `.name`）
+                let font_cat = egui::FontId::proportional(m.cat_pt);
+                // 类型标签宽（caption1，最长 90px 截断）先测出，从标题
                 // 可用宽中扣除；标签与标题间留 12px 间隙。
                 let cat_w = item
                     .result_category
                     .as_deref()
-                    .map(|cat| text_width(ui, cat, font12).min(90.0))
+                    .map(|cat| text_width(ui, cat, font_cat.clone()).min(90.0))
                     .unwrap_or(0.0);
                 let title_avail =
                     (ui.available_width() - if cat_w > 0.0 { cat_w + 12.0 } else { 0.0 }).max(1.0);
@@ -74,27 +73,32 @@ pub(crate) fn draw_item_row(
                 // centered_and_justified 会把短标题居中（真机反馈 2026-09-12），
                 // 改为 allocate_exact_size 预留中列矩形 + child Ui
                 // left_to_right 布局（与页脚/引擎行同一惯用法）。
-                let (title_box, _) =
-                    ui.allocate_exact_size(egui::vec2(title_avail, 16.0), egui::Sense::hover());
+                let (title_box, _) = ui.allocate_exact_size(
+                    egui::vec2(title_avail, m.title_pt + 2.0),
+                    egui::Sense::hover(),
+                );
                 let mut title_ui = ui.new_child(
                     egui::UiBuilder::new()
                         .max_rect(title_box)
                         .layout(egui::Layout::left_to_right(egui::Align::Center)),
                 );
-                title_ui
-                    .add(egui::Label::new(egui::RichText::new(&item.title).size(14.0)).truncate());
+                title_ui.add(
+                    egui::Label::new(egui::RichText::new(&item.title).size(m.title_pt)).truncate(),
+                );
                 // 类型标签：贴右最右。
                 if let Some(cat) = &item.result_category {
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         ui.add_sized(
-                            egui::vec2(cat_w, 16.0),
-                            egui::Label::new(egui::RichText::new(cat).size(12.0).color(p.text3)),
+                            egui::vec2(cat_w, m.title_pt + 2.0),
+                            egui::Label::new(
+                                egui::RichText::new(cat).size(m.cat_pt).color(p.text3),
+                            ),
                         );
                     });
                 }
                 // 标题自然宽度超出可用宽 = 被截断（供行 tooltip 判定；
                 // egui 0.36 无 Response::truncated()，用量宽比较）
-                text_width(ui, &item.title, font14) > title_avail
+                text_width(ui, &item.title, font_title) > title_avail
             })
             .inner
         });

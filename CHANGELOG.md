@@ -4,6 +4,15 @@
 
 ## [Unreleased]
 
+### 新增（图标与字体展示优化：参考 DeskBox 的「图标/文字大小可调」，方案 [`docs/icons-typography-plan.md`](./docs/icons-typography-plan.md)）
+
+- **列表密度三档（F2）**：设置 → 外观新增「列表密度」卡（紧凑/标准/宽松），一档联动行高（36/40/44）、行名与标签字号（13/14/15、11/12/13）、图标格与 glyph 字号（20/24/28、16/20/24）——`theme::ListMetrics` 单点定义，标准档硬性等于既有常量（parity 单测守卫，默认观感与上一版逐像素一致）。`Settings.density` 持久化（手工 JSON 读写沿用 `label/as_str/parse` 枚举模式，旧配置缺字段/未知值回落标准档，零迁移）。**关键联动**：面板默认高度折算 `base_height_for_workarea` / `root_panel_size` / `settings_panel_size` 增 `row_h` 参数（`lifecycle.rs` 唤起与 `ui()` 页面 diff 两处调用点接线），宽/松档默认窗口不会一行显示不下；Loading 骨架行随档同源，加载完成无布局跳动。设置页三选 pill 复用 radio-card 视觉口径（选中 accent_soft + 2px accent_stroke，hover `control_hover` B7 几何判定），zh/en 文案各 5 条。
+- **无图标/url 项回落占位 glyph（I1）**：结果行图标列由「空列」改为极弱色（text4）占位 glyph（U+E7C3）——对齐不变，观感从「图标缺失」变为「本来就没有」；与解码失败的 text2 占位区分层级。修订设计稿 04「空列」决策（代码注释同步记档）。
+- **glyph 用色显式化（I2）**：图标格 glyph 改为显式取 `Palette::text2`。核实发现 `visuals.weak_text_color` 已被 theme.rs 显式接管为 text2（weak 档≠更弱），**行为零变化**，仅消除经由 states 辅助函数的间接引用（该函数已无调用者，删除）。
+- **列表排印 token 化（F1）**：`theme.rs` 新增 `LIST_TITLE_PT/LIST_CAT_PT/LIST_ICON_GAP/LIST_ICON_CELL/LIST_GLYPH_PT`，列表绘制路径（row.rs / icons.rs）全部引用常量——初值 = 现状硬编码值，纯收拢零观感变化，为 F2 铺路。设置页/页脚字号（各有机理与单测锚点）有意不动。
+- **明确不做**（同 DeskBox 的取舍，理由见方案 §3/§4）：256px Shell 图标源（48px 源对 24px 格是精确 2×）、url favicon 网络下载（M5 决策不翻案）、两行文件名（与 B5 单行 + tooltip 决策冲突）、逐组件独立字号。
+- **验证**：`cargo test -p dd-gui` 178 通过（新增 density 往返/回落 1 条、ListMetrics parity 1 条、密度档高度折算 1 条），`cargo check --workspace` 干净。
+
 ### 新增（M8 扩展生态验证：非 Rust 扩展走通协议全链路，协议 v1.0 零改动）
 
 - **扩展开发指南** [`docs/extensions.md`](./docs/extensions.md)：面向第三方开发者的「30 秒心智模型 → 10 分钟上手」路径。含**三条铁律**（stdout 只出协议消息 / UTF-8 且行内无裸换行 / 通知不回复）、**三个 Windows 陷阱**（文本模式的 `\n`→`\r\n`；stdout 默认编码可能是 cp936 而非 UTF-8，后者不容忍）、各方法按「值得实现」排序、`host/*` 反向请求（不必阻塞等应答）、自检说明、**调试手册（8 条症状→原因对照）**、崩溃语义与超时预算。只写规范里没有的东西，重复处一律引用 `protocol.md` / `manifest-schema.md` 并声明「冲突以规范为准」。

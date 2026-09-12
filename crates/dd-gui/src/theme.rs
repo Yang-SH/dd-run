@@ -21,6 +21,67 @@ pub const ACCENT_BAR_W: f32 = 3.0; // 选中左侧指示条宽（CSS 3px）
 pub const SEARCHBAR_H: f32 = 40.0; // 搜索栏高（Fluent Input large = 40，D17 filled-darker）
 pub const SEARCHBAR_RADIUS: u8 = 4; // 搜索框圆角（radius-m，filled-darker 无边框）
 
+// ── F1 列表排印 token（icons-typography-plan.md F2/F1；初值 = 091c765
+// 现状硬编码值，纯收拢零观感变化；F2 密度档经 ListMetrics 引用）──────────
+/// 列表行名字号（B1 semibold 族，设计稿 `.name` 14）。
+pub const LIST_TITLE_PT: f32 = 14.0;
+/// 列表类型标签字号（caption1 12，设计稿 05.1）。
+pub const LIST_CAT_PT: f32 = 12.0;
+/// 图标列与标题间距（CSS `.row` gap 12px）。
+pub const LIST_ICON_GAP: f32 = 12.0;
+/// 列表图标格边长（设计稿 v2 20 → 真机反馈 2026-09-12 放大到 24）。
+pub const LIST_ICON_CELL: f32 = 24.0;
+/// glyph 图标字号（随图标格 24 的 20/24 比例）。
+pub const LIST_GLYPH_PT: f32 = 20.0;
+
+// ── F2 列表密度（icons-typography-plan.md，参考 DeskBox「图标/文字大小
+// 可调」）────────────────────────────────────────────────────────────────
+/// 列表密度档 → 行几何/排印指标。一档联动五值（不拆孤立设置项）；
+/// **标准档硬性等于上方各常量**（parity 单测守卫），紧凑/宽松档按 ±1 字号、
+/// ±4px 行高的同节奏派生。
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ListMetrics {
+    /// 行高（标准档 = [`ROW_H`]）。
+    pub row_h: f32,
+    /// 行名字号（标准档 = [`LIST_TITLE_PT`]）。
+    pub title_pt: f32,
+    /// 类型标签字号（标准档 = [`LIST_CAT_PT`]）。
+    pub cat_pt: f32,
+    /// 图标格边长（标准档 = [`LIST_ICON_CELL`]）。
+    pub icon_cell: f32,
+    /// glyph 图标字号（标准档 = [`LIST_GLYPH_PT`]）。
+    pub glyph_pt: f32,
+}
+
+impl ListMetrics {
+    pub const fn of(density: crate::settings::ListDensity) -> Self {
+        use crate::settings::ListDensity;
+        match density {
+            ListDensity::Compact => Self {
+                row_h: 36.0,
+                title_pt: 13.0,
+                cat_pt: 11.0,
+                icon_cell: 20.0,
+                glyph_pt: 16.0,
+            },
+            ListDensity::Standard => Self {
+                row_h: ROW_H,
+                title_pt: LIST_TITLE_PT,
+                cat_pt: LIST_CAT_PT,
+                icon_cell: LIST_ICON_CELL,
+                glyph_pt: LIST_GLYPH_PT,
+            },
+            ListDensity::Relaxed => Self {
+                row_h: 44.0,
+                title_pt: 15.0,
+                cat_pt: 13.0,
+                icon_cell: 28.0,
+                glyph_pt: 24.0,
+            },
+        }
+    }
+}
+
 // ── 页脚（`.panel-footer` / `.keys` / `.dot`）几何 ─────────────────────────
 // v4：padding 8px 16px、字号 caption1 12/16、键帽 mini 10/14（页脚总高 32px）。
 pub const FOOTER_PAD_X: f32 = 16.0; // `.panel-footer` padding: 8px 16px
@@ -744,5 +805,31 @@ mod tests {
         assert_eq!(theme_preference(ThemePref::System), ThemePreference::System);
         assert_eq!(theme_preference(ThemePref::Light), ThemePreference::Light);
         assert_eq!(theme_preference(ThemePref::Dark), ThemePreference::Dark);
+    }
+
+    /// F2 parity：密度标准档硬性等于排印/几何常量锚点（紧凑/宽松按
+    /// ±1 字号、±4px 行高同节奏派生），改常量漏改映射在此被拦下。
+    #[test]
+    fn list_metrics_standard_matches_constants() {
+        use crate::settings::ListDensity;
+        let m = ListMetrics::of(ListDensity::Standard);
+        assert_eq!(m.row_h, ROW_H, "标准档行高 = ROW_H");
+        assert_eq!(m.title_pt, LIST_TITLE_PT, "标准档行名字号");
+        assert_eq!(m.cat_pt, LIST_CAT_PT, "标准档标签字号");
+        assert_eq!(m.icon_cell, LIST_ICON_CELL, "标准档图标格");
+        assert_eq!(m.glyph_pt, LIST_GLYPH_PT, "标准档 glyph 字号");
+        // 非标准档为独立取值，且节奏与标准档对齐（行高 ±4）
+        assert_eq!(
+            ListMetrics::of(ListDensity::Compact).row_h,
+            ROW_H - 4.0,
+            "紧凑 = 标准 − 4"
+        );
+        assert_eq!(
+            ListMetrics::of(ListDensity::Relaxed).row_h,
+            ROW_H + 4.0,
+            "宽松 = 标准 + 4"
+        );
+        assert_eq!(ListMetrics::of(ListDensity::Compact).icon_cell, 20.0);
+        assert_eq!(ListMetrics::of(ListDensity::Relaxed).icon_cell, 28.0);
     }
 }

@@ -42,10 +42,11 @@ impl PaletteApp {
         // 先同步旗标防重复发送。
         let want_settings = self.stack.current().is_settings;
         self.settings_sized = want_settings;
+        let row_h = dd_gui::theme::ListMetrics::of(self.settings.density).row_h;
         let (w, h) = if want_settings {
-            settings_panel_size(self.last_work_area, self.settings.panel_size)
+            settings_panel_size(self.last_work_area, self.settings.panel_size, row_h)
         } else {
-            root_panel_size(self.last_work_area, self.settings.panel_size)
+            root_panel_size(self.last_work_area, self.settings.panel_size, row_h)
         };
         self.shown_size = Some((w, h));
         // 按**目标尺寸**居中（不再读 stale `inner_rect`）：重开设置页后回到根页

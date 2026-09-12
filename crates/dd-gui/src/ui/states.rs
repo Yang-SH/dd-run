@@ -5,13 +5,6 @@ use crate::ui::settings_view::accent_soft;
 use dd_gui::theme;
 use eframe::egui;
 
-/// egui 0.36 中 `weak_text_color` 是 `Option<Color32>`，取不到时退回文本色。
-pub(crate) fn weak_text_color(ui: &egui::Ui) -> egui::Color32 {
-    ui.visuals()
-        .weak_text_color
-        .unwrap_or_else(|| ui.visuals().text_color())
-}
-
 /// 单个列表项行（设计稿 01 ueli 式布局）：**图标 20px 列 + 名称 + 描述徽标
 /// （名称右侧）+ Tag chips（贴右）**；40px 高（[`theme::ROW_H`]，D8）。
 ///
@@ -24,7 +17,8 @@ pub(crate) fn weak_text_color(ui: &egui::Ui) -> egui::Color32 {
 ///
 /// 返回整行可交互响应（hover + click 感知），供 `draw_list` 做
 /// 「悬停高亮 / 单击执行」与「选中项滚入可视区」。
-/// `icon` = [`PaletteApp::resolve_icons`] 预解析结果（`None` 项 = 空列占位对齐）。
+/// `icon` = [`PaletteApp::resolve_icons`] 预解析结果（`None` 项 = 弱色占位
+/// glyph，对齐不变——I1 修订原「空列」决策）。
 ///
 /// 行背景在 Frame 之前按**预算行矩形**判定 hover（`ui.rect_contains_pointer`），
 /// 避免依赖交互响应回读的帧延迟；预算矩形与实际分配矩形一致的前提是行前无
@@ -86,8 +80,9 @@ pub(crate) fn shimmer_color(p: &theme::Palette, time: f64) -> egui::Color32 {
 
 /// Loading 态（§07.2）：Spinner（22×22、环宽 2.5px、accent 旋转弧 +
 /// accent-soft 底环、0.9s/圈）+ caption「正在加载…」+ 3 条骨架行
-/// （行高 [`theme::ROW_H`]：图标块 20×20 圆角 6 + 名称条 12px 高 +
-/// 描述条 10px 高右对齐，shimmer 底色）。加载完成行高一致 → 无布局跳动（A3）。
+/// （行高 `m.row_h`：图标块 `m.icon_cell`×`m.icon_cell` 圆角 6 + 名称条
+/// 12px 高 + 描述条 10px 高右对齐，shimmer 底色）。加载完成行高一致 →
+/// 无布局跳动（A3）——骨架行随密度档（F2）与结果行同源。
 ///
 /// 占位设计：不改拉取时序与超时语义（`TIMEOUT_GET_ITEMS` 不变）。
 /// 动画由调用方 `request_repaint_after` 驱动（egui 按需重绘）。
@@ -97,6 +92,7 @@ pub(crate) fn draw_loading_state(
     p: &theme::Palette,
     dark: bool,
     time: f64,
+    m: theme::ListMetrics,
 ) {
     // ── Spinner + 文案（`.loading`：居中、gap 12） ──
     ui.vertical_centered(|ui| {
@@ -138,14 +134,14 @@ pub(crate) fn draw_loading_state(
         let name_frac = skeleton_name_fraction(idx);
         let c = shimmer_color(p, time + idx as f64 * 0.18); // 各行相位微错开
         let (row, _) = ui.allocate_exact_size(
-            egui::vec2(ui.available_width(), theme::ROW_H),
+            egui::vec2(ui.available_width(), m.row_h),
             egui::Sense::hover(),
         );
         let cy = row.center().y;
-        // 图标块 24×24 圆角 6（随结果行 ICON_CELL 放大到 24 同步，2026-09-12）
-        let icon_rect = egui::Rect::from_min_size(
-            egui::pos2(row.min.x + 8.0, cy - 12.0),
-            egui::vec2(24.0, 24.0),
+        // 图标块 m.icon_cell×m.icon_cell 圆角 6（与结果行图标格同源，F2）
+        let icon_rect = egui::Rect::from_center_size(
+            egui::pos2(row.min.x + 8.0 + m.icon_cell / 2.0, cy),
+            egui::vec2(m.icon_cell, m.icon_cell),
         );
         ui.painter()
             .rect_filled(icon_rect, egui::CornerRadius::same(6), c);
