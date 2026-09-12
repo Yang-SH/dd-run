@@ -68,9 +68,8 @@ pub(crate) fn draw_item_row(
                     .as_deref()
                     .map(|cat| text_width(ui, cat, font12).min(90.0))
                     .unwrap_or(0.0);
-                let title_avail = (ui.available_width()
-                    - if cat_w > 0.0 { cat_w + 12.0 } else { 0.0 })
-                .max(1.0);
+                let title_avail =
+                    (ui.available_width() - if cat_w > 0.0 { cat_w + 12.0 } else { 0.0 }).max(1.0);
                 // 标题：占满中列，过长截断。
                 ui.add_sized(
                     egui::vec2(title_avail, 16.0),

@@ -752,9 +752,18 @@ mod size_tests {
     fn baseline_used_when_workarea_plentiful() {
         // G1（B8 修订）：无记忆值时基准高按工作区推导（宽恒基准 650）——
         // 1080p → 11 行 532；2K / 4K → 12 行上限 572
-        assert_close(root_panel_size(Some((1920.0, 1040.0)), None), (650.0, 532.0));
-        assert_close(root_panel_size(Some((2560.0, 1440.0)), None), (650.0, 572.0));
-        assert_close(root_panel_size(Some((3840.0, 2160.0)), None), (650.0, 572.0));
+        assert_close(
+            root_panel_size(Some((1920.0, 1040.0)), None),
+            (650.0, 532.0),
+        );
+        assert_close(
+            root_panel_size(Some((2560.0, 1440.0)), None),
+            (650.0, 572.0),
+        );
+        assert_close(
+            root_panel_size(Some((3840.0, 2160.0)), None),
+            (650.0, 572.0),
+        );
         // 800×600 小本屏：可用区 (784, 584) → 9 行下限 452 原样容纳
         assert_close(root_panel_size(Some((800.0, 600.0)), None), (650.0, 452.0));
     }
@@ -851,7 +860,10 @@ mod size_tests {
         // 极小工作区：同样落 9 行下限（最终由 clamp 兜底 460×400）
         close(base_height_for_workarea(120.0), 452.0);
         // 派生接入根页：无记忆值 + 充裕屏 → (650, 572)
-        assert_close(root_panel_size(Some((2560.0, 1440.0)), None), (650.0, 572.0));
+        assert_close(
+            root_panel_size(Some((2560.0, 1440.0)), None),
+            (650.0, 572.0),
+        );
         // 记忆值优先：推导不参与
         assert_close(
             root_panel_size(Some((2560.0, 1440.0)), Some((650, 440))),

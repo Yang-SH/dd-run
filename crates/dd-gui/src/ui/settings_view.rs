@@ -199,9 +199,11 @@ impl PaletteApp {
                     egui::pos2(item_rect.left(), item_rect.center().y - 8.0),
                     egui::vec2(3.0, 16.0),
                 );
-                nav_ui
-                    .painter()
-                    .rect_filled(indicator, egui::CornerRadius::same(2), p.accent_stroke);
+                nav_ui.painter().rect_filled(
+                    indicator,
+                    egui::CornerRadius::same(2),
+                    p.accent_stroke,
+                );
             }
             // 图标 16px：内边距 12 + 槽位 16 居中；文字：图标右 12 起（左+40）。
             // B7：未选项 hover 时图标/文字 text2→text 提亮。
@@ -971,11 +973,7 @@ impl PaletteApp {
                     ui.add_space(28.0);
                     // B6①：报错文案走 Palette::danger（原裸色值 #C42B1C 违反
                     // 「绘制层不写裸色值」契约且不适配亮色主题）。
-                    ui.label(
-                        egui::RichText::new(err.clone())
-                            .size(12.0)
-                            .color(p.danger),
-                    );
+                    ui.label(egui::RichText::new(err.clone()).size(12.0).color(p.danger));
                 });
             }
         });
@@ -1280,9 +1278,9 @@ fn draw_theme_thumb(ui: &mut egui::Ui, thumb: ThemeThumb, rect: egui::Rect, p: &
                 radius4,
                 dp.panel,
             );
-            let left_half = egui::Rect::from_min_max(rect.min, egui::pos2(mid - 2.0, rect.bottom()));
-            let right_half =
-                egui::Rect::from_min_max(egui::pos2(mid + 2.0, rect.top()), rect.max);
+            let left_half =
+                egui::Rect::from_min_max(rect.min, egui::pos2(mid - 2.0, rect.bottom()));
+            let right_half = egui::Rect::from_min_max(egui::pos2(mid + 2.0, rect.top()), rect.max);
             draw_thumb_region(painter, &lp, left_half);
             draw_thumb_region(painter, &dp, right_half);
         }

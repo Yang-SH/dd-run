@@ -251,11 +251,7 @@ fn load_cjk_font_definitions() -> Option<egui::FontDefinitions> {
     }
     // 后援链与 Proportional 一致（◌ U+25CC 等缺字形继续落 sym/segoe；
     // Latin/CJK 已由 seguisb/cjkbd 覆盖，排在后面的 regular 主字不会截胡）。
-    if let Some(prop) = fonts
-        .families
-        .get(&egui::FontFamily::Proportional)
-        .cloned()
-    {
+    if let Some(prop) = fonts.families.get(&egui::FontFamily::Proportional).cloned() {
         semibold_chain.extend(prop);
     }
     fonts.families.insert(
