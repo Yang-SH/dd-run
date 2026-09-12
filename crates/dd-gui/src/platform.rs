@@ -5,6 +5,27 @@
 use crate::app::PaletteApp;
 use eframe::egui;
 
+/// 内存优化 M1（docs/memory-optimization-plan.md §3.M1）：隐藏后修剪进程
+/// 工作集——提示 OS 把当前物理页移出工作集（`(-1,-1)` = EmptyWorkingSet 语义）。
+/// 页按需软故障回（µs 级），唤起首帧无感；**私有提交不变**，收益 = 后台常驻
+/// 物理内存与 Task Manager「内存」数字的真实下降（启动器隐藏期是常驻态）。
+/// 调用点：`ui()` 隐藏帧绘制收尾（`paint_hide_frame` 消费后）+ 隐藏期
+/// `warm_idle_reclaim` 驱逐之后（`health.rs`）。
+#[cfg(windows)]
+pub fn trim_working_set() {
+    use windows_sys::Win32::System::Memory::SetProcessWorkingSetSizeEx;
+    use windows_sys::Win32::System::Threading::GetCurrentProcess;
+    unsafe {
+        // 伪句柄（GetCurrentProcess），min/max = (SIZE_T)-1 + Flags=0 =
+        // EmptyWorkingSet 语义（等价旧 API SetProcessWorkingSetSize(-1,-1)）
+        SetProcessWorkingSetSizeEx(GetCurrentProcess(), usize::MAX, usize::MAX, 0);
+    }
+}
+
+/// 非 Windows 平台无对应语义，空实现（调用点恒安全）。
+#[cfg(not(windows))]
+pub fn trim_working_set() {}
+
 /// 加载本地字体栈：CJK 主字（msyh / SimHei / Deng）、Segoe UI Symbol 符号后援、
 /// Segoe UI 拉丁/符号扩展后援、Segoe Fluent/MDL2 图标字体（§8.6 glyph 图标，M5 UI 批次 2）。
 ///
@@ -52,6 +73,35 @@ pub fn setup_cjk_fonts(ctx: &egui::Context) {
         .expect("spawn cjk-fonts thread");
 }
 
+/// 读单个字体文件为 egui 字体数据（内存优化 M2，docs/memory-optimization-plan.md
+/// §3.M2）：**只读内存映射**接入——文件页不计私有提交、可被系统随时回收重读
+/// （字体「大而偶用」的理想形态）。上游事实（epaint 0.36.1 已核）：
+/// `FontData::from_static(&'static [u8])` + skrifa `FontRef` 纯借用解析 ⇒ mmap
+/// 切片贯穿 FontData → skrifa → set_fonts 热替换重解析全链路，零私有拷贝。
+/// mmap 常驻进程全程（`Box::leak` 有意为之——字体生命周期即进程生命周期）；
+/// 映射失败回落整读 `from_owned`（行为与 M6 批次 6.2 完全一致）。
+fn load_font_file(path: &str) -> Option<egui::FontData> {
+    match std::fs::File::open(path) {
+        Ok(file) => match unsafe { memmap2::Mmap::map(&file) } {
+            Ok(mmap) => {
+                let len = mmap.len();
+                let leaked: &'static [u8] = &*Box::leak(Box::new(mmap));
+                eprintln!("[dd-gui] 字体 mmap 化：{path}（{len} B，文件页，不计私有提交）");
+                Some(egui::FontData::from_static(leaked))
+            }
+            Err(e) => {
+                let bytes = std::fs::read(path).ok()?;
+                eprintln!(
+                    "[dd-gui] 字体 mmap 失败（{e}），回落整读：{path}（{} B）",
+                    bytes.len()
+                );
+                Some(egui::FontData::from_owned(bytes))
+            }
+        },
+        Err(_) => None,
+    }
+}
+
 /// 读盘并构建字体定义（纯函数，供 [`setup_cjk_fonts`] 的后台线程调用）；
 /// `None` = 无任何 CJK 字体可用（维持 egui 默认字体）。
 fn load_cjk_font_definitions() -> Option<egui::FontDefinitions> {
@@ -75,34 +125,31 @@ fn load_cjk_font_definitions() -> Option<egui::FontDefinitions> {
         .into_iter()
         .find(|p| std::path::Path::new(p).is_file())
     {
-        match std::fs::read(path) {
-            Ok(bytes) => {
-                fonts.font_data.insert(
-                    "cjk".to_owned(),
-                    std::sync::Arc::new(egui::FontData::from_owned(bytes)),
-                );
-                fonts
-                    .families
-                    .entry(egui::FontFamily::Proportional)
-                    .or_default()
-                    .push("cjk".to_owned());
-                fonts
-                    .families
-                    .entry(egui::FontFamily::Monospace)
-                    .or_default()
-                    .push("cjk".to_owned());
-                any_loaded = true;
-            }
-            Err(e) => eprintln!("[dd-gui] 读 CJK 字体 {path} 失败：{e}"),
+        if let Some(data) = load_font_file(path) {
+            fonts
+                .font_data
+                .insert("cjk".to_owned(), std::sync::Arc::new(data));
+            fonts
+                .families
+                .entry(egui::FontFamily::Proportional)
+                .or_default()
+                .push("cjk".to_owned());
+            fonts
+                .families
+                .entry(egui::FontFamily::Monospace)
+                .or_default()
+                .push("cjk".to_owned());
+            any_loaded = true;
+        } else {
+            eprintln!("[dd-gui] 读 CJK 字体 {path} 失败");
         }
     }
-    if let Ok(bytes) = std::fs::read(sym_candidate) {
+    if let Some(data) = load_font_file(sym_candidate) {
         // 符号后援：append 在 cjk 之后，egui 字形回退按字体族顺序查找，
         // cjk 缺的 Geometric Shapes/Misc Symbols 落到 seguisym。
-        fonts.font_data.insert(
-            "sym".to_owned(),
-            std::sync::Arc::new(egui::FontData::from_owned(bytes)),
-        );
+        fonts
+            .font_data
+            .insert("sym".to_owned(), std::sync::Arc::new(data));
         fonts
             .families
             .entry(egui::FontFamily::Proportional)
@@ -121,57 +168,48 @@ fn load_cjk_font_definitions() -> Option<egui::FontDefinitions> {
     // 缺失的拉丁修饰符码位落到这里（见函数 doc 注释的取证记录）。零 PUA
     // 码位，插在图标字体之前无抢字形风险；缺文件（< Vista）仅记日志。
     let latin_candidate = r"C:\Windows\Fonts\segoeui.ttf";
-    if std::path::Path::new(latin_candidate).is_file() {
-        let path = latin_candidate;
-        match std::fs::read(path) {
-            Ok(bytes) => {
-                fonts.font_data.insert(
-                    "segoe".to_owned(),
-                    std::sync::Arc::new(egui::FontData::from_owned(bytes)),
-                );
-                // 插在 sym 之后、icons 之前：普通拉丁/符号优先用 Segoe UI，
-                // PUA 图标码位继续落到后面的图标字体。
-                fonts
-                    .families
-                    .entry(egui::FontFamily::Proportional)
-                    .or_default()
-                    .push("segoe".to_owned());
-                fonts
-                    .families
-                    .entry(egui::FontFamily::Monospace)
-                    .or_default()
-                    .push("segoe".to_owned());
-                eprintln!("[dd-gui] 已加载拉丁后援字体：{path}");
-            }
-            Err(e) => eprintln!("[dd-gui] 读拉丁后援字体 {path} 失败：{e}"),
-        }
+    if let Some(data) = load_font_file(latin_candidate) {
+        fonts
+            .font_data
+            .insert("segoe".to_owned(), std::sync::Arc::new(data));
+        // 插在 sym 之后、icons 之前：普通拉丁/符号优先用 Segoe UI，
+        // PUA 图标码位继续落到后面的图标字体。
+        fonts
+            .families
+            .entry(egui::FontFamily::Proportional)
+            .or_default()
+            .push("segoe".to_owned());
+        fonts
+            .families
+            .entry(egui::FontFamily::Monospace)
+            .or_default()
+            .push("segoe".to_owned());
+        eprintln!("[dd-gui] 已加载拉丁后援字体：{latin_candidate}");
     }
     if let Some(path) = icon_candidates
         .into_iter()
         .find(|p| std::path::Path::new(p).is_file())
     {
-        match std::fs::read(path) {
-            Ok(bytes) => {
-                fonts.font_data.insert(
-                    "icons".to_owned(),
-                    std::sync::Arc::new(egui::FontData::from_owned(bytes)),
-                );
-                // 追加在族末（cjk/sym 之后）：PUA 码位（§8.6 glyph 值）落到图标字体。
-                // 加入 Proportional + Monospace 两个族（列表副标题/键位提示同源显示）。
-                fonts
-                    .families
-                    .entry(egui::FontFamily::Proportional)
-                    .or_default()
-                    .push("icons".to_owned());
-                fonts
-                    .families
-                    .entry(egui::FontFamily::Monospace)
-                    .or_default()
-                    .push("icons".to_owned());
-                any_loaded = true;
-                eprintln!("[dd-gui] 已加载图标字体：{path}");
-            }
-            Err(e) => eprintln!("[dd-gui] 读图标字体 {path} 失败：{e}"),
+        if let Some(data) = load_font_file(path) {
+            fonts
+                .font_data
+                .insert("icons".to_owned(), std::sync::Arc::new(data));
+            // 追加在族末（cjk/sym 之后）：PUA 码位（§8.6 glyph 值）落到图标字体。
+            // 加入 Proportional + Monospace 两个族（列表副标题/键位提示同源显示）。
+            fonts
+                .families
+                .entry(egui::FontFamily::Proportional)
+                .or_default()
+                .push("icons".to_owned());
+            fonts
+                .families
+                .entry(egui::FontFamily::Monospace)
+                .or_default()
+                .push("icons".to_owned());
+            any_loaded = true;
+            eprintln!("[dd-gui] 已加载图标字体：{path}");
+        } else {
+            eprintln!("[dd-gui] 读图标字体 {path} 失败");
         }
     } else {
         eprintln!("[dd-gui] 未找到图标字体（SegoeIcons/segmdl2）；glyph 图标将显示为方块");

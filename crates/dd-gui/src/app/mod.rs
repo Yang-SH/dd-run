@@ -582,6 +582,17 @@ impl eframe::App for PaletteApp {
             }
             self.paint_hide_frame = false;
             self.draw_panel(ui);
+            // 内存优化 M3+M1（docs/memory-optimization-plan.md §3）：隐藏帧已画完，
+            // 此后整个隐藏期无绘制——图标纹理全部释放（下次唤起仅对可见行惰性
+            // 重解码，读的是落盘 PNG 缓存）+ 修剪工作集（页按需软故障回）。
+            // 挂在 paint_hide_frame 消费点而非 hide()：hide() 之后还要绘一帧
+            // 真实内容，先清会被复绘立即重填。
+            let icon_n = self.icon_cache.len();
+            if icon_n > 0 {
+                self.icon_cache.clear();
+                eprintln!("[dd-gui] 隐藏收尾：icon_cache 清空（{icon_n} 项纹理）");
+            }
+            crate::platform::trim_working_set();
             return;
         }
         let ctx = ui.ctx().clone();

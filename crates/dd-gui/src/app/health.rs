@@ -65,6 +65,7 @@ impl PaletteApp {
         if self.visible || self.processes.is_empty() {
             return;
         }
+        let mut evicted = false;
         for id in self.lru.idle_victims(WARM_IDLE_TTL) {
             if !self.processes.iter().any(|(pid, _)| pid == &id) {
                 continue; // 在途请求（进程已 take 出保活集）：等归还后再判
@@ -79,6 +80,12 @@ impl PaletteApp {
                 WARM_IDLE_TTL.as_secs()
             );
             self.evict_warm(&id);
+            evicted = true;
+        }
+        // 内存优化 M1（docs/memory-optimization-plan.md §3）：驱逐后同步修剪
+        // 工作集——本 tick 由 request_repaint_after 驱动，无额外唤醒源。
+        if evicted {
+            crate::platform::trim_working_set();
         }
     }
 
