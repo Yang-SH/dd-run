@@ -312,44 +312,33 @@ impl PaletteApp {
                 ui.spacing_mut().item_spacing.x = 0.0;
                 let avail = ui.available_width();
                 let card_w = ((avail - 2.0 * gap) / 3.0).floor().max(64.0);
+                // B6③：缩略图种类跟随目标主题（跟随系统 = 亮暗拼接）
                 let prefs = [
                     (
                         dd_gui::settings::ThemePref::System,
                         crate::text::t(lang, "set.theme.follow"),
                         "System",
-                        // swatch 系统卡显示亮 + 暗双本色
-                        [
-                            egui::Color32::WHITE,
-                            egui::Color32::from_rgb(0x1b, 0x1b, 0x1b),
-                        ],
+                        ThemeThumb::System,
                     ),
                     (
                         dd_gui::settings::ThemePref::Light,
                         crate::text::t(lang, "set.theme.light"),
                         "Light",
-                        // 亮色主题卡：白 + 浅灰
-                        [
-                            egui::Color32::WHITE,
-                            egui::Color32::from_rgb(0xf4, 0xf4, 0xf4),
-                        ],
+                        ThemeThumb::Light,
                     ),
                     (
                         dd_gui::settings::ThemePref::Dark,
                         crate::text::t(lang, "set.theme.dark"),
                         "Dark",
-                        // 暗色主题卡：灰[16] + 灰[12]
-                        [
-                            egui::Color32::from_rgb(0x29, 0x29, 0x29),
-                            egui::Color32::from_rgb(0x1f, 0x1f, 0x1f),
-                        ],
+                        ThemeThumb::Dark,
                     ),
                 ];
-                for (i, (pref, zh, en, sw)) in prefs.iter().enumerate() {
+                for (i, (pref, zh, en, thumb)) in prefs.iter().enumerate() {
                     if i > 0 {
                         ui.add_space(gap);
                     }
                     let selected = self.settings.theme == *pref;
-                    if draw_radio_card(ui, card_w, zh, en, *sw, selected, p, dark) {
+                    if draw_radio_card(ui, card_w, zh, en, *thumb, selected, p, dark) {
                         pick = Some(*pref);
                     }
                 }
@@ -823,30 +812,55 @@ impl PaletteApp {
             });
             card.add_space(8.0);
             // ── 已启用引擎列表：名称 + 模板截断 + 删除（v4.9：名称 14 / 模板 12、
-            // 行高 32——旧 12/10 过小；删除改 Fluent 小按钮）──
+            // 行高 32；删除 = Fluent 小按钮）──
+            // B6②：行级 hover 底 + 模板全文 tooltip（截断时）。行矩形先分配
+            // （hover 底画在文字下层），内容经 child Ui 定位——与列表行
+            // allocate-first 同一惯用法。
             for e in &enabled {
-                card.horizontal(|ui| {
-                    ui.spacing_mut().item_spacing.x = 0.0;
-                    ui.add_space(28.0);
-                    ui.set_min_height(32.0);
-                    ui.label(egui::RichText::new(&e.name).size(14.0).color(p.text));
-                    ui.add_space(12.0);
-                    ui.add(
-                        egui::Label::new(
-                            egui::RichText::new(&e.template)
-                                .size(12.0)
-                                .color(p.text3)
-                                .monospace(),
-                        )
-                        .truncate(),
-                    );
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        ui.add_space(4.0);
-                        if fluent_button_small(ui, self.tr("set.search.delete"), p) {
-                            remove_name = Some(e.name.clone());
-                        }
-                    });
+                let (row_rect, row_resp) = card.allocate_exact_size(
+                    egui::vec2(card.available_width(), 32.0),
+                    egui::Sense::hover(),
+                );
+                if row_resp.hovered() {
+                    card.painter()
+                        .rect_filled(row_rect, egui::CornerRadius::same(4), p.row_hover);
+                }
+                let mut row_ui = card.new_child(
+                    egui::UiBuilder::new()
+                        .max_rect(row_rect)
+                        .layout(egui::Layout::left_to_right(egui::Align::Center)),
+                );
+                row_ui.spacing_mut().item_spacing.x = 0.0;
+                row_ui.add_space(28.0);
+                row_ui.label(egui::RichText::new(&e.name).size(14.0).color(p.text));
+                row_ui.add_space(12.0);
+                // 删除按钮贴右：先按 fluent_button_small 同口径预算按钮宽
+                // （文字 + 左右 8 padding，下限 = 高 24 + 8），模板占剩余宽截断。
+                let del_label = self.tr("set.search.delete");
+                let font12 = egui::FontId::proportional(12.0);
+                let btn_w = (text_width(&row_ui, del_label, font12) + 16.0).max(32.0);
+                let font_mono = egui::FontId::monospace(12.0);
+                let tmpl_avail = (row_ui.available_width() - btn_w - 12.0).max(1.0);
+                let template_truncated = text_width(&row_ui, &e.template, font_mono) > tmpl_avail;
+                row_ui.add_sized(
+                    egui::vec2(tmpl_avail, 16.0),
+                    egui::Label::new(
+                        egui::RichText::new(&e.template)
+                            .size(12.0)
+                            .color(p.text3)
+                            .monospace(),
+                    )
+                    .truncate(),
+                );
+                row_ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    ui.add_space(4.0);
+                    if fluent_button_small(ui, del_label, p) {
+                        remove_name = Some(e.name.clone());
+                    }
                 });
+                if template_truncated {
+                    row_resp.on_hover_text(e.template.clone());
+                }
             }
             if enabled.is_empty() {
                 card.horizontal(|ui| {
@@ -948,10 +962,12 @@ impl PaletteApp {
             if let Some(err) = &self.engine_add_err {
                 card.horizontal(|ui| {
                     ui.add_space(28.0);
+                    // B6①：报错文案走 Palette::danger（原裸色值 #C42B1C 违反
+                    // 「绘制层不写裸色值」契约且不适配亮色主题）。
                     ui.label(
                         egui::RichText::new(err.clone())
                             .size(12.0)
-                            .color(egui::Color32::from_rgb(0xC4, 0x2B, 0x1C)),
+                            .color(p.danger),
                     );
                 });
             }
@@ -1193,8 +1209,87 @@ pub(crate) fn accent_soft(dark: bool, p: &theme::Palette) -> egui::Color32 {
     p.accent.gamma_multiply(alpha)
 }
 
+/// 主题缩略图种类（B6③）：跟随系统 = 亮暗左右拼接、亮/暗 = 单色。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ThemeThumb {
+    System,
+    Light,
+    Dark,
+}
+
+/// 单个迷你面板缩略图区域（B6③）：搜索栏条 + 选中行条（accent_stroke）+
+/// 普通行条，全部取目标主题 `pal` 的现有 token 值，零魔法色值。
+fn draw_thumb_region(painter: &egui::Painter, pal: &theme::Palette, r: egui::Rect) {
+    // 搜索栏条（input_fill 底 + 1px border 描边）
+    let sb = egui::Rect::from_min_size(
+        egui::pos2(r.left() + 4.0, r.top() + 5.0),
+        egui::vec2(r.width() - 8.0, 6.0),
+    );
+    painter.rect_filled(sb, egui::CornerRadius::same(2), pal.input_fill);
+    painter.rect_stroke(
+        sb,
+        egui::CornerRadius::same(2),
+        egui::Stroke::new(1.0, pal.border),
+        egui::StrokeKind::Inside,
+    );
+    // 选中行条（accent_stroke）
+    let r1 = egui::Rect::from_min_size(
+        egui::pos2(r.left() + 4.0, r.top() + 15.0),
+        egui::vec2((r.width() - 8.0) * 0.62, 4.0),
+    );
+    painter.rect_filled(r1, egui::CornerRadius::same(2), pal.accent_stroke);
+    // 普通行条
+    let r2 = egui::Rect::from_min_size(
+        egui::pos2(r.left() + 4.0, r.top() + 22.0),
+        egui::vec2((r.width() - 8.0) * 0.45, 4.0),
+    );
+    painter.rect_filled(r2, egui::CornerRadius::same(2), pal.row_selected);
+}
+
+/// 主题缩略图（B6③）：34px 高圆角块，替换原双色块 swatch——直观呈现目标
+/// 主题的面板观感。跟随系统 = 左半亮右半暗拼接。
+fn draw_theme_thumb(ui: &mut egui::Ui, thumb: ThemeThumb, rect: egui::Rect, p: &theme::Palette) {
+    let lp = theme::Palette::light();
+    let dp = theme::Palette::dark();
+    let radius4 = egui::CornerRadius::same(4);
+    let painter = ui.painter();
+    match thumb {
+        ThemeThumb::Light => {
+            painter.rect_filled(rect, radius4, lp.panel);
+            draw_thumb_region(painter, &lp, rect);
+        }
+        ThemeThumb::Dark => {
+            painter.rect_filled(rect, radius4, dp.panel);
+            draw_thumb_region(painter, &dp, rect);
+        }
+        ThemeThumb::System => {
+            // 左半亮右半暗拼接：整块先铺亮底，再叠右半暗底（radius 4 只在
+            // 右缘起作用，中缝为直边拼接线）。
+            let mid = rect.left() + rect.width() * 0.5;
+            painter.rect_filled(rect, radius4, lp.panel);
+            painter.rect_filled(
+                egui::Rect::from_min_max(egui::pos2(mid, rect.top()), rect.max),
+                radius4,
+                dp.panel,
+            );
+            let left_half = egui::Rect::from_min_max(rect.min, egui::pos2(mid - 2.0, rect.bottom()));
+            let right_half =
+                egui::Rect::from_min_max(egui::pos2(mid + 2.0, rect.top()), rect.max);
+            draw_thumb_region(painter, &lp, left_half);
+            draw_thumb_region(painter, &dp, right_half);
+        }
+    }
+    // 外描边用当前主题 border（缩略图属于当前 UI 的 chrome）
+    painter.rect_stroke(
+        rect,
+        radius4,
+        egui::Stroke::new(1.0, p.border),
+        egui::StrokeKind::Inside,
+    );
+}
+
 /// 单张 radio-card（§08.1 "主题单选"）：圆点 12×12 + 名称 (caption1 12/16)
-/// + 副标题 (mini 10/14 fg-3) + swatch (16px 高两色色板)。
+/// + 副标题 (mini 10/14 fg-3) + 迷你面板缩略图（B6③，原双色块 swatch）。
 ///
 /// 规格（§08.1 line 1236）：
 /// - 未选：1px `--border-strong` + `--input-fill` 底 + 圆点 1.5px stroke 空心；
@@ -1208,13 +1303,14 @@ pub(crate) fn draw_radio_card(
     w: f32,
     label: &str,
     sub: &str,
-    swatch_colors: [egui::Color32; 2],
+    thumb: ThemeThumb,
     selected: bool,
     p: &theme::Palette,
     dark: bool,
 ) -> bool {
-    // 高度 = padding 10 top + name 20 + sub 14 + gap 8 + swatch 16 + padding 10 bot = 78
-    let h = 78.0;
+    // 高度 = padding 10 top + name 20 + sub 14 + gap 8 + 缩略图 34 + padding 10 bot = 96
+    //（B6③：缩略图 16→34，卡体随之增高）
+    let h = 96.0;
     let (rect, resp) = ui.allocate_exact_size(egui::vec2(w, h), egui::Sense::click());
     let radius = egui::CornerRadius::same(8);
 
@@ -1276,22 +1372,12 @@ pub(crate) fn draw_radio_card(
         egui::FontId::proportional(11.0),
         p.text3,
     );
-    // swatch 两色色板（16px 高 + gap 4 + 各自 1px stroke）
-    let sw_y = rect.bottom() - 10.0 - 16.0;
-    let sw_w = ((rect.width() - 24.0 - 4.0) / 2.0).max(8.0); // 横向 padding 12 两侧 + gap 4
-    let sw_left = rect.left() + 12.0;
-    for (i, c) in swatch_colors.iter().enumerate() {
-        let sx = sw_left + i as f32 * (sw_w + 4.0);
-        let srect = egui::Rect::from_min_size(egui::pos2(sx, sw_y), egui::vec2(sw_w, 16.0));
-        ui.painter()
-            .rect_filled(srect, egui::CornerRadius::same(4), *c);
-        ui.painter().rect_stroke(
-            srect,
-            egui::CornerRadius::same(4),
-            egui::Stroke::new(1.0, p.border),
-            egui::StrokeKind::Inside,
-        );
-    }
+    // 迷你面板缩略图（B6③，34px 高 + gap 4）
+    let thumb_rect = egui::Rect::from_min_size(
+        egui::pos2(rect.left() + 12.0, rect.bottom() - 10.0 - 34.0),
+        egui::vec2(rect.width() - 24.0, 34.0),
+    );
+    draw_theme_thumb(ui, thumb, thumb_rect, p);
     resp.clicked()
 }
 
