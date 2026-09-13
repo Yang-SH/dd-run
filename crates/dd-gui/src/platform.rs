@@ -54,8 +54,9 @@ pub fn trim_working_set() {}
 /// 短暂显示方块后自动恢复（字体热替换为原子操作，无半新半旧帧）。
 pub fn setup_cjk_fonts(ctx: &egui::Context) {
     // B1 语义字重：先**同步**注册 semibold 族（映射到 egui 默认 Proportional
-    // 链）——字体后台热替换（~2.5s）完成前，首帧若引用未知族 egui 无法回退；
-    // 注册后前期以默认字体渲染，热替换后自动获得真实 semibold 字形。
+    // 链）——字体后台热替换（~2.5s）完成前，首帧若引用未知族 egui 无法回退。
+    // 2026-09-13 真机反馈「不用加粗字体」撤销加粗：该族自此恒指 regular 字形
+    // （seguisb/msyhbd 停载，见 load_cjk_font_definitions 末尾注册）。
     let mut fonts = egui::FontDefinitions::default();
     let prop = fonts
         .families
@@ -119,6 +120,15 @@ fn load_font_file(path: &str) -> Option<egui::FontData> {
 
 /// 读盘并构建字体定义（纯函数，供 [`setup_cjk_fonts`] 的后台线程调用）；
 /// `None` = 无任何 CJK 字体可用（维持 egui 默认字体）。
+///
+/// **F3 拉丁主字纠偏（2026-09-13）**：最终 Proportional 族序由下方**显式重排**
+/// 为 `[segoe, NotoEmoji-Regular, emoji-icon-font, cjk, sym, icons]`——拉丁/
+/// 数字主字 = Segoe UI（Windows 原生排印；参考 DeskBox = WinUI 3 系统管线的
+/// 默认观感），并消除「semibold 拉丁 = Segoe UI Semibold / regular 拉丁 =
+/// Ubuntu-Light」的同屏异字体混排。重排原则**仅拉丁一处变化**：CJK/emoji/
+/// Geometric Shapes/PUA 的回退路由与重排前逐一相同；缺文件的成员被剔除
+/// （降级安全，如无 segoe → 回到旧观感）。Ubuntu-Light 移出 Proportional
+/// （Hack 仍留在 Monospace 族——该族全仓无调用者，零行为变化）。
 fn load_cjk_font_definitions() -> Option<egui::FontDefinitions> {
     let cjk_candidates = [
         // 优先 msyh.ttc（YaHei，Win7+ 必装且完整含 U+2713 ✓ 与 CJK）
@@ -184,16 +194,16 @@ fn load_cjk_font_definitions() -> Option<egui::FontDefinitions> {
     // 码位，插在图标字体之前无抢字形风险；缺文件（< Vista）仅记日志。
     let latin_candidate = r"C:\Windows\Fonts\segoeui.ttf";
     if let Some(data) = load_font_file(latin_candidate) {
-        fonts
-            .font_data
-            .insert("segoe".to_owned(), std::sync::Arc::new(data));
-        // 插在 sym 之后、icons 之前：普通拉丁/符号优先用 Segoe UI，
-        // PUA 图标码位继续落到后面的图标字体。
-        fonts
-            .families
-            .entry(egui::FontFamily::Proportional)
-            .or_default()
-            .push("segoe".to_owned());
+            fonts
+                .font_data
+                .insert("segoe".to_owned(), std::sync::Arc::new(data));
+            // 载入顺序仅决定 font_data 注册；最终族序由下方 F3 重排统一确定
+            // （segoe 置顶 = 拉丁主字，图标字体仍居末位不抢 PUA 码位）。
+            fonts
+                .families
+                .entry(egui::FontFamily::Proportional)
+                .or_default()
+                .push("segoe".to_owned());
         fonts
             .families
             .entry(egui::FontFamily::Monospace)
@@ -230,33 +240,45 @@ fn load_cjk_font_definitions() -> Option<egui::FontDefinitions> {
         eprintln!("[dd-gui] 未找到图标字体（SegoeIcons/segmdl2）；glyph 图标将显示为方块");
     }
 
-    // B1 语义字重：semibold 族主字（拉丁 = Segoe UI Semibold，Win7+ 必装；
-    // CJK = 微软雅黑 Bold msyhbd.ttc）。任一缺失仅记日志、跳过——族内缺主字
-    // 时该脚本回落 regular 观感，不影响启动。mmap 载入策略与 msyh.ttc 相同
-    // （msyhbd.ttc ~19MB，文件页常驻不计私有提交）。
-    let semibold_candidates = [
-        (r"C:\Windows\Fonts\seguisb.ttf", "seguisb"),
-        (r"C:\Windows\Fonts\msyhbd.ttc", "cjkbd"),
-    ];
-    let mut semibold_chain: Vec<String> = Vec::new();
-    for (path, key) in semibold_candidates {
-        if let Some(data) = load_font_file(path) {
-            fonts
-                .font_data
-                .insert(key.to_owned(), std::sync::Arc::new(data));
-            semibold_chain.push(key.to_owned());
-        } else {
-            eprintln!("[dd-gui] 未找到 semibold 字体 {path}（对应脚本以 regular 字重渲染）");
-        }
-    }
-    // 后援链与 Proportional 一致（◌ U+25CC 等缺字形继续落 sym/segoe；
-    // Latin/CJK 已由 seguisb/cjkbd 覆盖，排在后面的 regular 主字不会截胡）。
-    if let Some(prop) = fonts.families.get(&egui::FontFamily::Proportional).cloned() {
-        semibold_chain.extend(prop);
-    }
+    // F3 拉丁主字纠偏（2026-09-13）：显式重排 Proportional 族序——只做两个
+    // 动作：`segoe` 提到最前（拉丁/数字主字 = Segoe UI，见函数 doc）、
+    // `Ubuntu-Light` 移出，其余成员相对次序一字不动 ⇒ 除拉丁外零路由变化：
+    //   旧：[Ubuntu-Light, NotoEmoji, emoji-icon, cjk, sym, segoe, icons]
+    //   新：[segoe,       NotoEmoji, emoji-icon, cjk, sym,        icons]
+    // CJK 汉字/全角标点 → msyh（segoe/NotoEmoji/emoji-icon 均无 CJK 不截胡）；
+    // emoji → NotoEmoji（相对 sym 次序不变）；◌ → seguisym；PUA → 图标字体。
+    // U+A78B（AMD 显示名）由族首 segoe 直接命中（v4.12 修复语义不变）。
+    // 缺文件成员剔除：retain 按 font_data 实际注册过滤，降级安全。
+    // semibold 族（见下方注册）同样指向本链——2026-09-13 撤销加粗后恒为
+    // regular 字形，regular/semibold 名义族共用一套字形，无混排问题。
+    let mut prop_order: Vec<String> = [
+        "segoe",
+        "NotoEmoji-Regular",
+        "emoji-icon-font",
+        "cjk",
+        "sym",
+        "icons",
+    ]
+    .into_iter()
+    .map(String::from)
+    .collect();
+    prop_order.retain(|k| fonts.font_data.contains_key(k.as_str()));
+    fonts
+        .families
+        .insert(egui::FontFamily::Proportional, prop_order);
+
+    // B1 语义字重（2026-09-13 真机反馈「不用加粗字体」撤销）：seguisb.ttf /
+    // msyhbd.ttc **不再加载**——theme::semibold 已回落 regular 字形，加粗面
+    // 零引用（少两份 mmap 读盘 + 解析，热替换更快）。族名保留注册并指向
+    // regular 链：热替换会整体重建 FontDefinitions，不注册则该族在替换后
+    // 消失；显式兜底，防任何历史 FontId 引用未知族。
     fonts.families.insert(
         egui::FontFamily::Name(crate::theme::SEMIBOLD_FAMILY.into()),
-        semibold_chain,
+        fonts
+            .families
+            .get(&egui::FontFamily::Proportional)
+            .cloned()
+            .unwrap_or_default(),
     );
 
     if !any_loaded {
@@ -700,6 +722,129 @@ pub fn set_immersive_dark(hwnd: isize, dark: bool) -> bool {
 #[cfg(not(windows))]
 pub fn set_immersive_dark(_hwnd: isize, _dark: bool) -> bool {
     false
+}
+
+/// 窗口 chrome 应用（M3/M4，2026-09-13，参考 DeskBox 材质能力清单）：
+/// - **圆角**：`DWMWA_WINDOW_CORNER_PREFERENCE` 按设置三档（P3，2026-09-13：
+///   圆角 `DWMWCP_ROUND` ≈8px 对齐设计 token `window_corner_radius = 8` /
+///   小圆角 `DWMWCP_ROUNDSMALL` ≈4px / 方角 `DWMWCP_DONOTROUND`）——无边框
+///   工具窗在 Win11 上是否默认圆角取决于系统对窗口样式的判定，行为不定；
+///   显式设置后跨机型确定。设置页改选时由 `apply_corner_pref` 重调（DWM
+///   属性幂等，与 egui 帧内容无关，无防闪面）；
+/// - **禁过渡**：`DWMWA_TRANSITIONS_FORCEDISABLED`——唤起/隐藏瞬时（A1 验收
+///   语义），不随系统「窗口动画」设置漂移（DeskBox 有动画开关；启动器场景
+///   无「要动画」的需求面，直接禁用并记档，不做设置项）。
+///
+/// 两属性均为 Win11 文档化 DWM 属性；失败（Win10 / 22621 以下）仅记日志
+/// 跳过，行为与既往一致。首次调用由 `refresh_backdrop` 以 `chrome_applied`
+/// 旗标执行，与材质选择无关（无材质/不透明路径同样圆角）。
+pub fn apply_window_chrome(hwnd: isize, corner: crate::settings::CornerPref) {
+    use crate::settings::CornerPref;
+    use windows_sys::Win32::Foundation::HWND;
+    use windows_sys::Win32::Graphics::Dwm::{
+        DwmSetWindowAttribute, DWMWA_TRANSITIONS_FORCEDISABLED, DWMWA_WINDOW_CORNER_PREFERENCE,
+        DWMWCP_DONOTROUND, DWMWCP_ROUND, DWMWCP_ROUNDSMALL,
+    };
+    let corner: i32 = match corner {
+        CornerPref::Round => DWMWCP_ROUND,
+        CornerPref::Small => DWMWCP_ROUNDSMALL,
+        CornerPref::Square => DWMWCP_DONOTROUND,
+    };
+    unsafe {
+        let hr = DwmSetWindowAttribute(
+            hwnd as HWND,
+            DWMWA_WINDOW_CORNER_PREFERENCE as u32,
+            (&corner) as *const i32 as *const core::ffi::c_void,
+            std::mem::size_of::<i32>() as u32,
+        );
+        if hr != 0 {
+            eprintln!(
+                "[dd-gui] DWMWA_WINDOW_CORNER_PREFERENCE 应用失败（hr=0x{:x}），保持系统默认圆角",
+                hr
+            );
+        }
+        let disable: i32 = 1;
+        let hr = DwmSetWindowAttribute(
+            hwnd as HWND,
+            DWMWA_TRANSITIONS_FORCEDISABLED as u32,
+            (&disable) as *const i32 as *const core::ffi::c_void,
+            std::mem::size_of::<i32>() as u32,
+        );
+        if hr != 0 {
+            eprintln!("[dd-gui] DWMWA_TRANSITIONS_FORCEDISABLED 应用失败（hr=0x{:x}）", hr);
+        }
+    }
+}
+
+/// 非 Windows 平台无对应语义，空实现（调用点恒安全）。
+#[cfg(not(windows))]
+pub fn apply_window_chrome(_hwnd: isize, _corner: crate::settings::CornerPref) {}
+
+/// 面板外描边（M2，2026-09-13）：`DWMWA_BORDER_COLOR`（= 34，Win11 文档化）。
+/// 材质生效时 1px 实色描边压在窗口边缘——Mica 染色极淡，面板边界与桌面易融，
+/// 描边给出可辨轮廓，且跟随 [`apply_window_chrome`] 的圆角形状（DWM 自绘、
+/// 贴窗口形状，无 egui 自绘描边的圆角缺口问题）。取色复用 `Palette::
+/// border_strong` token（暗 0x666666 / 亮 0xd1d1d1），不造新色。`None` →
+/// `DWMWA_BORDER_COLOR_NONE`（0xFFFFFFFE）停画。注意 COLORREF 无 alpha
+/// （0x00BBGGRR，传入色的 alpha 被忽略）；Win10 无此属性失败跳过。
+/// 幂等：材质/主题切换时由 `refresh_backdrop`/`apply_theme_pref` 重设。
+pub fn set_window_border(hwnd: isize, color: Option<egui::Color32>) {
+    use windows_sys::Win32::Foundation::HWND;
+    use windows_sys::Win32::Graphics::Dwm::{DwmSetWindowAttribute, DWMWA_BORDER_COLOR};
+    const BORDER_COLOR_NONE: u32 = 0xFFFF_FFFE;
+    let value: u32 = match color {
+        Some(c) => (c.b() as u32) << 16 | (c.g() as u32) << 8 | c.r() as u32,
+        None => BORDER_COLOR_NONE,
+    };
+    let hr = unsafe {
+        DwmSetWindowAttribute(
+            hwnd as HWND,
+            DWMWA_BORDER_COLOR as u32,
+            (&value) as *const u32 as *const core::ffi::c_void,
+            std::mem::size_of::<u32>() as u32,
+        )
+    };
+    if hr != 0 {
+        eprintln!("[dd-gui] DWMWA_BORDER_COLOR 应用失败（hr=0x{:x}）", hr);
+    }
+}
+
+/// 非 Windows 平台无对应语义，空实现（调用点恒安全）。
+#[cfg(not(windows))]
+pub fn set_window_border(_hwnd: isize, _color: Option<egui::Color32>) {}
+
+/// 系统强调色（P4，2026-09-13）：`DwmGetColorizationColor`（dwmapi，
+/// `Win32_Graphics_Dwm` 特性已启用）——DWM 色彩化色 ≈ 用户在系统设置里选的
+/// 强调色（DeskBox 用 WinRT `UISettings`；此处取等价近似，不引入 WinRT 依赖）。
+/// 返回 `None` = 调用失败，调用方回落 `Palette::accent`。
+///
+/// COLORREF 为 `0x00BBGGRR`（无 alpha，与 [`set_window_border`] 同约定）；
+/// `pfOpaqueBlend = FALSE` 表示 DWM 对该色做透明混合——色相不变，1px 描边
+/// 小面积上混合差量不可辨，忽略该标志直接取色。
+#[cfg(windows)]
+pub fn system_accent_color() -> Option<egui::Color32> {
+    use windows_sys::Win32::Graphics::Dwm::DwmGetColorizationColor;
+    let mut colorref: u32 = 0;
+    let mut opaque: i32 = 0;
+    // SAFETY：两个出参指针均为本地变量，HRESULT 判定后使用。
+    let hr = unsafe { DwmGetColorizationColor(&mut colorref, &mut opaque) };
+    if hr != 0 {
+        eprintln!(
+            "[dd-gui] DwmGetColorizationColor 失败（hr=0x{hr:x}），强调色描边回落 Palette::accent"
+        );
+        return None;
+    }
+    Some(egui::Color32::from_rgb(
+        (colorref & 0xFF) as u8,
+        ((colorref >> 8) & 0xFF) as u8,
+        ((colorref >> 16) & 0xFF) as u8,
+    ))
+}
+
+/// 非 Windows 平台无对应语义：恒 `None`（调用方恒走 `Palette::accent` 回落）。
+#[cfg(not(windows))]
+pub fn system_accent_color() -> Option<egui::Color32> {
+    None
 }
 
 /// 窗口是否 OS 层可见（`IsWindowVisible`）。

@@ -2,9 +2,8 @@
 //!
 //! 契约来源：
 //! - [`docs/manifest-schema.md`](../../docs/manifest-schema.md) §10：内置扩展
-//!   **同样走清单注册**（与第三方无特判代码）；MVP 无安装器，故由宿主在启动时
-//!   **内存注册**——把 `exe_dir` 目录里的 `dd-ext-*.exe` 直接构造为
-//!   [`LoadedExtension`]，等效于"安装器写好了清单、扫描恰好扫到"。
+//!   **不通过清单文件注册**；本模块以**内存注册**等效实现——把扩展元数据直接
+//!   构造为 [`LoadedExtension`]，注册与去重规则与第三方一致（同 id 内置优先）。
 //!   `exe_dir` 的来源见 [`ensure_builtins`] 文档：开发期为宿主 exe 同目录，
 //!   单文件分发历史上为「内嵌扩展物化目录」。**M9 起内置扩展改为 in-process**
 //!   （见 [`builtin_registrations`]，不探测 exe 路径），本函数保留给子进程测试场景。

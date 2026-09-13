@@ -115,12 +115,19 @@ impl PaletteApp {
         let back_clicked = draw_back_btn(&mut back_ui, &p);
 
         // 页标题：painter 直绘锚定 cy（v4.9：16 → 18，真机反馈"整体文字偏小"；
-        // Fluent subtitle 档，40px 顶行内仍居中）。B1：semibold 族真实字重。
-        ui.painter().text(
-            egui::pos2(back_rect.right() + 8.0, cy),
-            egui::Align2::LEFT_CENTER,
-            self.tr("page.settings"),
-            dd_gui::theme::semibold(18.0),
+        // Fluent subtitle 档，40px 顶行内仍居中）。字重 regular（2026-09-13
+        // 真机反馈「不用加粗字体」，semibold() 已回落 regular 字形）。
+        // 0.05em 字距为排印规格保留（painter.text 不支持，故经
+        // LayoutJob 排版后 painter.galley 直绘：左对齐 + 垂直居中手工对位）。
+        let mut title_job = egui::text::LayoutJob::single_section(
+            self.tr("page.settings").to_owned(),
+            egui::TextFormat::simple(dd_gui::theme::semibold(18.0), p.text),
+        );
+        title_job.sections[0].format.extra_letter_spacing = 18.0 * 0.05;
+        let title_galley = ui.ctx().fonts_mut(|f| f.layout_job(title_job));
+        ui.painter().galley(
+            egui::pos2(back_rect.right() + 8.0, cy - title_galley.size().y / 2.0),
+            title_galley,
             p.text,
         );
 
@@ -283,7 +290,7 @@ impl PaletteApp {
         let dark = ui.visuals().dark_mode;
         let lang = self.lang_effective;
         let mut pick: Option<dd_gui::settings::ThemePref> = None;
-        draw_settings_card_frame(ui, p, |card| {
+        draw_settings_card_frame(ui, p, self.backdrop_active, |card| {
             // 主题 icon + 名称 + 描述（16px / 14/20 / 12/16 fg-2 / text / text-3）
             // item_spacing.x 清零：gap 严格 12px（§08 CSS setting-row gap），不受
             // egui 默认 8px item_spacing 叠加影响。
@@ -292,7 +299,7 @@ impl PaletteApp {
                 let (icon_rect, _) =
                     ui.allocate_exact_size(egui::vec2(16.0, 16.0), egui::Sense::hover());
                 ui.painter().text(
-                    icon_rect.center(),
+                    icon_rect.center() + egui::vec2(0.0, 1.0), // +1px 光学下移：Fluent glyph 墨迹重心偏上，对齐标题行
                     egui::Align2::CENTER_CENTER,
                     '\u{E790}',
                     egui::FontId::proportional(16.0),
@@ -302,9 +309,7 @@ impl PaletteApp {
                 ui.vertical(|ui| {
                     ui.set_min_height(36.0);
                     ui.label(
-                        egui::RichText::new(crate::text::t(lang, "set.theme.name"))
-                            .font(dd_gui::theme::semibold(14.0))
-                            .size(14.0)
+                        dd_gui::theme::semibold_title(crate::text::t(lang, "set.theme.name"), 14.0)
                             .color(p.text),
                     );
                     ui.add(
@@ -365,24 +370,33 @@ impl PaletteApp {
         }
     }
 
-    /// 外观栏：「窗口材质」卡（v4.7 D30/D31）——云母 / 亚克力两个 ToggleSwitch
-    /// 行，互斥·后开优先：开关状态由单值 `backdrop` 派生（与该值比较），点击
-    /// 已开项 → 关（None），点击未开项 → 开（该项）；变更经 `apply_backdrop`
-    /// 即时生效 + 落盘（默认云母，D30）。
+    /// 外观栏：「窗口材质与边框」卡（窗口材质与边框方案 P1–P4，2026-09-13，
+    /// 参考 DeskBox「外观 → 窗口材质与边框」）：卡头描述跟随当前材质；四行 =
+    /// 材质三选 pill（P1，互斥单值 `backdrop`）+ 不透明度滑杆（P2）+ 窗口圆角
+    /// 三选（P3）+ 面板边框三选（P4）。pill 复用 `draw_density_pill` 口径
+    /// （F2 同构，三选等宽）；材质未生效（回退 / Win10）时滑杆与边框行置灰
+    /// （`add_enabled_ui`，与 S6 降级语义一致——圆角行与材质无关保持可用）。
+    /// P2 滑杆即时生效不落盘，松手（`drag_released`）时统一 `settings.save()`。
     fn draw_material_card(&mut self, ui: &mut egui::Ui, p: &theme::Palette, ctx: &egui::Context) {
-        // 开关状态在闭包外读取、闭包内只收集点击结果（避免闭包内 &mut self 冲突）。
-        let mica_on = self.settings.backdrop == dd_gui::settings::Backdrop::Mica;
-        let acrylic_on = self.settings.backdrop == dd_gui::settings::Backdrop::Acrylic;
+        let dark = ui.visuals().dark_mode;
         let lang = self.lang_effective;
-        let mut picked: Option<dd_gui::settings::Backdrop> = None;
-        draw_settings_card_frame(ui, p, |card| {
-            // 卡头：图标 + 名称 + 描述（行内 spacing.x 清零，同主题卡口径）
+        let material = self.settings.backdrop;
+        let material_active = self.backdrop_active;
+        // 开关状态在闭包外读取、闭包内只收集点击结果（避免闭包内 &mut self 冲突）。
+        let mut picked_material: Option<dd_gui::settings::Backdrop> = None;
+        let mut picked_corner: Option<dd_gui::settings::CornerPref> = None;
+        let mut picked_border: Option<dd_gui::settings::BorderMode> = None;
+        let mut opacity_tmp = self.settings.material_opacity;
+        let mut opacity_changed = false;
+        let mut opacity_released = false;
+        draw_settings_card_frame(ui, p, self.backdrop_active, |card| {
+            // 卡头：图标 + 名称 + 描述（描述跟随当前材质，同 DeskBox 行描述语义）
             card.horizontal(|ui| {
                 ui.spacing_mut().item_spacing.x = 0.0;
                 let (icon_rect, _) =
                     ui.allocate_exact_size(egui::vec2(16.0, 16.0), egui::Sense::hover());
                 ui.painter().text(
-                    icon_rect.center(),
+                    icon_rect.center() + egui::vec2(0.0, 1.0), // +1px 光学下移：Fluent glyph 墨迹重心偏上，对齐标题行
                     egui::Align2::CENTER_CENTER,
                     '\u{E771}',
                     egui::FontId::proportional(16.0),
@@ -392,77 +406,188 @@ impl PaletteApp {
                 ui.vertical(|ui| {
                     ui.set_min_height(36.0);
                     ui.label(
-                        egui::RichText::new(crate::text::t(lang, "set.backdrop.name"))
-                            .font(dd_gui::theme::semibold(14.0))
-                            .size(14.0)
+                        dd_gui::theme::semibold_title(crate::text::t(lang, "set.backdrop.name"), 14.0)
                             .color(p.text),
                     );
                     ui.add(
                         egui::Label::new(
-                            egui::RichText::new(crate::text::t(lang, "set.backdrop.desc"))
-                                .size(12.0)
-                                .color(p.text3),
+                            egui::RichText::new(crate::text::t(
+                                lang,
+                                match material {
+                                    dd_gui::settings::Backdrop::None => "set.material.none.desc",
+                                    dd_gui::settings::Backdrop::Mica => "set.material.mica.desc",
+                                    dd_gui::settings::Backdrop::Acrylic => {
+                                        "set.material.acrylic.desc"
+                                    }
+                                },
+                            ))
+                            .size(12.0)
+                            .color(p.text3),
                         )
                         .wrap(),
                     );
                 });
             });
-            // 开关行 ×2：名称 + 描述 + 贴右功能态开关（§08.1 v4.7「材质开关」行）
-            // v4.15 真机反馈修复：①卡头 → 首个开关行 4px 间距；②每个开关行内
-            // 标题/描述垂直垂直块 name ↔ desc 间 4px；③两个开关行之间 8px 间距
-            //（避免「云母材质」与「亚克力材质」黏在一起）；④每行统一
-            // `set_min_height(36)` 仍是底线高度，名+描 + 4px 自然撑开 ≥40，视觉
-            // 与其他设置卡保持一致节奏。
-            for (i, (backdrop, name, desc, on)) in [
-                (
-                    dd_gui::settings::Backdrop::Mica,
-                    crate::text::t(lang, "set.backdrop.mica"),
-                    crate::text::t(lang, "set.backdrop.mica.desc"),
-                    mica_on,
-                ),
-                (
-                    dd_gui::settings::Backdrop::Acrylic,
-                    crate::text::t(lang, "set.backdrop.acrylic"),
-                    crate::text::t(lang, "set.backdrop.acrylic.desc"),
-                    acrylic_on,
-                ),
-            ]
-            .into_iter()
-            .enumerate()
-            {
-                if i == 0 {
-                    card.add_space(4.0); // 卡头 → 首开关行 4px
-                } else {
-                    card.add_space(8.0); // 开关行间 8px（真机反馈修复）
+            // ── 行 1：材质三选 pill（无材质 / 云母 / 亚克力，P1）──
+            card.add_space(8.0);
+            card.label(egui::RichText::new(crate::text::t(lang, "set.material.name")).size(14.0).color(p.text));
+            card.add_space(2.0);
+            card.label(
+                egui::RichText::new(crate::text::t(lang, "set.material.desc"))
+                    .size(12.0)
+                    .color(p.text3),
+            );
+            card.add_space(6.0);
+            let gap = 8.0;
+            card.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = 0.0;
+                let avail = ui.available_width();
+                let pill_w = (avail - 2.0 * gap) / 3.0;
+                for (i, (backdrop, key)) in [
+                    (
+                        dd_gui::settings::Backdrop::None,
+                        "set.material.none",
+                    ),
+                    (dd_gui::settings::Backdrop::Mica, "set.material.mica"),
+                    (
+                        dd_gui::settings::Backdrop::Acrylic,
+                        "set.material.acrylic",
+                    ),
+                ]
+                .into_iter()
+                .enumerate()
+                {
+                    if i > 0 {
+                        ui.add_space(gap);
+                    }
+                    if draw_density_pill(
+                        ui,
+                        pill_w,
+                        crate::text::t(lang, key),
+                        material == backdrop,
+                        p,
+                        dark,
+                    ) {
+                        picked_material = Some(backdrop);
+                    }
                 }
-                let mut clicked = false;
-                card.horizontal(|ui| {
-                    ui.spacing_mut().item_spacing.x = 0.0;
-                    // 与卡头图标对齐的 16px 空槽位（设计稿演示同构）
-                    ui.allocate_exact_size(egui::vec2(16.0, 16.0), egui::Sense::hover());
-                    ui.add_space(12.0);
-                    ui.vertical(|ui| {
-                        ui.set_min_height(36.0);
-                        ui.label(egui::RichText::new(name).size(14.0).color(p.text));
-                        ui.add_space(4.0); // name ↔ desc 间距（修复"标题与描述黏"）
-                        ui.label(egui::RichText::new(desc).size(12.0).color(p.text3));
-                    });
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        clicked = draw_switch_fn(ui, on, p);
-                    });
-                });
-                if clicked {
-                    // 互斥·后开优先（D30）：已开 → 关；未开 → 开（自动挤掉另一项）
-                    picked = Some(if on {
-                        dd_gui::settings::Backdrop::None
-                    } else {
-                        backdrop
-                    });
+            });
+            // ── 行 2：不透明度滑杆（P2；材质关/未生效 → 置灰）──
+            card.add_space(8.0);
+            card.label(egui::RichText::new(crate::text::t(lang, "set.opacity.name")).size(14.0).color(p.text));
+            card.add_space(2.0);
+            card.label(
+                egui::RichText::new(crate::text::t(lang, "set.opacity.desc"))
+                    .size(12.0)
+                    .color(p.text3),
+            );
+            card.add_space(6.0);
+            card.add_enabled_ui(material_active, |ui| {
+                ui.spacing_mut().item_spacing.y = 0.0;
+                let resp = ui
+                    .add(
+                        egui::Slider::new(&mut opacity_tmp, 0..=100)
+                            .suffix("%")
+                            .step_by(5.0),
+                    );
+                if resp.changed() {
+                    opacity_changed = true;
                 }
-            }
+                // 拖动中不落盘（apply_material_opacity 只改内存）；松手或点击
+                // 跳值（changed 且未处于拖拽）才写盘一次。键盘微调同口径落盘。
+                if resp.drag_stopped() || (resp.changed() && !resp.dragged()) {
+                    opacity_released = true;
+                }
+            });
+            // ── 行 3：窗口圆角三选 pill（P3；与材质无关恒可用）──
+            card.add_space(8.0);
+            card.label(egui::RichText::new(crate::text::t(lang, "set.corner.name")).size(14.0).color(p.text));
+            card.add_space(2.0);
+            card.label(
+                egui::RichText::new(crate::text::t(lang, "set.corner.desc"))
+                    .size(12.0)
+                    .color(p.text3),
+            );
+            card.add_space(6.0);
+            card.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = 0.0;
+                let avail = ui.available_width();
+                let pill_w = (avail - 2.0 * gap) / 3.0;
+                for (i, (pref, key)) in [
+                    (dd_gui::settings::CornerPref::Round, "set.corner.round"),
+                    (dd_gui::settings::CornerPref::Small, "set.corner.small"),
+                    (dd_gui::settings::CornerPref::Square, "set.corner.square"),
+                ]
+                .into_iter()
+                .enumerate()
+                {
+                    if i > 0 {
+                        ui.add_space(gap);
+                    }
+                    if draw_density_pill(
+                        ui,
+                        pill_w,
+                        crate::text::t(lang, key),
+                        self.settings.corner_pref == pref,
+                        p,
+                        dark,
+                    ) {
+                        picked_corner = Some(pref);
+                    }
+                }
+            });
+            // ── 行 4：面板边框三选 pill（P4；仅材质生效时绘制 → 未生效置灰）──
+            card.add_space(8.0);
+            card.label(egui::RichText::new(crate::text::t(lang, "set.border.name")).size(14.0).color(p.text));
+            card.add_space(2.0);
+            card.label(
+                egui::RichText::new(crate::text::t(lang, "set.border.desc"))
+                    .size(12.0)
+                    .color(p.text3),
+            );
+            card.add_space(6.0);
+            card.add_enabled_ui(material_active, |ui| {
+                ui.spacing_mut().item_spacing.x = 0.0;
+                let avail = ui.available_width();
+                let pill_w = (avail - 2.0 * gap) / 3.0;
+                for (i, (mode, key)) in [
+                    (dd_gui::settings::BorderMode::Neutral, "set.border.neutral"),
+                    (dd_gui::settings::BorderMode::Accent, "set.border.accent"),
+                    (dd_gui::settings::BorderMode::None, "set.border.off"),
+                ]
+                .into_iter()
+                .enumerate()
+                {
+                    if i > 0 {
+                        ui.add_space(gap);
+                    }
+                    if draw_density_pill(
+                        ui,
+                        pill_w,
+                        crate::text::t(lang, key),
+                        self.settings.border_mode == mode,
+                        p,
+                        dark,
+                    ) {
+                        picked_border = Some(mode);
+                    }
+                }
+            });
         });
-        if let Some(backdrop) = picked {
+        if let Some(backdrop) = picked_material {
             self.apply_backdrop(ctx, backdrop);
+        }
+        if opacity_changed {
+            self.apply_material_opacity(ctx, opacity_tmp);
+        }
+        if opacity_released {
+            self.settings.save();
+        }
+        if let Some(pref) = picked_corner {
+            self.apply_corner_pref(pref);
+        }
+        if let Some(mode) = picked_border {
+            self.apply_border_mode(ctx, mode);
         }
     }
 
@@ -475,14 +600,14 @@ impl PaletteApp {
         let lang = self.lang_effective;
         let current = self.settings.density;
         let mut pick: Option<dd_gui::settings::ListDensity> = None;
-        draw_settings_card_frame(ui, p, |card| {
+        draw_settings_card_frame(ui, p, self.backdrop_active, |card| {
             // 卡头：图标 + 名称 + 描述（同主题/材质卡口径）
             card.horizontal(|ui| {
                 ui.spacing_mut().item_spacing.x = 0.0;
                 let (icon_rect, _) =
                     ui.allocate_exact_size(egui::vec2(16.0, 16.0), egui::Sense::hover());
                 ui.painter().text(
-                    icon_rect.center(),
+                    icon_rect.center() + egui::vec2(0.0, 1.0), // +1px 光学下移：Fluent glyph 墨迹重心偏上，对齐标题行
                     egui::Align2::CENTER_CENTER,
                     '\u{E8FD}', // BulletedList（Segoe MDL2/Fluent，列表语义）
                     egui::FontId::proportional(16.0),
@@ -492,9 +617,7 @@ impl PaletteApp {
                 ui.vertical(|ui| {
                     ui.set_min_height(36.0);
                     ui.label(
-                        egui::RichText::new(crate::text::t(lang, "set.density.name"))
-                            .font(dd_gui::theme::semibold(14.0))
-                            .size(14.0)
+                        dd_gui::theme::semibold_title(crate::text::t(lang, "set.density.name"), 14.0)
                             .color(p.text),
                     );
                     ui.add(
@@ -556,13 +679,13 @@ impl PaletteApp {
         // ── 卡 1：打开面板时显示 ──
         let mut show_all = self.settings.open_view == dd_gui::settings::OpenView::All;
         let mut view_changed = false;
-        draw_settings_card_frame(ui, p, |card| {
+        draw_settings_card_frame(ui, p, self.backdrop_active, |card| {
             card.horizontal(|ui| {
                 ui.spacing_mut().item_spacing.x = 0.0;
                 let (icon_rect, _) =
                     ui.allocate_exact_size(egui::vec2(16.0, 16.0), egui::Sense::hover());
                 ui.painter().text(
-                    icon_rect.center(),
+                    icon_rect.center() + egui::vec2(0.0, 1.0), // +1px 光学下移：Fluent glyph 墨迹重心偏上，对齐标题行
                     egui::Align2::CENTER_CENTER,
                     '\u{E8A9}',
                     egui::FontId::proportional(16.0),
@@ -572,9 +695,7 @@ impl PaletteApp {
                 ui.vertical(|ui| {
                     ui.set_min_height(36.0);
                     ui.label(
-                        egui::RichText::new(crate::text::t(lang, "set.openview.name"))
-                            .font(dd_gui::theme::semibold(14.0))
-                            .size(14.0)
+                        dd_gui::theme::semibold_title(crate::text::t(lang, "set.openview.name"), 14.0)
                             .color(p.text),
                     );
                     ui.add(
@@ -629,13 +750,13 @@ impl PaletteApp {
         let reset_w = text_width(ui, reset_text_btn, egui::FontId::proportional(14.0)) + 24.0;
         // 8 = Change 与 Reset 之间的 gap，4 = 卡片内右边距
         let buttons_total_w = change_w + reset_w + 8.0 + 4.0;
-        draw_settings_card_frame(ui, p, |card| {
+        draw_settings_card_frame(ui, p, self.backdrop_active, |card| {
             card.horizontal(|ui| {
                 ui.spacing_mut().item_spacing.x = 0.0;
                 let (icon_rect, _) =
                     ui.allocate_exact_size(egui::vec2(16.0, 16.0), egui::Sense::hover());
                 ui.painter().text(
-                    icon_rect.center(),
+                    icon_rect.center() + egui::vec2(0.0, 1.0), // +1px 光学下移：Fluent glyph 墨迹重心偏上，对齐标题行
                     egui::Align2::CENTER_CENTER,
                     '\u{E92E}',
                     egui::FontId::proportional(16.0),
@@ -645,9 +766,7 @@ impl PaletteApp {
                 ui.vertical(|ui| {
                     ui.set_min_height(36.0);
                     ui.label(
-                        egui::RichText::new(crate::text::t(lang, "set.hotkey.name"))
-                            .font(dd_gui::theme::semibold(14.0))
-                            .size(14.0)
+                        dd_gui::theme::semibold_title(crate::text::t(lang, "set.hotkey.name"), 14.0)
                             .color(p.text),
                     );
                     ui.add(
@@ -726,13 +845,13 @@ impl PaletteApp {
         // ── 卡 3：开机自启（功能态开关）──
         let autostart_on = self.settings.autostart;
         let mut autostart_toggled = false;
-        draw_settings_card_frame(ui, p, |card| {
+        draw_settings_card_frame(ui, p, self.backdrop_active, |card| {
             card.horizontal(|ui| {
                 ui.spacing_mut().item_spacing.x = 0.0;
                 let (icon_rect, _) =
                     ui.allocate_exact_size(egui::vec2(16.0, 16.0), egui::Sense::hover());
                 ui.painter().text(
-                    icon_rect.center(),
+                    icon_rect.center() + egui::vec2(0.0, 1.0), // +1px 光学下移：Fluent glyph 墨迹重心偏上，对齐标题行
                     egui::Align2::CENTER_CENTER,
                     '\u{E7E8}',
                     egui::FontId::proportional(16.0),
@@ -742,9 +861,7 @@ impl PaletteApp {
                 ui.vertical(|ui| {
                     ui.set_min_height(36.0);
                     ui.label(
-                        egui::RichText::new(crate::text::t(lang, "set.autostart.name"))
-                            .font(dd_gui::theme::semibold(14.0))
-                            .size(14.0)
+                        dd_gui::theme::semibold_title(crate::text::t(lang, "set.autostart.name"), 14.0)
                             .color(p.text),
                     );
                     ui.add_space(2.0);
@@ -790,7 +907,7 @@ impl PaletteApp {
         // Lang 序：FollowSystem=0 / ZhCn=1 / EnUs=2，与 labels 严格对齐。
         let selected_idx = lang_pref as usize;
         let combo_w: f32 = 180.0;
-        draw_settings_card_frame(ui, p, |card| {
+        draw_settings_card_frame(ui, p, self.backdrop_active, |card| {
             card.horizontal(|ui| {
                 ui.spacing_mut().item_spacing.x = 0.0;
                 // 左：图标 + 标题描述（强制宽度 = available - combo_w - gap，
@@ -802,7 +919,7 @@ impl PaletteApp {
                         let (icon_rect, _) =
                             ui.allocate_exact_size(egui::vec2(16.0, 16.0), egui::Sense::hover());
                         ui.painter().text(
-                            icon_rect.center(),
+                            icon_rect.center() + egui::vec2(0.0, 1.0), // +1px 光学下移：Fluent glyph 墨迹重心偏上，对齐标题行
                             egui::Align2::CENTER_CENTER,
                             '\u{E774}',
                             egui::FontId::proportional(16.0),
@@ -812,9 +929,7 @@ impl PaletteApp {
                         ui.vertical(|ui| {
                             ui.set_min_height(36.0);
                             ui.label(
-                                egui::RichText::new(crate::text::t(lang_eff, "settings.lang.name"))
-                                    .font(dd_gui::theme::semibold(14.0))
-                                    .size(14.0)
+                                dd_gui::theme::semibold_title(crate::text::t(lang_eff, "settings.lang.name"), 14.0)
                                     .color(p.text),
                             );
                             ui.add_space(2.0);
@@ -863,7 +978,7 @@ impl PaletteApp {
         let apps_on = self.settings.search_apps;
         let lang = self.lang_effective;
         let mut apps_toggled = false;
-        draw_settings_card_frame(ui, p, |card| {
+        draw_settings_card_frame(ui, p, self.backdrop_active, |card| {
             card.horizontal(|ui| {
                 ui.spacing_mut().item_spacing.x = 0.0;
                 // 与其他卡卡头图标对齐的 16px 空槽位
@@ -924,13 +1039,13 @@ impl PaletteApp {
         let mut preset_picked: Option<String> = None;
         let mut add_custom_url: Option<String> = None;
 
-        draw_settings_card_frame(ui, p, |card| {
+        draw_settings_card_frame(ui, p, self.backdrop_active, |card| {
             card.horizontal(|ui| {
                 ui.spacing_mut().item_spacing.x = 0.0;
                 let (icon_rect, _) =
                     ui.allocate_exact_size(egui::vec2(16.0, 16.0), egui::Sense::hover());
                 ui.painter().text(
-                    icon_rect.center(),
+                    icon_rect.center() + egui::vec2(0.0, 1.0), // +1px 光学下移：Fluent glyph 墨迹重心偏上，对齐标题行
                     egui::Align2::CENTER_CENTER,
                     '\u{E721}',
                     egui::FontId::proportional(16.0),
@@ -940,9 +1055,7 @@ impl PaletteApp {
                 ui.vertical(|ui| {
                     ui.set_min_height(36.0);
                     ui.label(
-                        egui::RichText::new(self.tr("set.search.name"))
-                            .font(dd_gui::theme::semibold(14.0))
-                            .size(14.0)
+                        dd_gui::theme::semibold_title(self.tr("set.search.name"), 14.0)
                             .color(p.text),
                     );
                     ui.add_space(2.0);
@@ -1180,13 +1293,13 @@ impl PaletteApp {
         let mut retry_id: Option<String> = None;
         let lang = self.lang_effective;
 
-        draw_settings_card_frame(ui, p, |card| {
+        draw_settings_card_frame(ui, p, self.backdrop_active, |card| {
             card.horizontal(|ui| {
                 ui.spacing_mut().item_spacing.x = 0.0;
                 let (icon_rect, _) =
                     ui.allocate_exact_size(egui::vec2(16.0, 16.0), egui::Sense::hover());
                 ui.painter().text(
-                    icon_rect.center(),
+                    icon_rect.center() + egui::vec2(0.0, 1.0), // +1px 光学下移：Fluent glyph 墨迹重心偏上，对齐标题行
                     egui::Align2::CENTER_CENTER,
                     '\u{E74E}',
                     egui::FontId::proportional(16.0),
@@ -1196,9 +1309,7 @@ impl PaletteApp {
                 ui.vertical(|ui| {
                     ui.set_min_height(36.0);
                     ui.label(
-                        egui::RichText::new(crate::text::t(lang, "set.ext.name"))
-                            .font(dd_gui::theme::semibold(14.0))
-                            .size(14.0)
+                        dd_gui::theme::semibold_title(crate::text::t(lang, "set.ext.name"), 14.0)
                             .color(p.text),
                     );
                     ui.add_space(2.0);
@@ -1330,10 +1441,13 @@ pub(crate) fn draw_version_chip(
 pub(crate) fn draw_settings_card_frame(
     ui: &mut egui::Ui,
     p: &theme::Palette,
+    glass_card: bool,
     body: impl FnOnce(&mut egui::Ui),
 ) {
     egui::Frame::new()
-        .fill(p.card)
+        // 玻璃卡（材质生效时，2026-09-13 真机反馈）：材质从卡面透出；
+        // 回退路径 = 实色 card（theme::card_fill 内部裁决）。
+        .fill(theme::card_fill(ui.visuals().dark_mode, glass_card))
         .stroke(egui::Stroke::new(1.0, p.border))
         .corner_radius(egui::CornerRadius::same(8))
         .inner_margin(egui::Margin::same(12))

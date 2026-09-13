@@ -5,8 +5,8 @@
 //! - **并行**：每扩展一个线程（进程对象线程独占），互不阻塞（A12 能力调用不阻塞 UI）；
 //! - **错误隔离**：单个扩展失败只记入 [`SourceSummary`]，不影响其他扩展与整体渲染；
 //! - **内置扩展常驻**（M4 P4 → M9 in-process）：`dd-ext-apps/calc/system/websearch/shell`
-//!   由宿主**内存自注册**（manifest-schema §10：内置同样走清单注册，MVP 无安装器 →
-//!   宿主启动时直接构造 `LoadedExtension`）。**M9 起内置扩展以 in-process 方式运行**
+//!   由宿主**内存自注册**（manifest-schema §10：内置不通过清单文件注册 →
+//!   宿主启动时直接内存构造 `LoadedExtension`）。**M9 起内置扩展以 in-process 方式运行**
 //!   （宿主进程内直接调 `dd_ext::serve_line`，见 [`crate::ext_client`]），注册不再
 //!   依赖磁盘 `dd-ext-*.exe`（[`dd_host::builtin::builtin_registrations`]），也
 //!   不再物化内嵌 exe；第三方 / sidecar 仍为子进程，扩展目录中的清单与其**并存**，

@@ -297,6 +297,9 @@ impl PaletteApp {
             if let Some(hwnd) = self.hwnd {
                 let dark = ctx.theme() == egui::Theme::Dark;
                 crate::platform::set_immersive_dark(hwnd, dark);
+                // M2 + P4：描边色随主题切换——与 refresh_backdrop 同一单点收口
+                // `border_color`（中性档随明暗、强调色档跨主题恒色）。
+                crate::platform::set_window_border(hwnd, self.border_color(dark));
             }
         }
         self.settings.save();
@@ -319,8 +322,82 @@ impl PaletteApp {
         self.refresh_backdrop(ctx);
     }
 
-    /// 按当前设置应用 DWM 材质（v4.7 D31）。成功 → 面板背景透明化（亮暗两套
-    /// Style 同步注册）+ 明暗染色跟随主题；失败（Win10 / 22621 以下）→ 保持
+    /// 设置页「不透明度」滑杆（P2 v2，2026-09-13）：即时重算 egui 浓淡层
+    /// （`alpha = cap × pct/100`，0 = 纯材质、100 = 面板最实），**不落盘**——
+    /// 拖动中每帧触发，写盘由 UI 层在松手（`drag_stopped`）时调
+    /// `settings.save()`，避免拖动期间逐帧写盘。材质未生效时无视觉可调，
+    /// 仅更新内存值（UI 层此时置灰，正常路径不会进来）。
+    pub(crate) fn apply_material_opacity(&mut self, ctx: &egui::Context, pct: u8) {
+        let pct = pct.clamp(0, 100);
+        if self.settings.material_opacity == pct {
+            return;
+        }
+        self.settings.material_opacity = pct;
+        if self.backdrop_active {
+            let dark = ctx.theme() == egui::Theme::Dark;
+            theme::apply_panel_tint(
+                ctx,
+                theme::panel_tint_with_opacity(dark, self.settings.backdrop, pct),
+            );
+        }
+    }
+
+    /// 设置页「窗口圆角」（P3，2026-09-13）：落盘 + 即时重设 DWM 圆角偏好
+    /// （属性幂等，与 egui 帧内容无关，无防闪面）。HWND 未捕获（首帧前）时
+    /// 仅落盘——首帧 `refresh_backdrop` 会按设置应用。
+    pub(crate) fn apply_corner_pref(&mut self, pref: dd_gui::settings::CornerPref) {
+        if self.settings.corner_pref == pref {
+            return;
+        }
+        eprintln!("[dd-gui] 窗口圆角：{} → 立即生效并保存", pref.label());
+        self.settings.corner_pref = pref;
+        self.settings.save();
+        if let Some(hwnd) = self.hwnd {
+            crate::platform::apply_window_chrome(hwnd, pref);
+        }
+    }
+
+    /// 设置页「面板边框」（P4，2026-09-13）：落盘 + 即时重设描边色；描边仅
+    /// 材质生效时绘制（既有语义），未生效时只落盘（UI 层该行置灰）。
+    pub(crate) fn apply_border_mode(
+        &mut self,
+        ctx: &egui::Context,
+        mode: dd_gui::settings::BorderMode,
+    ) {
+        if self.settings.border_mode == mode {
+            return;
+        }
+        eprintln!("[dd-gui] 面板边框：{} → 立即生效并保存", mode.label());
+        self.settings.border_mode = mode;
+        self.settings.save();
+        if self.backdrop_active {
+            if let Some(hwnd) = self.hwnd {
+                let dark = ctx.theme() == egui::Theme::Dark;
+                crate::platform::set_window_border(hwnd, self.border_color(dark));
+            }
+        }
+    }
+
+    /// P4 描边色单点收口（`refresh_backdrop` / `apply_theme_pref` /
+    /// `apply_border_mode` 同源）：中性 = `border_strong`（随主题明暗）；
+    /// 强调色 = 系统强调色（`DwmGetColorizationColor`，取不到回落
+    /// `Palette::accent`——跨主题恒色）；关 = `None` 停画。材质未生效时调用方
+    /// 本就不画描边，本函数不判 `backdrop_active`。
+    fn border_color(&self, dark: bool) -> Option<egui::Color32> {
+        use dd_gui::settings::BorderMode;
+        match self.settings.border_mode {
+            BorderMode::Neutral => Some(theme::Palette::of(dark).border_strong),
+            BorderMode::Accent => Some(
+                crate::platform::system_accent_color()
+                    .unwrap_or_else(|| theme::Palette::of(dark).accent),
+            ),
+            BorderMode::None => None,
+        }
+    }
+
+    /// 按当前设置应用 DWM 材质（v4.7 D31 + M1–M4 2026-09-13）。成功 → 面板底
+    /// 切为浓淡层（`apply_panel_tint`，亮暗两套 Style 同步注册）+ 明暗染色与
+    /// 1px 描边跟随主题；失败（Win10 / 22621 以下）→ 保持
     /// 不透明（platform 层已记日志，回退不阻断）。HWND 未捕获（首帧前）时
     /// 跳过——`ui()` 捕获后会再调用一次。
     ///
@@ -333,11 +410,20 @@ impl PaletteApp {
         let Some(hwnd) = self.hwnd else {
             return;
         };
+        // M3/M4（2026-09-13）：窗口 chrome（圆角 + 禁过渡动画）一次性应用，
+        // 与材质选择无关（无材质路径同样圆角）；P3 起圆角档来自设置，改选时
+        // 经 `apply_corner_pref` 重调；Win10 无对应属性 → platform 层失败跳过。
+        if !self.chrome_applied {
+            self.chrome_applied = true;
+            crate::platform::apply_window_chrome(hwnd, self.settings.corner_pref);
+        }
         // ── 不透明化方向（backdrop = None）：先绘制不透明，后清材质 ──
         if self.settings.backdrop == dd_gui::settings::Backdrop::None {
             if self.backdrop_active {
                 self.backdrop_active = false;
-                theme::apply_panel_transparency(ctx, false);
+                // M1：面板底回实色；M2：材质场景结束 → 停画描边。
+                theme::apply_panel_tint(ctx, None);
+                crate::platform::set_window_border(hwnd, None);
                 // 倒计时 3 帧：点击帧（旧透明视觉）→ 第 1 个不透明帧绘制并呈现
                 // → 第 2 个不透明帧呈现后清 DWM 材质。全程无透明帧暴露窗口。
                 self.backdrop_clear_countdown = 3;
@@ -355,10 +441,30 @@ impl PaletteApp {
         if active {
             let dark = ctx.theme() == egui::Theme::Dark;
             crate::platform::set_immersive_dark(hwnd, dark);
+            // M2 + P4：材质生效 → 1px 描边，颜色按边框模式单点收口（中性随
+            // 主题 / 强调色恒色 / 关 = 停画）；主题切换的同步点在 apply_theme_pref
+            // ——材质切换不经该路径。
+            crate::platform::set_window_border(hwnd, self.border_color(dark));
+            // M1 + P2：面板底浓淡层随主题、材质与不透明度设置（云母/亚克力互
+            // 切、不透明度拖动都要刷新面板底——原实现两档同为全透明无需刷新，
+            // M1 起语义不同）。
+            theme::apply_panel_tint(
+                ctx,
+                theme::panel_tint_with_opacity(
+                    dark,
+                    self.settings.backdrop,
+                    self.settings.material_opacity,
+                ),
+            );
         }
         if active != self.backdrop_active {
             self.backdrop_active = active;
-            theme::apply_panel_transparency(ctx, active);
+            if !active {
+                // apply_system_backdrop 失败（Win10 / 22621 以下）→ 回退不透明
+                // 面板底 + 停描边，视觉与 v4.6 一致。
+                theme::apply_panel_tint(ctx, None);
+                crate::platform::set_window_border(hwnd, None);
+            }
         }
     }
 

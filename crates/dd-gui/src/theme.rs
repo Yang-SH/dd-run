@@ -99,16 +99,26 @@ pub const KEYCAP_DESC_GAP: f32 = 6.0;
 pub const DOT_SIZE: f32 = 6.0; // `.dot` 6×6
 pub const DOT_GAP: f32 = 5.0; // `.dot` margin-right 5px
 
-// ── B1 语义字重：semibold 字体族 ─────────────────────────────────────────
-/// semibold 族名（platform.rs 注册：拉丁 = seguisb.ttf、CJK = msyhbd.ttc，
-/// 后援链同 Proportional；启动时先同步注册默认字体映射，热替换后生效）。
+// ── B1 语义字重：已撤销（2026-09-13 真机反馈「不用加粗字体」）────────────
+/// 语义字重族名（**保留注册**：platform.rs 将其映射到 regular Proportional
+/// 链，防历史 FontId 引用未知族；seguisb/msyhbd 加粗字体文件已停载）。
 pub const SEMIBOLD_FAMILY: &str = "semibold";
 
-/// semibold `FontId`（B1）：分组标题 / 行名 / 空态标题 / 设置卡头等
-/// 设计稿标注 500–600 字重的文本。egui `.strong()` 只变色不改字重，
-/// 真实字重经独立字体族实现；字体文件缺失/热替换前回落 regular 观感。
+/// 标题字重 `FontId`（原 B1 semibold）：分组标题 / 行名 / 空态标题 / 设置卡头
+/// 等。2026-09-13 真机反馈「不用加粗字体」——**回落 regular 字形**；函数与
+/// 全部调用点保留（语义层不撤），将来若恢复字重只改此一处。
 pub fn semibold(size: f32) -> eframe::egui::FontId {
-    eframe::egui::FontId::new(size, eframe::egui::FontFamily::Name(SEMIBOLD_FAMILY.into()))
+    eframe::egui::FontId::proportional(size)
+}
+
+/// 标题富文本：[`semibold`] + 0.05em 额外字距。字距为排印规格保留（引入时
+/// 为缓解雅黑 Bold 小字号的「压缩」观感；字重撤销后 CJK 无内建 tracking，
+/// 补呼吸感的作用不变）。painter 直绘不走此函数（painter.text 不支持
+/// 字距，见 settings_view 页标题的 LayoutJob 用法）。
+pub fn semibold_title(text: impl Into<String>, size: f32) -> eframe::egui::RichText {
+    eframe::egui::RichText::new(text)
+        .font(semibold(size))
+        .extra_letter_spacing(size * 0.05)
 }
 
 // ── 设置按钮（设计稿 §6.1，批次 4.0）─────────────────────────────────────
@@ -318,14 +328,151 @@ pub fn overlay(dark: bool) -> Color32 {
     Color32::from_black_alpha(if dark { 128 } else { 102 })
 }
 
+/// 浓淡层 alpha 上限（P2 v2 直控式 → v5 两主题统一，2026-09-13）。语义 =
+/// 「面板底不透明度直控」：`alpha = cap × pct/100`，滑杆覆盖 0→cap 全带。
+/// 参考 DeskBox「不透明度/材质强度」能力的文档化落地：DWM SystemBackdrop
+/// 本身无透明度控制，由 egui 侧浓淡层实现同观感。
+///
+/// **默认 40% 档**（cap × 0.4）= 真机对比 DeskBox 调定的推荐观感：
+/// 云母 0.30 / 亚克力 0.40（v5 起两主题同档）。v5 统一理由：v3 把浓淡基色
+/// 换成「面板色 × 系统强调色」后，M1「厚白浓淡 = 白漆」的前提已不存在——
+/// 带色基色加厚只会增强材质色相、不会洗白，亮色原独立低档（0.55/0.70，
+/// 默认 0.22/0.28）反而压低了材质存在感（真机对比 DeskBox 仍差一档），
+/// 故按材质（而非主题）定档。亚克力拉满（1.0）= 面板全实色；云母拉满
+/// （0.75）仍保留 25% 采色语义。
+///
+/// 修订沿革：初版 `基准 × (0.25 + 0.75×pct/100)` 在云母上有效带仅 0.075–0.30
+/// （暗）/0.025–0.10（亮），叠在近乎不透明的 DWM 云母上感知极弱——v2 改直控
+/// 全带（真机反馈「调透明度效果不明显」）；v3 浓淡基色带系统强调色（真机反馈
+/// 「与 DeskBox 显示效果不一致」）；v4 亮色档增强（真机对比「还差一点」）；
+/// v5 两主题统一 cap + 行 hover 材质适配（真机反馈「还需优化 / 悬浮样式按
+/// 材质调」）。P2 未发版（同一 Unreleased 批次），历次重定义无迁移。
+pub const TINT_CAP_MICA: f32 = 0.75;
+pub const TINT_CAP_ACRYLIC: f32 = 1.0;
+
+/// 材质激活时面板底的浓淡层 alpha **上限**（P2 v2 直控式，2026-09-13）；
+/// `None` = 材质未生效（回退不透明面板底）。v5 起上限按材质定档、两主题一致
+/// （`dark` 参数保留以稳定调用点签名）。
+pub fn panel_tint_cap(dark: bool, backdrop: crate::settings::Backdrop) -> Option<f32> {
+    use crate::settings::Backdrop;
+    match backdrop {
+        Backdrop::None => None,
+        Backdrop::Mica => Some(TINT_CAP_MICA),
+        Backdrop::Acrylic => Some(TINT_CAP_ACRYLIC),
+    }
+}
+
+/// 材质不透明度滑杆（P2 v2 直控式，2026-09-13）→ 实际浓淡 alpha：
+/// `cap(材质) × pct/100`——0% = 纯材质（无浓淡层），100% = 面板最实（亚克力
+/// 拉满即全实色）。默认 40%（`Settings::default().material_opacity`）= 真机
+/// 对比 DeskBox 调定的推荐观感档。pct 超界按 100 处理（u8 入参，序列化层已
+/// clamp，此处兜底）；`None` = 材质未生效（回退不透明面板底）。
+pub fn panel_tint_with_opacity(
+    dark: bool,
+    backdrop: crate::settings::Backdrop,
+    opacity_pct: u8,
+) -> Option<f32> {
+    panel_tint_cap(dark, backdrop).map(|cap| cap * f32::from(opacity_pct.min(100)) / 100.0)
+}
+
+/// 结果行填充对（P2 v5 材质适配，2026-09-13 真机反馈）：
+/// - **hover 材质分档**：同一块 `row_hover_glass`（#f5f5f5/#3d3d3d @ 31%）在
+///   云母下面板近白对比不足（「不明显」）、在亚克力动态模糊上又形成亮块
+///   （「太突兀」）——云母**加权**（亮 = 黑 7% / 暗 = 白 7.8% 玻璃）、亚克力
+///   **减重**（亮 = 黑 3.5% / 暗 = 白 3.9%）；
+/// - **selected 同走玻璃**（`selected` 比 `hover` 重一档）：材质激活时若保持
+///   不透明 `row_selected` 实色，鼠标扫动时「玻璃 → 不透明块 → 消失」的两段
+///   跳变在半透明面板上即「应用栏目闪烁」——selected 玻璃化后扫动为半透明层
+///   平滑过渡（accent 竖条仍由 `row.rs` 绘制，选中辨识度不变）；
+/// - **回退**（无材质 / 未生效）：`row_hover` / `row_selected` 实色——既有观
+///   感不变。
+/// 供 `row.rs` 结果行专用；卡片/设置项等其余 hover 维持实色不变。
+#[derive(Debug, Clone, Copy)]
+pub struct RowFills {
+    /// 非选中行 hover 玻璃。
+    pub hover: Color32,
+    /// 选中行填充（材质档 = 玻璃；回退 = 实色 `row_selected`）。
+    pub selected: Color32,
+}
+
+pub fn row_fills(dark: bool, backdrop: crate::settings::Backdrop, backdrop_active: bool) -> RowFills {
+    use crate::settings::Backdrop;
+    let p = Palette::of(dark);
+    if !backdrop_active || backdrop == Backdrop::None {
+        return RowFills { hover: p.row_hover, selected: p.row_selected };
+    }
+    match (dark, backdrop) {
+        (true, Backdrop::Mica) => RowFills {
+            hover: Color32::from_rgba_unmultiplied(255, 255, 255, 20),
+            selected: Color32::from_rgba_unmultiplied(255, 255, 255, 26),
+        },
+        (true, Backdrop::Acrylic) => RowFills {
+            hover: Color32::from_rgba_unmultiplied(255, 255, 255, 10),
+            selected: Color32::from_rgba_unmultiplied(255, 255, 255, 15),
+        },
+        (false, Backdrop::Mica) => RowFills {
+            hover: Color32::from_rgba_unmultiplied(0, 0, 0, 18),
+            selected: Color32::from_rgba_unmultiplied(0, 0, 0, 26),
+        },
+        (false, Backdrop::Acrylic) => RowFills {
+            hover: Color32::from_rgba_unmultiplied(0, 0, 0, 9),
+            selected: Color32::from_rgba_unmultiplied(0, 0, 0, 15),
+        },
+        (_, Backdrop::None) => RowFills { hover: p.row_hover, selected: p.row_selected },
+    }
+}
+
+/// 设置卡片填充（2026-09-13 真机反馈「材质覆盖设置页」）：材质生效时卡面
+/// **玻璃化**（card 色降 alpha，材质从卡片本身透出——WinUI Card 半透明层
+/// 语义）；不透明回退路径仍用实色 `Palette::card`。亮色卡比暗色厚一档
+/// （亮材质上太薄会与背景糊在一起，靠 1px 描边区分层级）。注意 egui
+/// `Color32` 为预乘存储：`from_rgba_unmultiplied` 会按 alpha 缩 RGB。
+pub const CARD_GLASS_ALPHA_DARK: u8 = 190;
+pub const CARD_GLASS_ALPHA_LIGHT: u8 = 210;
+
+pub fn card_fill(dark: bool, glass_card: bool) -> Color32 {
+    let p = Palette::of(dark);
+    if !glass_card {
+        return p.card;
+    }
+    let a: u8 = if dark { CARD_GLASS_ALPHA_DARK } else { CARD_GLASS_ALPHA_LIGHT };
+    Color32::from_rgba_unmultiplied(p.card.r(), p.card.g(), p.card.b(), a)
+}
+
+/// 浓淡层基色（P2 v3 + v4，2026-09-13 显示对齐）：**面板色 × 系统强调色
+/// 混合**——参考 DeskBox `BuildContentTintColor` 配方（暗基底 + 8% 强调色、
+/// 亮基底 + 强调色；基底用本项目 Fluent token #292929/#FFFFFF）。真机对比
+/// 反馈：纯中性白浓淡把 DWM 云母「洗白」成无材质感的白平面（DeskBox 同桌面
+/// 下呈灰蓝材质面）——tint 带上系统强调色后，浓淡层在任何 alpha 下都有材质
+/// 色相。v4 亮色混合比 0.16 → 0.30：DeskBox 另有亮度层压深表面（DWM
+/// SystemBackdrop 无对应旋钮），用更强的色相混合补偿，混合比按真机对比调定。
+/// 取不到系统强调色（非 Windows / DwmGetColorizationColor 失败）→ 纯面板色
+/// （中性回退，与既往一致）。每次 visuals 重建时取色（调用点均为事件驱动，
+/// DwmGetColorizationColor 为轻量 API，滑杆拖动期双调用/帧可忽略）。
+pub fn tint_color(dark: bool) -> Color32 {
+    let p = Palette::of(dark);
+    let Some(accent) = crate::platform::system_accent_color() else {
+        return p.panel;
+    };
+    let mix = if dark { 0.08_f32 } else { 0.30_f32 };
+    let lerp = |a: u8, b: u8| (f32::from(a) + (f32::from(b) - f32::from(a)) * mix).round() as u8;
+    Color32::from_rgb(
+        lerp(p.panel.r(), accent.r()),
+        lerp(p.panel.g(), accent.g()),
+        lerp(p.panel.b(), accent.b()),
+    )
+}
+
 /// 05 表 → egui `Visuals`：以 egui 默认视觉为基底，覆盖 token 可映射字段。
 /// 组件类色板（Tag/行态）不进 `Visuals`（无对应字段），由绘制层经
 /// [`Palette`] 直接取用。
 ///
-/// `panel_transparent`（v4.7 D31）：窗口材质生效时面板背景透明——DWM 系统材质
-/// 画在窗口表面之后，egui 面板必须不涂底色才可见。只透明 `panel_fill`
-/// （CentralPanel 底），行/卡片/页脚等表面保持不透明层级。
-pub fn visuals(dark: bool, panel_transparent: bool) -> Visuals {
+/// `panel_tint`（v4.7 D31 + M1 2026-09-13 + P2 v3）：窗口材质生效时面板底为
+/// **半透明浓淡层**（[`tint_color`] 基色 × alpha——面板色 × 系统强调色混合，
+/// DWM 系统材质从底下透出），同时保证面板轮廓与内容对比度。`None` = 材质未
+/// 生效（回退实色面板底）。只调 `panel_fill`，行/卡片/页脚等表面保持不透明
+/// 层级（行 hover 的 `row_hover_glass` 同构先例）。
+pub fn visuals(dark: bool, panel_tint: Option<f32>) -> Visuals {
     let p = Palette::of(dark);
     let mut v = if dark {
         Visuals::dark()
@@ -333,10 +480,19 @@ pub fn visuals(dark: bool, panel_transparent: bool) -> Visuals {
         Visuals::light()
     };
     v.dark_mode = dark;
-    v.panel_fill = if panel_transparent {
-        Color32::TRANSPARENT
-    } else {
-        p.panel
+    v.panel_fill = match panel_tint {
+        None => p.panel,
+        // 只缩 alpha、不动 RGB（from_rgba_unmultiplied；不用 gamma_multiply——
+        // 它会连带压暗 RGB，浓淡层的语义是「半透明面板色」而非「调暗面板色」）。
+        Some(a) => {
+            let base = tint_color(dark);
+            Color32::from_rgba_unmultiplied(
+                base.r(),
+                base.g(),
+                base.b(),
+                (a.clamp(0.0, 1.0) * 255.0).round() as u8,
+            )
+        }
     };
     v.window_fill = p.panel;
     v.extreme_bg_color = p.input_fill; // TextEdit/滚动条底（bg3，filled-darker 同源）
@@ -368,17 +524,17 @@ pub fn visuals(dark: bool, panel_transparent: bool) -> Visuals {
 /// 不再写死跟随系统）。程序启动时调用一次；此后用户在设置页改选时由
 /// `Context::set_theme` 运行时切换（无需重启）。
 ///
-/// `panel_transparent`（v4.7 D31）：材质生效时为 true——亮暗两套 Style **都**
-/// 带透明 panel_fill 注册，保证「跟随系统」在系统亮暗切换 re-resolve 后
-/// 透明性不丢失。
+/// `panel_tint`（v4.7 D31 + M1）：材质生效时传 `Some(alpha)`——亮暗两套
+/// Style **都**带浓淡层注册，保证「跟随系统」在系统亮暗切换 re-resolve 后
+/// 一致性不丢失；`None` = 不透明面板（启动时材质成败未知，先按实色注册）。
 ///
 /// B3（v5.2 方案）：floating 滚动条 Fluent 化调参（两主题一致）——静默时
 /// 细条 4px 低透明，悬停展开到 8px 便于拖拽。字段口径按 egui 0.36.1
 /// `ScrollStyle`（style.rs:494）：把手颜色随 `foreground_color`（floating
 /// 默认高对比），不做任意取色。
-pub fn apply(ctx: &Context, pref: ThemePreference, panel_transparent: bool) {
-    ctx.set_visuals_of(Theme::Dark, visuals(true, panel_transparent));
-    ctx.set_visuals_of(Theme::Light, visuals(false, panel_transparent));
+pub fn apply(ctx: &Context, pref: ThemePreference, panel_tint: Option<f32>) {
+    ctx.set_visuals_of(Theme::Dark, visuals(true, panel_tint));
+    ctx.set_visuals_of(Theme::Light, visuals(false, panel_tint));
     ctx.all_styles_mut(|style| {
         let scroll = &mut style.spacing.scroll;
         // egui floating 默认：bar_width 10 / floating_width 2 / dormant handle 0.0
@@ -393,11 +549,12 @@ pub fn apply(ctx: &Context, pref: ThemePreference, panel_transparent: bool) {
     ctx.set_theme(pref);
 }
 
-/// 仅切换面板背景透明性（v4.7 D31：材质开/关与回退时调用），不动主题偏好。
-/// 亮暗两套 Style 同步重注册（同 [`apply`] 的透明性口径）。
-pub fn apply_panel_transparency(ctx: &Context, panel_transparent: bool) {
-    ctx.set_visuals_of(Theme::Dark, visuals(true, panel_transparent));
-    ctx.set_visuals_of(Theme::Light, visuals(false, panel_transparent));
+/// 仅切换面板底浓淡（v4.7 D31 + M1 2026-09-13：材质开/关、云母↔亚克力互切
+/// 与回退时调用），不动主题偏好。亮暗两套 Style 同步重注册（同 [`apply`]
+/// 的口径）。
+pub fn apply_panel_tint(ctx: &Context, panel_tint: Option<f32>) {
+    ctx.set_visuals_of(Theme::Dark, visuals(true, panel_tint));
+    ctx.set_visuals_of(Theme::Light, visuals(false, panel_tint));
 }
 
 /// [`settings::ThemePref`] → egui [`ThemePreference`]（设置页选择立即生效用）。
@@ -673,7 +830,7 @@ mod tests {
     #[test]
     fn visuals_reflect_palette_of_theme() {
         for dark in [true, false] {
-            let v = visuals(dark, false);
+            let v = visuals(dark, None);
             let p = Palette::of(dark);
             assert_eq!(v.dark_mode, dark, "dark_mode 标志随主题");
             assert_eq!(v.panel_fill, p.panel, "panel_fill = --panel");
@@ -689,18 +846,158 @@ mod tests {
         }
     }
 
-    /// v4.7 D31：材质生效时 panel_fill 透明（其余字段不变），亮暗两套一致。
+    /// v4.7 D31 + M1（2026-09-13）+ P2 v3/v5：`None` = 不透明面板底；材质档 =
+    /// 浓淡基色半透明层（只调 alpha，RGB 不变；cap 按材质两主题同档），其余
+    /// 字段两路径一致，亮暗两套相同。
     #[test]
-    fn panel_transparent_visuals_only_affect_panel_fill() {
+    fn panel_tint_visuals_only_affect_panel_fill() {
+        use crate::settings::Backdrop;
         for dark in [true, false] {
-            let opaque = visuals(dark, false);
-            let transparent = visuals(dark, true);
-            assert_eq!(transparent.panel_fill, Color32::TRANSPARENT);
-            assert_ne!(opaque.panel_fill, Color32::TRANSPARENT);
-            // 其余表面不透明层级不变（行/卡片经 Palette 取用，不在 Visuals 内）
-            assert_eq!(transparent.extreme_bg_color, opaque.extreme_bg_color);
-            assert_eq!(transparent.window_fill, opaque.window_fill);
-            assert_eq!(transparent.dark_mode, opaque.dark_mode);
+            let p = Palette::of(dark);
+            let opaque = visuals(dark, None);
+            assert_eq!(opaque.panel_fill, p.panel, "回退路径（无材质）= 实色面板底");
+            for backdrop in [Backdrop::Mica, Backdrop::Acrylic] {
+                let a = panel_tint_cap(dark, backdrop).expect("材质档必有浓淡层");
+                let tinted = visuals(dark, Some(a));
+                // P2 v3：浓淡基色 = tint_color（面板色 × 系统强调色混合，DeskBox
+                // 配方）；非 Windows/取色失败时 = p.panel（本断言经 tint_color
+                // 取期望值，两平台口径一致）。
+                let base = tint_color(dark);
+                assert_eq!(
+                    tinted.panel_fill,
+                    Color32::from_rgba_unmultiplied(
+                        base.r(),
+                        base.g(),
+                        base.b(),
+                        (a * 255.0).round() as u8
+                    ),
+                    "材质档 panel_fill = 浓淡基色 × alpha（RGB 不变）"
+                );
+                // 其余表面不透明层级不变（行/卡片经 Palette 取用，不在 Visuals 内）
+                assert_eq!(tinted.extreme_bg_color, opaque.extreme_bg_color);
+                assert_eq!(tinted.window_fill, opaque.window_fill);
+                assert_eq!(tinted.dark_mode, opaque.dark_mode);
+            }
+        }
+        // v5：cap 按材质两主题同档（亮色低档已废——带色基色无白漆问题）
+        assert_eq!(
+            panel_tint_cap(false, Backdrop::Mica),
+            panel_tint_cap(true, Backdrop::Mica),
+            "云母 cap 两主题一致"
+        );
+        assert_eq!(
+            panel_tint_cap(false, Backdrop::Acrylic),
+            panel_tint_cap(true, Backdrop::Acrylic),
+            "亚克力 cap 两主题一致"
+        );
+    }
+
+    /// P2 v2/v5（2026-09-13 真机反馈迭代）：不透明度直控式换算——默认 40% 档
+    /// = 真机对比调定推荐观感（云母 0.30 / 亚克力 0.40，两主题同档）；0% =
+    /// 纯材质；100% = cap；随 pct 单调不减（越界 clamp）；无材质恒 None。
+    #[test]
+    fn panel_tint_with_opacity_direct_control() {
+        use crate::settings::Backdrop;
+        // 默认 40% = 推荐观感锚点（±1e-6：1.0×40/100 存在浮点舍入）
+        let anchors = [
+            (true, Backdrop::Mica, 0.30_f32),
+            (true, Backdrop::Acrylic, 0.40_f32),
+            (false, Backdrop::Mica, 0.30_f32),
+            (false, Backdrop::Acrylic, 0.40_f32),
+        ];
+        for (dark, backdrop, anchor) in anchors {
+            let a = panel_tint_with_opacity(dark, backdrop, 40).expect("材质档必有浓淡层");
+            assert!(
+                (a - anchor).abs() < 1e-6,
+                "默认 40% 必须复现推荐观感锚点 {anchor}（实际 {a}，dark={dark} {backdrop:?}）"
+            );
+        }
+        // 0% = 纯材质（浓淡层全透）；100% = cap 上限（拉满即面板最实）
+        assert_eq!(panel_tint_with_opacity(true, Backdrop::Mica, 0), Some(0.0));
+        assert_eq!(
+            panel_tint_with_opacity(true, Backdrop::Acrylic, 100),
+            panel_tint_cap(true, Backdrop::Acrylic)
+        );
+        assert_eq!(
+            panel_tint_with_opacity(false, Backdrop::Mica, 100),
+            panel_tint_cap(false, Backdrop::Mica)
+        );
+        // 单调不减；超界 u8（200 > 100）视同 100
+        let mut prev = -1.0_f32;
+        for pct in [0u8, 10, 25, 40, 60, 80, 100, 200] {
+            let a = panel_tint_with_opacity(true, Backdrop::Mica, pct).unwrap();
+            assert!(a >= prev, "alpha 随 pct 单调不减（pct={pct}）");
+            prev = a;
+        }
+        assert_eq!(
+            panel_tint_with_opacity(true, Backdrop::Mica, 200),
+            panel_tint_cap(true, Backdrop::Mica),
+            "pct > 100 兜底视同 100"
+        );
+        // cap 排序（材质语义：亚克力拉满可全实、云母拉满保留采色语义）——本条
+        // 即真机反馈「调透明度不明显」的修复锚点
+        assert!(TINT_CAP_MICA >= 0.75 && TINT_CAP_ACRYLIC > TINT_CAP_MICA);
+        // 无材质恒 None（滑杆在该档置灰，换算层同口径）
+        assert_eq!(panel_tint_with_opacity(true, Backdrop::None, 50), None);
+    }
+
+    /// P2 v5（2026-09-13 真机反馈）：行填充材质适配——hover 分档（云母加权、
+    /// 亚克力减重）；selected 同走玻璃（比 hover 重一档，消除扫动时「不透明块
+    /// 跳变」的闪烁）；回退 = row_hover/row_selected 实色不变。
+    #[test]
+    fn row_fills_are_material_aware() {
+        use crate::settings::Backdrop;
+        let p_light = Palette::of(false);
+        let p_dark = Palette::of(true);
+        // 回退路径 = row_hover / row_selected 实色（既有观感不变）
+        for backdrop in [Backdrop::None, Backdrop::Mica, Backdrop::Acrylic] {
+            let f = row_fills(true, backdrop, false);
+            assert_eq!(f.hover, p_dark.row_hover);
+            assert_eq!(f.selected, p_dark.row_selected);
+            let f = row_fills(false, backdrop, false);
+            assert_eq!(f.hover, p_light.row_hover);
+            assert_eq!(f.selected, p_light.row_selected);
+        }
+        let f = row_fills(true, Backdrop::None, true);
+        assert_eq!(f.hover, p_dark.row_hover);
+        assert_eq!(f.selected, p_dark.row_selected);
+        // 材质档 = 半透明玻璃（alpha < 255），且 selected 比 hover 重一档
+        let lm = row_fills(false, Backdrop::Mica, true);
+        let la = row_fills(false, Backdrop::Acrylic, true);
+        let dm = row_fills(true, Backdrop::Mica, true);
+        let da = row_fills(true, Backdrop::Acrylic, true);
+        for f in [&lm, &la, &dm, &da] {
+            assert!(f.hover.a() < 255 && f.selected.a() < 255, "材质档必须全玻璃");
+            assert!(f.selected.a() > f.hover.a(), "selected 必须重于 hover（平滑过渡）");
+        }
+        // 云母档强于亚克力档
+        assert!(lm.hover.a() > la.hover.a(), "亮色：云母 hover > 亚克力 hover");
+        assert!(dm.hover.a() > da.hover.a(), "暗色：云母 hover > 亚克力 hover");
+        // 定值锚点（亮·云母 黑 7%/10%、暗·云母 白 7.8%/10.2%、亚克力减半）
+        assert_eq!(lm.hover, Color32::from_rgba_unmultiplied(0, 0, 0, 18));
+        assert_eq!(lm.selected, Color32::from_rgba_unmultiplied(0, 0, 0, 26));
+        assert_eq!(dm.hover, Color32::from_rgba_unmultiplied(255, 255, 255, 20));
+        assert_eq!(dm.selected, Color32::from_rgba_unmultiplied(255, 255, 255, 26));
+        assert_eq!(la.hover, Color32::from_rgba_unmultiplied(0, 0, 0, 9));
+        assert_eq!(la.selected, Color32::from_rgba_unmultiplied(0, 0, 0, 15));
+        assert_eq!(da.hover, Color32::from_rgba_unmultiplied(255, 255, 255, 10));
+        assert_eq!(da.selected, Color32::from_rgba_unmultiplied(255, 255, 255, 15));
+    }
+
+    /// 设置卡填充（2026-09-13）：非玻璃 = 实色 card；玻璃 = card 色 × alpha
+    /// （预乘存储，材质从卡面透出），亮暗两主题一致。
+    #[test]
+    fn card_fill_glass_is_translucent_only_when_asked() {
+        for dark in [true, false] {
+            let p = Palette::of(dark);
+            assert_eq!(card_fill(dark, false), p.card, "回退路径 = 实色卡");
+            let expected_a = if dark { CARD_GLASS_ALPHA_DARK } else { CARD_GLASS_ALPHA_LIGHT };
+            assert_eq!(
+                card_fill(dark, true),
+                Color32::from_rgba_unmultiplied(p.card.r(), p.card.g(), p.card.b(), expected_a),
+                "玻璃卡 = card 色 × alpha"
+            );
+            assert!(expected_a < 255, "玻璃卡必须降 alpha（材质透出）");
         }
     }
 

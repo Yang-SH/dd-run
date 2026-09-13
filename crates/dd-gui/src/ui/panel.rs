@@ -35,10 +35,15 @@ impl PaletteApp {
         let mut open_settings = false;
         let self_ref: &Self = &*self;
         let p = theme::Palette::of(ui.visuals().dark_mode);
-        // v4.7 D31（真机反馈修订）：材质生效时页脚同样透出系统材质——否则底部
-        // 一条不透明带把材质面板割裂；全关/回退时保持 --panel-2 不透明。
+        // 材质态页脚填充（P2 v5 修复「底部栏未同步修复效果」，2026-09-13）：
+        // D31 时代页脚 = 纯 TRANSPARENT（彼时面板也没有浓淡层，透明对透明一致）；
+        // M1 起面板有了浓淡层（panel_fill = tint 基色 × alpha，只由 CentralPanel
+        // 绘制、不覆盖页脚矩形），页脚带露出的就成了**未 tint 的原始 DWM 材质**
+        // ——面板 tint 越重底部色差带越明显。现改为与面板**同源** `panel_fill`
+        // （同一份浓淡层），材质态页脚与面板一体；全关/回退时仍为 --panel-2 不
+        // 透明（fallback 观感不变）。
         let footer_fill = if self.backdrop_active {
-            egui::Color32::TRANSPARENT
+            ui.style().visuals.panel_fill
         } else {
             p.panel_2
         };
@@ -344,6 +349,13 @@ impl PaletteApp {
         let p = theme::Palette::of(ui.visuals().dark_mode);
         // F2：列表密度档 → 行几何/排印指标（行高/字号/图标格一档联动）
         let metrics = theme::ListMetrics::of(self.settings.density);
+        // P2 v5：行填充材质适配（hover 分档 + selected 玻璃化治扫动闪烁，
+        // 见 `theme::row_fills`——循环外一次解析，行内直用）。
+        let row_fills = theme::row_fills(
+            ui.visuals().dark_mode,
+            self.settings.backdrop,
+            self.backdrop_active,
+        );
         // 本帧鼠标指针屏幕坐标（用于区分「鼠标真的动了」vs「内容在静止鼠标下滚动」）。
         let current_hover_pos = ui.input(|i| i.pointer.hover_pos());
 
@@ -442,11 +454,7 @@ impl PaletteApp {
                             ui.add_space(12.0);
                             ui.horizontal(|ui| {
                                 ui.add_space(10.0);
-                                ui.label(
-                                    egui::RichText::new(section)
-                                        .font(theme::semibold(12.0))
-                                        .color(p.text3),
-                                );
+                                ui.label(theme::semibold_title(section, 12.0).color(p.text3));
                             });
                             ui.add_space(4.0);
                         } else {
@@ -459,6 +467,7 @@ impl PaletteApp {
                                 Some(*idx) == selected,
                                 icon_views.get(idx),
                                 hover_visual,
+                                row_fills,
                                 metrics,
                             );
                             row_rects.push((*idx, resp.rect));

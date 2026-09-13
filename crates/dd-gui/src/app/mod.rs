@@ -312,13 +312,16 @@ pub struct PaletteApp {
     /// 主面板窗口 Win32 HWND（v4.7 D31：DWM 材质调用句柄；首个 ui 帧捕获一次，
     /// 非 Win32 平台保持 None → 材质功能静默不可用、回退不透明）。
     pub(crate) hwnd: Option<isize>,
-    /// 材质当前是否已成功生效（面板背景透明）。驱动 `clear_color` 与
-    /// panel_fill 透明注册；失败回退时保持 false，视觉与 v4.6 一致。
+    /// 材质当前是否已成功生效（面板底为浓淡层）。驱动 `clear_color` 与
+    /// panel_fill 浓淡注册；失败回退时保持 false，视觉与 v4.6 一致。
     pub(crate) backdrop_active: bool,
     /// 材质切换防闪倒计时（v4.7 真机反馈）：切到「无材质」时置 3，`ui()` 末尾
     /// 逐帧递减，归零时才向 DWM 清材质——保证清材质发生时窗口已呈现≥2 帧
     /// 不透明面板，消除「一瞬透明」闪烁。
     pub(crate) backdrop_clear_countdown: u32,
+    /// M3/M4（2026-09-13）：窗口 chrome（圆角 + 禁过渡）是否已应用——HWND
+    /// 捕获后由 `refresh_backdrop` 一次性设置（属性幂等，旗标避免重复发送）。
+    pub(crate) chrome_applied: bool,
     /// 当前窗口是否已按设置页尺寸调整（帧间 diff，仅在进/出设置页时发
     /// `InnerSize`，避免每帧塞 ViewportCommand）。
     pub(crate) settings_sized: bool,
@@ -457,6 +460,7 @@ impl PaletteApp {
             hwnd: None,
             backdrop_active: false,
             backdrop_clear_countdown: 0,
+            chrome_applied: false,
             settings_sized: false,
             native_resize: false,
             native_resize_since: None,

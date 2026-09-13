@@ -39,12 +39,9 @@ pub(crate) fn draw_empty_state(
                 .color(p.text3),
         );
         ui.add_space(10.0);
-        // B1：空态标题 16px/600（base400）走 semibold 族
-        ui.label(
-            egui::RichText::new(title)
-                .font(dd_gui::theme::semibold(16.0))
-                .color(p.text),
-        );
+        // B1：空态标题 16px/600（base400）走 semibold 族；2026-09-13 追加
+        // 0.05em 字距（semibold_title，缓解雅黑 Bold 小字号「压缩」观感）。
+        ui.label(dd_gui::theme::semibold_title(title, 16.0).color(p.text));
         if let Some(desc) = desc {
             ui.add_space(2.0);
             ui.label(egui::RichText::new(desc).size(12.0).color(p.text3));

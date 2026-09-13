@@ -138,6 +138,96 @@ impl Backdrop {
     }
 }
 
+/// 窗口圆角偏好（窗口材质与边框方案 P3，2026-09-13；参考 DeskBox
+/// `WidgetCornerPreference`）。映射 `DWMWA_WINDOW_CORNER_PREFERENCE` 三档
+/// （`platform::apply_window_chrome`）；Win11 以下该属性不可用，失败仅记日志
+/// 跳过。默认圆角 = 既有现状（v4.7 起恒 `DWMWCP_ROUND`）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum CornerPref {
+    /// 圆角（`DWMWCP_ROUND`，≈8px，对齐设计 token `window_corner_radius = 8`）。
+    #[default]
+    Round,
+    /// 小圆角（`DWMWCP_ROUNDSMALL`，≈4px）。
+    Small,
+    /// 方角（`DWMWCP_DONOTROUND`）。
+    Square,
+}
+
+impl CornerPref {
+    /// 设置页显示标签。
+    pub fn label(self) -> &'static str {
+        match self {
+            CornerPref::Round => "圆角",
+            CornerPref::Small => "小圆角",
+            CornerPref::Square => "方角",
+        }
+    }
+
+    /// JSON 序列化值（稳定标识，与显示标签解耦）。
+    pub fn as_str(self) -> &'static str {
+        match self {
+            CornerPref::Round => "round",
+            CornerPref::Small => "small",
+            CornerPref::Square => "square",
+        }
+    }
+
+    /// JSON 值反解；未知值返回 `None`（调用方回落默认圆角）。
+    pub fn parse(s: &str) -> Option<Self> {
+        match s {
+            "round" => Some(CornerPref::Round),
+            "small" => Some(CornerPref::Small),
+            "square" => Some(CornerPref::Square),
+            _ => None,
+        }
+    }
+}
+
+/// 面板边框颜色模式（窗口材质与边框方案 P4，2026-09-13；参考 DeskBox
+/// `WidgetBorderColorMode`）。映射 `DWMWA_BORDER_COLOR`——1px 实色，宽度
+/// 固定，粗细不在能力面内；仅材质生效时绘制（既有语义）。默认中性 = 现状。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum BorderMode {
+    /// 中性灰（`Palette::border_strong`，随主题明暗；默认）。
+    #[default]
+    Neutral,
+    /// 系统强调色（`DwmGetColorizationColor`，取不到回落 `Palette::accent`；
+    /// 跨主题恒色）。
+    Accent,
+    /// 关（`DWMWA_BORDER_COLOR_NONE` 停画）。
+    None,
+}
+
+impl BorderMode {
+    /// 设置页显示标签。
+    pub fn label(self) -> &'static str {
+        match self {
+            BorderMode::Neutral => "中性",
+            BorderMode::Accent => "强调色",
+            BorderMode::None => "关",
+        }
+    }
+
+    /// JSON 序列化值（稳定标识，与显示标签解耦）。
+    pub fn as_str(self) -> &'static str {
+        match self {
+            BorderMode::Neutral => "neutral",
+            BorderMode::Accent => "accent",
+            BorderMode::None => "none",
+        }
+    }
+
+    /// JSON 值反解；未知值返回 `None`（调用方回落默认中性）。
+    pub fn parse(s: &str) -> Option<Self> {
+        match s {
+            "neutral" => Some(BorderMode::Neutral),
+            "accent" => Some(BorderMode::Accent),
+            "none" => Some(BorderMode::None),
+            _ => None,
+        }
+    }
+}
+
 /// 界面语言（v4.13 D38）。`FollowSystem`（默认）在运行时经平台探测解析为
 /// 具体语言（`crate::platform::system_ui_lang`：zh 系 → ZhCn，其余 → EnUs）。
 /// 显示文案不走固定中文 `label()`——语言卡经 `text::t()` 按**当前生效语言**
@@ -279,6 +369,14 @@ pub struct Settings {
     pub search_engines: Vec<SearchEngine>,
     /// 窗口材质（v4.7 D30；默认云母，材质不可用场景由渲染层回退不透明）。
     pub backdrop: Backdrop,
+    /// 材质不透明度百分比（窗口材质与边框方案 P2 v2，2026-09-13：0–100 直控
+    /// egui 浓淡层，`alpha = cap × pct/100`，见 `theme::panel_tint_with_opacity`；
+    /// 默认 40 = 精确复现 M1 真机调定四档锚点观感；0 = 纯材质，100 = 面板最实）。
+    pub material_opacity: u8,
+    /// 窗口圆角偏好（P3；默认圆角 = 现状）。
+    pub corner_pref: CornerPref,
+    /// 面板边框颜色模式（P4；默认中性 = 现状）。
+    pub border_mode: BorderMode,
     /// 全局热键修饰键位掩码（M6 批次 6.3：MOD_ALT=1/CONTROL=2/SHIFT=4/WIN=8，
     /// 不含 NOREPEAT——注册时由热键线程统一补）。默认 Win+Alt。
     pub hotkey_mods: u32,
@@ -320,6 +418,9 @@ impl Default for Settings {
             open_view: OpenView::default(),
             search_engines: default_search_engines(),
             backdrop: Backdrop::default(),
+            material_opacity: 40,
+            corner_pref: CornerPref::default(),
+            border_mode: BorderMode::default(),
             hotkey_mods: HOTKEY_MODS_DEFAULT,
             hotkey_vk: HOTKEY_VK_DEFAULT,
             autostart: false,
@@ -395,6 +496,25 @@ impl Settings {
         if let Some(t) = v.get("backdrop").and_then(|t| t.as_str()) {
             if let Some(backdrop) = Backdrop::parse(t) {
                 s.backdrop = backdrop;
+            }
+        }
+        // 材质不透明度 / 窗口圆角 / 面板边框（P2–P4，2026-09-13）：字段缺失
+        // （旧版本配置）→ 默认（40 / 圆角 / 中性——40% = M1 真机调定锚点观感）；
+        // 数值越界 clamp 到 0–100；类型损坏或未知字符串回落默认（与 backdrop
+        // 同口径）。
+        s.material_opacity = v
+            .get("material_opacity")
+            .and_then(|x| x.as_u64())
+            .map(|x| x.clamp(0, 100) as u8)
+            .unwrap_or(40);
+        if let Some(t) = v.get("corner_pref").and_then(|t| t.as_str()) {
+            if let Some(pref) = CornerPref::parse(t) {
+                s.corner_pref = pref;
+            }
+        }
+        if let Some(t) = v.get("border_mode").and_then(|t| t.as_str()) {
+            if let Some(mode) = BorderMode::parse(t) {
+                s.border_mode = mode;
             }
         }
         // 全局热键（M6 批次 6.3）：掩码先剔除非法位；剔除后无任何修饰键或字段
@@ -481,6 +601,9 @@ impl Settings {
             "open_view": self.open_view.as_str(),
             "search_engines": engines,
             "backdrop": self.backdrop.as_str(),
+            "material_opacity": self.material_opacity,
+            "corner_pref": self.corner_pref.as_str(),
+            "border_mode": self.border_mode.as_str(),
             "hotkey_mods": self.hotkey_mods,
             "hotkey_vk": self.hotkey_vk,
             "autostart": self.autostart,
@@ -736,6 +859,76 @@ mod tests {
         assert_eq!(
             Settings::parse_json(r#"{"backdrop":42}"#).backdrop,
             Backdrop::Mica
+        );
+    }
+
+    // ── P2–P4（窗口材质与边框方案，2026-09-13）────────────────────────
+
+    #[test]
+    fn material_window_defaults_and_roundtrip() {
+        // 默认值：40 / 圆角 / 中性（40% = M1 真机调定锚点观感）
+        assert_eq!(Settings::default().material_opacity, 40);
+        assert_eq!(Settings::default().corner_pref, CornerPref::Round);
+        assert_eq!(Settings::default().border_mode, BorderMode::Neutral);
+        // 旧版本配置（三个字段均缺失）→ 默认值
+        let old = Settings::parse_json(r#"{"backdrop":"acrylic"}"#);
+        assert_eq!(old.material_opacity, 40);
+        assert_eq!(old.corner_pref, CornerPref::Round);
+        assert_eq!(old.border_mode, BorderMode::Neutral);
+        // 合法值往返
+        let s = Settings {
+            material_opacity: 40,
+            corner_pref: CornerPref::Small,
+            border_mode: BorderMode::Accent,
+            ..Settings::default()
+        };
+        let parsed = Settings::parse_json(&s.to_json_string());
+        assert_eq!(parsed.material_opacity, 40);
+        assert_eq!(parsed.corner_pref, CornerPref::Small, "{} 往返一致", CornerPref::Small.label());
+        assert_eq!(parsed.border_mode, BorderMode::Accent, "{} 往返一致", BorderMode::Accent.label());
+    }
+
+    #[test]
+    fn material_opacity_out_of_range_and_type_corruption() {
+        // 越界 clamp 到 0–100（滑杆口径）；负数/类型损坏 → 默认 40
+        assert_eq!(Settings::parse_json(r#"{"material_opacity":57}"#).material_opacity, 57);
+        assert_eq!(Settings::parse_json(r#"{"material_opacity":0}"#).material_opacity, 0);
+        assert_eq!(Settings::parse_json(r#"{"material_opacity":100}"#).material_opacity, 100);
+        assert_eq!(Settings::parse_json(r#"{"material_opacity":255}"#).material_opacity, 100);
+        assert_eq!(Settings::parse_json(r#"{"material_opacity":-3}"#).material_opacity, 40);
+        assert_eq!(
+            Settings::parse_json(r#"{"material_opacity":"half"}"#).material_opacity,
+            40
+        );
+    }
+
+    #[test]
+    fn corner_and_border_unknown_values_fall_back() {
+        // 未知字符串 → 默认（与 backdrop 未知回落口径一致）；合法值单独解析
+        assert_eq!(
+            Settings::parse_json(r#"{"corner_pref":"huge"}"#).corner_pref,
+            CornerPref::Round
+        );
+        assert_eq!(
+            Settings::parse_json(r#"{"border_mode":"thick"}"#).border_mode,
+            BorderMode::Neutral
+        );
+        assert_eq!(
+            Settings::parse_json(r#"{"corner_pref":"square"}"#).corner_pref,
+            CornerPref::Square
+        );
+        assert_eq!(
+            Settings::parse_json(r#"{"border_mode":"none"}"#).border_mode,
+            BorderMode::None
+        );
+        // 类型损坏 → 默认
+        assert_eq!(
+            Settings::parse_json(r#"{"corner_pref":3}"#).corner_pref,
+            CornerPref::Round
+        );
+        assert_eq!(
+            Settings::parse_json(r#"{"border_mode":true}"#).border_mode,
+            BorderMode::Neutral
         );
     }
 

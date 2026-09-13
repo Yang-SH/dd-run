@@ -21,10 +21,10 @@
 //! 速度打磨（扩展侧，零宿主改动即可生效）：
 //! 1. **探测缓存**：`available()` 探测结果按 TTL 缓存（默认 3s），避免每次按键
 //!    都探测 Everything（IPC 轻量探活优先，回落 `es.exe -get-everything-version`）。
-//! 2. **超时收紧**：探测 800ms、查询 1.2s（宿主 `get_items` 超时 2000ms，留余量）。
+//! 2. **超时收紧**：探活与查询统一 `ES_TIMEOUT = 1200ms`（宿主 `get_items` 超时 2000ms，留余量）。
 //! 3. **结果数自适应**：默认 30 条，评分排序稳定；海量结果只取前 N。
 //! 4. **查询直透**：Everything 全部搜索语法（`ext:`/`dm:`/`path:`/通配符/正则）
-//!    原样透传，无需扩展侧解析。
+//!    原样透传（例外：`-`/`/` 开头的查询前置 `^` 转义），无需扩展侧解析。
 //!
 //! 依赖：`fuzzy-matcher`（纯 Rust）+ `chrono` + `everything-ipc`（P2，仅 Windows）。
 //! **不使用 Everything HTTP / TcpStream**（v3.1 计划期方案，v3.3 起废弃，历史见
