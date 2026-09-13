@@ -313,7 +313,7 @@
 | 项目 | 状态 | 落点 |
 |---|---|---|
 | P1 材质单选化（三段 pill：无材质/云母/亚克力） | ✅ | `ui/settings_view.rs` draw_material_card 重构（复用 `draw_density_pill` 口径）+ `text.rs` |
-| P2 不透明度滑杆（0–100，默认 40 = 推荐观感档；v2 直控式） | ✅ | `settings.rs` `material_opacity: u8` + `theme.rs` `panel_tint_with_opacity`（`alpha = cap × pct/100`；v5 cap 按材质两主题同档：云母 0.75 / 亚克力 1.0，0 = 纯材质）+ `app/keys.rs` `apply_material_opacity`（拖动不落盘、松手 `drag_stopped` 落盘）；v3/v4 浓淡基色 = `theme::tint_color`（面板色 × 系统强调色，暗 8%/亮 30%，DeskBox `BuildContentTintColor` 配方 + 亮度层补偿）；v5 行填充材质适配 = `theme::row_fills`（hover 分档：云母加权 7%/7.8% 玻璃、亚克力减重 3.5%/3.9%；selected 同走玻璃治扫动闪烁；回退实色）+ 页脚同步浓淡层（材质态 footer 与面板同源 `panel_fill`，消除底部色差带） |
+| P2 不透明度滑杆（0–100，默认 40 = 推荐观感档；v2 直控式） | ✅ | `settings.rs` `material_opacity: u8` + `theme.rs` `panel_tint_with_opacity`（`alpha = cap × pct/100`；v5 cap 按材质两主题同档：云母 0.75 / 亚克力 1.0，0 = 纯材质）+ `app/keys.rs` `apply_material_opacity`（拖动不落盘、松手 `drag_stopped` 落盘）；v3/v4 浓淡基色 = `theme::tint_color`（面板色 × 系统强调色，暗 8%/亮 30%，DeskBox `BuildContentTintColor` 配方 + 亮度层补偿）；v5 行填充材质适配 = `theme::row_fills`（hover 分档：云母加权 7%/7.8% 玻璃、亚克力减重 3.5%/3.9%；selected 同走玻璃治扫动闪烁；回退实色）+ 页脚同步浓淡层（材质态 footer 与面板同源 `panel_fill`，消除底部色差带）；v6 设置卡控件风格对齐（自绘 Fluent 滑杆：轨 4px/accent_stroke 已选段/白钮描边、百分比右对齐行头；边框 pill 竖排修复；pill `dim` 置灰参数） |
 | P3 窗口圆角三选（圆角/小圆角/方角） | ✅ | `settings.rs` `CornerPref` + `platform.rs` `apply_window_chrome(hwnd, pref)` 映射 `DWMWCP_ROUND/ROUNDSMALL/DONOTROUND` + `apply_corner_pref` |
 | P4 面板边框三选（中性/强调色/关） | ✅ | `settings.rs` `BorderMode` + `platform.rs` `system_accent_color`（`DwmGetColorizationColor`，COLORREF 0x00BBGGRR）+ `app/keys.rs` `border_color` 单点收口（refresh_backdrop / apply_theme_pref / apply_border_mode 同源） |
 

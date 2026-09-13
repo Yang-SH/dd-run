@@ -467,38 +467,50 @@ impl PaletteApp {
                         material == backdrop,
                         p,
                         dark,
+                        false,
                     ) {
                         picked_material = Some(backdrop);
                     }
                 }
             });
             // ── 行 2：不透明度滑杆（P2；材质关/未生效 → 置灰）──
+            // v6（2026-09-13 设计风格对齐）：egui 默认 Slider（细灰轨 + 行内
+            // 百分比后缀）与整套 Fluent 控件（pill/开关）脱节，改自绘规格：
+            // 轨 4px 圆角 2（未选 `--border` / 已选 accent_stroke）+ 16px 白钮
+            // border-strong 描边（悬停/拖动加粗到 2px）；百分比值右对齐在行头。
             card.add_space(8.0);
-            card.label(egui::RichText::new(crate::text::t(lang, "set.opacity.name")).size(14.0).color(p.text));
-            card.add_space(2.0);
-            card.label(
-                egui::RichText::new(crate::text::t(lang, "set.opacity.desc"))
-                    .size(12.0)
-                    .color(p.text3),
-            );
-            card.add_space(6.0);
-            card.add_enabled_ui(material_active, |ui| {
-                ui.spacing_mut().item_spacing.y = 0.0;
-                let resp = ui
-                    .add(
-                        egui::Slider::new(&mut opacity_tmp, 0..=100)
-                            .suffix("%")
-                            .step_by(5.0),
+            card.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = 0.0;
+                ui.vertical(|ui| {
+                    ui.label(
+                        egui::RichText::new(crate::text::t(lang, "set.opacity.name"))
+                            .size(14.0)
+                            .color(p.text),
                     );
-                if resp.changed() {
-                    opacity_changed = true;
-                }
-                // 拖动中不落盘（apply_material_opacity 只改内存）；松手或点击
-                // 跳值（changed 且未处于拖拽）才写盘一次。键盘微调同口径落盘。
-                if resp.drag_stopped() || (resp.changed() && !resp.dragged()) {
-                    opacity_released = true;
-                }
+                    ui.add_space(2.0);
+                    ui.label(
+                        egui::RichText::new(crate::text::t(lang, "set.opacity.desc"))
+                            .size(12.0)
+                            .color(p.text3),
+                    );
+                });
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    ui.label(
+                        egui::RichText::new(format!("{}%", opacity_tmp))
+                            .size(12.0)
+                            .color(if material_active { p.text2 } else { p.text3 }),
+                    );
+                });
             });
+            card.add_space(6.0);
+            let (slider_changed, slider_released) =
+                draw_opacity_slider(card, material_active, &mut opacity_tmp, p, dark);
+            if slider_changed {
+                opacity_changed = true;
+            }
+            if slider_released {
+                opacity_released = true;
+            }
             // ── 行 3：窗口圆角三选 pill（P3；与材质无关恒可用）──
             card.add_space(8.0);
             card.label(egui::RichText::new(crate::text::t(lang, "set.corner.name")).size(14.0).color(p.text));
@@ -531,6 +543,7 @@ impl PaletteApp {
                         self.settings.corner_pref == pref,
                         p,
                         dark,
+                        false,
                     ) {
                         picked_corner = Some(pref);
                     }
@@ -546,32 +559,37 @@ impl PaletteApp {
                     .color(p.text3),
             );
             card.add_space(6.0);
+            // v6 修复：三个 pill 必须包在 horizontal 里（此前直接落在垂直
+            // 闭包中被逐行堆叠——真机截图「面板边框排版」问题根因）。
             card.add_enabled_ui(material_active, |ui| {
-                ui.spacing_mut().item_spacing.x = 0.0;
-                let avail = ui.available_width();
-                let pill_w = (avail - 2.0 * gap) / 3.0;
-                for (i, (mode, key)) in [
-                    (dd_gui::settings::BorderMode::Neutral, "set.border.neutral"),
-                    (dd_gui::settings::BorderMode::Accent, "set.border.accent"),
-                    (dd_gui::settings::BorderMode::None, "set.border.off"),
-                ]
-                .into_iter()
-                .enumerate()
-                {
-                    if i > 0 {
-                        ui.add_space(gap);
+                ui.horizontal(|ui| {
+                    ui.spacing_mut().item_spacing.x = 0.0;
+                    let avail = ui.available_width();
+                    let pill_w = (avail - 2.0 * gap) / 3.0;
+                    for (i, (mode, key)) in [
+                        (dd_gui::settings::BorderMode::Neutral, "set.border.neutral"),
+                        (dd_gui::settings::BorderMode::Accent, "set.border.accent"),
+                        (dd_gui::settings::BorderMode::None, "set.border.off"),
+                    ]
+                    .into_iter()
+                    .enumerate()
+                    {
+                        if i > 0 {
+                            ui.add_space(gap);
+                        }
+                        if draw_density_pill(
+                            ui,
+                            pill_w,
+                            crate::text::t(lang, key),
+                            self.settings.border_mode == mode,
+                            p,
+                            dark,
+                            !material_active,
+                        ) {
+                            picked_border = Some(mode);
+                        }
                     }
-                    if draw_density_pill(
-                        ui,
-                        pill_w,
-                        crate::text::t(lang, key),
-                        self.settings.border_mode == mode,
-                        p,
-                        dark,
-                    ) {
-                        picked_border = Some(mode);
-                    }
-                }
+                });
             });
         });
         if let Some(backdrop) = picked_material {
@@ -659,7 +677,8 @@ impl PaletteApp {
                         ui.add_space(gap);
                     }
                     let selected = current == density;
-                    if draw_density_pill(ui, pill_w, crate::text::t(lang, key), selected, p, dark) {
+                    if draw_density_pill(ui, pill_w, crate::text::t(lang, key), selected, p, dark, false)
+                    {
                         pick = Some(density);
                     }
                 }
@@ -1658,35 +1677,122 @@ pub(crate) fn draw_density_pill(
     selected: bool,
     p: &theme::Palette,
     dark: bool,
+    dim: bool,
 ) -> bool {
     let h = 32.0;
     let (rect, resp) = ui.allocate_exact_size(egui::vec2(w, h), egui::Sense::click());
     let radius = egui::CornerRadius::same(6);
-    if selected {
+    if selected && !dim {
         ui.painter().rect_filled(rect, radius, accent_soft(dark, p));
     } else {
         ui.painter().rect_filled(rect, radius, p.input_fill);
-        if ui.rect_contains_pointer(rect) {
+        // 禁用态（dim，如边框行在材质关闭时）不做 hover 反馈
+        if ui.rect_contains_pointer(rect) && ui.is_enabled() {
             ui.painter()
                 .rect_filled(rect.shrink(1.0), radius, p.control_hover);
         }
     }
-    // 边框同 radio-card：选中 2px 走 accent_stroke（B2 线状小元素口径）
-    let stroke = if selected {
+    // 边框同 radio-card：选中 2px 走 accent_stroke（B2 线状小元素口径）；
+    // 禁用态去 accent（结构性提示改用 border_strong 描边 + text2 标签）
+    let stroke = if dim {
+        egui::Stroke::new(1.0, if selected { p.border_strong } else { p.border })
+    } else if selected {
         egui::Stroke::new(2.0, p.accent_stroke)
     } else {
         egui::Stroke::new(1.0, p.border_strong)
     };
     ui.painter()
         .rect_stroke(rect, radius, stroke, egui::StrokeKind::Inside);
+    let label_color = if dim {
+        if selected { p.text2 } else { p.text3 }
+    } else if selected {
+        p.text
+    } else {
+        p.text2
+    };
     ui.painter().text(
         rect.center(),
         egui::Align2::CENTER_CENTER,
         label,
         egui::FontId::proportional(12.0),
-        if selected { p.text } else { p.text2 },
+        label_color,
     );
     resp.clicked()
+}
+
+/// 不透明度滑杆（P2 v6，2026-09-13 设计风格对齐）：egui 默认 Slider 的细灰
+/// 轨 + 行内百分比后缀与整套 Fluent 控件（pill/开关）风格脱节，按设计 token
+/// 自绘——轨 4px 圆角 2（未选段 `--border` / 已选段 accent_stroke，与搜索框
+/// 聚焦下划线同源的小面积强调口径）、钮 16px 白底 border-strong 描边（悬停
+/// /拖动加粗 2px）；禁用态（材质关/未生效）置灰且不响应。返回 (changed,
+/// released)：拖动中 changed 即时生效不落盘，released（松手/单击跳值）落盘。
+fn draw_opacity_slider(
+    ui: &mut egui::Ui,
+    enabled: bool,
+    value: &mut u8,
+    p: &theme::Palette,
+    dark: bool,
+) -> (bool, bool) {
+    let height = 20.0;
+    let (rect, _) =
+        ui.allocate_exact_size(egui::vec2(ui.available_width(), height), egui::Sense::hover());
+    let id = ui.id().with("opacity_slider");
+    let resp = ui.interact(rect, id, egui::Sense::click_and_drag());
+    let mut changed = false;
+    let mut released = false;
+    if enabled {
+        if let Some(pos) = resp.interact_pointer_pos() {
+            if resp.dragged() || resp.clicked() {
+                let v = slider_value(rect.left(), rect.width(), pos.x);
+                if v != *value {
+                    *value = v;
+                    changed = true;
+                }
+            }
+        }
+        released = resp.drag_stopped() || resp.clicked();
+    }
+    // 轨：4px 圆角 2，垂直居中
+    let rail_y = rect.center().y;
+    let rail = egui::Rect::from_min_max(
+        egui::pos2(rect.left(), rail_y - 2.0),
+        egui::pos2(rect.right(), rail_y + 2.0),
+    );
+    let rail_radius = egui::CornerRadius::same(2);
+    ui.painter().rect_filled(rail, rail_radius, p.border);
+    // 已选段：accent_stroke（B2 小面积强调口径）
+    let t = f32::from((*value).min(100)) / 100.0;
+    let fill_right = rect.left() + rect.width() * t;
+    if fill_right - rail.left() > 2.0 {
+        ui.painter().rect_filled(
+            egui::Rect::from_min_max(rail.min, egui::pos2(fill_right, rail.max.y)),
+            rail_radius,
+            if enabled { p.accent_stroke } else { p.border_strong },
+        );
+    }
+    // 钮：16px 白底 + border-strong 描边（悬停/拖动加粗）；禁用置灰
+    let thumb_center = egui::pos2(fill_right.clamp(rail.left() + 8.0, rail.right() - 8.0), rail_y);
+    let active = enabled && (resp.hovered() || resp.dragged());
+    let thumb_fill = if enabled {
+        egui::Color32::WHITE
+    } else {
+        p.border
+    };
+    let thumb_stroke = egui::Stroke::new(
+        if active { 2.0 } else { 1.0 },
+        if enabled { p.border_strong } else { p.border },
+    );
+    ui.painter().circle_filled(thumb_center, 8.0, thumb_fill);
+    ui.painter().circle_stroke(thumb_center, 8.0, thumb_stroke);
+    (changed, released)
+}
+
+/// 指针横坐标 → 0–100 档位（纯函数，供单测；宽度非正防除零）。
+fn slider_value(left: f32, width: f32, x: f32) -> u8 {
+    if width <= 0.0 {
+        return 0;
+    }
+    ((x - left) / width).clamp(0.0, 1.0).mul_add(100.0, 0.5).floor() as u8
 }
 
 /// 功能态 ToggleSwitch（§08.1 v4.7「材质开关」行；v4.9 放大到 Fluent 规格
@@ -1963,6 +2069,19 @@ mod tests {
         // §08 v4.6（B5）：默认选中首栏「外观」；open_settings 每次进入重置到
         // default（与 go_home 复位语义一致），栏目不落盘。
         assert_eq!(SettingsCategory::default(), SettingsCategory::Appearance);
+    }
+
+    /// P2 v6：自绘滑杆的指针→档位纯函数——映射、越界钳制与零宽防除零。
+    #[test]
+    fn opacity_slider_value_maps_and_clamps() {
+        assert_eq!(super::slider_value(0.0, 100.0, 0.0), 0);
+        assert_eq!(super::slider_value(0.0, 100.0, 40.0), 40);
+        assert_eq!(super::slider_value(0.0, 100.0, 100.0), 100);
+        // 越界指针钳制到 0–100
+        assert_eq!(super::slider_value(0.0, 100.0, -20.0), 0);
+        assert_eq!(super::slider_value(0.0, 100.0, 150.0), 100);
+        // 零宽防除零
+        assert_eq!(super::slider_value(10.0, 0.0, 10.0), 0);
     }
 
     #[test]
