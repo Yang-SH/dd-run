@@ -16,3 +16,7 @@ Cargo.lock.orig
 # 由 build.rs include_bytes!；非源码、不提交，保留 .gitkeep 占位）
 /crates/dd-gui/assets/embed/*.exe
 
+# 文档体检工具（tools/docscan.py）的输出，随用随生成，不入库
+/.docscan.txt
+/.doclinks.txt
+

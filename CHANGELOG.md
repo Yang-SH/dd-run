@@ -4,6 +4,35 @@
 
 ## [Unreleased]
 
+### 优化（窗口材质与边框：材质单选 pill + 不透明度滑杆 + 圆角/边框三选 P1–P4，2026-09-13）
+
+- **设置卡更名「窗口材质与边框」**，参考 DeskBox「外观 → 窗口材质与边框」能力面（源码取证），原「云母/亚克力」两互斥开关行重构为四行结构；视觉契约与规格表见根目录 `cmdpal-window-material-effects.html` 效果页。
+- **P1 材质单选化**：两互斥开关 → 三段 pill「无材质 / 云母 / 亚克力」（复用 F2 密度卡 pill 口径），选中值仍落单值 `backdrop`，切换防闪链路（倒计时清 DWM）不变。
+- **P2 不透明度滑杆（v2 直控式，同日真机反馈修订）**：新增 0–100% 滑杆，语义 = **面板底不透明度直控** `alpha = cap(主题,材质) × pct/100`（cap = 暗·云母 0.75 / 暗·亚克力 1.0 / 亮·云母 0.25 / 亮·亚克力 0.45）——0% = 纯材质，100% = 面板最实（亮色 cap 刻意压低，延续 M1「厚白浓淡=白漆」防线）。**默认 40% 精确复现 M1 真机调定四档锚点**（0.30/0.40/0.10/0.18，默认观感零变化）。修订原因：初版 `基准 × (0.25 + 0.75×pct/100)` 在云母上有效带仅 0.075–0.30，叠在近乎不透明的 DWM 云母上感知极弱（真机反馈「调透明度效果不明显」）；参考 DeskBox 强度滑杆直扫 tint 全带（云母 0.04→0.46）改为全带直控。只走 egui 浓淡层重注册，不碰 DWM，零闪烁面；拖动即时生效不落盘、松手落盘一次（egui 0.36 为 `drag_stopped`）。P2 未发版，换算重定义无迁移。
+- **P2 v3 浓淡层基色带系统强调色 + v4 亮色增强（同日显示对齐反馈）**：tint 层基色由纯面板色改为**面板色 × 系统强调色混合**（暗 8% / 亮 30%，DeskBox `BuildContentTintColor` 配方 + 亮度层补偿；复用 P4 的 `DwmGetColorizationColor` 取色，取不到回落纯面板色）。真机截图对比：纯中性白浓淡把 DWM 云母「洗」成无材质感的白平面，同桌面下 DeskBox 呈灰蓝材质面——带色基色后浓淡层在任何 alpha 下都有材质色相；v4 进一步把亮色 cap 放宽（云母 0.25→0.55 / 亚克力 0.45→0.70，默认档 0.10/0.18→0.22/0.28）：v3 带色基色已根治 M1「厚白浓淡=白漆」问题，亮色可安全加厚逼近 DeskBox 存在感（仍低于暗色一档保留采色语义）。`theme::tint_color` 单点收口，visuals 契约单测同步。
+- **P3 窗口圆角三选**：圆角 / 小圆角 / 方角（`DWMWCP_ROUND / ROUNDSMALL / DONOTROUND`），默认圆角 = 现状；改选即时重设 DWM 属性（幂等），描边自动贴合新形状（DWM 自绘）。
+- **P4 面板边框三选**：中性 / 强调色 / 关（`DWMWA_BORDER_COLOR`），默认中性 = 现状；强调色 = `DwmGetColorizationColor`（系统强调色等价近似，不引 WinRT；取不到回落 `Palette::accent`），跨主题恒色；描边色经 `border_color()` 单点收口，`apply_theme_pref` 同步点同源（中性随明暗、强调色不变）。
+- **兼容与降级**：旧配置 `material_opacity`/`corner_pref`/`border_mode` 三键缺失 → 默认值（观感逐像素一致），越界 clamp、未知字符串回落（单测覆盖）；材质未生效（Win10 / 22621-）时滑杆与边框行置灰、圆角行恒可用。明确非目标：MicaAlt、AcrylicBase、边框粗细、材质强度第二滑杆、Win10 旧版亚克力（理由见效果页「非目标」节与 implementation.md P1–P4 小节）。
+- **P2 v5 两主题统一 cap + 行填充材质适配（同日反馈）**：①cap 改为按材质定档（云母 0.75 / 亚克力 1.0，不再分主题）——亮色独立低档（0.55/0.70）压低了材质存在感（真机对比 DeskBox 仍差一档），带色基色下统一后亮色默认档 0.22/0.28 → **0.30/0.40**；②结果行填充由单一 `row_hover_glass` 改为 `theme::row_fills` 材质适配对（hover + selected 成对）——同一块 31% 白/灰玻璃在近白云母上不可辨（「不明显」）、在亚克力动态模糊上形成亮块（「太突兀」），现 hover 云母加权（亮·黑 7% / 暗·白 7.8% 玻璃）、亚克力减重（3.5%/3.9%）；**selected 材质档同走玻璃**（比 hover 重一档，回退仍实色）——原不透明 `row_selected` 实色块在半透明材质上随鼠标扫动逐行蹦跳，即真机反馈「鼠标滑动时应用栏目闪烁」，玻璃化后扫动为半透明层平滑过渡（accent 竖条不变，选中辨识度不变）；③**底部页脚同步浓淡层**——页脚原为纯 TRANSPARENT（D31 时代面板无 tint 的一致态），M1 起面板 tint 只由 CentralPanel 绘制、不覆盖页脚矩形，页脚带露出的是未 tint 的原始材质，形成底部色差带（真机反馈「底部栏未同步修复效果」），改为与面板同源 `panel_fill`，材质态页脚与面板一体（回退仍 `panel_2` 实色）；卡片/设置项等其余 hover 不变。
+- 零新依赖（`Win32_Graphics_Dwm` 特性既有）；`cargo test --workspace` 全绿（dd-gui 187，新增 settings/theme/hover 单测 5 项），编译 0 警告；真机验收（材质/浓度/圆角/边框矩阵 + Win10 降级）待做。
+
+### 优化（字体与材质显示：F3 拉丁主字纠偏 + M1–M4 材质浓淡/描边/圆角/禁过渡，2026-09-13）
+
+- **F3 字体（参考 DeskBox = WinUI 3 系统排印管线）**：Proportional 族显式重排为 `[segoe, NotoEmoji-Regular, emoji-icon-font, cjk, sym, icons]`——拉丁/数字主字由 egui 内置 **Ubuntu-Light** 纠偏为 **Segoe UI**（此前英文应用名/路径/设置页全用 Ubuntu-Light，与行名 semibold 拉丁的 Segoe UI Semibold 同屏异字体混排）。重排仅动拉丁一处：CJK/emoji/Geometric Shapes（◌）/PUA glyph 回退路由逐一不变；缺文件成员自动剔除（降级安全）。semibold 链继承新序，regular/semibold 从此同为 Segoe 系。落点仅 `platform.rs`（约 20 行 + doc），无字号/密度变化（F1/F2 成果不动）。
+- **M1 材质浓淡层**：材质生效时面板底由纯 `TRANSPARENT` 改为**面板色半透明浓淡层**（云母 ×0.35 / 亚克力 ×0.50，`theme.rs` 常量 `TINT_ALPHA_*` 可调）——DWM 材质仍从底下透出，面板轮廓与内容对比度不再随壁纸漂移。D31 切换防闪逻辑不变；`visuals/apply/apply_panel_tint` 签名 bool → `Option<f32>`（3 处调用点同步）。
+- **M2 材质描边**：材质生效时 `DWMWA_BORDER_COLOR`（Win11 文档化属性）画 1px 外描边，取色复用 `border_strong` token（暗 `0x666666`/亮 `0xd1d1d1`），跟随 M3 圆角形状；主题切换在 `apply_theme_pref` 同步；材质关闭/Win10 恢复不描边。
+- **M3 圆角显式化**：`DWMWA_WINDOW_CORNER_PREFERENCE = DWMWCP_ROUND`（≈8px，对齐设计 token `window_corner_radius=8`），HWND 捕获后经 `refresh_backdrop` 一次性应用——消除无边框工具窗圆角「随系统判定」的不确定性。
+- **M4 禁过渡**：`DWMWA_TRANSITIONS_FORCEDISABLED`——唤起/隐藏瞬时（A1），不随系统「窗口动画」设置漂移。DeskBox 的动画开关不做：启动器无「要动画」需求面，记档直接禁用。
+- 均无新设置项/依赖/配置迁移；无材质与 Win10 路径观感不变。`cargo test -p dd-gui` 181 通过、`cargo clippy` 全仓 0 警告；真机截图验收（亮暗 × 三材质矩阵）待做。
+- **真机反馈修订一（同日）**：「不用加粗字体」——`theme::semibold()` 回落 **regular 字形**（函数与全部调用点保留，恢复字重只改一处）；`seguisb.ttf` / `msyhbd.ttc` 加粗字体**停载**（热替换少读 ~19MB，更快），`SEMIBOLD_FAMILY` 保留注册指向 regular 链防未知族；0.05em 标题字距作为排印规格保留。
+- **真机反馈修订二（同日）**：「云母/亚克力材质没有整个面板和设置页生效」——像素取证（设置页背景 RGB 带壁纸色偏 G/B>R）确认材质**其实已激活**，被 M1 初版单值浓淡层洗白 + 设置卡实色遮挡，属感知问题非链路故障。修复：①浓淡层**分主题四档**（亮 云母 0.10 / 亚克力 0.18；暗 0.30 / 0.40——亮色厚白浓淡等于白漆）；②材质生效时**设置卡片玻璃化**（`theme::card_fill`：card 色 × alpha 暗 190 / 亮 210，材质从卡面透出）；根页行/搜索框/页脚本就透材质，不受影响。`cargo test` 182 通过、clippy 0 警告。
+
+### 文档（文档 ↔ 代码差异清单修复：71 条差异经三路复核验真后逐条落实，2026-09-13）
+
+- **核对与修复记录**：新增 [`docs/doc-code-diff-2026-09-13.md`](./docs/doc-code-diff-2026-09-13.md)（v1.1，已登记 INDEX.md）——P/M/E/I/D/R/S 七系列 71 条差异，三路独立复核验真（修正清单自身 9 处）后按「文档对齐代码」落实约 84 处修复。规范类文档未实现契约**保留条文**、加「⚠️ 实现现状」注记；含 3 处纯注释代码修正（search.rs 超时注释、builtin.rs / aggregator.rs 陈旧注册注释），无行为变更。
+- **要点**：`search.md` 移除与 A-33 红线冲突的「无需 es.exe」承诺（高严重度 S-01）；`protocol.md` §9.2 `-32002` 归因更正（兜底在各扩展 handler，Python 示例确实回该码）；`extensions.md` Python 示例补 `stdin.reconfigure(utf-8)`（中文 query 乱码隐患）；README 双语 M7–M9 关账同步；release.yml 「内嵌」表述改「in-process」。
+- **遗留待人工确认**：超限消息「回 `-32600` + 关连接」是否补实现（P-01）、方法名常量层（P-18）等，见 INDEX.md §5。
+
 ### 修复（返回后搜索框失焦：嵌套页返回重新聚焦，2026-09-12 真机反馈）
 
 - **现象**：从文件搜索页（或任意嵌套页/设置页）返回后，搜索框没有焦点——无法直接键入，须先点一下输入框。
@@ -89,6 +118,21 @@
 - **根因**：协议 §6.4 的 `get_command` **只查顶层命令**（`dd-ext/src/lib.rs`），而兜底模板 id（如 `calc.eval.query`）天然不在顶层注册表 → 桩复热链路拿到 `Ok(None)` 即判「陈旧」并短路。
 - **修复**：`FallbackStore` 新增 `contains_template(ext_id, id)`；`dispatch_invoke` / `dispatch_fetch_page` 判定为模板时**跳过 §6.4 校验直接执行**（invoke 侧走 `skip_lookup`，page 侧传 `command_id=None`，等价「无对应命令点击」语义）。**常规命令保持 §6.4 陈旧校验不变**。
 - 该缺陷此前不触发（`LRU=8` > 扩展数 6，永不驱逐）；本次空闲回收让驱逐真实发生，故与上一条**同批修复**。
+
+### 新增（M9 内置扩展进程内化：单文件分发，内置不再 spawn 子进程）
+
+- 5 个内置扩展（apps / calc / system / websearch / shell）自 M9 起改为**宿主进程内**运行：宿主直接驱动 `dd_ext::serve_line`，不再 spawn 子进程、不再内嵌扩展 exe（`dd-gui/build.rs` 内嵌空表，`assets/embed/` 仅遗留目录）。
+- 发版产物收敛为**单一宿主文件** `dist/dd-run-<ver>.exe`（不再含内置 exe）；文件搜索 sidecar（`dd-ext-search.exe`）仍按 ADR-1 以子进程运行，随绿色包 `dist/extensions.d/` 携带。
+- 配套：`dd-run-cli --conformance` 对内置扩展改走 in-process 分支（直驱 `serve_line`）；websearch 引擎配置改由宿主内存注入（`set_configured_engines_json`），不再依赖 spawn 子进程才生效的 `DD_WEBSEARCH_ENGINES` 环境变量（详见上文「搜索引擎配置失效」修复）。
+- 协议 v1.0 零改动（in-process 与子进程走同一套 NDJSON 路由，字节等价）；`tools/package.sh` 改为 M9 单文件出包流程（见仓库 `README.md` 构建与打包一节）。
+
+### 新增（apps 扩展垃圾项过滤：安装附属工具黑名单 + 同 exe+参数去重 + AppsFolder 伪应用拦截）
+
+- 应用扩展结果新增**垃圾项过滤**：屏蔽安装器写入的「附属工具 / 卸载程序」等噪音项、按「同 exe + 参数」去重、拦截 `Applications` / `AppsFolder` 伪应用条目，使根视图与关键词匹配结果更干净。
+
+### 性能（运行时内存优化 M1+M2+M3：隐藏后工作集修剪 + 字体栈 mmap 化 + 图标纹理缓存清空）
+
+- 面板隐藏后执行**工作集修剪**；字体栈改为 `mmap` 化（按需分页，降低常驻内存）；图标纹理缓存由宿主在隐藏态清空，避免长期占用显存/内存。三项合计降低空闲期内存占用（协议 v1.0 零改动，纯宿主侧）。
 
 ### 文档
 

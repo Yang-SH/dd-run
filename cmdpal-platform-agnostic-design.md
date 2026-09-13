@@ -1,16 +1,19 @@
 # PowerToys Command Palette（CmdPal）参考设计：以 Rust 为主的跨平台实现
 
-> **文档性质**：从 `microsoft/PowerToys` 的 `src/modules/cmdpal`（Command Palette，简称 CmdPal）提炼出的**参考设计**。本文以 **Rust** 为实现目标（跨平台优先），在 §1–§7 抽象出与具体语言尽量解耦的契约/UI/宿主模型，§8 给出 Rust 参照实现。**本文不宣称"语言无关"**——Rust 是主目标，但抽象层尽量不绑定 Rust，供其他语言读者借鉴架构思路。
->
-> **事实来源与核验**：本文所有架构、接口、交互模型均来自 PowerToys `main` 分支真实源码与官方文档，抓取日期 **2026-08-31**。具体出处见文末「参考来源」。CmdPal 目前为 **preview**，README 明确说明 v1.0 前扩展 API 仍可能出现 **breaking changes**，落地时请以你拉取时的实际代码为准。
->
-> **符号约定**：✅ = 已核验事实；⚠️ = 需注意的偏差/风险；🔧 = 需读者在自己工具链中自行验证的设计点/验证点（含可执行的验证方法）。
+> **状态**：生效中 ｜ **版本**：v1.0 ｜ **最后更新**：2026-09-13
+> **关联**：[docs/implementation.md](./docs/implementation.md)（实施主线与验收映射）· [docs/protocol.md](./docs/protocol.md)（扩展协议 v1.0）· [docs/manifest-schema.md](./docs/manifest-schema.md)
 
 ---
 
+> **符号约定**：✅ = 已核验事实；⚠️ = 需注意的偏差/风险（含「未实施 / 待核实」标注）；🔧 = 需读者在自己工具链中自行验证的设计点/验证点（含可执行的验证方法）。
+
 ## 1. 文档目的与适用范围
 
-> **核验基准**：microsoft/PowerToys `v0.101.2362.0`（核验日期 2026-09-01）。本文所有"上游如此"的硬事实断言（接口名、`CommandResultKind` 成员、默认热键、§7 扩展清单等）以此为基准核验；上游仍在 preview，接口可能演进（见 §11 与 `docs/implementation.md` R6）。
+> **核验基准**：microsoft/PowerToys `v0.101.2362.0`（核验日期 2026-09-01，与 `docs/protocol.md` 一致）。本文所有"上游如此"的硬事实断言（接口名、`CommandResultKind` 成员、默认热键、§7 扩展清单等）以此为基准核验；上游仍在 preview，接口可能演进（见 §11 与 `docs/implementation.md`）。
+
+> **文档性质**：从 `microsoft/PowerToys` 的 `src/modules/cmdpal`（Command Palette，简称 CmdPal）提炼出的**参考设计**。本文以 **Rust** 为实现目标（跨平台优先），在 §1–§7 抽象出与具体语言尽量解耦的契约/UI/宿主模型，§8 给出 Rust 参照实现。**本文不宣称"语言无关"**——Rust 是主目标，但抽象层尽量不绑定 Rust，供其他语言读者借鉴架构思路。
+
+> **事实来源与核验**：本文架构、接口、交互模型来自 PowerToys `main` 分支真实源码与官方文档，源码抓取于 **2026-08-31**、上游核验基准日期 **2026-09-01**。具体出处见 §11「参考来源」。CmdPal 目前为 **preview**，README 明确说明 v1.0 前扩展 API 仍可能出现 **breaking changes**，落地时请以你拉取时的实际代码为准。
 
 CmdPal 是 PowerToys Run 的下一代实现，官方定位为"一站式启动器（launch _anything_）"。它的扩展接口 `Microsoft.CommandPalette.Extensions` **被官方明确设计为语言无关**：
 
@@ -23,6 +26,8 @@ CmdPal 是 PowerToys Run 的下一代实现，官方定位为"一站式启动器
 3. **宿主模型**：宿主如何发现、加载、缓存、跨进程调用扩展。
 
 **本文不覆盖**：CmdPal 的具体 C#/WinUI 代码、MSIX 打包/商店分发、具体模糊搜索算法内部实现（仅给概念模型与 Rust 参照选型）。
+
+> **实施进度说明**：里程碑状态、ADR 决策、真机验收结论一律见 [`docs/implementation.md`](./docs/implementation.md)（M0–M9 已全部关闭，发布 **v0.1.1**）。本文仅保留「设计意图与抽象模型」，不展开实施进度。
 
 ---
 
@@ -38,7 +43,7 @@ CmdPal 是 PowerToys Run 的下一代实现，官方定位为"一站式启动器
 | 4 | **不应为了用电脑而开浏览器** | 用户要的东西应在指尖（面板内）可达 |
 | 5 | **Success is measured in disengagement** | 优化指标是"用户多快拿到结果并离开"，而非停留时长 |
 
-🔧 落地点：把以下三项作为验收指标，并已在 §10 落项——"冷启动耗时"→ **A2**、"首次结果呈现时间"（输入后过滤帧耗时）→ **A3**、"键盘可达性覆盖率"→ **A11**。
+🔧 落地点：把以下三项作为验收指标，并已在 §10 落项——"冷启动数据就绪耗时"→ **A2**、"首次结果呈现时间"（输入后过滤帧耗时）→ **A3**、"键盘可达性覆盖率"→ **A11**。
 
 ---
 
@@ -46,7 +51,7 @@ CmdPal 是 PowerToys Run 的下一代实现，官方定位为"一站式启动器
 
 CmdPal 采用 **宿主（Host）+ 多扩展进程（Extension）** 的隔离架构：
 
-```
+```text
 ┌─────────────────────────────────────────────┐
 │  Host（命令面板宿主）                          │
 │  - 全局热键 → 唤起浮动面板                      │
@@ -67,7 +72,9 @@ CmdPal 采用 **宿主（Host）+ 多扩展进程（Extension）** 的隔离架�
 
 - 每个扩展是**独立进程**，通过进程外 COM Server（Windows）与宿主通信；扩展间、扩展与宿主间相互隔离 → 单扩展崩溃不影响宿主。
 - 宿主通过 **包目录（AppExtensionCatalog）** 或（未打包时）**注册表**发现扩展，见 §6.1。
-- 扩展契约是**语言无关接口**（指 CmdPal 原生契约的事实属性，见 §1 ✅ 引文）：只要某语言能实现该接口并通过 IPC 编组，就能写扩展。本文实现目标为 Rust，故改用"子进程 + JSON-RPC"（MVP 默认，见 §6.2）表达同一意图（§8），因为这是非 Windows / 非 COM 环境下更自然的等价物。
+- 扩展契约是**语言无关接口**（指 CmdPal 原生契约的事实属性，见 §1 ✅ 引文）：只要某语言能实现该接口并通过 IPC 编组，就能写扩展。本文实现目标为 Rust，故改用"子进程 + JSON-RPC"（第三方/sidecar 扩展的 MVP 默认，见 §6.2）或"宿主进程内 in-process"（内置扩展，见 §6.2）表达同一意图（§8），因为这是非 Windows / 非 COM 环境下更自然的等价物。
+
+> **dd-run 进程模型（已落地，与上游不同）**：上游每个扩展独立进程；dd-run 的 **第三方 / sidecar 扩展**沿用子进程 + JSON-RPC（ADR-1 对其仍生效），而 **5 个内置扩展（apps/calc/system/websearch/shell）M9 起改为宿主进程内 in-process**（不再各自 spawn 子进程），协议逻辑零重写。详见 §6.2 与 [`docs/m9-inprocess-builtins.md`](./docs/m9-inprocess-builtins.md)。
 
 ---
 
@@ -140,6 +147,8 @@ CmdPal 采用 **宿主（Host）+ 多扩展进程（Extension）** 的隔离架�
 
 🔧 参照实现最小集：先实现 **ListPage + DetailPage**（覆盖绝大多数启动器场景），Form/Markdown/Grid 可按需追加。
 
+> ⚠️ **未实施**：`FormPage` / `MarkdownPage` 在 dd-run MVP 中未实现（明确不在 MVP，见 `README.md` 非目标与 `docs/implementation.md` §1）；当前仅 ListPage + DetailPage 落地。Grid 渲染模式为 ListPage 的可选属性，未单独实现。
+
 ### 4.6 UI 设计图
 
 🔧 各界面（Root View / 搜索过滤态 / ListPage / DetailPage / FormPage / MarkdownPage / **Grid 渲染模式** / 上下文菜单 / Confirm+Toast / EmptyContent / Loading 共 11 屏）的**交互式设计稿**见同目录 [`cmdpal-ui-mockups.html`](./cmdpal-ui-mockups.html)——真实 DOM+CSS 组件（暗色主题，含选中/hover/焦点态与微交互，**支持键盘走查**），浏览器打开即可逐个浏览；页首附设计令牌（accent/panel/字体）供实现取用。
@@ -184,7 +193,7 @@ CmdPal 采用 **宿主（Host）+ 多扩展进程（Extension）** 的隔离架�
 
 ### 5.3 数据模型（Data Model）
 
-```
+```text
 Extension
   └─ ICommandProvider
        ├─ TopLevelCommands()      → ICommandItem[]   （首屏聚合）
@@ -202,7 +211,7 @@ IListItem（列表项）
   ├─ Tags[] / Section / Details / TextToSuggest
 ```
 
-> 🔧 **命名澄清（已对齐 §8）**：`IFallbackCommandItem` 是 `FallbackCommands()` 返回的**兜底命令数据项**；决定 provider 是否视为 fresh 的"是否具备兜底能力"标记，本文统一称 `IFallbackProvider`（原文档曾用 `IFallbackHandler`）。两者概念不同，勿混。
+> 🔧 **命名澄清（已对齐 §8）**：`IFallbackCommandItem` 是 `FallbackCommands()` 返回的**兜底命令数据项**；决定 provider 是否视为 fresh 的"是否具备兜底能力"标记，本文统一称 `IFallbackProvider`（原文档曾用 `IFallbackHandler`）。两者概念不同，勿混。上游 SDK（`v0.101.2362.0`）原名 `IFallbackHandler`（见 `Microsoft.CommandPalette.Extensions.idl`），dd-run 重命名为 `IFallbackProvider`——与本设计文档口径一致。
 
 ### 5.4 命令发现与调用流程
 
@@ -241,13 +250,17 @@ IListItem（列表项）
 
 🔧 平台无关等价物（**MVP 默认 = 清单文件扫描**，其余为可选进阶）：
 - **清单文件扫描（MVP 默认）**：在约定目录（如 `~/.config/<host>/extensions.d/*.json`）读取扩展清单（id、命令入口、显示名、图标）。最简单、零运行时、易调试。**dd-run 的具体目录与清单字段规范见 [`docs/manifest-schema.md`](./docs/manifest-schema.md)。**
-- **进程注册（可选）**：扩展启动时向宿主的本地 socket/命名管道注册自身（类 LSP / 类 Flow Launcher 的"外部进程"模式）。
-- **WASM 沙箱（可选）**：扩展以 WASM 模块形式直接被宿主加载（见 §8.1 的 `wasmtime` / `extism`），省去独立进程发现；隔离更强但需宿主实现沙箱运行时。
+- **进程注册（可选）** ⚠️ **未实施**：扩展启动时向宿主的本地 socket/命名管道注册自身（类 LSP / 类 Flow Launcher 的"外部进程"模式）。当前仅清单发现落地（见 implementation.md ADR-3）。
+- **WASM 沙箱（可选）** ⚠️ **未实施**：扩展以 WASM 模块形式直接被宿主加载（见 §8.1 的 `wasmtime` / `extism`），省去独立进程发现；隔离更强但需宿主实现沙箱运行时。明确不在 MVP（README 非目标）。
 
 ### 6.2 进程模型与隔离
 
 ✅ CmdPal 每个扩展独立进程、进程外 COM 通信；扩展崩溃隔离。
-🔧 参照实现（**MVP 默认 = 独立子进程 + stdin/stdout JSON-RPC**）：每个扩展 = 独立子进程，通过 stdin/stdout JSON-RPC 通信；零沙箱运行时、跨平台直出、调试简单。WASM 实例为可选进阶：隔离更强、启动更快，但需宿主实现沙箱运行时。
+
+🔧 dd-run 参照实现（**与上游不同，已落地**）：
+- **第三方 / sidecar 扩展**（含文件搜索 `dd-ext-search`）：独立子进程 + stdin/stdout JSON-RPC（MVP 默认，ADR-1 对其仍生效）；零沙箱运行时、跨平台直出、调试简单。
+- **5 个内置扩展（apps/calc/system/websearch/shell）**：**M9 起改为宿主进程内 in-process**——宿主直接调 `dd_ext::serve_line`，不再各自 spawn 子进程；崩溃以 `std::panic::catch_unwind` 兜底（单扩展 panic → 该扩展标 Failed、宿主存活）。**协议 v1.0 零改动**（DDD 见 [`docs/m9-inprocess-builtins.md`](./docs/m9-inprocess-builtins.md)）。
+- **WASM 实例** ⚠️ **未实施**：隔离更强、启动更快，但需宿主实现沙箱运行时。
 
 ### 6.3 缓存策略（frozen / fresh / stub）
 
@@ -260,10 +273,12 @@ IListItem（列表项）
 
 🔧 参照实现落地点：
 - 启动时并行：(a) 加载缓存桩 → 立即渲染首屏；(b) 懒加载 fresh 扩展。
-- 用 LRU（容量 N）管理"warm"扩展集合。
+- 用 LRU（容量 N，默认 **N=8，可配置**）管理"warm"扩展集合。
 - frozen 扩展的顶层命令 JSON 缓存到本地（带版本号，扩展升级即失效）。
 - **桩复热的 Rust 等价**：点击桩项 → 拉起子进程 → 走协议 `get_command`（§8.2）取回真实命令；失败或超时则回退 stub 并报错（对应 §10 A6；崩溃场景见 A8）。
 - **释放的 Rust 等价**：调协议 `close`、终止子进程，命令重新标为 stub（对应上文 ✅ 的"释放 COM 引用"）。
+
+> ⚠️ **in-process 内置扩展的差异（M9）**：5 个内置扩展 in-process 后**不读、不落磁盘桩**，也不参与 LRU warm 集合管理；上述 frozen/stub/LRU 语义主要适用于**子进程扩展**（第三方 / sidecar）。内置扩展的"就绪"由宿主进程内直接调用保证，崩溃由 `catch_unwind` 兜底（A6/A7/A8 的判定口径见 §10）。
 
 ### 6.4 跨进程通信注意事项
 
@@ -272,7 +287,7 @@ IListItem（列表项）
 - 避免跨进程传集合类型，用"变更事件 + 全量 `GetItems()`"模式（见 §5.5）。
 - 后台扩展线程无法用标准剪贴板，需宿主提供助手能力。
 
-🔧 参照实现：IPC 层所有请求/响应都走 async；宿主暴露的能力（复制文本、显示 Toast、打开 URL）以异步消息提供。
+🔧 参照实现：IPC 层所有请求/响应都走 async；宿主暴露的能力（复制文本、显示 Toast、打开 URL）以异步消息提供。in-process 内置扩展复用同一套消息分类/路由逻辑（`route_messages`），与子进程路径逐字节等价（见 m9 文档 D2）。
 
 ### 6.5 设置与配置
 
@@ -283,6 +298,8 @@ IListItem（列表项）
 
 ✅ 来自 `doc/extension-gallery.md`：CmdPal 的"扩展商店"页从一个远程 `extensions.json` 拉取（`https://aka.ms/CmdPal-ExtensionsJson`），带本地磁盘缓存（feed TTL 4h、icon TTL 24h、HTTP 超时 15s）、`FromCache`/`UsedFallbackCache`/`RateLimited` 状态旗标，支持 `x-cmdpal://extensions/gallery/{id}` 深链。
 🔧 参照实现：若要做"商店"，复用同样思路——单一 JSON feed + 磁盘缓存 + 条件 GET（ETag）；feed 条目含 `id/title/description/author/installSources[]/iconUrl`。注意：这是**可选**模块，MVP 不必做；**故 §8.1 不提供对应 crate 映射**，若日后实现再补。
+
+> ⚠️ **未实施**：Gallery 扩展商店明确不在 dd-run MVP（README 非目标）；当前无商店/远程 feed 拉取能力。
 
 ---
 
@@ -296,7 +313,7 @@ IListItem（列表项）
 
 | 扩展（目录名） | 功能 | 平台 | 判定依据 |
 |----------------|------|------|----------|
-| `Ext.Apps` | 应用启动/列表 | ⚙️ | 应用枚举按 OS 分路径：Win 开始菜单 `.lnk`+PATH / macOS `/Applications` / Linux `.desktop`+PATH |
+| `Ext.Apps` | 应用启动/列表 | ⚙️ | 应用枚举按 OS 分路径：Win：`shell:AppsFolder`（FOLDERID_AppsFolder）本体枚举 + 开始菜单 `.lnk` 兜底（实现采用，见 `apps.rs`）/ macOS `/Applications` / Linux `.desktop`+PATH |
 | `Ext.Calc` | 计算器 | ✅ | 纯表达式求值，无 OS 依赖 |
 | `Ext.TimeDate` | 时间/日期 | ✅ | 日期时间格式化，标准库能力 |
 | `Ext.System` | 系统命令（锁屏、关机等） | ⚙️ | 锁屏/关机/休眠各有平台命令：Win `shutdown.exe` / macOS `pmset`·`osascript` / Linux `systemctl` |
@@ -322,11 +339,13 @@ IListItem（列表项）
 
 🔧 参照实现 MVP 建议内置（**默认技术路径见 §6.1/§6.2**）：Apps（启动应用）+ Calc + System + WebSearch + Shell，其余作为可插扩展。⚠️ **MVP 这 5 项均为 ✅ 或 ⚙️，无一是 🪟 专属项**——可直接作为 dd-run 的 MVP 范围（见 [`docs/implementation.md`](./docs/implementation.md)）。⚠️ Apps 索引在跨平台下按 OS 分路径：Windows 枚举开始菜单 `.lnk` + PATH；macOS 扫描 `/Applications`；Linux 读 `.desktop` 与 PATH——该步为平台相关，非中立契约的一部分。
 
+> ✅ **已落地**：dd-run 已内置这 5 个扩展（M4 完成功能清单；**M9 起改为宿主进程内 in-process 运行**，见 §6.2）。9 个 🪟 Windows 专属项与 Gallery 等均不在 MVP（README 非目标）。
+
 ---
 
 ## 8. Rust 参照实现指南
 
-> 🔧 本节为**设计级参照**，给出组件→crate 映射与协议/结构示意。**未在本环境编译验证**，请在你的 Rust 工具链中落地并编译确认。crate 版本请以 crates.io 当前为准。
+> 🔧 本节为**设计级参照**，给出组件→crate 映射与协议/结构示意。**未在本环境编译验证**（§8.2 骨架为示意），请在你的 Rust 工具链中落地并编译确认。crate 版本请以 crates.io 当前为准。
 
 ### 8.1 组件 → crate 映射
 
@@ -334,10 +353,12 @@ IListItem（列表项）
 |-------------|-----------|------|
 | 宿主浮动 UI 面板 | `egui` + `eframe`（或 `Slint` / `iced`） | egui 即时模式，出面板最快 |
 | 全局热键 | Windows：`windows-sys`（`RegisterHotKey`）；macOS / Linux：`rdev` / `global-hotkey`（二者本身跨平台） | 原生实现，无需外部 AHK；`Win+Alt+Space` 仅为 Windows 默认键位，其他平台自选（见 §4.1） |
-| 应用索引 + 模糊搜索 | 按 OS 分路径：Windows 枚举开始菜单 `.lnk` + PATH；macOS 扫描 `/Applications`；Linux 读 `.desktop` + PATH；匹配用 `skim` 或 `nucleo` | 与 §7 跨平台注记一致；已有 q7-rust-launcher 等验证 |
-| 扩展 IPC（MVP 默认 JSON-RPC） | **JSON-RPC** 子进程（stdin/stdout，MVP 默认）；**WASM 沙箱**（`wasmtime` / `extism`，可选进阶） | 比 WinRT 接口更轻、更跨平台；JSON-RPC 零沙箱运行时、最简单 |
+| 应用索引 + 模糊搜索 | 按 OS 分路径：Windows 用 `shell:AppsFolder` 本体枚举 + 开始菜单 `.lnk` 兜底（无 PATH exe 噪音；实现见 `apps.rs`）；macOS 扫描 `/Applications`；Linux 读 `.desktop` + PATH；匹配用 `skim` 或 `nucleo` | 与 §7 跨平台注记一致；实现层采用 `nucleo`（见 implementation.md M4） |
+| 扩展 IPC（MVP 默认 JSON-RPC） | **JSON-RPC** 子进程（stdin/stdout，第三方/sidecar 用）；**in-process** 内置扩展直接调 `dd_ext::serve_line`（M9） | 比 WinRT 接口更轻、更跨平台；JSON-RPC 零沙箱运行时、最简单 |
 | 配置/状态 | `serde` + 本地文件 | — |
 | 列表变更通知 | 事件 + 全量 `GetItems()` 拉取 | 对应 §5.5 跨进程约束 |
+
+> ⚠️ **未实施（实际构建/真机验收仅 Windows）**：macOS / Linux 的全局热键（`rdev`/`global-hotkey`）与索引分路径目前**仅有设计层、无实际构建产物与真机验收**（README：macOS/Linux 计划 v0.2）。`cargo-xwin` 跨平台产出 Windows `.exe` 亦为设计目标，未在本仓库验证（见 §8.3）。
 
 ### 8.2 最小宿主骨架（设计示意，非编译产物）
 
@@ -345,8 +366,8 @@ IListItem（列表项）
 // 仅表达结构，未经编译验证
 struct Host {
     hotkey: HotKey,
-    providers: Vec<ExtHandle>,   // MVP 默认：IPC 子进程句柄（见 §6.2）
-                                 // 若把扩展做进同进程（非 MVP 默认），改用 Vec<Box<dyn CommandProvider>>
+    providers: Vec<ExtHandle>,   // 第三方/sidecar 扩展：IPC 子进程句柄（见 §6.2，ADR-1）
+                                 // 内置扩展 M9 起 in-process：改用 Vec<Box<dyn CommandProvider>> 同进程调用
     warm_cache: LruCache<ExtId, RunningExt>,    // 最近 N 个保活
     stub_cache: StubStore,                       // frozen 命令桩（磁盘）
 }
@@ -415,8 +436,8 @@ enum Sender {                         // 对应 §5.4 步骤 6：sender 随上�
 enum Page {                           // 对应 §4.5 的页面类型（Grid 为 ListPage 渲染模式，非独立类型）
     List(ListPage),                   // MVP 必做；Grid 布局由 ListPage.GridProperties 控制
     Detail(ContentPage),              // MVP 必做
-    Form(FormContent),                // 按需
-    Markdown(String),                 // 按需
+    Form(FormContent),                // ⚠️ 未实施（见 §4.5）
+    Markdown(String),                 // ⚠️ 未实施（见 §4.5）
 }
 
 trait HostHandle: Send + Sync {       // 对应 §5.1 IExtensionHost + §6.4 能力注入
@@ -453,59 +474,63 @@ trait HostHandle: Send + Sync {       // 对应 §5.1 IExtensionHost + §6.4 能
 //   request:  {"method":"host/open_url","url":"..."}
 ```
 
-🔧 验证清单（在你环境）：`cargo build` 通过；`cargo clippy` 无错；全局热键可唤起/隐藏；点击 frozen 桩项能复热扩展并取回命令；`get_items` 全量拉取与 `items_changed` 事件联动正常；扩展经 `host/*` 反向调用宿主能力不阻塞 UI；关闭面板用 `Esc`。
+🔧 落地与真机验收进度见 [`docs/implementation.md`](./docs/implementation.md)（M0–M9 已全部关闭，发布 **v0.1.1**）。骨架中的 `Page::Form` / `Page::Markdown` 与 `get_command`（frozen 桩复热）当前分别属于「⚠️ 未实施」与「仅子进程扩展路径」——内置扩展 in-process 后不读磁盘桩（见 §6.3）。
 
 ### 8.3 工具链：彻底摆脱 VS / Windows SDK
 
-🔧 依据前序调研（WebSearch 核验），以下为**设计预期/目标**，落地时须自行验证（数值随功能集与平台浮动）：
-- **免 VS / Windows SDK（Windows 开发）**：纯 Rust GUI crate（egui 用 glow/wgpu）自带所需绑定，本地仅需 `rustup` + `cargo`。**验证方法**：在干净 Windows 环境（未装 VS）执行 `cargo build` 成功即通过。
-- **跨平台产出原生 `.exe`（cargo-xwin）**：从 Linux/macOS 直接产出 Windows `.exe`，自动下载 MSVC CRT + SDK 库。**验证方法**：`cargo-xwin build --target x86_64-pc-windows-msvc --release` 成功产出 `target/x86_64-pc-windows-msvc/release/<bin>.exe`；CRT 由 cargo-xwin 自动拉取，无需本机 VS/SDK。
-- **单文件静态 exe 体积 < 10MB（目标值）**：实际取决于 egui 后端、图标资源与特性开关。**验证方法**：`cargo build --release` 后 `ls -lh target/release/<bin>` 查看；用 `cargo bloat` 复核体积来源。
-- **冷启动毫秒级（目标值）**：无 .NET 运行时、无 XAML 解析。**验证方法**：`hyperfine --warmup 3 './target/release/<bin> --bench-startup'` 或 Windows `Measure-Command` 计首屏渲染耗时；§10 A2 的 < 200ms 同为需实测的目标值。
+🔧 依据前序调研（WebSearch 核验）与 v0.1.1 实测，下列为**已达成事实或待验证目标**：
 
-🔧 这些预期与本文"低占用、快启动"目标契合；但均为**待验证目标，非已证事实**——请以你拉取的代码与工具链实测为准。
+- **✅ 免 VS / Windows SDK（Windows 开发）**：纯 Rust GUI crate（egui 用 glow/wgpu）自带所需绑定，本地仅需 `rustup` + `cargo`。**验证方法**：在干净 Windows 环境（未装 VS）执行 `cargo build` 成功即通过——v0.1.1 已在未装 VS 的 Windows 环境构建通过。
+- **⚠️ 待核实：跨平台产出原生 `.exe`（cargo-xwin）**：从 Linux/macOS 直接产出 Windows `.exe`，自动下载 MSVC CRT + SDK 库。**验证方法**：`cargo-xwin build --target x86_64-pc-windows-msvc --release` 成功产出 `target/x86_64-pc-windows-msvc/release/<bin>.exe`；CRT 由 cargo-xwin 自动拉取，无需本机 VS/SDK。本仓库当前仅 Windows 有实际构建产物（macOS/Linux ⚠️ 未实施）。
+- **✅ 单文件静态 exe 体积（目标 < 10MB，已达成）**：`dist/dd-run-0.1.1.exe` = **8.2 MB**（8,601,088 B，`strip = "symbols"`；M9 后实测，`dist/` 唯一产物即此值，较内嵌 5 内置 exe 时 ↓ 2.2 MB）。**验证方法**：`cargo build --release` 后查看；用 `cargo bloat` 复核体积来源。
+- **✅ 冷启动数据就绪（目标毫秒级，已达成）**：无 .NET 运行时、无 XAML 解析；**数据就绪 ~2ms（A2 实测达标，M3 真机复验）**。**验证方法**：Windows `Measure-Command` 计真机首屏渲染耗时（注：CLI 的 `--bench-startup` 参数属早期设想，未实现；当前启动埋点计时见代码内 `state.rs`）；`total` 首帧受 GUI/wgpu + CJK 字体（msyh ~19.7MB）加载影响较高，瓶颈记录于 implementation.md R2，**不调目标值**。
+
+🔧 上述体积与冷启动数值为 **v0.1.1 实测结论**（非待验证目标）；其余（cargo-xwin 跨平台产出等）仍为**设计目标，须按验证方法实测确认**。
 
 ---
 
 ## 9. 设计要点速查（给实现者的 check-list）
 
-- ✅ 宿主与扩展**进程隔离**，单扩展崩溃不影响宿主。
+- ✅ 宿主与扩展**进程隔离**（第三方/sidecar），单扩展崩溃不影响宿主；**内置扩展 M9 起 in-process**（catch_unwind 兜底）。
 - ✅ 首屏 = 聚合所有 provider 的 `TopLevelCommands()`；输入即过滤。
 - ✅ 命令执行结果用 `CommandResultKind` 状态机驱动页面栈（关闭/隐藏不关/回首页/返回/保持/跳转/Toast/确认）——8 种，与 §5.2 / §8.2 一致。
-- ✅ frozen 扩展缓存命令桩、冷启动不实例化；fresh 扩展常驻；LRU 保活最近 N 个。
-- ✅ 跨进程列表更新用"变更事件 + 全量 `GetItems()`"，**不**推增量集合。
+- ✅ frozen 扩展（子进程）缓存命令桩、冷启动不实例化；fresh 扩展常驻；LRU 保活最近 N 个（默认 N=8）。in-process 内置不读磁盘桩。
+- ✅ 跨进程列表更新用"变更事件 + 全量 `GetItems()`"，**不**推增量集合（A9）。
 - ✅ 扩展契约与语言解耦（CmdPal 原生属性，见 §1 ✅ 引文），本文以 Rust 实现：宿主侧定义接口，扩展侧实现，通过 IPC 编组。
-- ✅ 页面类型至少覆盖 List + Detail；Form/Markdown/Grid 按需。
-- ⚠️ 默认热键以 `Win+Alt+Space` 为准（README，**此为 CmdPal 在 Windows 的默认**），anatomy 示例的 `Win+Ctrl+.` 为早期写法；跨平台宿主在其他 OS 上自选键位（见 §8.1）。
+- ✅ 页面类型至少覆盖 List + Detail；Form/Markdown/Grid 按需（⚠️ Form/Markdown 当前未实施）。
+- ⚠️ 默认热键以 `Win+Alt+Space` 为准（README，**此为 CmdPal 在 Windows 的默认**），anatomy 示例的 `Win+Ctrl+.` 为早期写法；跨平台宿主在其他 OS 上自选键位（见 §8.1，⚠️ macOS/Linux 未实施）。
 - ⚠️ CmdPal 仍 preview，v1.0 前 API 可能 breaking change，落地以你拉取的代码为准。
 - ✅ 一致性补强：§8.2 的 Rust `CommandResult` 已补齐至与 §5.2 一致的 8 种 `Kind`；`CommandProvider` 已补 `close()` 与变更事件钩子，对应 `IClosable` / `INotifyItemsChanged`；`IFallbackHandler` 已统一改名为 `IFallbackProvider`（见 §5.3/§6.3）。
-- ✅ 完整性补强：§8.2 已补契约相关类型（`CommandItem` / `Sender` / `Page` / `HostHandle`）与双向协议方法（`get_items` / `items_changed` / `get_command` / `close` + extension→host 能力请求）；§10 已扩至 A1–A12，并覆盖 §2 承诺的三项指标（A2 / A3 / A11）。
-- ✅ 成员级对齐：`CommandItem` 补 `command`；`Command` 补 `id()` / `icon()`（合并自 `ICommand` + `IInvokableCommand`）；`CommandProvider` 补 `icon()` / `settings()` / `fallback_commands()`（后者为 §6.3 判定 fresh 的依据）；`Host.providers` 改为 **IPC 句柄为主**，以承载 frozen / stub 状态机。
+- ✅ 完整性补强：§8.2 已补契约相关类型（`CommandItem` / `Sender` / `Page` / `HostHandle`）与双向协议方法（`get_items` / `items_changed` / `get_command` / `close` + extension→host 能力请求）；§10 的 A1–A12 覆盖 §2 承诺的三项指标（A2 / A3 / A11）。
 
 ---
 
 ## 10. 验收标准（可量化、可核验）
 
-| 编号 | 验收项 | 可核验方法 |
-|------|--------|------------|
-| A1 | 全局热键可唤起/隐藏面板 | 手动 + 自动化按键模拟 |
-| A2 | 首屏在冷启动 < 200ms 内渲染（含从缓存读 frozen 桩）——**目标值，需实测** | 启动埋点计时（`hyperfine` / `Measure-Command`）；取决于 frozen 桩命中率与平台 |
-| A3 | 输入查询后结果列表实时过滤（< 16ms/帧）——**目标值，需实测** | 帧耗时采样；取决于结果集规模与匹配库 |
-| A4 | 选中 `IInvokableCommand` 执行并返回正确 `CommandResultKind` | 单测覆盖 8 种 Kind |
-| A5 | 进入 `IPage` 后页面栈可 `GoBack`/`GoHome` 回退 | 导航单测 |
-| A6 | frozen 扩展进程冷启动不启动，点击桩项后复热成功 | 进程监视器验证 |
-| A7 | 最近 N 个扩展保活，超出后释放并重新标 stub | LRU 行为单测 |
-| A8 | 扩展崩溃（kill 子进程）后宿主不退出、可恢复 | 故障注入测试 |
-| A9 | 跨进程列表更新走"事件+全量拉取"，无增量集合推送 | 协议审查 |
-| A10 | 内置扩展至少覆盖 Apps/Calc/System/WebSearch/Shell | 功能清单核对 |
-| A11 | 核心路径（唤起/搜索/选择/执行/返回/关闭）**全程键盘可完成、无需鼠标** | 逐路径键盘走查，覆盖率目标 100%（对应 §2 落地点） |
-| A12 | 协议双向方法齐全（host→extension 与 extension→host）；能力调用异步、不阻塞 UI | 协议审查 + UI 卡顿观察 |
+> 编号 A1–A12 与 [`docs/implementation.md`](./docs/implementation.md) §3 验收映射表、各里程碑记录引用一致，**未改动编号**。括号内为实测结论（来自 implementation.md / m4-record / m9 文档 / README）。
+
+| 编号 | 验收项 | 可核验方法 / 实测结论 |
+|------|--------|----------------------|
+| A1 | 全局热键可唤起/隐藏面板 | 手动 + 自动化按键模拟（**M1 真机验收通过**） |
+| A2 | 冷启动**数据就绪** < 200ms（实测 **~2ms**，M3 真机复验达标；`total` 首帧受 GUI/wgpu + CJK 字体加载影响较高，R2 记录瓶颈，不调目标） | 启动埋点计时（`hyperfine` / `Measure-Command`） |
+| A3 | 输入过滤 < 16ms/帧（实测 **2000 项 ×6 字段 3.7ms**，M4 达标，debug 构建） | 帧耗时采样；取决于结果集规模与匹配库 |
+| A4 | 选中 `IInvokableCommand` 执行并返回正确 `CommandResultKind`（单测覆盖**全部 8 种 Kind**） | 单测（**M2**） |
+| A5 | 进入 `IPage` 后页面栈可 `GoBack`/`GoHome` 回退 | 导航单测（**M2**） |
+| A6 | **子进程**扩展：frozen 冷启动不拉起，点击桩项复热成功（进程监视器验证，**M3**）；⚠️ 内置扩展 M9 起 in-process，无独立进程/磁盘桩，走 `catch_unwind` 兜底 | 进程监视器验证 / 故障注入 |
+| A7 | LRU 保活最近 **N 个（默认 N=8，可配置）**，超出释放并重新标 stub（**M3**）；⚠️ 仅适用于子进程扩展，in-process 内置不参与 | LRU 行为单测 |
+| A8 | 扩展崩溃后宿主不退出、可恢复（**M4 关闭**）：子进程 kill → EOF/非0 → stub 回退；in-process 由 `catch_unwind` 兜底 | 故障注入测试 |
+| A9 | 跨进程列表更新走"事件 + 全量拉取"，无增量集合推送（协议审查通过，**M2**） | 协议审查（见 `docs/protocol.md`） |
+| A10 | 内置扩展覆盖 Apps/Calc/System/WebSearch/Shell（**M4 完成，M9 in-process 落地**） | 功能清单核对 |
+| A11 | 核心路径（唤起/搜索/选择/执行/返回/关闭）**全程键盘可完成、无需鼠标**，覆盖率目标 **100%**（**M1 真机验收通过**） | 逐路径键盘走查 |
+| A12 | 协议双向方法齐全（host→ext 7 请求 + ext→host 3 请求，共 10 请求 + 2 通知，见 `docs/protocol.md` §1.3）；能力调用异步、不阻塞 UI（**M0 + M1**） | 协议审查 + UI 卡顿观察 |
+
+> ⚠️ **未量化项说明**：A1 / A5 / A8 为「行为是否存在」的二值判定，无单一数值阈值（沿用原文口径，未臆造数字）；A2 / A3 / A11 的阈值取自 implementation.md 实测结论。A6 / A7 / A8 因 M9 in-process 改变了内置扩展的执行形态，已在表中分别标注适用边界。
 
 ---
 
-## 11. 参考来源（出处均于 2026-08-31 核验）
+## 11. 参考来源（出处均于 2026-08-31 抓取、2026-09-01 核验）
 
-> 🔧 **"核验"的边界**：下表的"核验"仅指**出处可达、内容已对照**；其中 **§8.3 的体积 / 冷启动等数值为待验证目标、非已证事实**（见 §8.3），须按该节给出的验证方法实测确认。
+> 🔧 **"核验"的边界**：下表的"核验"仅指**出处可达、内容已对照**；**§8.3 中体积 8.2MB 与冷启动数据就绪 ~2ms 为 v0.1.1 实测值**（M9 / M3），其余（cargo-xwin 跨平台产出等）仍为**设计目标，须按该节验证方法实测确认**。
 
 | 来源 | 路径/URL | 用途 |
 |------|----------|------|
@@ -516,6 +541,6 @@ trait HostHandle: Send + Sync {       // 对应 §5.1 IExtensionHost + §6.4 能
 | 扩展商店 | `src/modules/cmdpal/doc/extension-gallery.md` | Gallery feed 格式与缓存策略 |
 | 扩展模型（官方） | `https://learn.microsoft.com/windows/powertoys/command-palette/extensibility-overview` | 进程外 COM、manifest、页面类型、commands/pages |
 | 内置扩展目录 | `src/modules/cmdpal/ext/`（GitHub API 目录列表，**2026-09-01 复核：21 项**） | 20 个真实扩展 + 1 示例；目录名前缀与平台标记见 §7 |
-| Rust 工具链来源 | WebSearch：WinUI3 dotnet CLI 路径 / cargo-xwin 跨平台编译 | §8.3 依据；**仅核验出处，§8.3 的体积 / 冷启动数值为待验证目标、非已证事实** |
+| Rust 工具链来源 | WebSearch：WinUI3 dotnet CLI 路径 / cargo-xwin 跨平台编译 | §8.3 依据；**仅核验出处，cargo-xwin 跨平台产出为待验证设计目标** |
 
 > ⚠️ 再次提醒：CmdPal 处于 preview，接口可能演进。本文为**设计参考**而非逐行代码移植；落地时请重新核验你所用版本的源码，并以本文 §10 验收标准做验证。

@@ -1,5 +1,7 @@
 # 写一个 dd-run 扩展
 
+> **状态**：生效中 ｜ **版本**：v1.0 ｜ **最后更新**：2026-09-13 ｜ **受众**：扩展作者
+>
 > **本文件是「路径」，不是「规范」**。规范只有两份，二者都是硬契约：
 >
 > | 规范 | 管什么 |
@@ -66,6 +68,12 @@
 ```python
 import json, sys
 
+# Windows 陷阱 1 + 2（见 §3）：stdout 必须是 UTF-8，且不要把 \n 翻译成 \r\n
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", newline="\n")
+if hasattr(sys.stdin, "reconfigure"):
+    sys.stdin.reconfigure(encoding="utf-8")
+
 def send(obj):
     sys.stdout.write(json.dumps(obj, ensure_ascii=False, separators=(",", ":")) + "\n")
     sys.stdout.flush()
@@ -111,7 +119,7 @@ for line in sys.stdin:                 # 一行一条消息（NDJSON）
 | **解释型（Python/Node）** | **跑一个安装脚本，把「解释器 + 脚本」的绝对路径写进清单**（见下） |
 
 解释型必须**生成**清单，因为清单**表达不了**「解释器 + 脚本」这种两段式命令行：
-`entry.args` **不支持** `${EXT_DIR}` 展开（§4 只覆盖 `command` / `cwd` / `icon`）。
+`entry.args` **不支持** `${EXT_DIR}` 展开（§4 只覆盖 `command` / `cwd`；`icon` 虽列入 §4 但当前无消费者，见 [`manifest-schema.md`](./manifest-schema.md) §3 现状注）。
 
 推荐做法 —— 安装时把**绝对路径**写死（`examples/python-minimal/install.py` 就是这么做的）：
 
@@ -128,7 +136,7 @@ manifest["entry"] = {
 > Windows 上这远非默认（Store 版 / 未勾选 Add-to-PATH / IDE 自带解释器都不在 PATH），
 > 而且 dd-run 从**资源管理器启动时继承的是系统 PATH**（与你敲命令行的环境不同）。
 > 典型症状：**终端里自检全绿，双击 dd-run 却显示扩展"暂时不可用"** —— 实测踩过：
-> `.cmd` 里的 `python` 在 GUI 环境下找不到，连续 3 次 spawn 失败后熔断。
+> `.cmd` 里的 `python` 在 GUI 环境下找不到，扩展显示"暂时不可用"。⚠️ **实现现状（核对至 2026-09-13）**：spawn 失败只置 `SourceStatus::Failed`、**不进崩溃计数**（`aggregator.rs:359-360`）；「连续 3 次 spawn 失败熔断」当前未实现——`crash_guards` 仅在运行期进程退出时计数。
 >
 > 若已确认 `where python` 有输出，`.cmd` 桥接也可用：清单写
 > `{"command": "${EXT_DIR}/hello"}`，宿主会依次补 `.exe` / `.cmd` / `.bat` 解析到 `hello.cmd`。
@@ -238,7 +246,7 @@ GUI :  python hello.py   ✗ 'python' 不是内部或外部命令
   "locale":"zh-CN"}}
 ```
 
-**你要回的**（四个字段都是必填）：
+**你要回的**（`protocol_version`、`provider`、`capabilities` 必填；`provider` 内 `id` / `display_name` / `frozen` / `has_fallback` 四个子字段也全部必填）：
 
 ```json
 {"jsonrpc":"2.0","id":1,"result":{
@@ -249,7 +257,7 @@ GUI :  python hello.py   ✗ 'python' 不是内部或外部命令
 
 | 字段 | 怎么定 |
 |---|---|
-| `protocol_version` | 回**不高于**宿主所发的版本；不认识宿主的主版本时回 `-32004`（§5.3） |
+| `protocol_version` | 回**不高于**宿主所发的版本；不认识宿主的主版本时回 `-32004`（§5.3）。⚠️ `dd-ext` 共享运行时未实现此协商（不读 `params.protocol_version`，恒回 `"1.0"`）；仅自行实现运行时的扩展需遵守 |
 | `provider.frozen` | 顶层命令**不变**就填 `true`（宿主会落磁盘桩，冷启动免拉起） |
 | `provider.has_fallback` | 有兜底命令就填 `true`（**宿主据此把你当作 fresh**，见 §6） |
 | `capabilities` | 你**要用到**的 `host/*`；没声明的调用会被回 `-32601`（§7.4） |
@@ -273,7 +281,7 @@ GUI :  python hello.py   ✗ 'python' 不是内部或外部命令
 可选字段：`subtitle` / `icon` / `section` / `tags` / `details` / `text_to_suggest` /
 `more_commands`（右键菜单，可嵌套）。
 
-### 5.2 `get_command`（`frozen: true` 时**必须**实现）
+### 5.2 `get_command`（自研运行时必须实现；共享运行时已内置，与 `frozen` 取值无关）
 
 冷启动时宿主只读磁盘桩、不拉起你；用户点击某个桩项时才 spawn → `initialize` →
 `get_command(id)` → 执行。**返回 `{"command": null}` 是正常结果**（表示桩已失效），
@@ -332,7 +340,7 @@ if not context.get("confirmed"):
 # 已经确认过，真正执行
 ```
 
-命令不存在时回 `-32002`（**不是** `ShowToast`）。
+> ⚠️ **实现现状（核对至 2026-09-13）**：`-32002 command_not_found` 虽在 `dd-protocol` 定义了常量，但宿主与 `dd-ext` **共享运行时均无抛出点**。「命令不存在」由**各扩展自身的 handler** 兜底：内置扩展（system/websearch/shell）回普通结果 `ShowToast`（各带专属文案）；**本指南配套的 Python 示例（`examples/python-minimal/dd_ext_pymin.py:307-308`）则确实回 `-32002 command_not_found`**——那是示例自身 handler 的选择，与共享运行时行为不矛盾。两种兜底方式都合法，扩展自行决定；协议侧说明见 [`protocol.md`](./protocol.md) §9.2 注记。
 
 ### 5.5 `get_items`（嵌套页）
 
@@ -400,6 +408,8 @@ dd-run-cli --conformance      --extensions-dir <DIR> --ext-id <ID>  # 目录内�
 | `8) host/*` | §7 | 实际用到的能力是否都已声明 |
 | `9) close` | §6.6 | 优雅退出 |
 
+> ⚠️ **in-process 扩展（内置）**在自检中第 1 项标签为 `1) open`（进程内直调、无 spawn 步骤，`main.rs:646`）；子进程扩展为 `1) spawn`。其余 12 项标签两侧一致。
+
 > **为什么 `invoke` 默认跳过**：它会**真的产生副作用**——写剪贴板、开浏览器、
 > 甚至关机。要跑就显式加 `--invoke`。
 
@@ -446,6 +456,7 @@ python hello.py
 | `initialize` | 5000 ms（含你建索引的时间） |
 | `top_level_commands` | 3000 ms |
 | `get_items` / `fallback_commands` | 2000 ms |
+| `get_command` | 5000 ms |
 | `invoke` | 10000 ms |
 | `close` | 1000 ms |
 

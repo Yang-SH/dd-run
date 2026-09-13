@@ -1,20 +1,22 @@
 # 文件搜索（dd-run）
 
-> **适用版本**：v0.1.0+ ｜ **平台**：仅 Windows（依赖 Everything）
-> **面向**：使用者。实现方案与任务分解见 [`search-file.md`](./search-file.md)（开发者文档）。
-
-文件搜索通过 Everything 官方命令行工具 **`es.exe`**（IPC 通道）检索本地文件，结果直接呈现在 dd-run 主面板中。**无需开启 Everything 的 HTTP 服务器。**
+> **状态**：生效中 ｜ **版本**：v1.0 ｜ **最后更新**：2026-09-13
+> **关联**：[search-file.md](./search-file.md)（开发者权威方案）
 
 ---
 
-## 一、前置条件（一次性，约 2 分钟）
+## 1. 前置条件（一次性，约 2 分钟）
 
-文件搜索通过 Everything 官方命令行工具 **`es.exe`**（IPC 通道）检索本地文件，**无需开启 Everything 的 HTTP 服务器**。
+文件搜索通过 Everything 检索本地文件，结果直接呈现在 dd-run 主面板中。
 
-1. 安装并运行 [Everything](https://www.voidtools.com/)（1.4 及以上）。dd-run 仅要求 Everything **在运行**，不要求开启任何网络服务。
+- **传输通道**：dd-run 优先用 `everything-ipc` 直接连接正在运行的 Everything；当 IPC 不可用时自动回落到 `es.exe`（Everything 官方命令行工具）。无需开启 Everything 的 HTTP 服务器。
+- **平台**：仅支持 Windows（依赖 Everything）。
+
+1. 安装并运行 [Everything](https://www.voidtools.com/)（1.4 及以上）。无需开启 Everything 的 HTTP 服务器。
 2. 安装 `es.exe`（Everything 命令行工具，不随 Everything 安装包附带）：
    - 推荐：`winget install --id=voidtools.Everything.Cli`
    - 或手动从 voidtools 下载 `es.exe`，放到 Everything 安装目录（默认 `C:\Program Files\Everything\`）。
+   - 说明：`es.exe` 在 IPC 主通道可用时是回落通道，**仍受支持**；在 IPC 真机验收完成并发布前，仍建议安装 `es.exe`，确保各种环境下都能搜索。
 3. dd-run 按以下顺序自动定位 `es.exe`，**正常情况下无需手动配置**：
    - 环境变量 `DDRUN_ES_PATH`（完整路径）
    - 系统 `PATH`（winget 安装后 `es.exe` 已在 PATH）
@@ -25,7 +27,7 @@
 
 ---
 
-## 二、三种进入方式
+## 2. 三种进入方式
 
 | 方式 | 操作 | 说明 |
 | :--- | :--- | :--- |
@@ -39,9 +41,9 @@
 
 ---
 
-## 三、搜索语法速查
+## 3. 搜索语法速查
 
-关键词**原样透传**给 Everything，因此其全部语法均可直接使用：
+关键词**原样透传**给 Everything（例外：以 `-` 或 `/` 开头的查询会被前置 `^` 转义，避免被 `es.exe` 当作命令行开关），因此其全部语法均可直接使用：
 
 | 语法 | 示例 | 含义 |
 | :--- | :--- | :--- |
@@ -60,7 +62,7 @@
 
 ---
 
-## 四、配置项
+## 4. 配置项
 
 | 环境变量 | 默认值 | 用途 |
 | :--- | :--- | :--- |
@@ -71,35 +73,49 @@
 
 ---
 
-## 五、故障排查
+## 5. 故障排查
 
 | 现象 | 可能原因 | 处理 |
 | :--- | :--- | :--- |
 | 提示「未检测到 Everything」 | Everything 未运行，或 `es.exe` 不在 PATH/指定位置 | 启动 Everything；执行 `es.exe -get-everything-version` 确认识别；必要时设 `DDRUN_ES_PATH` |
-| 搜不到文件 / 结果乱码 | `es.exe` 未安装或版本过旧 | 重装 `es.exe`（`winget install --id=voidtools.Everything.Cli`）；确认 `es.exe -get-everything-version` 正常 |
-| 结果为空 | 关键词过窄，或 Everything 索引尚未建完 | 等待索引完成；换更宽泛的关键词 |
+| 搜不到文件 / 结果乱码 | Everything 未运行、索引未建完，或 `es.exe` 缺失/版本过旧 | 等待索引完成；重装 `es.exe`（`winget install --id=voidtools.Everything.Cli`）；确认 `es.exe -get-everything-version` 正常 |
+| 结果为空 | 关键词过窄（索引尚未建完时 dd-run 返回的是引导项而非空结果） | 换更宽泛的关键词；等待索引完成后再试 |
 | 有结果但打不开文件 | 系统未关联默认程序，或文件已被移动/删除 | 手动关联程序；确认文件仍在原路径 |
 | 搜索长时间无响应 | Everything 进程异常 | 重启 Everything；dd-run 会在约 1.2 秒后按超时处理，不会卡死 |
 
 ---
 
-## 六、已知边界（v0.1）
+## 6. 已知边界
 
 - **仅支持 Windows**：依赖 Everything。跨平台能力（fd 兜底 Provider）计划于 v0.2 提供。
 - 每次最多返回前 **30** 条结果，按「文件名 > 路径」的相关度并叠加近因加分排序。
-- 结果页内的二次输入只做**本地过滤**（受前 30 条限制），不会重新请求 Everything。
-- Everything 未运行或 `es.exe` 缺失时，引导项的点击提示为通用文案，将在后续版本打磨。
+- **结果页二次输入会重新搜索**：在结果页搜索框继续输入时，宿主会做 **200ms 去抖**后重新向扩展请求，经 `everything-ipc` 或 `es.exe` 重新拉取；每次仍**至多返回前 30 条**（与上一条同口径）；输入期间结果会刷新。
+- **Everything 未运行 / `es.exe` 缺失时的引导项**：点击会弹出**专属提示 Toast**（写明需安装/启动 Everything 或 `es.exe`），不再是通用「未知命令」文案。
 - 单个搜索请求超过 **2 秒**未响应时，宿主按超时处理（不挂起、不崩溃）。
 
 ---
 
-## 七、后续升级说明（v3.3，部分已提供）
+## 7. 后续升级说明
 
-开发计划 [`search-file.md`](./search-file.md) 规划两项升级，当前状态：
+开发计划 [`search-file.md`](./search-file.md) §九 规划了两项升级，当前状态：
 
 - **更多操作（✅ 已提供）**：结果项右键 = 打开（默认）/ **显示所在目录**（资源管理器中定位文件）/ **复制路径**（复制完整路径到剪贴板）。
-- **IPC 直连（尚未提供）**：规划优先连接正在运行的 Everything，失败时仍回落到 `es.exe`；在该功能通过
-  Windows 真机兼容性、回落和性能验收前，仍须安装并可调用 `es.exe`。
+- **IPC 直连（✅ 已实现）**：现已优先通过 `everything-ipc` 直连正在运行的 Everything，失败自动回落 `es.exe`。在 Windows 真机兼容性、回落与性能验收（A-33-05…A-33-10）完成并发布前，仍建议安装并保留 `es.exe` 作为回落通道；届时用户文档会再同步更新。
 
-升级完成后会同步更新本页的前置条件、故障排查和版本号；当前实现不使用 Everything HTTP
-服务，用户只需按本页说明准备 `es.exe` 和正在运行的 Everything。
+升级细节见 [`search-file.md`](./search-file.md) §九。当前实现不使用 Everything HTTP 服务，用户只需按本页说明准备 Everything（并建议安装 `es.exe`）。
+
+---
+
+## 8. 常见问题
+
+- **搜不到文件怎么办？**
+  1. 确认 Everything 已运行（`es.exe -get-everything-version` 能返回版本号）；新装 Everything 请等首轮索引完成。
+  2. 确认 `es.exe` 已安装并在 PATH，或通过 `DDRUN_ES_PATH` / `DDRUN_EVERYTHING_DIR` 指定位置。
+  3. 结果为空也可能是关键词过窄；换更宽泛的关键词重试。
+  4. 搜索长时间无响应时，dd-run 会在约 1.2 秒后按超时处理，不会卡死。
+- **还需要安装 `es.exe` 吗？**
+  **需要（建议）**。`everything-ipc` 直连主通道已实现，但 `es.exe` 仍作为回落通道受支持；在 IPC 真机验收完成并发布前，已发布版本仍依赖 `es.exe`。建议保持安装，确保各种环境下都能搜索。
+- **要开 Everything 的 HTTP 服务器吗？**
+  不需要。无论是 IPC 直连还是 `es.exe` 回落，都走本机 IPC，不监听端口、无局域网暴露风险。
+- **文件打不开 / 打开成了错误文件？**
+  文件名含 `%` `#` `?` 或位于网络共享（UNC）等特殊路径，此前存在解析缺陷，**已在代码侧修复**（宿主改用 `resolve_file_url_to_path` 做存在性优先匹配）。如仍异常，请确认系统已为该类型关联默认程序、且文件未被移动/删除。

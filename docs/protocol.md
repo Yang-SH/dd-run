@@ -1,9 +1,9 @@
 # dd-run Extension Protocol v1.0
 
-> **状态**：草案冻结（v1.0）——M0 期间按本规范实现，变更需走 §13 协议演进规则。  
-> **面向**：写宿主的人与写扩展的人。这是二者之间**唯一的硬契约**。  
-> **上手路径**：第一次写扩展请先读 [`extensions.md`](./extensions.md)（那份是"路径"，本文是"规范"）。  
-> **上游依据**：[`cmdpal-platform-agnostic-design.md`](../cmdpal-platform-agnostic-design.md) §5（扩展契约）、§6（宿主模型）。  
+> **状态**：已冻结 ｜ **版本**：v1.0 ｜ **最后更新**：2026-09-13（变更须走 §13 协议演进规则）
+> **受众**：写宿主的人与写扩展的人——这是二者之间**唯一的硬契约**。
+> **上手路径**：第一次写扩展请先读 [`extensions.md`](./extensions.md)（那份是"路径"，本文是"规范"）。
+> **上游依据**：[`cmdpal-platform-agnostic-design.md`](../cmdpal-platform-agnostic-design.md) §5（扩展契约）、§6（宿主模型）。
 > **核验基准**：microsoft/PowerToys `v0.101.2362.0`（核验日期 2026-09-01）。本文引用的上游接口名、`CommandResultKind` 成员均以此为基准核验。
 
 ---
@@ -75,7 +75,7 @@
 
 每条消息是**一行紧凑 JSON 对象**，以单个 `\n`（LF, `0x0A`）结尾：
 
-```
+```text
 {"jsonrpc":"2.0","id":1,"method":"top_level_commands","params":{}}\n
 ```
 
@@ -86,13 +86,16 @@
 3. 编码为 **UTF-8**。
 4. 不允许 pretty-print 的多行 JSON（会被解析成多条不完整的行）。
 5. 空行应被**忽略**（不视为错误），以便对端写入容错。
+6. 非 UTF-8 的行**视同无效帧**：实现产出 `Frame::InvalidUtf8`（`framing.rs:20`，无对应 JSON-RPC 错误码）——宿主 `call` 路径向调用方返回 `InvalidUtf8` 错误，通知路径静默丢弃。
 
 > **为什么选 NDJSON**：协议 payload 全是几十到几百字节的文本，无二进制附件需求；NDJSON 让两端的 I/O 循环都简化为"按行读写"，调试时 `tail -f` 即可肉眼读协议流。日后若有二进制需求，可在握手时协商升级（见 §5.1 的 `transport` 字段）。
 
 ### 2.3 消息大小上限
 
-- **默认单条消息上限 1 MiB（1 048 576 字节）**，握手时由宿主通过 `transport.max_message_bytes` 告知，扩展可回更低值。
+- **默认单条消息上限 1 MiB（1 048 576 字节）**，握手时由宿主通过 `transport.max_message_bytes` 告知。
+- ⚠️ **v1.0 未定义「扩展回传更低上限」的承载字段**：`InitializeResult` 没有对应成员，实现方不得假设扩展可下调上限。若将来需要，按 §13 走 `MINOR` 演进新增可选字段。
 - 收到超过上限的消息：接收方应回一个 `-32600 Invalid Request` 错误（若无法解析 `id` 则 `id` 为 `null`），**并关闭连接**——继续读取可能导致流错位。
+- ⚠️ **实现现状（核对至 2026-09-13）**：两侧均未实现上一条的「回 `-32600` + 关闭连接」。宿主 `call` 路径收到超限帧直接向调用方返回 `MessageTooLarge`（`process.rs:575`）；宿主通知轮询与扩展侧对超限帧**静默丢弃**。是否按本节补齐「回错 + 关连接」待确认（差异清单 P-01）。
 
 ### 2.4 读写循环要求
 
@@ -145,9 +148,11 @@
 | `result`  | 成功响应必填；与 `error` **互斥**                       |
 | `error`   | 失败响应必填；与 `result` **互斥**；结构见 §9.1             |
 
+> ⚠️ **实现现状（核对至 2026-09-13）**：上表的 `-32600` 处置当前均未实现——`jsonrpc` 非 `"2.0"` 的消息被静默忽略；`jsonrpc` 缺失、`id` 类型非法（负数/字符串）导致反序列化失败，宿主按 `MalformedEnvelope` 处置并使整个 `call` 失败（不回 `-32600`）；`params` 未校验为对象（数组亦被接受）；`result`/`error` 并存未强制互斥，宿主以 `error` 优先。
+
 ### 3.3 `id` 规则
 
-- `id` 为**非负整数**（本协议不使用字符串 id，简化实现）。
+- `id` 为**非负整数**（本协议不使用字符串 id，简化实现）。⚠️ 实现为 `u64`：`0` 合法、上界 `u64::MAX`。
 - **两端 id 空间独立**：宿主与扩展各自从 `1` 开始自增。实现时必须用"发出方向"区分：收到带 `id` 的消息时，先看 `method`——若 `method` 是**自己能提供的**（对宿主而言是 `host/*`），这是对端发来的**请求**；否则这是**我发出请求的响应**。
 - 未匹配到 in-flight 请求的响应：应记日志并**忽略**，不得崩溃。
 - 通知无 `id`，**永不回复**；收到未知 method 的通知应忽略（不报错）。
@@ -155,6 +160,8 @@
 ### 3.4 不支持批处理
 
 JSON-RPC 2.0 允许数组形式的批量请求，**本协议不支持**。收到数组 → 回 `-32600 Invalid Request`。
+
+> ⚠️ **实现现状（核对至 2026-09-13）**：宿主侧收到数组按反序列化失败冒泡处置（不回 `-32600`）；扩展侧 `serve_line` 回 `-32700 Parse error`。`-32600` 的批处理处置两侧均未实现。
 
 ---
 
@@ -188,6 +195,8 @@ discovered → spawned → initializing → ready ⇄ busy ─┤
 | `stub`         | **宿主侧命令项状态**（非进程状态）：closed 后回到"仅缓存数据" | → 点击时触发 `spawned`                                 |
 
 > **并发**：MVP 阶段宿主对每个扩展**串行化请求**（同一时刻最多 1 个 in-flight 请求）。扩展侧可不保证串行，但宿主串行化能让超时与重连语义保持简单。
+>
+> ⚠️ **实现现状（核对至 2026-09-13）**：代码**无**对应状态枚举，状态隐含于进程生命周期与 in-flight 集合；`busy` 的宿主侧载体为 `ext_busy` Toast（`invoke.rs:120,152`、`page.rs:232,265`）。运行期崩溃（有磁盘缓存）回退 **stub**（`pool.rs:68-79`）；启动期聚合失败则该扩展不产出 items。崩溃计数口径见 §11 现状。
 
 ---
 
@@ -227,7 +236,7 @@ discovered → spawned → initializing → ready ⇄ busy ─┤
 | `provider.frozen`       | bool     | ✅  | 顶层命令是否可缓存（设计文档 §6.3）                        |
 | `provider.has_fallback` | bool     | ✅  | 是否有兜底命令；`true` 时宿主**必须**视为 fresh（设计文档 §6.3） |
 | `capabilities`          | string[] | ✅  | 扩展**需要用到**的 `host/*` 方法；宿主可据此拒绝不支持的扩展       |
-| `timeouts.*`            | object   | ❌  | 扩展建议的超时值（毫秒），宿主可覆盖                          |
+| `timeouts.*`            | object   | ❌  | 扩展建议的超时值（毫秒），宿主可覆盖。⚠️ 实现现状：类型仅 `get_items_ms` 一个字段，且宿主从不读取（建议值不被消费） |
 
 **失败响应**（版本不兼容）：
 
@@ -237,7 +246,9 @@ discovered → spawned → initializing → ready ⇄ busy ─┤
 
 ### 5.2 `initialized`（ext → host，通知）
 
-扩展在返回 `initialize` 的 result **之后**可发送，表示自身已就绪（例如后台索引已建好）。**可选**——宿主以 `initialize` 的 result 作为就绪判定依据；收到 `initialized` 只用于触发一次额外的 `items_changed` 拉取。
+扩展在返回 `initialize` 的 result **之后**可发送，表示自身已就绪（例如后台索引已建好）。**可选**——宿主以 `initialize` 的 result 作为就绪判定依据。
+
+> ⚠️ **实现说明（v0.1.1 核对）**：宿主收到 `initialized` 后**仅记录该通知**，**不会**因此额外触发一次拉取（通知轮询只消费 `items_changed`）。扩展应把 `initialized` 当作纯就绪信令；**需要宿主刷新数据请改发 `items_changed`**（§7.1），不要依赖 `initialized` 产生数据副作用。
 
 ```json
 {"jsonrpc":"2.0","method":"initialized","params":{}}
@@ -250,6 +261,8 @@ discovered → spawned → initializing → ready ⇄ busy ─┤
 3. 若扩展不支持宿主发来的主版本，回 `-32004 version_mismatch`，`data.supported_versions` 列出自己支持的版本。
 4. 若扩展回的版本宿主**不认识**（高于宿主所发，或格式非法），宿主应回 `close`、终止进程，并把该扩展标记为不可用。
 5. **`MAJOR` 不兼容递增，`MINOR` 向后兼容递增**：1.0 → 1.1 时，只新增可选方法/可选字段，老扩展无需改动。
+
+> ⚠️ **实现现状（核对至 2026-09-13）**：扩展侧共享运行时的 `initialize` 不读取 `params.protocol_version`，恒回 `"1.0"`；`-32004 version_mismatch` 在 `dd-ext` 共享运行时**无任何产出点**（宿主侧 in-process 路径有版本校验，`ext_inprocess.rs:97-106`）。规则 3 的扩展侧实现待接线。
 
 ---
 
@@ -272,6 +285,8 @@ discovered → spawned → initializing → ready ⇄ busy ─┤
 | `commands` | CommandItem[] | 顶层命令项；**可为空数组** |
 
 > **缓存语义**：仅当 `provider.frozen == true` 时，宿主才会把该结果缓存到磁盘并在冷启动时作为**桩**渲染（设计文档 §6.3）。缓存必须带扩展版本号，扩展升级即失效。
+>
+> ⚠️ **实现现状（核对至 2026-09-13）**：落盘门禁实际读取**清单**的 `frozen` 字段（`crates/dd-gui/src/aggregator.rs:394,411-435`），握手回传的 `provider.frozen` 当前不被消费。两者在正常清单下取值一致。
 
 ### 6.2 `fallback_commands`
 
@@ -304,6 +319,8 @@ discovered → spawned → initializing → ready ⇄ busy ─┤
 | `page_id`     | string | ✅  | 页标识，来自 `CommandItem.command.page_id` 或 `GoToPage` 结果 |
 | `search_text` | string | ❌  | 当前搜索词；扩展自行决定是否过滤                                     |
 
+> ⚠️ **实现现状（核对至 2026-09-13）**：`page_id` 缺失或未注册时，扩展共享运行时统一回 `-32005 page_not_found`（`lib.rs:294-309`），不回 `-32602`。
+
 ```json
 {"jsonrpc":"2.0","id":4,"result":{"items":[{"id":"h1","title":"3.14159","subtitle":"π","command":{"kind":"invoke"}}],"has_more_items":false,"is_loading":false}}
 ```
@@ -311,7 +328,7 @@ discovered → spawned → initializing → ready ⇄ busy ─┤
 | 结果字段             | 类型            | 说明                                     |
 | ---------------- | ------------- | -------------------------------------- |
 | `items`          | CommandItem[] | **全量**当前项，不含增量                         |
-| `has_more_items` | bool          | 是否还有更多；为 `true` 时宿主可再次调用并带更大的 `offset` |
+| `has_more_items` | bool          | 是否还有更多。⚠️ v1.0 **未定义分页参数**：`get_items` 的参数只有 `page_id` / `search_text`，宿主不得假设可带 `offset` 增量拉取；扩展应一次返回**全量**当前项 |
 | `is_loading`     | bool          | 扩展是否仍在后台加载（宿主可显示 Loading 态）            |
 
 > **禁止**：协议层**不得**流式推送增量集合（验收 A9）。列表变化一律走 `items_changed` 通知 + 宿主重新 `get_items`。
@@ -333,6 +350,8 @@ discovered → spawned → initializing → ready ⇄ busy ─┤
 ```json
 {"jsonrpc":"2.0","id":5,"result":{"command":null}}
 ```
+
+> ⚠️ **实现现状（核对至 2026-09-13）**：`GetCommandResult.command` 带 `skip_serializing_if`（`messages.rs:146-148`），`command: null` 在线上序列化为 `{"result":{}}`（字段整体省略）；接收方不得假设该字段必然出现。
 
 > **复热链路**：用户点击 frozen 桩 → 宿主 spawn 进程 → `initialize` → `get_command` → 取回真实命令后执行。失败或超时则回退 stub 状态并向用户报错（验收 A6）。
 
@@ -401,6 +420,8 @@ discovered → spawned → initializing → ready ⇄ busy ─┤
 - 不可见 → 标记脏，待该页可见时再拉；
 - 顶层变化 → 重新 `top_level_commands`。
 
+> ⚠️ **实现现状（核对至 2026-09-13）**：宿主**无脏标记机制**——不可见页的通知被直接丢弃（`refresh.rs:43`）；命中当前页的通知也进入 100 ms 合并窗口，并非「立即」拉取。另 in-process 路径的通知队列从不清空，同一 `page_id` 会被反复上报（子进程路径为一次性消费，`ext_inprocess.rs:173-186`）。
+
 > **限流**：宿主应对高频 `items_changed` 做合并（如 100ms 窗口内的多次通知合并为一次拉取）。
 
 ### 7.2 `host/show_status`（请求）
@@ -414,6 +435,8 @@ discovered → spawned → initializing → ready ⇄ busy ─┤
 | `message`     | string  | ✅  | 文本                                                  |
 | `state`       | string  | ❌  | `"info"`（默认）/ `"success"` / `"warning"` / `"error"` |
 | `duration_ms` | integer | ❌  | 显示时长；`0` 表示常驻直到被替换                                  |
+
+> ⚠️ **实现现状（核对至 2026-09-13）**：宿主解析 `state` 后**渲染侧忽略**，四种取值一律按 Info 样式展示（`toast.rs:83-85`）；`duration_ms = 0` 未实现「常驻」——原样写入过期时间导致**下一帧即清空**（`toast.rs:104`、`app/mod.rs:637`）。
 
 ```json
 {"jsonrpc":"2.0","id":1,"method":"host/show_status","params":{"message":"Copied to clipboard","state":"success","duration_ms":2000}}
@@ -471,7 +494,7 @@ discovered → spawned → initializing → ready ⇄ busy ─┤
 | `tags`            | string[]      | ❌  | 标签，宿主以 chip 展示（设计文档 §4.4）         |
 | `details`         | Details       | ❌  | 右侧详情面板内容（设计文档 §4.5 `ShowDetails`） |
 | `text_to_suggest` | string        | ❌  | 选中后回填搜索框的文本（设计文档 §4.4）            |
-| `more_commands`   | CommandItem[] | ❌  | 上下文菜单项，可嵌套（设计文档 §5.6）             |
+| `more_commands`   | CommandItem[] | ❌  | 上下文菜单项，可嵌套（设计文档 §5.6）。⚠️ 实现无嵌套深度上限，接收方需注意深嵌套反序列化的栈风险 |
 | `command`         | CommandRef    | ✅  | 该命令的执行目标，见 §8.2                   |
 
 ### 8.2 CommandRef
@@ -553,9 +576,13 @@ discovered → spawned → initializing → ready ⇄ busy ─┤
 | `"list_item"`    | 从嵌套列表页的某一项触发 |
 | `"context_menu"` | 从上下文菜单项触发    |
 
+> ⚠️ **实现现状（核对至 2026-09-13）**：宿主生产路径当前仅产出 `"top_level"`（`confirm_selected` 对所有 Invoke 项一律按顶层触发，`invoke.rs:100-108`）与 `"context_menu"`（`ctx_menu.rs:201`）；`"list_item"` 已定义但仅单测覆盖，无生产产出点。
+
 ### 8.5 Page
 
-`get_items` 返回的页元信息（当前随 items 一并返回；设计文档 §4.5）。
+页元信息（设计文档 §4.5）。
+
+> ⚠️ **v1.0 现状（核对至 2026-09-13）**：`PageInfo` 类型已在 `dd-protocol` 定义，但**运行时不传递**——`GetItemsResult`（§6.3）只含 `items` / `has_more_items` / `is_loading`，**不携带页元信息**。宿主渲染页标题与占位文本目前取自 `CommandItem` 与本地页面栈状态，**不得依赖 `get_items` 回传 `PageInfo`**。将来若接线，按 §13 递增 `MINOR`。
 
 ```json
 {"type":"list","page_id":"calc.history","title":"History","placeholder_text":"Search history","is_loading":false,"show_details":true,"has_more_items":false,"grid":{"columns":4}}
@@ -644,16 +671,20 @@ discovered → spawned → initializing → ready ⇄ busy ─┤
 | 码        | 名称                     | 触发                                | 建议宿主行为                |
 | -------- | ---------------------- | --------------------------------- | --------------------- |
 | `-32001` | `extension_timeout`    | 请求超时未响应                           | 记日志；可重试一次；仍失败则标 stub  |
-| `-32002` | `command_not_found`    | `invoke` / `get_command` 的 id 不存在 | 提示用户；从列表移除该项          |
+| `-32002` | `command_not_found`    | ⚠️ **保留码，当前实现未产出**（见本条注记） | 提示用户；从列表移除该项          |
 | `-32003` | `provider_unavailable` | 扩展进程已退出或不可用                       | 回退 stub；下次激活时重新 spawn |
 | `-32004` | `version_mismatch`     | 协议版本不兼容                           | 关闭进程；标记扩展不可用          |
 | `-32005` | `page_not_found`       | `page_id` 不存在或已失效                 | 返回上一级；刷新页面栈           |
 
-> `-32002 command_not_found` 与 `get_command` **返回 `command: null`** 的区别：前者用于 `invoke` 一个确实不存在的 id（视为错误）；后者是 `get_command` 的**正常结果**（桩已失效，回退 stub）。
+> ⚠️ **`-32002` 的现状与边界（核对至 2026-09-13）**：
+>
+> - **当前实现不产出此码**：常量 `error_codes::COMMAND_NOT_FOUND` 已在 `dd-protocol` 定义，但宿主与 `dd-ext` 共享运行时**均无抛出点**。「命令不存在」由**各扩展自身的 handler** 兜底：内置扩展（system/websearch/shell）回普通结果 `ShowToast`（各带专属文案，`builtins/system.rs:173` 等），示例扩展回「未知命令」提示（`dd-ext-sample/src/main.rs:528`）；**随 [`extensions.md`](./extensions.md) 发布的 Python 示例则确实回 `-32002 command_not_found`**（`examples/python-minimal/dd_ext_pymin.py:307-308`）。
+> - **与 §6.4 的边界**：`get_command` 查不到时返回 `result.command = null`，这是**正常结果**、**不是**错误，不得用 `-32002` 表达。上表把 `get_command` 列为该码的触发场景属历史表述，已更正。
+> - **结论**：`-32002` 在 v1.0 属「已保留、待接线」的码。扩展不得依赖宿主会发出它；若将来启用，须同时更新本节与 §6.4。
 
 ### 9.3 错误处置通则
 
-- 错误**不是**致命的：收到错误响应后连接应继续保持（除 `-32600` 消息超上限与 `-32004` 版本不兼容外）。
+- 错误**不是**致命的：收到错误响应后连接应继续保持（除 `-32600` 消息超上限与 `-32004` 版本不兼容外）。⚠️ 实现现状：`-32600`（含消息超上限）当前两侧均按**非致命**处置（超限帧被静默丢弃，见 §2.3 现状）；`-32004` 在扩展侧当前无产出点（见 §5.3 现状）。
 - 对端**不得**因为一次错误就退出进程。
 - 宿主应把 `-32603` 与 `-32001` 写入日志，用于诊断（验收 A8）。
 
@@ -663,16 +694,16 @@ discovered → spawned → initializing → ready ⇄ busy ─┤
 
 | 阶段                   | 默认值      | 说明               |
 | -------------------- | -------- | ---------------- |
-| 进程启动                 | 3000 ms  | spawn 后到管道就绪     |
+| 进程启动                 | 3000 ms  | spawn 后到管道就绪。⚠️ 文档建议值，当前实现无对应常量     |
 | `initialize`         | 5000 ms  | 含扩展自身初始化（如建索引）   |
 | `top_level_commands` | 3000 ms  | —                |
 | `fallback_commands`  | 2000 ms  | —                |
 | `get_items`          | 2000 ms  | 首屏路径上，**热路径**    |
 | `get_command`        | 5000 ms  | 含冷启动进程的 spawn 开销 |
 | `invoke`             | 10000 ms | 命令可能耗时（如启动应用）    |
-| `close`              | 1000 ms  | 超时即强杀            |
+| `close`              | 1000 ms  | 超时即强杀。⚠️ 实现为两段各 1000 ms（等 result + 等进程退出），最坏 2000 ms |
 
-- 数值为**默认建议值**，宿主可配置；扩展可在 `initialize` 的 `result.timeouts` 中建议更宽的值。
+- 数值为**默认建议值**，宿主可配置；扩展可在 `initialize` 的 `result.timeouts` 中建议更宽的值。⚠️ **实现现状（核对至 2026-09-13）**：`result.timeouts` 仅 `get_items_ms` 一个字段且宿主从不读取；「宿主可配置」当前亦未实现（数值为编译期常量，见 `process.rs:30-42`）。
 - 超时即视为失败：宿主应答 `-32001 extension_timeout` 给调用方（UI 层），并**丢弃**该请求——但若之后收到迟到的响应，应记日志后忽略。
 - **心跳**：v1.0 **不做心跳**。进程存活以"子进程是否退出"为准，协议层不引入 `ping`。
 
@@ -685,6 +716,8 @@ discovered → spawned → initializing → ready ⇄ busy ─┤
 **宿主侧检测**：
 
 1. 读取 stdout 遇 **EOF**，或等待子进程退出得到非 0 退出码 → 判定崩溃。
+
+> ⚠️ **实现现状（核对至 2026-09-13）**：周期巡检仅以**非 0 退出码**计崩溃（`health.rs:27`）；invoke/get_items 失败路径在进程已退出（含 EOF/正常退出，`process.rs:442-443`）时同样计入（`invoke.rs:73`、`page.rs:134`）。「EOF 单独计崩溃」仅在巡检路径不成立。
 2. 所有 in-flight 请求**立即**以 `-32003 provider_unavailable` 失败，UI 不得卡住。
 3. 若该 provider 为 `frozen` **且有磁盘缓存** → 命令项回退为 **stub**，保留在列表中；  
    若无缓存 → 从当前列表移除该 provider 的项（不删除 manifest）。
@@ -726,7 +759,7 @@ discovered → spawned → initializing → ready ⇄ busy ─┤
 
 一个 Calculator 扩展从拉起到执行一次命令的完整协议流（`→` 为 host→ext，`←` 为 ext→host）：
 
-```
+```text
 → {"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocol_version":"1.0","host":{"name":"dd-run","version":"0.1.0","platform":"windows"},"transport":{"framing":"ndjson","max_message_bytes":1048576},"capabilities":["host/show_status","host/set_clipboard","host/open_url"],"locale":"zh-CN"}}
 ← {"jsonrpc":"2.0","id":1,"result":{"protocol_version":"1.0","provider":{"id":"com.example.calc","display_name":"Calculator","frozen":true,"has_fallback":false},"capabilities":["host/set_clipboard"]}}
 ← {"jsonrpc":"2.0","method":"initialized","params":{}}
@@ -738,7 +771,7 @@ discovered → spawned → initializing → ready ⇄ busy ─┤
 ← {"jsonrpc":"2.0","id":4,"result":{"command":{"id":"calc.eval","title":"Calculator","command":{"kind":"invoke"}}}}
 → {"jsonrpc":"2.0","id":5,"method":"invoke","params":{"id":"calc.eval","sender":"top_level","context":{"query":"1+1"}}}
 ← {"jsonrpc":"2.0","id":1,"method":"host/set_clipboard","params":{"text":"2"}}
-← {"jsonrpc":"2.0","id":5,"result":{"result":{"kind":"ShowToast","args":{"message":"= 2","duration_ms":2000}}}}
+← {"jsonrpc":"2.0","id":5,"result":{"kind":"ShowToast","args":{"message":"= 2","duration_ms":2000}}}
 → {"jsonrpc":"2.0","id":6,"method":"close","params":{}}
 ← {"jsonrpc":"2.0","id":6,"result":{}}
 ```

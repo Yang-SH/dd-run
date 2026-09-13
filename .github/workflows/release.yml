@@ -1,8 +1,9 @@
 name: Release
 
 # 批次 7.5：tag → 构建 → 免安装绿色包 zip → GitHub Release 附着。
-# 分发形态（2026-09-08 定案）：仅免安装单文件——dist/dd-run-<ver>.exe（5 内置扩展
-# 内嵌）+ dist/extensions.d/（file-search sidecar），整体 zip，无安装器。
+# 分发形态（2026-09-08 定案，M9 起更新）：仅免安装单文件——dist/dd-run-<ver>.exe
+# （5 内置扩展 in-process 内置于宿主进程，不再内嵌 exe）+ dist/extensions.d/（file-search
+# sidecar），整体 zip，无安装器。
 on:
   push:
     tags: ['v*']
@@ -63,6 +64,6 @@ jobs:
           body: |
             dd-run ${{ github.ref_name }} — 免安装绿色版（portable）
 
-            - 解压后直接运行 `dd-run-<版本>.exe`（单文件，5 个内置扩展已内嵌，无安装器）
+            - 解压后直接运行 `dd-run-<版本>.exe`（单文件，5 个内置扩展以 in-process 方式内置于宿主进程，无安装器）
             - `extensions.d/` 为文件搜索扩展 sidecar：与 exe 保持相对位置即可被自动发现（需本机装有 [Everything](https://www.voidtools.com/)）
             - 数据目录：`%APPDATA%\dd-run\`（设置 / 扩展清单 / 缓存）；开机自启在应用内设置页开启
