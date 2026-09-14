@@ -1,0 +1,403 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="dark">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>dd-run · 文件搜索结果「地址常显」方案（v2 · 单行 D8 兼容）</title>
+<style>
+  /* ── 设计令牌：取自 crates/dd-gui/src/theme.rs（= cmdpal-ui-mockups.html v4.3 对照）── */
+  :root{
+    --page:#141414; --panel:#292929; --panel-2:#1f1f1f; --panel-3:#141414;
+    --card:#333333; --card-hover:#3d3d3d;
+    --border:#525252; --border-strong:#666666;
+    --text:#ffffff; --text-2:#d6d6d6; --text-3:#adadad; --text-4:#999999; --text-disabled:#5c5c5c;
+    --accent:#115ea3; --accent-stroke:#479ef5; --accent-line:rgba(71,158,245,.55);
+    --row-hover:#3d3d3d; --row-selected:#383838;
+    --input-fill:#141414;
+    --success:#54b054; --danger:#dc626d;
+    --shadow-64:0 32px 64px rgba(0,0,0,.28),0 0 2px rgba(0,0,0,.20);
+    --shadow-8:0 4px 8px rgba(0,0,0,.28),0 0 2px rgba(0,0,0,.14);
+    --radius-sm:2px;--radius-md:4px;--radius-lg:6px;--radius-xl:8px;
+    --space-8:8px;--space-10:10px;--space-12:12px;
+    --font-caption:12px;--lh-caption:16px;--font-body:14px;--lh-body:20px;
+    --panel-w:650px;--h-row:40px;--icon-cell:24px;--icon-gap:12px;
+    --glyph:"Segoe Fluent Icons","Segoe MDL2 Assets","Noto Sans Symbols2",sans-serif;
+    --ui:"Segoe UI Variable","Segoe UI",system-ui,-apple-system,"Microsoft YaHei",sans-serif;
+  }
+  [data-theme="light"]{
+    --page:#f0f0f0; --panel:#ffffff; --panel-2:#fafafa; --panel-3:#f5f5f5;
+    --card:#fafafa; --card-hover:#ffffff;
+    --border:#e0e0e0; --border-strong:#d1d1d1;
+    --text:#242424; --text-2:#424242; --text-3:#616161; --text-4:#707070; --text-disabled:#bdbdbd;
+    --accent:#0f6cbd; --accent-stroke:#0f6cbd; --accent-line:rgba(15,108,189,.45);
+    --row-hover:#f5f5f5; --row-selected:#ebebeb;
+    --input-fill:#f5f5f5;
+    --success:#0e700e; --danger:#b10e1c;
+    --shadow-64:0 32px 64px rgba(0,0,0,.24),0 0 8px rgba(0,0,0,.20);
+    --shadow-8:0 4px 8px rgba(0,0,0,.14),0 0 2px rgba(0,0,0,.12);
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;background:var(--page);color:var(--text);font-family:var(--ui);
+    font-size:var(--font-body);line-height:var(--lh-body);-webkit-font-smoothing:antialiased}
+  .wrap{max-width:1080px;margin:0 auto;padding:32px 20px 80px}
+  header.top{display:flex;align-items:flex-start;justify-content:space-between;gap:16px;margin-bottom:8px}
+  h1{font-size:22px;font-weight:600;margin:0}
+  h2{font-size:16px;font-weight:600;margin:30px 0 10px;padding-top:10px;border-top:1px solid var(--border)}
+  h3{font-size:13px;font-weight:600;color:var(--text-2);margin:18px 0 8px;text-transform:uppercase;letter-spacing:.04em}
+  p{color:var(--text-2);margin:8px 0}
+  .muted{color:var(--text-3)}
+  .toggle{display:inline-flex;border:1px solid var(--border);border-radius:var(--radius-md);overflow:hidden;flex:0 0 auto}
+  .toggle button{background:var(--panel);color:var(--text-2);border:0;padding:6px 14px;font:inherit;cursor:pointer}
+  .toggle button.active{background:var(--accent);color:#fff}
+  /* ── 命令面板（650px）── */
+  .palette{width:var(--panel-w);max-width:100%;background:var(--panel);border:1px solid var(--border);
+    border-radius:var(--radius-xl);box-shadow:var(--shadow-64);overflow:hidden;margin:14px 0;position:relative}
+  .searchbar{display:flex;align-items:center;gap:var(--space-8);height:var(--h-row);
+    padding:0 var(--space-12);background:var(--input-fill);border-bottom:1px solid var(--border)}
+  .searchbar .glyph{font-family:var(--glyph);color:var(--text-3);font-size:16px}
+  .searchbar input{flex:1;background:transparent;border:0;outline:0;color:var(--text);font:inherit}
+  .searchbar .kbd{font-size:11px;color:var(--text-3);border:1px solid var(--border);border-radius:var(--radius-sm);padding:1px 6px}
+  .section-h{font-size:11px;font-weight:600;color:var(--text-3);padding:8px var(--space-12) 2px;letter-spacing:.06em}
+  .list{padding:4px var(--space-8) 8px}
+  /* ── 结果行：40px（= theme::ROW_H），D8 几何不变 ── */
+  .row{position:relative;display:flex;align-items:center;height:var(--h-row);
+    padding:8px 10px 8px 8px;border-radius:var(--radius-lg);cursor:pointer}
+  .row .icon{width:var(--icon-cell);height:var(--icon-cell);flex:0 0 var(--icon-cell);display:grid;place-items:center;
+    font-family:var(--glyph);font-size:20px;color:var(--text-2)}
+  .row .name{flex:1 1 auto;min-width:0;font-size:var(--font-body);line-height:var(--lh-body);color:var(--text);
+    white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  /* 右列：文件结果 = 所在文件夹（中段省略）；其他结果 = 来源类别标签 */
+  .row .trail{flex:0 0 auto;margin-left:var(--space-12);font-size:var(--font-caption);line-height:var(--lh-caption);
+    color:var(--text-3);white-space:nowrap;overflow:hidden}
+  .row .trail.cat{max-width:90px}
+  .row.old .name{flex:0 1 auto;max-width:46%}
+  .row.old .trail{flex:1 1 auto;max-width:240px}
+  .row.old .trail.dropped{color:var(--text-disabled);font-style:italic}
+  .row:hover{background:var(--row-hover)}
+  .row.sel{background:var(--row-selected)}
+  .row.sel::before{content:"";position:absolute;left:0;top:8px;bottom:8px;width:3px;
+    background:var(--accent-stroke);border-radius:2px}
+  .tooltip{position:absolute;z-index:9;max-width:520px;background:var(--panel-2);border:1px solid var(--border);
+    border-radius:var(--radius-md);box-shadow:var(--shadow-8);padding:6px 10px;font-size:var(--font-caption);
+    color:var(--text-2);pointer-events:none;display:none;word-break:break-all}
+  .spec-note{font-size:12px;color:var(--text-3);margin:6px 0}
+  table.spec{width:100%;border-collapse:collapse;margin:10px 0;font-size:13px}
+  table.spec th,table.spec td{border:1px solid var(--border);padding:8px 10px;text-align:left;vertical-align:top}
+  table.spec th{background:var(--panel-2);color:var(--text-2);font-weight:600}
+  table.spec td{color:var(--text-2)}
+  table.spec td:first-child{width:26%}
+  code{background:var(--panel-3);padding:1px 5px;border-radius:var(--radius-sm);font-size:12px;color:var(--text)}
+  .tag{display:inline-block;font-size:11px;color:var(--accent-stroke);border:1px solid var(--accent-line);
+    border-radius:var(--radius-sm);padding:1px 7px;margin-left:8px;vertical-align:middle}
+  ul.tight{margin:8px 0;padding-left:20px}ul.tight li{margin:5px 0;color:var(--text-2)}
+  .note{background:var(--panel-3);border:1px solid var(--border);border-left:3px solid var(--accent-stroke);
+    border-radius:var(--radius-md);padding:10px 14px;color:var(--text-2);margin:12px 0}
+  .note.warn{border-left:3px solid var(--danger);background:rgba(220,98,109,.10)}
+  .note.done{border-left:3px solid var(--success);background:rgba(84,176,84,.10)}
+  .note b{color:var(--text)}
+  .bad{color:var(--danger)} .good{color:var(--success)}
+  .cmp-label{font-size:12px;color:var(--text-3);margin:14px 0 -6px}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header class="top">
+    <div>
+      <h1>文件搜索结果「地址常显」方案 v2 <span class="tag">单行 · D8 兼容 · 零协议改动</span></h1>
+      <p class="muted">修复「文件搜索看不到文件地址」——在 <b>40px 单行</b>内把右列从无信息量的「命令」类别标签改为<b>所在文件夹路径</b>（中段省略），不动几何契约。</p>
+    </div>
+    <div class="toggle" id="themeToggle">
+      <button data-t="dark" class="active">暗色</button>
+      <button data-t="light">亮色</button>
+    </div>
+  </header>
+
+  <div class="note done">
+    <b>✅ 已实现并验证（2026-09-14，基于 <code>f3716ea</code> 新版 row.rs 骨架）</b>
+    <ul class="tight">
+      <li><code>crates/dd-gui/src/ui/row.rs</code>：新增 <code>is_file_item</code> / <code>looks_like_path</code> / <code>file_location</code> / <code>middle_ellipsis_chars</code>（纯函数）/ <code>middle_ellipsis</code>（宽度自适应）与 4 个常量；<code>draw_item_row</code> 的右列按 <code>file_item</code> 分派（文件=路径 / 其他=类别标签），tooltip 对文件结果恒给完整路径。</li>
+      <li><b>无 <code>PanelItem</code> 字段变更、无线协议改动</b>（v1 方案里的 <code>details</code> 透传已按新架构撤销）。</li>
+      <li>验证：<code>cargo build -p dd-gui</code> 0 error / row.rs 0 warning；<code>cargo test -p dd-gui</code> <b>192 passed / 0 failed</b>（含新增 4 条 row 单测）。</li>
+    </ul>
+  </div>
+
+  <div class="note warn">
+    <b>⚠️ 相对 v1 方案（56px 双行）的设计变更——已否决双行</b>：v1 打算「文件行 40 → 56px 双行、路径常显」。按新版代码核对后被否决，因为<b>与项目自身既有契约冲突</b>：
+    <ul class="tight">
+      <li><code>docs/icons-typography-plan.md</code> §5.3「明确不采纳」首条即：<i>「两行文件名——B5 刚决策单行 + 整行 hover tooltip；两行使行高动态化、<b>与 40px D8 几何契约冲突</b>，启动器场景收益低」</i>。</li>
+      <li><code>app/mod.rs::base_height_for_workarea</code> 用 <b>单一 <code>row_h</code></b> 折算面板默认高度（<code>rows × row_h + 92</code>），<code>row.rs:33</code> 用同一 <code>row_h</code> 预留指针命中矩形，「一屏 9–12 行」也是按它推导的。逐行变高会让面板高度语义与命中矩形同时失准。</li>
+    </ul>
+    v2 因此改为<b>行高完全不变</b>、只用右列承载地址——既让地址常显，又零几何改动、零新增字段。
+  </div>
+
+  <div class="note">
+    <b>根因（新版代码复核）</b>：协议层一直有完整路径——<code>dd-ext/src/bin/search.rs:733</code> <code>subtitle: Some(path.clone())</code>。丢失发生在渲染层：<code>16a3b07</code>（B5）把副标题从行内移除、改由整行 hover tooltip 承载，<b>而文件结果的地址是需要「一眼可见」的信息，不该藏在悬停里</b>；此前的老布局（B5 之前）虽在行内，又有「剩余空间 ≥48px 才画、最多 240px」的门控，长文件名时整段丢弃。
+  </div>
+
+  <!-- ============ A. 新方案演示 ============ -->
+  <h2>A · 新方案演示（单行 40px，右列 = 所在文件夹）</h2>
+  <p class="muted">
+    标题仍是文件名（占满中列、尾省略）；<b>右列在文件结果下由「来源类别标签」改为「所在文件夹路径」</b>，中段省略（保留盘符首段 + 最靠近文件的父目录尾段），宽度上限 = 可用宽 × 45%（下限 120px）。<b>悬停整行</b>显示完整路径。把指针移到任意一行可看到 tooltip。
+  </p>
+
+  <div class="palette" id="palNew">
+    <div class="searchbar">
+      <span class="glyph">&#xE721;</span>
+      <input value="report" readonly />
+      <span class="kbd">Enter 打开</span>
+    </div>
+    <div class="section-h">文件</div>
+    <div class="list" id="listNew"></div>
+    <div class="tooltip" id="tipNew"></div>
+  </div>
+  <p class="spec-note">选中行 = <code>row_selected</code> 填充 + 左 3px <code>accent_stroke</code> 竖条（与 B5 一致）。注意第 1 行的<b>文件名很长</b>——右列地址依然完整可见，这正是原 bug 的场景。</p>
+
+  <!-- ============ B. 对照 ============ -->
+  <h2>B · 对照：现状（B5，无地址） vs 本方案</h2>
+  <p class="muted">同一批数据、同一个 650px 面板、同一 40px 行高。差异只在右列。</p>
+
+  <p class="cmp-label">B-1 现状（<code>16a3b07</code> B5）：右列是来源类别标签「命令」，<b class="bad">地址完全不可见</b>（只能悬停）</p>
+  <div class="palette">
+    <div class="searchbar"><span class="glyph">&#xE721;</span><input value="report" readonly /></div>
+    <div class="section-h">文件</div>
+    <div class="list" id="listB5"></div>
+  </div>
+
+  <p class="cmp-label">B-2 B5 之前的旧布局：地址在行内，但受「剩余 ≥48px」门控 + 240px 截断 → 长文件名时<b class="bad">整段丢弃</b></p>
+  <div class="palette">
+    <div class="searchbar"><span class="glyph">&#xE721;</span><input value="report" readonly /></div>
+    <div class="section-h">文件</div>
+    <div class="list" id="listOld"></div>
+  </div>
+
+  <p class="cmp-label">B-3 本方案：右列 = 所在文件夹（中段省略），<b class="good">地址常显且不占标题空间</b></p>
+  <div class="palette">
+    <div class="searchbar"><span class="glyph">&#xE721;</span><input value="report" readonly /></div>
+    <div class="section-h">文件</div>
+    <div class="list" id="listNew2"></div>
+  </div>
+
+  <!-- ============ C. 设计说明 ============ -->
+  <h2>C · 设计说明</h2>
+
+  <h3>1 · 设计决策</h3>
+  <ul class="tight">
+    <li><b>行高不变</b>：仍是 <code>theme::ListMetrics::row_h</code>（标准档 <code>ROW_H = 40</code>；紧凑 36 / 宽松 44）。不引入逐行高度——D8 几何契约与面板高度折算（<code>rows × row_h + 92</code>）保持成立。</li>
+    <li><b>右列语义分派</b>：文件结果 → <b>所在文件夹路径</b>；其余结果 → 来源类别标签（「应用 / 网页 / 系统 / 命令」，B5 原样）。</li>
+    <li><b>为什么可以替换类别标签</b>：文件结果的类别来自 <code>aggregator::category_label_for(ext_id)</code>，而文件搜索扩展 <code>com.ddrun.search</code> 不在内置映射表中，<b>恒回退为「命令」</b>——对该结果零信息量；分组标题「文件」已由 <code>section</code> 表达。让位给地址是纯增益。</li>
+    <li><b>右列只显示父目录</b>（<code>C:\a\b\f.txt</code> → <code>C:\a\b</code>）：文件名已在标题，右列重复无意义；中段省略后「首段保盘符、尾段保最靠近文件的父目录」，定位信息最大化。</li>
+    <li><b>中段省略</b>优于尾省略：文件搜索场景下用户靠「盘符/根 + 深层父目录」定位，尾部 240px 截断会把最有用的深层目录切掉。</li>
+    <li><b>tooltip 兜底</b>：文件结果的行 tooltip <b>恒给完整路径（含文件名）</b>，任何面板宽度下地址都不丢。</li>
+    <li><b>零协议改动 / 零状态层改动</b>：只用既有 <code>PanelItem.subtitle</code>(路径)、<code>tags</code>(<code>["files"]</code>)、<code>result_category</code>、<code>section</code>、<code>more_commands</code>。未新增字段（v1 的 <code>details</code> 透传已撤销）。</li>
+  </ul>
+
+  <h3>2 · 规范表（与 <code>theme.rs</code> 令牌对齐）</h3>
+  <table class="spec">
+    <tr><th>项</th><th>取值</th><th>变化</th></tr>
+    <tr><td>面板宽</td><td><code>650px</code></td><td>不变</td></tr>
+    <tr><td>行高</td><td><code>m.row_h</code>：标准 40 / 紧凑 36 / 宽松 44（<code>ROW_H</code>=40，D8）</td><td><b>不变</b></td></tr>
+    <tr><td>图标列</td><td>图标格 24px（<code>LIST_ICON_CELL</code>）+ gap 12px（<code>LIST_ICON_GAP</code>），glyph 由扩展下发</td><td>不变</td></tr>
+    <tr><td>标题</td><td>文件名 14px / fg1 / 占满中列 / 尾省略；左对齐贴图标</td><td>不变</td></tr>
+    <tr><td>右列 · 文件结果</td><td>所在文件夹路径 · 12px / fg3 / <b>中段省略</b> / 宽度上限 = 可用宽 × 45%（下限 120px）</td><td><b>新增</b></td></tr>
+    <tr><td>右列 · 其他结果</td><td>来源类别标签 · 12px / fg3 / 贴右 / 最长 90px</td><td>不变</td></tr>
+    <tr><td>标题↔右列间隙</td><td>12px（<code>TRAIL_GAP</code>）</td><td>不变</td></tr>
+    <tr><td>选中态</td><td><code>row_selected</code>（材质档玻璃）+ 左 3px <code>accent_stroke</code> 竖条</td><td>不变</td></tr>
+    <tr><td>Hover</td><td><code>theme::row_fills</code>（材质感知玻璃：云母加权 / 亚克力减重 / 回退实色）</td><td>不变</td></tr>
+    <tr><td>Tooltip</td><td>文件结果恒给完整路径；其余沿用 B5（标题截断给全文 / 副标题）</td><td>文件结果增强</td></tr>
+  </table>
+
+  <h3>3 · 实现落点（已落地）</h3>
+  <ul class="tight">
+    <li><code>crates/dd-gui/src/ui/row.rs</code> 常量：<code>FILE_PATH_W_FRACTION = 0.45</code>、<code>FILE_PATH_MIN_W = 120.0</code>、<code>CAT_LABEL_MAX_W = 90.0</code>、<code>TRAIL_GAP = 12.0</code>。</li>
+    <li><code>is_file_item(item)</code> = <code>tags</code> 含 <code>"files"</code> <b>且</b> <code>subtitle</code> 形如绝对路径（<code>looks_like_path</code>）。<b>两个条件缺一不可</b>：文件搜索扩展的入口项 <code>files.search</code> 与 <code>files.search.query</code> 同样带 <code>"files"</code> 标签，但副标题是说明文案（「输入关键词搜索本地文件」）而非路径，只看 tags 会误判。</li>
+    <li><code>file_location(path)</code>：取父目录（<code>C:\f.txt</code> → <code>C:\</code>；UNC 保留 <code>\\server\share</code>；无分隔符原样返回）。</li>
+    <li><code>middle_ellipsis_chars(text, max_chars)</code>：纯函数，保留首尾折叠 <code>…</code>（可单测）；<code>middle_ellipsis(ui, text, font, max_w)</code>：按平均字宽估算 + 实测收敛，保证不溢出。</li>
+    <li><code>draw_item_row</code>：右列文本由 <code>file_item</code> 分派；宽度预算 = <code>trail_w = measure(trail).min(可用宽 × 0.45)</code>，标题宽 = 剩余 − <code>trail_w</code> − 12px。</li>
+    <li>单行其余结果路径逐字未改（B5 逻辑保留，含 <code>allocate_exact_size</code> + child Ui 左对齐惯用法）。</li>
+  </ul>
+
+  <h3>4 · 被否决的替代方案</h3>
+  <table class="spec">
+    <tr><th>方案</th><th>结论</th></tr>
+    <tr><td>双行 56px（v1 原方案）</td><td class="bad">✗ 违反 D8 40px；<code>icons-typography-plan.md</code> §5.3 明确不采纳；面板高度按 <code>row_h</code> 折算会失准</td></tr>
+    <tr><td>地址并入标题同行（B5 之前旧布局）</td><td class="bad">✗ 「剩余 ≥48px 才画 + 240px 截断」→ 长文件名时整段丢弃（原 bug 本身）</td></tr>
+    <tr><td>只在 hover tooltip（B5 现状）</td><td class="bad">✗ 地址需悬停才发现，不满足「可见」诉求</td></tr>
+    <tr><td><b>右列显所在文件夹（本方案）</b></td><td class="good">✓ 单行 / D8 不变 / 地址常显 / 零协议改动 / 零新增字段</td></tr>
+  </table>
+
+  <h3>5 · 验收标准与结果</h3>
+  <ul class="tight">
+    <li class="good">✅ 文件搜索结果的地址在<b>任意文件名长度</b>下均可见（不再受「剩余 ≥48px」门控）。</li>
+    <li class="good">✅ 行高恒为 <code>m.row_h</code>——D8 几何与「一屏 N 行」契约不变（无逐行高度）。</li>
+    <li class="good">✅ 中段省略保留盘符首段与最靠近文件的父目录；完整路径可经 tooltip「复制路径」还原。</li>
+    <li class="good">✅ 非文件结果（应用 / 网页 / 系统 / 计算）视觉与交互零回归——右列仍为类别标签。</li>
+    <li class="good">✅ 入口项 <code>files.search</code> / <code>files.search.query</code> 未被误判为文件结果（<code>tags</code> + 路径形状双条件）。</li>
+    <li class="good">✅ 协议 v1.0 与 <code>PanelItem</code> 结构零改动。</li>
+    <li class="good">✅ <code>cargo build -p dd-gui</code> 0 error；<code>cargo test -p dd-gui</code> <b>192 passed / 0 failed</b>（新增 4 条 row 单测：<code>looks_like_path_accepts_drive_and_unc</code> / <code>is_file_item_requires_files_tag_and_path_subtitle</code> / <code>file_location_strips_file_name</code> / <code>middle_ellipsis_chars_keeps_head_and_tail</code>）。</li>
+  </ul>
+
+  <div class="note">
+    <b>对标 comparable project</b>：Everything 主列表以「名称 + 路径」两列并列（路径列即父目录）；Listary / VS Code Quick Open 亦为「文件名 + 父目录尾段」。本方案取同构信息结构，但压缩进 40px 单行、并把省略放在中段，更贴合 dd-run「Everything 数据源 + D8 紧凑几何」的约束。
+  </div>
+</div>
+
+<script>
+  // ── 演示数据：含长文件名（复现原 bug 场景）与长/短路径、目录 / UNC ──
+  const DATA = [
+    {g:"\uE8A5", name:"报价单-2026-Q3-最终版-已审核.xlsx",
+     path:"C:\\Users\\y7398\\Documents\\财务\\季度报表\\2026\\Q3\\对外" },
+    {g:"\uE943", name:"row.rs",
+     path:"D:\\AI\\project\\dd-run\\crates\\dd-gui\\src\\ui" },
+    {g:"\uE943", name:"search.rs",
+     path:"D:\\AI\\project\\dd-run\\crates\\dd-ext\\src\\bin" },
+    {g:"\uE8B7", name:"Everything",
+     path:"C:\\Program Files\\Everything" },
+    {g:"\uE8B9", name:"壁纸_项目发布_final_v2.png",
+     path:"E:\\Photos\\2026\\设计素材\\已完成\\客户A\\终稿" },
+    {g:"\uE8A5", name:"月度总结.md",
+     path:"\\\\nas\\public\\财务\\季度报表\\对外" },
+  ];
+
+  const esc = s => String(s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
+
+  // 字体度量（与 demo 同栈，12px caption）
+  const mctx = document.createElement("canvas").getContext("2d");
+  function measure(t){
+    mctx.font = '12px "Segoe UI Variable","Segoe UI",system-ui,"Microsoft YaHei",sans-serif';
+    return mctx.measureText(t).width;
+  }
+  // 与 Rust `middle_ellipsis_chars` 同语义：keep = k-1，head = floor(keep/2)，tail = keep-head
+  function midChars(chars, k){
+    if(chars.length <= k || k <= 1) return chars.join("");
+    const keep = k - 1, head = Math.floor(keep/2), tail = keep - head;
+    return chars.slice(0, head).join("") + "\u2026" + chars.slice(chars.length - tail).join("");
+  }
+  function fitMiddle(full, maxW){
+    const chars = Array.from(full);
+    if(measure(full) <= maxW) return full;
+    let lo = 6, hi = chars.length, best = 6;
+    while(lo <= hi){
+      const mid = (lo + hi) >> 1;
+      if(measure(midChars(chars, mid)) <= maxW){ best = mid; lo = mid + 1; } else { hi = mid - 1; }
+    }
+    return midChars(chars, best);
+  }
+  // 父目录（与 Rust `file_location` 同语义）
+  function parentOf(p){
+    const i = Math.max(p.lastIndexOf("\\"), p.lastIndexOf("/"));
+    if(i <= 0) return p;
+    const head = p.slice(0, i);
+    return head.endsWith(":") ? p.slice(0, i + 1) : head;
+  }
+
+  // ── 本方案行 ──
+  function renderNew(listEl, selIdx){
+    listEl.innerHTML = "";
+    DATA.forEach((d, i) => {
+      const row = document.createElement("div");
+      row.className = "row" + (i === selIdx ? " sel" : "");
+      row.dataset.full = d.path;
+      row.innerHTML =
+        '<div class="icon">' + d.g + '</div>' +
+        '<div class="name">' + esc(d.name) + '</div>' +
+        '<div class="trail">' + esc(parentOf(d.path)) + '</div>';
+      listEl.appendChild(row);
+    });
+    fitList(listEl);
+  }
+
+  // 按 Rust 的预算逻辑设定右列宽度并做中段省略
+  function fitList(listEl){
+    listEl.querySelectorAll(".row").forEach(row => {
+      const trail = row.querySelector(".trail");
+      const name  = row.querySelector(".name");
+      if(!trail || !name) return;
+      const full = parentOf(row.dataset.full || trail.textContent);
+      const avail = row.clientWidth - 8 - 10 - 24 - 12;   // padding + 图标格 + gap
+      const cap   = Math.max(120, avail * 0.45);
+      const w     = Math.min(measure(full), cap);
+      trail.style.width = w + "px";
+      trail.textContent = fitMiddle(full, Math.max(1, w - 1));
+      name.style.maxWidth = Math.max(40, avail - w - 12) + "px";
+    });
+  }
+
+  // ── 现状（B5）：右列 = 类别标签「命令」 ──
+  function renderB5(listEl){
+    listEl.innerHTML = "";
+    DATA.forEach(d => {
+      const row = document.createElement("div");
+      row.className = "row";
+      row.innerHTML =
+        '<div class="icon">' + d.g + '</div>' +
+        '<div class="name">' + esc(d.name) + '</div>' +
+        '<div class="trail cat">命令</div>';
+      listEl.appendChild(row);
+    });
+  }
+
+  // ── 旧布局：地址在同行，受「剩余 ≥48px」门控 + 240px 截断 ──
+  function renderOld(listEl){
+    listEl.innerHTML = "";
+    DATA.forEach(d => {
+      const row = document.createElement("div");
+      row.className = "row old";
+      // 演示旧门控：长文件名吃掉横向空间 → 剩余不足即整段丢弃
+      const dropped = d.name.length > 16;
+      row.innerHTML =
+        '<div class="icon">' + d.g + '</div>' +
+        '<div class="name">' + esc(d.name) + '</div>' +
+        (dropped
+          ? '<div class="trail dropped">— 地址未显示（剩余 &lt; 48px）—</div>'
+          : '<div class="trail">' + esc(d.path) + '</div>');
+      listEl.appendChild(row);
+    });
+  }
+
+  // ── 整行 hover tooltip：完整路径 ──
+  function bindTip(paletteEl, listEl){
+    const tip = paletteEl.querySelector(".tooltip");
+    if(!tip) return;
+    listEl.querySelectorAll(".row").forEach(row => {
+      row.addEventListener("mouseenter", () => {
+        if(!row.dataset.full) return;
+        tip.textContent = row.dataset.full;
+        tip.style.display = "block";
+        const rr = row.getBoundingClientRect(), pr = paletteEl.getBoundingClientRect();
+        tip.style.left = "12px";
+        tip.style.top  = (rr.bottom - pr.top + 4) + "px";
+      });
+      row.addEventListener("mouseleave", () => { tip.style.display = "none"; });
+    });
+  }
+
+  const palNew = document.getElementById("palNew");
+  function renderAll(){
+    renderNew(document.getElementById("listNew"), 0);
+    renderNew(document.getElementById("listNew2"), 2);
+    renderB5(document.getElementById("listB5"));
+    renderOld(document.getElementById("listOld"));
+    bindTip(palNew, document.getElementById("listNew"));
+  }
+  renderAll();
+  if(document.fonts && document.fonts.ready) document.fonts.ready.then(renderAll);
+  window.addEventListener("load", renderAll);
+
+  const tg = document.getElementById("themeToggle");
+  tg.addEventListener("click", e => {
+    const b = e.target.closest("button"); if(!b) return;
+    document.documentElement.setAttribute("data-theme", b.dataset.t);
+    [...tg.children].forEach(x => x.classList.toggle("active", x === b));
+    renderAll();
+  });
+  let rid = 0;
+  window.addEventListener("resize", () => {
+    cancelAnimationFrame(rid);
+    rid = requestAnimationFrame(() => {
+      fitList(document.getElementById("listNew"));
+      fitList(document.getElementById("listNew2"));
+    });
+  });
+</script>
+</body>
+</html>

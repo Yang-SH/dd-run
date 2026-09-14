@@ -288,6 +288,25 @@
 
 > 交付顺序建议 `B7 → B2 → B4 → B5 → B3 → B6 → B8 → B1`（B1 涉及字体加载链，放最后单独回归 IME / 多语言 / 冷启动）。
 
+#### B5 修订 — 文件搜索结果「地址常显」（2026-09-14）
+
+**问题**：B5 把行内副标题移入 hover tooltip 后，文件搜索结果的**文件地址完全不可见**（真机反馈）；此前旧布局虽有行内地址，但受「标题剩余 ≥48px 才画 + 最多 240px 截断」门控，长文件名时整段丢弃。
+
+**方案**（演示页 [`docs/file-search-result-redesign.html`](./file-search-result-redesign.html)，未提交）：
+
+| 决策 | 说明 |
+|---|---|
+| 行高不变 | 仍取 `ListMetrics::row_h`（标准 40 / 紧凑 36 / 宽松 44）。**否决双行 56px**——与 D8 契约冲突，且 `icons-typography-plan.md` §5.3 已明确不采纳；`app/mod.rs::base_height_for_workarea` 按单一 `row_h` 折算面板高度，逐行变高会同时失准面板高度与命中矩形 |
+| 右列语义分派 | 文件结果 → **所在文件夹路径**（中段省略）；其余结果 → 来源类别标签（B5 原样） |
+| 可替换类别标签的理由 | 文件结果的类别来自 `aggregator::category_label_for(com.ddrun.search)`，不在内置映射表 → **恒回退「命令」**，零信息量；分组标题「文件」已由 `section` 表达 |
+| 右列只显父目录 | 文件名已在标题，重复无意义；中段省略后首段保盘符、尾段保最靠近文件的父目录 |
+| tooltip 兜底 | 文件结果的行 tooltip **恒给完整路径**（含文件名） |
+| 零改动 | 协议 v1.0 与 `PanelItem` 结构均不变（未新增 `details` 字段；v1 双行方案的 `details` 透传已撤销） |
+
+**落点**：`crates/dd-gui/src/ui/row.rs` —— 常量 `FILE_PATH_W_FRACTION=0.45` / `FILE_PATH_MIN_W=120` / `CAT_LABEL_MAX_W=90` / `TRAIL_GAP=12`；函数 `is_file_item`（`tags` 含 `files` **且** `subtitle` 形如绝对路径，双条件防误判入口项 `files.search`）/ `looks_like_path` / `file_location` / `middle_ellipsis_chars`（纯函数）/ `middle_ellipsis`（宽度自适应）；`draw_item_row` 右列按 `file_item` 分派。
+
+**验证**：`cargo build -p dd-gui` 0 error（row.rs 0 warning）；`cargo test -p dd-gui` **192 passed / 0 failed**（新增 4 条 row 单测）。
+
 ---
 
 ### 图标与字体优化 — I1/I2/F1/F2（2026-09-12 落地）
