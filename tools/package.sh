@@ -11,6 +11,26 @@
 # 用法：bash tools/package.sh
 set -euo pipefail
 
+# 0) 自愈：宿主 bash 环境可能缺 POSIX coreutils。例如 WorkBuddy 托管的
+#    PortableGit bash 以非交互方式启动（BASH_ENV 注入、不读 /etc/profile），
+#    PATH 里没有 git 的 usr/bin → dirname/sed/du/cut/cp 全部找不到，会让下面
+#    的 `cd "$(dirname "$0")/.."` 当场失败，且 cwd 停在 bash 安装根导致 cargo
+#    找不到 Cargo.toml。仅在检测到 dirname 缺失时才把可用的 git/MSYS usr/bin
+#    前置兜底；正常环境（coreutils 齐全）此块完全不执行、零影响。
+#    `/usr/bin` `/bin` 是 MSYS 对当前 git 安装的映射，通常已足够。
+if ! command -v dirname >/dev/null 2>&1; then
+  for __d in /usr/bin /bin \
+             "$HOME/.workbuddy/binaries/PortableGit/versions/"*/usr/bin \
+             "/c/Program Files/Git/usr/bin" \
+             "/c/Program Files (x86)/Git/usr/bin"; do
+    if [ -d "$__d" ]; then
+      PATH="$__d:$PATH"
+    fi
+  done
+  export PATH
+  echo "[package.sh] PATH 缺 coreutils，已自愈前置 git/MSYS usr/bin" >&2
+fi
+
 cd "$(dirname "$0")/.."   # 仓库根
 
 # 1) windows-gnu 工具链 self-contained bin（含 as.exe 等），**追加**到 PATH 末尾：
