@@ -309,6 +309,68 @@
 
 ---
 
+#### 页内补拉空窗误显「该页暂无内容」修复（2026-09-14，真机反馈）
+
+**问题**：文件搜索页内输入查询后 ~1s 在飞空窗显示误导性空态「该页暂无内容」，结果到达后才消失。根因：进页首拉由 `open_page` 置 `is_loading=true`（骨架屏），但页内输入 200ms 去抖后的补拉（`schedule_page_query_debounce` → `refetch_page_if_current` → `dispatch_fetch_page`）**不设任何加载标志**，且首拉空结果落地的 `page.empty` 文案一直挂着——`panel.rs` 渲染时 `empty` 优先级高于列表，空窗期直接画了过期空态。
+
+**方案**（stale-while-revalidate + 显式在飞指示）：
+
+| 决策 | 说明 |
+|---|---|
+| `PageState::begin_refetch()`（新增，可单测） | `dispatch_fetch_page` 入口统一调用：清过期 `empty`；可见列表为空 → `is_loading=true` 走既有骨架屏；有旧结果 → **保留旧结果继续展示**，不闪骨架（边打边搜每次按键闪骨架是反模式） |
+| 搜索框右端 spinner | `draw_searchbar` 新增 `busy` 参数：当前嵌套页 ext 有 `get_items` 在途（`inflight`）时，右端画 14px accent Spinner（egui 自带按需重绘）；TextEdit 预留 16px 宽避免文本与环重叠。有旧结果时这是唯一「正在搜索」信号 |
+| Err 落地过期补偿 | 失败分支补上与 Ok 分支对称的 v3.3 过期补偿（`cur_query != req_search` → 重武装去抖），否则补拉在飞期间输入的字符会被失败态吞掉 |
+
+**落点**：`crates/dd-gui/src/navigation.rs`（`begin_refetch` + 3 单测）、`crates/dd-gui/src/app/page.rs`（`dispatch_fetch_page` 入口 + Err 分支补偿）、`crates/dd-gui/src/ui/panel.rs`（`page_busy` 判定 + `draw_searchbar` spinner）。
+
+**验证**：`cargo build -p dd-gui` 0 error / 0 新 warning；`cargo test -p dd-gui` **195 passed / 0 failed**（新增 3 条 navigation 单测）。
+
+---
+
+#### 页内补拉空窗误显「该页暂无内容」修复（二轮：过期结果不落地，2026-09-14 真机复报）
+
+**复报**：一轮修复（上方 `begin_refetch` + spinner）后真机仍见空态闪烁。
+
+**新根因（一轮未覆盖的「落地」环节）**：`poll_page` 落地时**先**算 `empty`、**后**才判定「请求查询 `req_search` vs 页内当前 query」是否一致。请求在飞期间用户继续输入 → 旧查询的 `get_items`（尤其 0 命中）照常落地，`page.empty = "该页暂无内容"` 被画上屏；待按最新 query 补拉的结果回来才替换。一轮只覆盖补拉的**发起**，未堵住**旧结果的落地**。
+（另经 NDJSON 实测 `dd-ext-search`：冷启动 + `get_items` 共 0.47s、返回即结果、`is_loading=false` → 证「~1s」并非扩展/进程启动，而是 GUI 空窗。）
+
+**方案**（抽纯函数 + 过期即弃）：
+
+| 决策 | 说明 |
+|---|---|
+| `landing_is_stale(current_query, req_search)`（纯函数，可单测） | 判据 = 页内当前 query 非空且 ≠ 请求查询。空 query 属合法初始态（`GoToPage` 无查询进页）→ 不过期，保留既有语义 |
+| 过期结果**不落地** | `poll_page` Ok 分支：过期 → 不替换列表 / 不置 `empty` / 不置 `is_loading`；改调 `begin_refetch()` 保持 in-flight 语义（列表空→骨架 / 非空→保留旧结果） |
+| `rearm_page_query_debounce()`（新增） | **绕过 `is_loading` 早退**的强制重武装：过期路径已 `begin_refetch`（列表空时 `is_loading=true`），若复用带守卫的 `schedule_page_query_debounce` 会被早退吞掉 → 骨架卡死。仅置到期时刻 |
+| 移除 Ok 分支尾部旧补偿 | 原 `cur_query != req_search → schedule_page_query_debounce()` 前移进 `landing_is_stale` 分支，消除重复 |
+
+**落点**：`crates/dd-gui/src/app/page.rs`（`landing_is_stale` + 单测；Ok 分支重构为 `if stale {丢弃} else {正常落地}`）、`crates/dd-gui/src/app/refresh.rs`（`rearm_page_query_debounce`）。
+
+**验证**：`cargo build -p dd-gui` 0 error；`cargo test -p dd-gui` 199 passed / 0 failed（新增 4 条 `landing_is_stale` 单测）；clippy 无新增 warning。
+
+---
+
+#### 页内补拉「闪骨架」修复（三轮：延迟骨架，2026-09-14 真机再反馈）
+
+**再反馈**：输入文字后**删除一个字符**时「页面闪一下」（截图态 = 空态「该页暂无内容」）。
+
+**根因（二轮引入的副作用）**：二轮的「丢弃过期结果」落地为 `begin_refetch()` —— 其中「列表为空 → 立即 `is_loading=true`」对**快速补拉**（Everything 温热 IPC ~50ms）只显示几帧骨架便被结果替换 → 视觉闪烁；且发起时清 `empty` 会让列表为空的瞬间渲染出**另一种**空态（`empty.no_match`）同样闪烁。
+
+**方案**（延迟骨架 + 发起时不清空态）：
+
+| 决策 | 说明 |
+|---|---|
+| `PAGE_LOADING_DELAY = 250ms` | 补拉发起时**不立即**切骨架，只记录到期时刻；快速补拉在窗口内落地 → 全程无骨架（慢补拉到期才显示） |
+| `PageState::begin_refetch(now)` 改语义 | 列表为空 → `skeleton_after = now + 250ms`；非空 → `None`（保留旧结果）；**不再清 `empty`**（交由落地统一替换） |
+| `PageState::skeleton_due(now)` / `clear_refetch()` | 渲染层 `is_loading \|\| skeleton_due(now)` 决定画骨架；落地（成功 / 失败）清标记 |
+| 渲染层预约重绘 | 延迟未到期 → `request_repaint_after(deadline−now)`，无输入事件也能按时切骨架 |
+| 未真正发起的早退分支清标记 | 忙碌 / 熔断 / 扩展缺失 / 进程不可用 → `clear_refetch()`；否则 250ms 后会误显示骨架 |
+
+**落点**：`crates/dd-gui/src/navigation.rs`（常量 + `skeleton_after` 字段 + 3 方法 + 5 单测）、`crates/dd-gui/src/app/page.rs`（4 处调用 / 清理）、`crates/dd-gui/src/ui/panel.rs`（`skeleton_due` 判定 + 预约重绘）。
+
+**验证**：`cargo build -p dd-gui` 0 error；`cargo test -p dd-gui` 201 passed / 0 failed（`begin_refetch` 单测重写为延迟语义，199→201）；clippy 无新增 warning。
+
+---
+
 ### 图标与字体优化 — I1/I2/F1/F2（2026-09-12 落地）
 
 方案：[`docs/icons-typography-plan.md`](./icons-typography-plan.md)（参考 DeskBox「图标/文字大小可调」）。I3 未做。

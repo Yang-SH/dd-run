@@ -147,6 +147,23 @@ impl PaletteApp {
             self.page_query_debounce = Some(Instant::now() + PAGE_QUERY_DEBOUNCE);
         }
     }
+
+    /// 强制重武装页内输入去抖（**绕过 `is_loading` 早退**）。
+    ///
+    /// 供「过期结果被丢弃」路径使用（`poll_page`）：该路径必须重武装补拉，但页面
+    /// 可能正处于 Loading（首拉在飞 / 延迟骨架窗口），此时复用
+    /// [`Self::schedule_page_query_debounce`] 会被其 `is_loading` 早退吞掉 →
+    /// 补拉不再发起、页面卡在旧结果 / 骨架。此处只置到期时刻（刷新式去抖），
+    /// 嵌套页判定与既有语义保持一致。
+    pub(crate) fn rearm_page_query_debounce(&mut self) {
+        let page = self.stack.current();
+        if page.page_id.is_none() || page.is_settings {
+            return;
+        }
+        if !self.aggregating {
+            self.page_query_debounce = Some(Instant::now() + PAGE_QUERY_DEBOUNCE);
+        }
+    }
 }
 
 #[cfg(test)]

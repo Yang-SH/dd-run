@@ -12,6 +12,22 @@ use dd_protocol::messages::GetItemsResult;
 use std::sync::mpsc;
 use std::sync::mpsc::TryRecvError;
 use std::thread;
+use std::time::Instant;
+
+/// 纯决策：`get_items` 落地结果是否**已过期**（不具权威性）。
+///
+/// 判据 = 本次请求携带的查询文本（`req_search`）与页内**当前** query 不一致，
+/// 说明请求在飞期间用户又输入了。
+///
+/// - 页内框为空属合法初始态（`GoToPage` 等无查询进页路径）→ **不过期**，
+///   照常落地以保留扩展的初始过滤结果（与 v3.3 既有语义一致）；
+/// - 其余不一致 = 过期：旧查询（尤其 0 命中）结果不得落地，否则会把
+///   「该页暂无内容」画上屏（真机 2026-09-14：文件搜索输入后 ~1s 误显空态）。
+///
+/// 抽成纯函数便于单测（无宿主状态）。
+pub(crate) fn landing_is_stale(current_query: &str, req_search: Option<&str>) -> bool {
+    !current_query.is_empty() && Some(current_query) != req_search
+}
 
 /// 后台 `get_items` 的结果。
 pub(crate) struct PageOutcome {
@@ -67,52 +83,59 @@ impl PaletteApp {
                                 "[dd-gui] get_items 成功：page={page_id} items={}",
                                 items.len()
                             );
-                            // 文件搜索自动进页：落地时回填搜索框查询文本（否则被清空）
-                            let drill_armed = self.file_drill_armed;
-                            let drill_q = self.file_drill.clone();
-                            let page = self.stack.current_mut();
-                            page.is_loading = false;
-                            page.empty = if items.is_empty() && !is_loading {
-                                Some(crate::text::t(lang, "page.empty").to_string())
+                            // 过期判定（真机 2026-09-14：文件搜索输入后 ~1s 误显
+                            // 「该页暂无内容」）：落地结果对应的查询与页内当前 query
+                            // 不一致 → 旧查询结果，不具权威性。旧查询 0 命中若照常
+                            // 落地会把空态画上屏；此处丢弃、保持 in-flight 语义
+                            // （列表空 → 骨架 / 非空 → 保留旧结果），并重武装去抖
+                            // 按最新 query 补拉。非过期结果走下方正常落地。
+                            let landing_query = self.stack.current().list.query().to_owned();
+                            if landing_is_stale(&landing_query, req_search.as_deref()) {
+                                eprintln!(
+                                    "[dd-gui] get_items 结果过期：req={req_search:?} cur={landing_query:?} → 不落地 + 重武装补拉"
+                                );
+                                self.stack.current_mut().begin_refetch(Instant::now());
+                                self.rearm_page_query_debounce();
                             } else {
-                                None
-                            };
-                            page.is_loading = is_loading;
-                            // v3.3：落地**保留**页内 query（旧实现整表重建会把搜索框清空，
-                            // 用户在 loading 期间打的字全部丢失）；items 重建但 query 保留。
-                            let prev_query = page.list.query().to_owned();
-                            page.list = PanelState::new(items);
-                            page.list.set_passthrough(); // 嵌套页：扩展已过滤/排序，宿主不再二次过滤
-                            if !prev_query.is_empty() {
-                                page.list.set_query(prev_query.clone());
-                            }
-                            // 备用：普通嵌套页（非文件搜索 drill）落地后 query 已由
-                            // draw_searchbar 写回列表（panel.rs），这里无需额外处理。
-                            if drill_armed {
-                                self.file_drill_armed = false;
-                                if page_id == crate::app::FILE_SEARCH_PAGE_ID {
-                                    if let Some(root_q) = &drill_q {
-                                        if let Some(rest) =
-                                            root_q.strip_prefix(crate::app::FILE_SEARCH_PREFIX)
-                                        {
-                                            let q = rest.trim_start().to_string();
-                                            if !q.is_empty() {
-                                                page.list.set_query(q);
+                                // 文件搜索自动进页：落地时回填搜索框查询文本（否则被清空）
+                                let drill_armed = self.file_drill_armed;
+                                let drill_q = self.file_drill.clone();
+                                let page = self.stack.current_mut();
+                                page.clear_refetch(); // 落地：撤销延迟骨架标记
+                                page.is_loading = false;
+                                page.empty = if items.is_empty() && !is_loading {
+                                    Some(crate::text::t(lang, "page.empty").to_string())
+                                } else {
+                                    None
+                                };
+                                page.is_loading = is_loading;
+                                // v3.3：落地**保留**页内 query（旧实现整表重建会把搜索框清空，
+                                // 用户在 loading 期间打的字全部丢失）；items 重建但 query 保留。
+                                let prev_query = page.list.query().to_owned();
+                                page.list = PanelState::new(items);
+                                page.list.set_passthrough(); // 嵌套页：扩展已过滤/排序，宿主不再二次过滤
+                                if !prev_query.is_empty() {
+                                    page.list.set_query(prev_query.clone());
+                                }
+                                // 备用：普通嵌套页（非文件搜索 drill）落地后 query 已由
+                                // draw_searchbar 写回列表（panel.rs），这里无需额外处理。
+                                if drill_armed {
+                                    self.file_drill_armed = false;
+                                    if page_id == crate::app::FILE_SEARCH_PAGE_ID {
+                                        if let Some(root_q) = &drill_q {
+                                            if let Some(rest) =
+                                                root_q.strip_prefix(crate::app::FILE_SEARCH_PREFIX)
+                                            {
+                                                let q = rest.trim_start().to_string();
+                                                if !q.is_empty() {
+                                                    page.list.set_query(q);
+                                                }
                                             }
                                         }
                                     }
                                 }
-                            }
-                            // v3.3 过期补偿：请求期间用户又输入了 → 本次结果是旧查询的，重新武装去抖
-                            //（200ms 静默后按最新 query 补拉）。页内框为空属合法初始态
-                            //（GoToPage 等无查询进页路径），不补拉以保留扩展的初始过滤
-                            // 结果；带查询进页（如点「文件搜索」）时 open_page 已把根查询
-                            // 回填页内框，落地后 cur_query == req_search 同样不补拉。
-                            // set_query 幂等 + 去抖刷新式调度，不构成循环；直到
-                            // 「query 稳定 ∧ 结果与 query 对应」才收敛。
-                            let cur_query = self.stack.current().list.query().to_owned();
-                            if !cur_query.is_empty() && Some(cur_query) != req_search {
-                                self.schedule_page_query_debounce();
+                                // 过期补偿已前移至落地前的 `landing_is_stale` 分支；
+                                // 此处为非过期结果，正常落地（query 保留 + drill 回填见上）。
                             }
                         }
                         Err(e) => {
@@ -138,7 +161,8 @@ impl PaletteApp {
                             }
                             eprintln!("[dd-gui] get_items 失败：page={page_id}：{e}");
                             let page = self.stack.current_mut();
-                            // v3.3：失败落地同样保留页内 query（不吞掉 loading 期间输入）
+                            page.clear_refetch(); // 落地（失败）：撤销延迟骨架标记
+                                                  // v3.3：失败落地同样保留页内 query（不吞掉 loading 期间输入）
                             let prev_query = page.list.query().to_owned();
                             page.is_loading = false;
                             page.empty =
@@ -147,6 +171,13 @@ impl PaletteApp {
                             page.list.set_passthrough();
                             if !prev_query.is_empty() {
                                 page.list.set_query(prev_query);
+                            }
+                            // 失败落地同款过期补偿：请求期间用户又输入了 →
+                            // 重武装去抖按最新 query 补拉（与 Ok 分支对称；
+                            // 否则补拉期间输入的字符会被失败态吞掉不再触发）。
+                            let cur_query = self.stack.current().list.query().to_owned();
+                            if !cur_query.is_empty() && Some(cur_query) != req_search {
+                                self.schedule_page_query_debounce();
                             }
                         }
                     }
@@ -225,9 +256,14 @@ impl PaletteApp {
         command_id: Option<String>,
     ) {
         let lang = self.lang_effective; // 预捕获：current_mut() 借用期内不能调 self.tr
+                                        // 补拉状态预备（真机 2026-09-14 两轮反馈）：凡发起 get_items 先做预备
+                                        // ——有旧结果 → 保留展示（stale-while-revalidate）；列表为空 → **延迟**切
+                                        // 骨架（快速补拉不闪骨架，慢补拉才显示）；不清空态文案（交由落地统一替换）。
+        self.stack.current_mut().begin_refetch(Instant::now());
         if self.page_rx.is_some() || self.inflight.contains(ext_id) {
             eprintln!("[dd-gui] get_items 失败：ext={ext_id} 上一请求仍在处理");
             let page = self.stack.current_mut();
+            page.clear_refetch(); // 未真正发起 → 撤销延迟骨架（否则 250ms 后误显示）
             page.is_loading = false;
             page.empty = Some(crate::text::t(lang, "toast.ext_busy").to_string());
             return;
@@ -235,6 +271,7 @@ impl PaletteApp {
         if self.is_crash_tripped(ext_id) {
             eprintln!("[dd-gui] get_items 拒绝：ext={ext_id} 暂时不可用（连续崩溃熔断）");
             let page = self.stack.current_mut();
+            page.clear_refetch(); // 未真正发起 → 撤销延迟骨架
             page.is_loading = false;
             page.empty =
                 Some(crate::text::t(lang, "page.ext_unavailable_restart").replace("{id}", ext_id));
@@ -250,6 +287,7 @@ impl PaletteApp {
             self.fetch_page_reheat(&ext, page_id, search, command_id);
         } else {
             let page = self.stack.current_mut();
+            page.clear_refetch(); // 未真正发起 → 撤销延迟骨架
             page.is_loading = false;
             page.empty = Some(crate::text::t(lang, "page.ext_missing").to_string());
         }
@@ -261,6 +299,7 @@ impl PaletteApp {
         let Some(idx) = self.processes.iter().position(|(id, _)| id == ext_id) else {
             eprintln!("[dd-gui] get_items 失败：ext={ext_id} 进程不可用（可能 in-flight）");
             let page = self.stack.current_mut();
+            page.clear_refetch(); // 未真正发起 → 撤销延迟骨架
             page.is_loading = false;
             page.empty = Some(crate::text::t(lang, "toast.ext_busy").to_string());
             return;
@@ -340,5 +379,38 @@ impl PaletteApp {
             });
         });
         self.page_rx = Some(rx);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::landing_is_stale;
+
+    /// 请求期间用户又输入（当前 query ≠ 请求查询）→ 过期，不得落地。
+    /// 真机 2026-09-14：文件搜索输入后 ~1s 误显「该页暂无内容」即此路径。
+    #[test]
+    fn stale_when_current_query_differs_from_request() {
+        assert!(landing_is_stale("报告", Some("报")));
+        assert!(landing_is_stale("abc", Some("ab")));
+    }
+
+    /// 请求查询与页内当前一致 → 非过期，正常落地。
+    #[test]
+    fn not_stale_when_queries_match() {
+        assert!(!landing_is_stale("报告", Some("报告")));
+    }
+
+    /// 页内框为空属合法初始态（GoToPage 无查询进页）→ 非过期，
+    /// 保留扩展初始过滤结果（既有语义不回退）。
+    #[test]
+    fn not_stale_when_current_query_empty() {
+        assert!(!landing_is_stale("", Some("anything")));
+        assert!(!landing_is_stale("", None));
+    }
+
+    /// 请求无查询（search=None）但页内已有输入 → 过期（用户进页后立即输入）。
+    #[test]
+    fn stale_when_request_had_no_search_but_page_has_query() {
+        assert!(landing_is_stale("报告", None));
     }
 }

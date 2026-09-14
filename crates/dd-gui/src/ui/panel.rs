@@ -132,12 +132,18 @@ impl PaletteApp {
                 } else {
                     crate::text::t(self.lang_effective, "ph.root").to_string()
                 };
+                // 补拉在飞指示（真机 2026-09-14）：当前嵌套页有 get_items 在途
+                // → 搜索框右端小 spinner。有旧结果 / 延迟骨架窗口内都不闪骨架
+                // （见 PageState::begin_refetch），spinner 是这段时间唯一的「正在搜索」信号。
+                let cur_ext = self.stack.current().ext_id.clone();
+                let page_busy =
+                    is_nested && !cur_ext.is_empty() && self.inflight.contains(&cur_ext);
                 let search_ui = &mut ui.new_child(
                     egui::UiBuilder::new()
                         .max_rect(search_rect)
                         .layout(egui::Layout::left_to_right(egui::Align::Center)),
                 );
-                let resp = draw_searchbar(search_ui, &mut query, &placeholder);
+                let resp = draw_searchbar(search_ui, &mut query, &placeholder, page_busy);
                 let query_changed = query != prev_query; // v3.3：渲染后变化检测（set_query 会 move query）
                 {
                     let page = self.stack.current_mut();
@@ -364,7 +370,10 @@ impl PaletteApp {
         let (is_loading, empty, selected, items, query_empty) = {
             let page = self.stack.current();
             (
-                page.is_loading,
+                // 首拉 Loading（`open_page` 置位）或**延迟骨架到期**——快速补拉
+                // （Everything 温热 ~50ms）在延迟窗口内落地则全程无骨架闪烁；
+                // 慢补拉到期才显示骨架（真机 2026-09-14：输入后删一个字「页面闪一下」）。
+                page.is_loading || page.skeleton_due(std::time::Instant::now()),
                 page.empty.clone(),
                 page.list.selected_index(),
                 page.list
@@ -374,6 +383,13 @@ impl PaletteApp {
                 page.list.query().is_empty(),
             )
         };
+        // 延迟骨架未到期 → 预约到点重绘（无输入事件时也能按时切骨架）。
+        if let Some(deadline) = self.stack.current().skeleton_after {
+            let now = std::time::Instant::now();
+            if now < deadline {
+                ui.ctx().request_repaint_after(deadline - now);
+            }
+        }
 
         if is_loading {
             // C 组批次 C2（§07.2）：Spinner + 3 条骨架行替换纯文本；
@@ -568,6 +584,7 @@ pub(crate) fn draw_searchbar(
     ui: &mut egui::Ui,
     query: &mut String,
     placeholder: &str,
+    busy: bool,
 ) -> egui::Response {
     let p = theme::Palette::of(ui.visuals().dark_mode);
 
@@ -613,15 +630,35 @@ pub(crate) fn draw_searchbar(
     );
     content_ui.add_space(8.0);
 
-    // 5) TextEdit：在 child_ui（限定 40px 高度）里扩展 INFINITY 宽度撑满，
-    //    高度由 font(14px, body1) 自定 ~20px，居中显示。
+    // 5) TextEdit：在 child_ui（限定 40px 高度）里扩展宽度撑满，高度由
+    //    font(14px, body1) 自定 ~20px，居中显示。补拉在飞时右侧预留 16px
+    //    给 spinner，文本不再占满整行（避免与 spinner 重叠）。
     let resp = content_ui.add(
         egui::TextEdit::singleline(query)
             .frame(egui::Frame::new()) // 空 Frame：无底无边框，外观由外层 Frame 承担
             .hint_text(egui::RichText::new(placeholder).color(p.text3))
-            .desired_width(f32::INFINITY)
+            .desired_width(if busy {
+                (content_ui.available_width() - 16.0).max(40.0)
+            } else {
+                f32::INFINITY
+            })
             .font(egui::FontId::proportional(14.0)),
     );
+
+    // 5.2) 补拉在飞 spinner（搜索框右端，Fluent 进度环语义）：仅在 busy 时
+    // 绘制；egui Spinner 自带按需重绘（动画期 ~30fps，空闲不耗帧）。
+    if busy {
+        let sp_rect = egui::Rect::from_min_max(
+            egui::pos2(rect.right() - 12.0 - 16.0, rect.top()),
+            egui::pos2(rect.right() - 12.0, rect.bottom()),
+        );
+        let mut sp_ui = ui.new_child(
+            egui::UiBuilder::new()
+                .max_rect(sp_rect)
+                .layout(egui::Layout::right_to_left(egui::Align::Center)),
+        );
+        sp_ui.add(egui::Spinner::new().size(14.0).color(p.accent_stroke));
+    }
 
     // 5.5) 中文输入法候选框位置修正：手动报告 IME 光标区域。
     // egui TextEdit 内部也会设置 ime，但实测 Microsoft Pinyin 候选窗会漂到屏幕左上角；
