@@ -32,7 +32,9 @@ use std::panic::AssertUnwindSafe;
 
 use dd_ext::{serve_line, ExtensionSpec};
 use dd_host::manifest::{current_platform, HOST_CAPABILITIES};
-use dd_host::process::{route_messages, CloseError, ProtocolError};
+use dd_host::process::{
+    route_messages, CloseError, ProtocolError, DIAGNOSTIC_BUS_CAP,
+};
 use dd_protocol::framing::DEFAULT_MAX_MESSAGE_BYTES;
 use dd_protocol::messages::{
     error_codes, CommandListResult, GetCommandParams, GetCommandResult, GetItemsParams,
@@ -47,10 +49,13 @@ pub struct InProcessExtension {
     spec: ExtensionSpec,
     next_id: u64,
     /// `items_changed` / `initialized` 等通知（§7.1 / §5.2）。
+    /// **事件语义**：由 [`Self::poll_notifications`] 消费式取走（drain），
+    /// 非账本——若只增不清，既无界增长又会被每帧轮询重扫重触发。
     pub notifications: Vec<RawMessage>,
     /// 扩展反向发出的 `host/*` 请求（§7.4），由 UI 层 `drain_host_requests` 取走执行。
     pub host_requests: Vec<RawMessage>,
-    /// §3.3：未匹配到 in-flight 请求的响应，记日志用。
+    /// §3.3：未匹配到 in-flight 请求的响应，记日志用（无消费方，有界截断保留最近
+    /// [`DIAGNOSTIC_BUS_CAP`] 条——与子进程路径同口径）。
     pub unmatched: Vec<RawMessage>,
 }
 
@@ -168,11 +173,13 @@ impl InProcessExtension {
         Ok(())
     }
 
-    /// §7.1 通知轮询（非阻塞）：返回本次 `items_changed` 的 `page_id`
-    /// （`None` = 顶层命令变了），语义与 `ExtensionProcess::poll_notifications` 一致。
+    /// §7.1 通知轮询（非阻塞）：**取走并清空**积压通知，返回其中 `items_changed`
+    /// 的 `page_id`（`None` = 顶层命令变了），语义与 `ExtensionProcess::poll_notifications`
+    /// 一致（事件只报告一次，不重复触发）。
     pub fn poll_notifications(&mut self) -> Vec<Option<String>> {
+        let notifications = std::mem::take(&mut self.notifications);
         let mut changed = Vec::new();
-        for msg in &self.notifications {
+        for msg in notifications {
             if msg.method.as_deref() == Some("items_changed") {
                 let page_id = msg
                     .params
@@ -232,6 +239,11 @@ impl InProcessExtension {
         self.host_requests.extend(routed.host_requests);
         self.notifications.extend(routed.notifications);
         self.unmatched.extend(routed.unmatched);
+        // 诊断总线有界化：unmatched 无消费方，超容截断保留最近（子进程路径同口径）
+        if self.unmatched.len() > DIAGNOSTIC_BUS_CAP {
+            self.unmatched
+                .drain(..self.unmatched.len() - DIAGNOSTIC_BUS_CAP);
+        }
 
         match routed.response {
             Some(Ok(value)) => Ok(value),
@@ -414,6 +426,45 @@ mod tests {
         assert_eq!(result, CommandResult::KeepOpen);
         assert_eq!(ext.poll_notifications(), vec![Some("fix.sub".to_string())]);
         assert!(ext.drain_host_requests().is_empty());
+    }
+
+    /// 通知轮询为**事件语义**（消费式取走）：同一条 `items_changed` 只在第一次
+    /// poll 报告，后续 poll 为空——若不 drain，每帧轮询会对同一条通知重复触发
+    /// 刷新（旧实现的隐患：通知 Vec 只增不清 + 每帧全量重扫）。
+    #[test]
+    fn poll_notifications_drains_so_events_fire_once() {
+        let mut ext = InProcessExtension::new(fixture_spec());
+        ext.initialize("1.0", "0.1.1").unwrap();
+        ext.invoke(&InvokeParams {
+            id: "fix.notify".into(),
+            sender: Sender::TopLevel,
+            context: None,
+        })
+        .unwrap();
+        assert_eq!(ext.poll_notifications(), vec![Some("fix.sub".to_string())]);
+        assert!(ext.poll_notifications().is_empty(), "取走后不得重复报告");
+        assert!(ext.notifications.is_empty(), "通知总线应已清空");
+    }
+
+    /// unmatched 诊断总线有界：超容后保留最近 [`DIAGNOSTIC_BUS_CAP`] 条
+    /// （截断发生在每次 `call` 的路由收尾）。
+    #[test]
+    fn unmatched_is_capped_to_diagnostic_bus_cap() {
+        let mut ext = InProcessExtension::new(fixture_spec());
+        ext.initialize("1.0", "0.1.1").unwrap();
+        for i in 0..(DIAGNOSTIC_BUS_CAP as u64 + 10) {
+            ext.unmatched.push(RawMessage {
+                jsonrpc: "1.0".into(), // 非 2.0 → classify 未匹配
+                id: Some(i),
+                method: None,
+                params: None,
+                result: None,
+                error: None,
+            });
+        }
+        // 任一次正常 call 的路由收尾都会执行截断
+        ext.top_level_commands().unwrap();
+        assert!(ext.unmatched.len() <= DIAGNOSTIC_BUS_CAP);
     }
 
     #[test]

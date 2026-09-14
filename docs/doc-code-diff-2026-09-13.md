@@ -1,7 +1,7 @@
 # 文档描述 ↔ 代码实现 差异清单（2026-09-13）
 
-> **状态**：复核通过，进入修复阶段 ｜ **版本**：v1.1 ｜ **最后更新**：2026-09-13
-> **阶段说明**：v1.0 为纯只读核对记录。v1.1 经三路独立复核（P 系 / M+E 系 / I+D+R+S 系逐条验真），修正了 9 处清单自身的不实或偏差条目（见 §1.2），并开始按"文档对齐代码"落实修复。
+> **状态**：复核通过，进入修复阶段 ｜ **版本**：v1.2 ｜ **最后更新**：2026-09-14
+> **阶段说明**：v1.0 为纯只读核对记录。v1.1 经三路独立复核（P 系 / M+E 系 / I+D+R+S 系逐条验真），修正了 9 处清单自身的不实或偏差条目（见 §1.2），并开始按"文档对齐代码"落实修复。v1.2 追加 §10，记录 09-13 复核之后由**代码侧改动**（而非文档对齐）消除的差异（P-06）。
 
 ---
 
@@ -90,7 +90,7 @@
 | P-03 | 数据结构 | `protocol.md:143,151` | `id` 限非负整数；类型非法 → `-32600` | `messages.rs:43`：`id: Option<u64>`；负/字符串 id 反序列化失败 → `MalformedEnvelope` 冒泡 | 不回 `-32600`；`id=0` 合法、上界 `u64::MAX` |
 | P-04 | 边界条件 | `protocol.md:158` | 收到数组批量请求 → 回 `-32600` | host：反序列化失败冒泡（不回）；ext `serve_line`：回 **`-32700`** | 两侧都不回 `-32600` |
 | P-05 | 悬空 | `protocol.md:684,231` | 扩展可在 `result.timeouts` 建议各阶段更宽超时，宿主可覆盖 | `messages.rs:111`：`Timeouts` 仅 `get_items_ms`；宿主**从不读取** `result.timeouts`，无覆盖逻辑 | 文档能力无实现 |
-| P-06 | 业务逻辑 | `protocol.md:718` | 通知轮询返回"本次收到"的 `items_changed` | `ext_inprocess.rs:173-186`：`InProcessExtension::poll_notifications` 遍历全部通知且**从不清空**，每次轮询重复上报同一 `page_id`（子进程路径为一次性消费） | 不一致；可能反复重置 100 ms 合并窗口 |
+| P-06 | 业务逻辑 | `protocol.md` §7.1（约 :419-425） | 通知轮询返回"本次收到"的 `items_changed` | `ext_inprocess.rs:173-186`：`InProcessExtension::poll_notifications` 遍历全部通知且**从不清空**，每次轮询重复上报同一 `page_id`（子进程路径为一次性消费） | ✅ 已解决（2026-09-14，见 §10；原判「不一致」，可能反复重置 100 ms 合并窗口） |
 | P-07 | 业务逻辑 | `protocol.md:253` | §5.3 规则 3：扩展不支持宿主主版本时回 `-32004` + `data.supported_versions` | `dd-ext/src/lib.rs:177-181`：`initialize` **完全不读** `params.protocol_version`，恒回 `"1.0"`；`VERSION_MISMATCH` 无任何产出点 | 规则 3 无实现 |
 | P-08 | 业务逻辑 | `protocol.md:277` | §6.1：仅当 `provider.frozen == true` 才落盘缓存 | `crates/dd-gui/src/aggregator.rs:394,411-435`：落桩判定用**清单** `ext.manifest.frozen`；握手回的 `init.provider.frozen` **从未被读取** | 缓存门禁取错来源 |
 | P-09 | 参数 | `protocol.md:353,557` | §8.4：`list_item` = 从嵌套列表页某一项触发 | `dd-gui/src/result.rs:107-118`、`app/invoke.rs:100-108`：`confirm_selected` 对所有 Invoke 项一律用 `TopLevel`；`ListItem` **仅出现在单测**，生产路径无产出 | 不一致 |
@@ -209,7 +209,6 @@
 | S-02 | `search.rs:548-552` | 以 `-`/`/` 开头的查询会被前置 `^` 转义 |
 | S-15 | `search.rs:556` | 查询中的 `"` 不转义、查询长度无上限 |
 | S-17 | `search.rs:230,245` | `decode_output` / `decode_with_codepage` 两层函数的分工 |
-| P-06 | `ext_inprocess.rs:173-186` | in-process 通知不清空（与子进程路径语义不同） |
 
 ---
 
@@ -255,4 +254,20 @@ cargo +stable-x86_64-pc-windows-gnu test -p dd-protocol
 
 ---
 
-> **本阶段约束复述**：v1.0 为纯只读核对记录；v1.1 完成三路复核验真（修正清单自身 9 处）并落实上述修复，**已登记进 [`INDEX.md`](./INDEX.md)**（§3.E 清单与 §5 未闭环项）。
+## 10. 后续状态变更（2026-09-14）
+
+v1.2：记录 09-13 复核之后、由**代码侧改动**（而非「文档对齐代码」）消除的差异。
+
+| ID | 变化 | 依据 |
+|---|---|---|
+| P-06 | ✅ **已解决** | in-process 适配器 `poll_notifications` 改为**消费式取走**（`std::mem::take`，取走即清空）——同一 `items_changed` 只上报一次，与子进程路径的一次性消费语义一致；`unmatched` 同时改为有界（`DIAGNOSTIC_BUS_CAP = 64`，与子进程路径同口径）。[`protocol.md`](./protocol.md) §7.1「实现现状」注记同步更正。 |
+
+**连带变更**：本文 §3 的 P-06 行标注 ✅；§6 的 P-06 行移除（差异已消失，不再属「文档侧缺口」）。
+
+**备注（数值）**：§7 抽样条目提及的「`dist/` 字节数 8,601,088 B」为 2026-09-12 快照，已被 2026-09-14 实测值 **8,623,616 B** 取代（见 [`optimization-plan.md`](./optimization-plan.md) §2.1）。`implementation.md` 同值处标注为「2026-09-12 实测」，属历史记录、本批不改。
+
+**生效前提**：上述代码改动位于**工作副本**，随对应代码批提交后生效。
+
+---
+
+> **本阶段约束复述**：v1.0 为纯只读核对记录；v1.1 完成三路复核验真（修正清单自身 9 处）并落实上述修复，**已登记进 [`INDEX.md`](./INDEX.md)**（§3.E 清单与 §5 未闭环项）；v1.2 追加 §10，记录代码侧消除的差异（P-06）与过期数值的取代。

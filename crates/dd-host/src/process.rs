@@ -48,6 +48,19 @@ const STDERR_CAPTURE_LIMIT: usize = 64 * 1024;
 /// 而根因（解释器不在 PATH、Python traceback 末行）几乎总在最后一行。
 const STDERR_SUMMARY_CHARS: usize = 200;
 
+/// 诊断总线容量：`ExtensionProcess` 的 `notifications` / `unmatched` 只入不清
+/// （无消费方，仅诊断留档），长会话下会无界增长——超容即丢弃最旧一条，恒保留
+/// 最近 [`DIAGNOSTIC_BUS_CAP`] 条。in-process 适配器（dd-gui `ext_inprocess`）同口径。
+pub const DIAGNOSTIC_BUS_CAP: usize = 64;
+
+/// 有界入队：超容丢最旧、保序保最近（诊断用途，n ≤ cap，O(cap) 可忽略）。
+fn push_capped(buf: &mut Vec<RawMessage>, msg: RawMessage) {
+    if buf.len() >= DIAGNOSTIC_BUS_CAP {
+        buf.remove(0);
+    }
+    buf.push(msg);
+}
+
 /// 协议层错误。
 #[derive(Debug)]
 pub enum ProtocolError {
@@ -491,7 +504,8 @@ impl ExtensionProcess {
     /// 供 UI 层取走执行真实副作用（Toast / 剪贴板 / 开 URL）。此前这类请求只
     /// 在 [`Self::call`] 等待期间应答，空闲到达会被静默丢弃导致扩展等待超时。
     ///
-    /// 所有通知仍会记入 [`Self::notifications`]，供诊断与后续处理。
+    /// 所有通知仍会记入 [`Self::notifications`]（有界：恒保留最近
+    /// [`DIAGNOSTIC_BUS_CAP`] 条），供诊断与后续处理。
     pub fn poll_notifications(&mut self) -> Vec<Option<String>> {
         let mut changed = Vec::new();
         loop {
@@ -520,7 +534,7 @@ impl ExtensionProcess {
                                     .and_then(|p| p.page_id);
                                 changed.push(page_id);
                             }
-                            self.notifications.push(msg);
+                            push_capped(&mut self.notifications, msg);
                         }
                     }
                 }
@@ -596,7 +610,7 @@ impl ExtensionProcess {
         let msg: RawMessage = serde_json::from_str(line)?;
         if msg.jsonrpc != JSONRPC_VERSION {
             // §3.2：缺 jsonrpc 或非 "2.0" → 非法信封，按 §9.3 不致命，忽略
-            self.unmatched.push(msg);
+            push_capped(&mut self.unmatched, msg);
             return Ok(None);
         }
         match classify(&msg) {
@@ -605,13 +619,13 @@ impl ExtensionProcess {
                 Ok(None)
             }
             MessageKind::Notification => {
-                self.notifications.push(msg);
+                push_capped(&mut self.notifications, msg);
                 Ok(None)
             }
             MessageKind::Response(rid) => {
                 if rid != waiting_id {
                     // §3.3：未匹配到 in-flight 请求的响应，记日志并忽略
-                    self.unmatched.push(msg);
+                    push_capped(&mut self.unmatched, msg);
                     return Ok(None);
                 }
                 match msg.error {
@@ -620,7 +634,7 @@ impl ExtensionProcess {
                 }
             }
             MessageKind::Unknown => {
-                self.unmatched.push(msg);
+                push_capped(&mut self.unmatched, msg);
                 Ok(None)
             }
         }

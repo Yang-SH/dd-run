@@ -207,8 +207,14 @@ impl PanelState {
 
     /// 设置当前查询的兜底展示集（宿主在拉取模板并渲染后调用）。
     /// 空查询时忽略（兜底仅在查询非空场景参与显示）。
+    ///
+    /// 幂等早退：`sync_fallback` **每帧**调用本方法，同集重复注入（查询未变）
+    /// 直接跳过——避免每帧重建 Vec + 重夹紧选中（渲染项本身已按查询渲染好）。
     pub fn set_fallback(&mut self, items: Vec<PanelItem>) {
         if !self.query.is_empty() {
+            if self.fallback == items {
+                return;
+            }
             self.fallback = items;
             self.clamp_selection();
         }
@@ -348,7 +354,8 @@ impl PanelState {
     /// 性能要点：仅在本方法内跑匹配（查询变化时 / `reset` 时各一次），
     /// `filtered()` 等每帧多次的只读路径只走索引表（A3 埋点见计时日志）。
     fn recompute_visible(&mut self) {
-        let start = std::time::Instant::now(); // A3 埋点：一次重算 = 一次按键的过滤成本
+        #[cfg(debug_assertions)]
+        let start = std::time::Instant::now(); // A3 埋点（仅 debug 构建）：一次重算 = 一次按键的过滤成本
         let n = self.items.len();
         if self.passthrough {
             // 嵌套页：扩展 get_items 已按查询过滤/排序完毕，宿主不再做二次模糊过滤，

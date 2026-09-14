@@ -70,13 +70,11 @@ fn register_path(path: &str) -> u64 {
     let id = PATH_NEXT.fetch_add(1, Ordering::Relaxed);
     let mut idx = PATH_INDEX.lock().unwrap();
     if idx.len() >= PATH_INDEX_CAP {
-        // 淘汰最旧的若干项，使容量回落到 PATH_INDEX_CAP - 1（为本次 insert 留位）
-        let mut keys: Vec<u64> = idx.keys().copied().collect();
-        keys.sort_unstable();
-        let evict = keys.len() - PATH_INDEX_CAP + 1;
-        for k in keys.into_iter().take(evict) {
-            idx.remove(&k);
-        }
+        // 淘汰最旧的若干项，使容量回落到 PATH_INDEX_CAP - 1（为本次 insert 留位）。
+        // id 单调递增 → 直接按阈值清除旧 id 即可，无需收集全键排序（O(n log n) → O(n)）；
+        // 阈值保证最近注册的 CAP-1 个 id 恒在保留范围内，「注册后立即 lookup」仍恒命中。
+        let evict_below = id.saturating_sub(PATH_INDEX_CAP as u64 - 1);
+        idx.retain(|&k, _| k >= evict_below);
     }
     idx.insert(id, path.to_string());
     id
@@ -568,8 +566,10 @@ fn norm(skim: i64) -> f64 {
     }
 }
 
-fn score(entry: &FileEntry, query: &str) -> f64 {
-    let matcher = SkimMatcherV2::default();
+/// 单条文件评分。`matcher` 与 `recency_floor` 由调用方按**每次查询**构造一次传入
+/// ——此前本函数每条结果都 `SkimMatcherV2::default()` + `Utc::now()`（前者带
+/// 内部缓存初始化、后者一次系统调用，均为逐条重复开销；一次查询 N 条 = N 次）。
+fn score(entry: &FileEntry, query: &str, matcher: &SkimMatcherV2, recency_floor: i64) -> f64 {
     let name_score = matcher
         .fuzzy_match(&entry.name, query)
         .map(norm)
@@ -578,7 +578,7 @@ fn score(entry: &FileEntry, query: &str) -> f64 {
         .fuzzy_match(&entry.full_path(), query)
         .map(|s| norm(s) * 0.3)
         .unwrap_or(0.0);
-    let recency = if entry.modified > now_7days_unix() {
+    let recency = if entry.modified > recency_floor {
         0.1
     } else {
         0.0
@@ -928,8 +928,13 @@ fn get_file_items_with(params: &GetItemsParams, available: bool) -> GetItemsResu
     }
     match search(query, RESULT_LIMIT) {
         Ok(entries) => {
-            let mut scored: Vec<(f64, FileEntry)> =
-                entries.into_iter().map(|e| (score(&e, query), e)).collect();
+            // matcher / 近期阈值每查询构造一次（原逐条构造，见 score 文档注释）
+            let matcher = SkimMatcherV2::default();
+            let recency_floor = now_7days_unix();
+            let mut scored: Vec<(f64, FileEntry)> = entries
+                .into_iter()
+                .map(|e| (score(&e, query, &matcher, recency_floor), e))
+                .collect();
             scored.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
             let items: Vec<CommandItem> = scored
                 .into_iter()
@@ -1227,8 +1232,10 @@ mod tests {
             modified_raw: String::new(),
             is_dir: false,
         };
-        let s_name = score(&name_hit, q);
-        let s_path = score(&path_only, q);
+        let matcher = SkimMatcherV2::default();
+        let floor = now_7days_unix();
+        let s_name = score(&name_hit, q, &matcher, floor);
+        let s_path = score(&path_only, q, &matcher, floor);
         assert!((0.0..=1.0).contains(&s_name));
         assert!((0.0..=1.0).contains(&s_path));
         assert!(s_name > s_path, "文件名命中应高于仅路径命中");
@@ -1252,7 +1259,9 @@ mod tests {
             modified_raw: String::new(),
             is_dir: false,
         };
-        assert!(score(&recent, "x") > score(&old, "x"));
+        let matcher = SkimMatcherV2::default();
+        let floor = now_7days_unix();
+        assert!(score(&recent, "x", &matcher, floor) > score(&old, "x", &matcher, floor));
     }
 
     #[test]
