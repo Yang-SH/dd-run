@@ -1,6 +1,7 @@
 # dd-run 项目可优化方案（总览）
 
-> **状态**：规划中 ｜ **版本**：v1.1 ｜ **最后更新**：2026-09-14
+> **状态**：规划中 ｜ **版本**：v1.2 ｜ **最后更新**：2026-09-14
+> **进度**：O2 方法名常量层 ✅ 已落地（2026-09-14，见 §2.3 落地记录）；其余项状态见 §1 状态列。
 > **关联**：[implementation.md](./implementation.md) · [INDEX.md](./INDEX.md) · [optimization-plan-review-2026-09-14.md](./optimization-plan-review-2026-09-14.md) · [doc-audit-2026-09-13.md](./doc-audit-2026-09-13.md) · [doc-code-diff-2026-09-13.md](./doc-code-diff-2026-09-13.md) · [memory-optimization-plan.md](./memory-optimization-plan.md)
 
 ---
@@ -20,7 +21,7 @@
 | 编号 | 维度 | 机会 | 预期收益 | 改动量 | 风险 | 优先级 | 状态 |
 |---|---|---|---|---|---|---|---|
 | O1 | 协议错误码/校验接线 | 消息超上限、批处理、`jsonrpc≠2.0`、`result/error` 互斥等 `-32600` 处置未实现；`-32002` 保留码无产出 | 协议与文档一致、流错位防护 | 中（~150 行 + 单测） | 低（加法为主，协议冻结需走版本协商） | 🔴 高 | 已知（INDEX §5，P-01） |
-| O2 | 方法名常量层 | 协议方法全用字符串字面量分发，无单一来源 | 消除拼写漂移、协议演进单一来源 | 小（~60 行 + 全仓替换） | 极低 | 🔴 高 | 已知（INDEX §5，P-18） |
+| O2 | 方法名常量层 | 协议方法全用字符串字面量分发，无单一来源 | 消除拼写漂移、协议演进单一来源 | 小（~60 行 + 全仓替换） | 极低 | 🔴 高 | ✅ **已落地**（2026-09-14，§2.3） |
 | O3 | 依赖治理/安全 | 未接入 `cargo audit`/`udeps`/`outdated` | 漏洞与死依赖可观测 | 小（CI + 本地） | 低 | 🟠 中 | 新发现 |
 | O4 | 可观测性/日志 | 无 `log`/`tracing` 框架，散落 `eprintln!` | 真机排障与复现效率 | 中（多模块） | 低（stdout 协议纯净已天然满足） | 🟠 中 | 新发现 |
 | O5 | 体积再压缩 | 评估移除 `eframe default_fonts`；`panic=abort` 证伪 | 边际体积下降 | 小→中 | 中（tofu 风险） | 🟡 低 | 新发现（含证伪） |
@@ -66,19 +67,46 @@
 
 **验收**：补协议一致性测试 + 两侧单测（超限帧、批处理、非法信封）。
 
-### 2.3 代码可维护性：方法名常量层（O2，P-18）
+### 2.3 代码可维护性：方法名常量层（O2，P-18）— ✅ 已落地
 
-**现状取证**：协议方法名以裸字符串字面量出现在分发与调用各处——
+**结论（2026-09-14）**：协议 §1.3 的 12 个方法名已收敛为 `dd-protocol::methods` 单一来源，宿主/扩展/CLI 的**生产代码零裸方法字面量**，并由一致性测试锁定常量 ↔ 文档。详见 §2.3.1。
+
+**改动前现状（2026-09-14 取证，作为决策留痕）**：协议方法名以裸字符串字面量出现在分发与调用各处——
 - 扩展侧分发（7 臂）：`dd-ext/src/lib.rs` 约 :177（`initialize`）/约 :182（`top_level_commands`）/约 :189（`fallback_commands`）/约 :200（`get_command`）/约 :230（`invoke`）/约 :272（`get_items`）/约 :312（`close`）；
 - in-process 调用（7 处）：`dd-gui/src/ext_inprocess.rs` 约 :99/:118/:125/:133/:150/:157/:167；
 - 子进程客户端（6 处）：`dd-host/src/process.rs` 约 :358/:382/:397/:411/:426/:433；
 - CLI：`dd-run-cli/src/main.rs` 多处；示例：`dd-ext-sample/src/main.rs` 约 :108 起。
 
-**风险**：拼写漂移只在运行时暴露；协议方法演进需全仓手工搜改，易漏。
+**改动前风险**：拼写漂移只在运行时暴露；协议方法演进需全仓手工搜改，易漏。
 
-**机会**：在 `dd-protocol` 定义 `pub const METHOD_INITIALIZE: &str = "initialize"; …` 等常量，全仓引用。配合 O1 的协议演进，形成**单一来源**。
+#### 2.3.1 落地记录（2026-09-14，首项落地）
 
-**验收**：`grep` 除常量定义点外无裸方法字面量；`cargo test --workspace` 全绿。
+**常量层**：新增 [`crates/dd-protocol/src/methods.rs`](../crates/dd-protocol/src/methods.rs)，覆盖协议 §1.3 全部 **12 个方法**（10 请求 + 2 通知），并把两类聚合视图一并收口：
+
+| 常量 | 用途 | 消费方 |
+|---|---|---|
+| `METHOD_*`（7 个 host→ext 请求） | 分发 `match` 臂 + RPC 调用首参 | `dd-ext` `serve_line`、`dd-host` `ExtensionProcess`、`dd-gui` `InProcessExtension`/`ExtClient`、`dd-run-cli`、`dd-ext-sample` |
+| `METHOD_HOST_*`（3 个 ext→host 请求） | 反向请求 `method` 字段 + `capabilities` 声明 | `dd-ext` 各扩展 `spec()`/`Effect::HostRequest`、`dd-host` `builtin.rs`、`dd-gui` `execute_host_request` 分发 |
+| `NOTIFY_*`（2 个通知） | 通知构造 + 通知判别 | `dd-ext` `make_items_changed`、`dd-host`/`dd-gui` 的 `items_changed` 比较 |
+| `HOST_METHODS` | `host/*` 白名单（清单校验规则 9） | `dd-host::manifest::HOST_CAPABILITIES` 改为**别名**（不再重复声明字符串） |
+| `HOST_METHOD_PREFIX` | §3.3「带 id 且 method 以 `host/` 开头 → 对端请求」判别 | `dd-host::process::classify` |
+| `ALL_METHODS` | 全 12 项（**顺序即 §1.3 表格顺序**） | 一致性测试比对基线 |
+
+**替换面（9 个文件的生产代码）**：`dd-ext/src/lib.rs`（7 个分发臂 + 通知）、`dd-ext/src/builtins/{calc,websearch}.rs`、`dd-ext/src/bin/search.rs`、`dd-ext-sample/src/main.rs`、`dd-gui/src/ext_inprocess.rs`（7 处调用 + 通知判别 + `close` 帧）、`dd-gui/src/ext_client.rs`、`dd-gui/src/app/host_actions.rs`（3 个臂）、`dd-gui/src/app/invoke.rs`、`dd-host/src/{process,manifest,builtin}.rs`、`dd-run-cli/src/main.rs`。
+
+**新增验证（可复跑）**：`crates/dd-protocol/tests/consistency.rs::method_constants_match_protocol_method_table` —— 运行时从 `docs/protocol.md` §1.3 两张表抽取方法名，断言与 `ALL_METHODS` **逐项同序**相等（文档增删方法或常量拼错即红），并校验常量无重复、`host/*` 子集与前缀判别自洽。
+
+**残留字面量的三类豁免（已逐条分类核验）**：
+
+1. `#[cfg(test)]` / `tests/` 内的字面量——**刻意保留**，充当「独立交叉校验」（常量若被改错，引用常量的生产代码会与写死字面量的断言冲突而失败）；
+2. `docs/protocol.md` 的 ```json 样例（SSOT 本体）；
+3. 日志文案里**内嵌**的方法名（如 `eprintln!("[dd-gui] host/open_url 浏览器打开失败…")`）——非协议身份位，改常量会牺牲可读性。
+
+> ⚠️ **同形不同义陷阱（已加注释防误改）**：`dd-run-cli` 的 `command.kind` 判别值 `"invoke"` / `"page"`（§8.2 `CommandRef`）与协议方法名 `invoke` 同形但**不同命名空间**，不得替换为 `METHOD_INVOKE`。
+
+**验收结果**：`cargo fmt --all -- --check` 无差异；`cargo clippy --workspace --all-targets` 0 warning；`cargo test --workspace` **403 passed / 0 failed**（基线 402，+1 为本次新增一致性测试）。协议 v1.0 零改动（无字段/方法增删，纯实现侧重构）。
+
+**纪律备注**：本批仅改工作副本，**未 commit**（按项目约定由人工审核提交）；改动文件的**行尾保持原状**（仓库 `.rs` 工作区本就 CRLF/LF 混存，rustfmt 默认 `newline_style=Auto` 会保留各自原行尾——已实测确认，勿被 `git` 的 LF→CRLF 提示误导而做整体转换）。
 
 ### 2.4 可观测性 / 日志（O4，新发现）
 
@@ -111,7 +139,7 @@
 |---|---|---|
 | 文件搜索 P2 真机验收 A-33-05…A-33-10 | 🔴 高 | 阻塞「无需 es.exe」用户承诺 |
 | 协议错误码接线（见 2.2 / O1） | 🔴 高 | 已纳入 O1 |
-| 方法名常量层（见 2.3 / O2） | 🔴 高 | 已纳入 O2 |
+| 方法名常量层（见 2.3 / O2） | ✅ 已落地 | 2026-09-14 落地，12 个方法名常量 + 一致性测试（原 🔴 高） |
 | macOS/Linux 构建验收 | ⚪ 战略 | 见 2.6 |
 | I3 图标 32px 回退 | 🟡 低 | 视真机效果 |
 | CHANGELOG 缺日期 / example README CRLF | 🟡 低 | 文档卫生 |
@@ -121,7 +149,7 @@
 
 ## 3. 推荐实施顺序（分阶段，先确定性的）
 
-- **Phase 1（低风险·确定性，建议首批）**：O2 方法名常量 → O1 协议错误码接线 → O3 依赖治理 → O8 文档卫生。
+- **Phase 1（低风险·确定性，建议首批）**：~~O2 方法名常量~~ ✅ 已落地（2026-09-14）→ **下一步 O1 协议错误码接线** → O3 依赖治理 → O8 文档卫生。
 - **Phase 2（中风险·需真机）**：O4 可观测性 → O7 文件搜索 P2 真机验收。
 - **Phase 3（战略）**：O6 跨平台 M10。
 - **O5 体积**：仅 O5-a 评估后视收益决定，O5-b/O5-c 明确不做/暂缓（见 2.1）。

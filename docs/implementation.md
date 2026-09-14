@@ -1,6 +1,6 @@
 # dd-run 实施方案
 
-> **状态**：生效中 ｜ **版本**：v0.1.1 ｜ **最后更新**：2026-09-13
+> **状态**：生效中 ｜ **版本**：v0.1.1 ｜ **最后更新**：2026-09-14
 > **关联**：[protocol.md](./protocol.md) · [manifest-schema.md](./manifest-schema.md) · [extensions.md](./extensions.md) · [../cmdpal-platform-agnostic-design.md](../cmdpal-platform-agnostic-design.md)
 
 ---
@@ -23,6 +23,7 @@
 | M9 内置扩展进程内化 | ✅ 已关闭 | 2026-09-11 | 5 内置扩展改 in-process，单文件分发，进程隔离仅第三方 | [m9-inprocess-builtins](./m9-inprocess-builtins.md) |
 | v5.2 UI 优化 B1–B8 | ✅ 已关闭 | 2026-09-13 `815e212..da0589c` | 字重/强调色/滚动条/下划线/结果行/设置页/悬停/自适应 | [cmdpal-ui-optimization-v5.html](../cmdpal-ui-optimization-v5.html) |
 | 图标与字体优化 I1/I2/F1/F2 | ✅ 已关闭 | 2026-09-12 `3545d3f` | 占位 glyph / I2 显式色 / F1 token 化 / F2 密度三档（I3 未做） | [icons-typography-plan](./icons-typography-plan.md) |
+| O2 协议方法名常量层 | ✅ 已落地 | 2026-09-14（工作副本，未提交） | 12 个方法名收敛为 `dd-protocol::methods` 单一来源，全仓生产代码改用常量 + 一致性测试锁 SSOT | [§2 O2](#o2--协议方法名常量层2026-09-14-落地) |
 
 ## 产物与分发（2026-09-13 实测）
 
@@ -399,6 +400,22 @@
 | P4 面板边框三选（中性/强调色/关） | ✅ | `settings.rs` `BorderMode` + `platform.rs` `system_accent_color`（`DwmGetColorizationColor`，COLORREF 0x00BBGGRR）+ `app/keys.rs` `border_color` 单点收口（refresh_backdrop / apply_theme_pref / apply_border_mode 同源） |
 
 兼容承诺：旧配置三键缺失 → 默认（100/圆角/中性），升级观感零变化；未知值回落（单测覆盖）。材质未生效（Win10/22621- 回退）时滑杆与边框行置灰、圆角行恒可用。明确非目标：MicaAlt（标签页窗口语义误用）、AcrylicBase（无 DWM 对应档）、边框粗细（DWM 描边固定 1px）、材质强度第二滑杆（与 P2 重叠）、Win10 旧版亚克力（accent-policy，Win10 已过支持期）。`cargo test --workspace` 全绿（dd-gui 186）。
+
+---
+
+### O2 — 协议方法名常量层（2026-09-14 落地）
+
+方案与逐文件替换清单：[`docs/optimization-plan.md`](./optimization-plan.md) §2.3.1（Phase 1 首项，对应差异清单 P-18）。属**实现侧重构**：协议 v1.0 零改动（无字段/方法增删）。本表只记落点，细节不重复。
+
+| 项目 | 状态 | 落点 |
+|---|---|---|
+| 常量层（12 方法 + 3 聚合视图） | ✅ | 新增 `crates/dd-protocol/src/methods.rs`（`METHOD_*` / `METHOD_HOST_*` / `NOTIFY_*` + `HOST_METHODS` / `HOST_METHOD_PREFIX` / `ALL_METHODS`），`lib.rs` 导出 `pub mod methods` |
+| 宿主侧替换 | ✅ | `dd-host/src/process.rs`（6 调用 + `items_changed` 判别 + `classify` 前缀）、`manifest.rs`（`HOST_CAPABILITIES` 改常量别名）、`builtin.rs`（2 处 `capabilities`） |
+| 扩展侧替换 | ✅ | `dd-ext/src/lib.rs`（7 分发臂 + 通知构造）、`builtins/{calc,websearch}.rs`、`bin/search.rs`、`dd-ext-sample/src/main.rs` |
+| GUI / CLI 替换 | ✅ | `dd-gui/src/ext_inprocess.rs`（7 调用 + 通知判别 + `close` 帧）、`ext_client.rs`、`app/host_actions.rs`、`app/invoke.rs`、`dd-run-cli/src/main.rs` |
+| 一致性测试（新增核对基线） | ✅ | `crates/dd-protocol/tests/consistency.rs::method_constants_match_protocol_method_table`：运行时抽 `protocol.md` §1.3 两表，与 `ALL_METHODS` 逐项同序断言 |
+
+**验证**：`cargo fmt --all -- --check` 无差异；`cargo clippy --workspace --all-targets` 0 warning；`cargo test --workspace` **403 passed / 0 failed**（基线 402，+1）。工作副本**未提交**。
 
 ---
 

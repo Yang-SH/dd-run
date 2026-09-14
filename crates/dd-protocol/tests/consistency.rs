@@ -485,3 +485,88 @@ fn framing_follows_section_2() {
     assert_eq!(raw.jsonrpc, "2.0");
     assert_eq!(raw.method.as_deref(), Some("top_level_commands"));
 }
+
+// ─── 方法名常量层 ↔ §1.3 方法总览 的一致性（O2）────────────
+
+/// 从 `docs/protocol.md` §1.3「方法总览」的两张表抽取全部方法名。
+///
+/// 表格行形如 `| \`initialize\` | host → ext | 握手 + 版本协商 | §5.1 |`；
+/// 只取第一格为反引号包裹的标识符的行——表头（`| 方法 |`）与分隔行
+/// （`| ---- |`）因此自然落空，无需额外特判。
+fn extract_method_table() -> Vec<String> {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/protocol.md");
+    let src = std::fs::read_to_string(&path)
+        .unwrap_or_else(|e| panic!("读取协议文档失败（{:?}）: {e}", path));
+
+    let mut in_section = false;
+    let mut names = Vec::new();
+    for line in src.lines() {
+        if let Some(rest) = line.strip_prefix("### ") {
+            // 只认 §1.3；其它 ### 小节一律不解析
+            in_section = rest.starts_with("1.3");
+            continue;
+        }
+        if line.starts_with("## ") {
+            in_section = false; // 进入下一章
+            continue;
+        }
+        if !in_section {
+            continue;
+        }
+        let Some(rest) = line.strip_prefix('|') else {
+            continue; // 非表格行（引言、引用块、空行）
+        };
+        let cell = rest.split('|').next().unwrap_or("").trim();
+        if let Some(name) = cell.strip_prefix('`').and_then(|s| s.strip_suffix('`')) {
+            names.push(name.to_string());
+        }
+    }
+    names
+}
+
+/// O2 验收：`dd_protocol::methods` 的全部常量必须与 `docs/protocol.md` §1.3
+/// 的方法总览表**逐项且同序**一致。
+///
+/// 这是常量层与 SSOT 的绑定——文档增删方法、或常量拼错/漏改，本测试即失败
+/// （与 `EXPECTED_BLOCK_COUNT` 同思路：宁可测试红，也不要文档与实现静默漂移）。
+#[test]
+fn method_constants_match_protocol_method_table() {
+    use dd_protocol::methods::{ALL_METHODS, HOST_METHODS, HOST_METHOD_PREFIX, METHOD_INVOKE};
+
+    let documented = extract_method_table();
+    assert_eq!(
+        documented.len(),
+        12,
+        "§1.3「方法总览」应列出 12 个方法（10 请求 + 2 通知），实际 {}：{documented:?}",
+        documented.len()
+    );
+    assert_eq!(
+        ALL_METHODS.to_vec(),
+        documented,
+        "方法名常量与 protocol.md §1.3 表格不一致（顺序或取值）"
+    );
+
+    // 常量自身无重复（漏改常量值时会在此提前暴露）
+    let mut uniq = ALL_METHODS.to_vec();
+    uniq.sort_unstable();
+    uniq.dedup();
+    assert_eq!(uniq.len(), ALL_METHODS.len(), "ALL_METHODS 存在重复项");
+
+    // host/* 子集的两种判别口径自洽：白名单 ⊆ 前缀，且 3 个方法都在总表里
+    for m in HOST_METHODS {
+        assert!(
+            m.starts_with(HOST_METHOD_PREFIX),
+            "`{m}` 不以 `{HOST_METHOD_PREFIX}` 开头——classify 的前缀判别会漏掉它"
+        );
+        assert!(ALL_METHODS.contains(&m), "`{m}` 未登记进 ALL_METHODS");
+    }
+
+    // 反向核对一个字面量：常量确实可当 match 模式使用（dd-ext / dd-host 分发依赖）
+    assert_eq!(
+        match "invoke" {
+            METHOD_INVOKE => 1,
+            _ => 0,
+        },
+        1
+    );
+}

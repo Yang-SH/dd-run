@@ -22,6 +22,7 @@
 
 use crate::{i18n::tr, Effect, ExtensionSpec};
 use dd_protocol::messages::InvokeParams;
+use dd_protocol::methods::METHOD_HOST_OPEN_URL;
 use dd_protocol::model::{CommandItem, CommandRef, CommandResult, Icon, IconKind};
 
 /// 单个搜索引擎（运行时持有；来源 = `DD_WEBSEARCH_ENGINES` 配置或内置默认）。
@@ -215,7 +216,7 @@ pub fn spec() -> ExtensionSpec {
         ),
         frozen: true,
         has_fallback: true,
-        capabilities: &["host/open_url"],
+        capabilities: &[METHOD_HOST_OPEN_URL],
         log_tag: "dd-ext-websearch",
         pages: None, // 网络搜索为顶层命令，无子页（§6.3）
         top_level: top_level_commands,
@@ -308,7 +309,7 @@ fn handle_invoke(params: &InvokeParams) -> (CommandResult, Vec<Effect>) {
         return (
             CommandResult::KeepOpen,
             vec![Effect::HostRequest {
-                method: "host/open_url",
+                method: METHOD_HOST_OPEN_URL,
                 params: serde_json::json!({ "url": engine.home }),
             }],
         );
@@ -318,7 +319,7 @@ fn handle_invoke(params: &InvokeParams) -> (CommandResult, Vec<Effect>) {
         // 打开搜索结果后关闭面板
         CommandResult::Dismiss,
         vec![Effect::HostRequest {
-            method: "host/open_url",
+            method: METHOD_HOST_OPEN_URL,
             params: serde_json::json!({ "url": url }),
         }],
     )

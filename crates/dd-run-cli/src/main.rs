@@ -29,6 +29,10 @@ use dd_protocol::framing::DEFAULT_MAX_MESSAGE_BYTES;
 use dd_protocol::messages::{
     HostInfo, InitializeParams, InitializeResult, RawMessage, TransportInfo, JSONRPC_VERSION,
 };
+use dd_protocol::methods::{
+    METHOD_CLOSE, METHOD_FALLBACK_COMMANDS, METHOD_GET_COMMAND, METHOD_GET_ITEMS,
+    METHOD_INITIALIZE, METHOD_INVOKE, METHOD_TOP_LEVEL_COMMANDS,
+};
 use serde_json::Value;
 
 /// 协议版本（§5.1：宿主发送它支持的**最高**版本）。
@@ -452,7 +456,7 @@ impl InProcessExt {
             locale: None,
         };
         let value = self.call_json(
-            "initialize",
+            METHOD_INITIALIZE,
             serde_json::to_value(params).map_err(|e| e.to_string())?,
         )?;
         serde_json::from_value(value).map_err(|e| e.to_string())
@@ -494,7 +498,7 @@ impl InProcessExt {
         let line = serde_json::to_string(&serde_json::json!({
             "jsonrpc": JSONRPC_VERSION,
             "id": 0,
-            "method": "close",
+            "method": METHOD_CLOSE,
             "params": {},
         }))
         .map_err(|e| e.to_string())?;
@@ -756,7 +760,7 @@ fn conformance_after_open(
     // ③ top_level_commands（§6.1）+ 结构校验（§8.1 / §8.2）
     let commands = match call_json(
         &mut backend,
-        "top_level_commands",
+        METHOD_TOP_LEVEL_COMMANDS,
         serde_json::json!({}),
         process::TIMEOUT_TOP_LEVEL_COMMANDS,
     ) {
@@ -793,6 +797,9 @@ fn conformance_after_open(
         match item.get("command") {
             None => structure.push(format!("`{id}` 缺必填字段 `command`（§8.1）")),
             Some(cmd) => match cmd.get("kind").and_then(Value::as_str) {
+                // 注意：这里的 `invoke` / `page` 是 §8.2 `CommandRef.kind` 的判别值
+                // （`{"kind":"invoke"}` / `{"kind":"page","page_id":…}`），**不是**
+                // 协议方法名——不要替换成 `METHOD_INVOKE`（同形不同义，见 §1.3 与 §8.2）。
                 Some("invoke") => {}
                 Some("page") => {
                     let page_ok = cmd
@@ -821,7 +828,7 @@ fn conformance_after_open(
     // ④ fallback_commands（§6.2）—— 非空 ⟺ has_fallback
     let fallback = match call_json(
         &mut backend,
-        "fallback_commands",
+        METHOD_FALLBACK_COMMANDS,
         serde_json::json!({}),
         process::TIMEOUT_FALLBACK_COMMANDS,
     ) {
@@ -877,7 +884,7 @@ fn conformance_after_open(
         }
         match call_json(
             &mut backend,
-            "get_command",
+            METHOD_GET_COMMAND,
             serde_json::json!({ "id": id }),
             process::TIMEOUT_GET_COMMAND,
         ) {
@@ -925,7 +932,7 @@ fn conformance_after_open(
         for page_id in &pages {
             match call_json(
                 &mut backend,
-                "get_items",
+                METHOD_GET_ITEMS,
                 serde_json::json!({ "page_id": page_id }),
                 process::TIMEOUT_GET_ITEMS,
             ) {
@@ -980,7 +987,7 @@ fn conformance_after_open(
                     "sender": "top_level",
                     "context": { "query": "dd-run-conformance" }
                 });
-                match call_json(&mut backend, "invoke", params, process::TIMEOUT_INVOKE) {
+                match call_json(&mut backend, METHOD_INVOKE, params, process::TIMEOUT_INVOKE) {
                     // 注意：`call` 已解开信封，直接拿内层 result 判 `kind`
                     // （**不是** `result.kind`——那正是漏检过的错误形状）。
                     Ok(v) => match command_result_kind(&v) {

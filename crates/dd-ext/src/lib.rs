@@ -33,6 +33,10 @@ use dd_protocol::messages::{
     error_codes, CommandListResult, GetCommandParams, GetCommandResult, GetItemsParams,
     GetItemsResult, InitializeResult, InvokeParams, ProviderInfo, RawMessage, JSONRPC_VERSION,
 };
+use dd_protocol::methods::{
+    METHOD_CLOSE, METHOD_FALLBACK_COMMANDS, METHOD_GET_COMMAND, METHOD_GET_ITEMS,
+    METHOD_INITIALIZE, METHOD_INVOKE, METHOD_TOP_LEVEL_COMMANDS, NOTIFY_ITEMS_CHANGED,
+};
 use dd_protocol::model::{CommandItem, CommandResult};
 
 /// 内置扩展轻量 i18n（批次 D）：环境注入生效语言，按 zh/en 选文案。
@@ -174,19 +178,19 @@ pub fn serve_line(spec: &ExtensionSpec, line: &str) -> (Vec<serde_json::Value>, 
 
     log(spec, &format!("<- {method} (id={id})"));
     match method.as_str() {
-        "initialize" => {
+        METHOD_INITIALIZE => {
             let result =
                 serde_json::to_value(initialize_result(spec)).expect("序列化 InitializeResult");
             (vec![make_result(id, result)], false)
         }
-        "top_level_commands" => {
+        METHOD_TOP_LEVEL_COMMANDS => {
             let result = serde_json::to_value(CommandListResult {
                 commands: (spec.top_level)(),
             })
             .expect("序列化 CommandListResult");
             (vec![make_result(id, result)], false)
         }
-        "fallback_commands" => {
+        METHOD_FALLBACK_COMMANDS => {
             // §6.2：无兜底时回空列表（防御——宿主只在 has_fallback=true 时调用）
             let commands = spec.fallback.map(|f| f()).unwrap_or_default();
             log(
@@ -197,7 +201,7 @@ pub fn serve_line(spec: &ExtensionSpec, line: &str) -> (Vec<serde_json::Value>, 
                 .expect("序列化 CommandListResult");
             (vec![make_result(id, result)], false)
         }
-        "get_command" => {
+        METHOD_GET_COMMAND => {
             let parsed = msg
                 .params
                 .and_then(|v| serde_json::from_value::<GetCommandParams>(v).ok());
@@ -227,7 +231,7 @@ pub fn serve_line(spec: &ExtensionSpec, line: &str) -> (Vec<serde_json::Value>, 
                 .expect("序列化 GetCommandResult");
             (vec![make_result(id, result)], false)
         }
-        "invoke" => {
+        METHOD_INVOKE => {
             let parsed = msg
                 .params
                 .and_then(|v| serde_json::from_value::<InvokeParams>(v).ok());
@@ -269,7 +273,7 @@ pub fn serve_line(spec: &ExtensionSpec, line: &str) -> (Vec<serde_json::Value>, 
             }
             (outputs, false)
         }
-        "get_items" => {
+        METHOD_GET_ITEMS => {
             let params = msg
                 .params
                 .and_then(|v| serde_json::from_value::<GetItemsParams>(v).ok());
@@ -309,7 +313,7 @@ pub fn serve_line(spec: &ExtensionSpec, line: &str) -> (Vec<serde_json::Value>, 
                 }
             }
         }
-        "close" => {
+        METHOD_CLOSE => {
             // §6.6 后置规则 2：返回 result 后尽快自行退出
             (vec![make_result(id, serde_json::json!({}))], true)
         }
@@ -361,10 +365,10 @@ fn make_host_request(
 
 /// §7.1 `items_changed` 通知；`page_id=None` 表示顶层命令变了。
 fn make_items_changed(spec: &ExtensionSpec, page_id: Option<String>) -> serde_json::Value {
-    log(spec, "-> items_changed");
+    log(spec, &format!("-> {NOTIFY_ITEMS_CHANGED}"));
     serde_json::json!({
         "jsonrpc": JSONRPC_VERSION,
-        "method": "items_changed",
+        "method": NOTIFY_ITEMS_CHANGED,
         "params": { "page_id": page_id }
     })
 }

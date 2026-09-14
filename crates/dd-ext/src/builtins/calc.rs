@@ -17,6 +17,7 @@
 
 use crate::{i18n::tr, Effect, ExtensionSpec};
 use dd_protocol::messages::InvokeParams;
+use dd_protocol::methods::METHOD_HOST_SET_CLIPBOARD;
 use dd_protocol::model::{CommandItem, CommandRef, CommandResult, Icon, IconKind};
 
 pub fn spec() -> ExtensionSpec {
@@ -29,7 +30,7 @@ pub fn spec() -> ExtensionSpec {
         ),
         frozen: true,
         has_fallback: true,
-        capabilities: &["host/set_clipboard"],
+        capabilities: &[METHOD_HOST_SET_CLIPBOARD],
         log_tag: "dd-ext-calc",
         pages: None, // 计算器为顶层命令，无子页（§6.3）
         top_level: top_level_commands,
@@ -133,7 +134,7 @@ fn handle_invoke(params: &InvokeParams) -> (CommandResult, Vec<Effect>) {
                     duration_ms: Some(3_000),
                 },
                 vec![Effect::HostRequest {
-                    method: "host/set_clipboard",
+                    method: METHOD_HOST_SET_CLIPBOARD,
                     params: serde_json::json!({ "text": text }),
                 }],
             )

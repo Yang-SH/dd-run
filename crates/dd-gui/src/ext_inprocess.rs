@@ -39,6 +39,10 @@ use dd_protocol::messages::{
     GetItemsResult, HostInfo, InitializeParams, InitializeResult, InvokeParams, ItemsChangedParams,
     RawMessage, RpcError, TransportInfo, JSONRPC_VERSION,
 };
+use dd_protocol::methods::{
+    METHOD_CLOSE, METHOD_FALLBACK_COMMANDS, METHOD_GET_COMMAND, METHOD_GET_ITEMS,
+    METHOD_INITIALIZE, METHOD_INVOKE, METHOD_TOP_LEVEL_COMMANDS, NOTIFY_ITEMS_CHANGED,
+};
 use dd_protocol::model::{CommandItem, CommandResult};
 
 /// 一次 in-process 调用（无子进程）。状态字段与 [`dd_host::process::ExtensionProcess`]
@@ -94,7 +98,7 @@ impl InProcessExtension {
             capabilities: HOST_CAPABILITIES.iter().map(|s| (*s).to_string()).collect(),
             locale: None,
         };
-        let value = self.call("initialize", serde_json::to_value(params)?)?;
+        let value = self.call(METHOD_INITIALIZE, serde_json::to_value(params)?)?;
         let result: InitializeResult = serde_json::from_value(value)?;
 
         let bad = || ProtocolError::BadProtocolVersion {
@@ -113,14 +117,14 @@ impl InProcessExtension {
 
     /// §6.1 取首屏顶层命令。
     pub fn top_level_commands(&mut self) -> Result<Vec<CommandItem>, ProtocolError> {
-        let value = self.call("top_level_commands", serde_json::json!({}))?;
+        let value = self.call(METHOD_TOP_LEVEL_COMMANDS, serde_json::json!({}))?;
         let result: CommandListResult = serde_json::from_value(value)?;
         Ok(result.commands)
     }
 
     /// §6.2 兜底命令模板。
     pub fn fallback_commands(&mut self) -> Result<Vec<CommandItem>, ProtocolError> {
-        let value = self.call("fallback_commands", serde_json::json!({}))?;
+        let value = self.call(METHOD_FALLBACK_COMMANDS, serde_json::json!({}))?;
         let result: CommandListResult = serde_json::from_value(value)?;
         Ok(result.commands)
     }
@@ -128,7 +132,7 @@ impl InProcessExtension {
     /// §6.4 按 id 取回真实命令（`Ok(None)` = 扩展答复 `command: null`，正常结果）。
     pub fn get_command(&mut self, id: &str) -> Result<Option<CommandItem>, ProtocolError> {
         let value = self.call(
-            "get_command",
+            METHOD_GET_COMMAND,
             serde_json::to_value(GetCommandParams { id: id.to_string() })?,
         )?;
         let result: GetCommandResult = serde_json::from_value(value)?;
@@ -145,14 +149,14 @@ impl InProcessExtension {
             page_id: page_id.to_string(),
             search_text: search_text.map(|s| s.to_string()),
         };
-        let value = self.call("get_items", serde_json::to_value(params)?)?;
+        let value = self.call(METHOD_GET_ITEMS, serde_json::to_value(params)?)?;
         let result: GetItemsResult = serde_json::from_value(value)?;
         Ok(result)
     }
 
     /// §6.5 执行一条命令，返回 §8.3 `CommandResult`。
     pub fn invoke(&mut self, params: &InvokeParams) -> Result<CommandResult, ProtocolError> {
-        let value = self.call("invoke", serde_json::to_value(params)?)?;
+        let value = self.call(METHOD_INVOKE, serde_json::to_value(params)?)?;
         let result: CommandResult = serde_json::from_value(value)?;
         Ok(result)
     }
@@ -162,7 +166,7 @@ impl InProcessExtension {
         let line = serde_json::to_string(&serde_json::json!({
             "jsonrpc": JSONRPC_VERSION,
             "id": 0,
-            "method": "close",
+            "method": METHOD_CLOSE,
             "params": {},
         }))
         .expect("序列化 close 请求");
@@ -178,7 +182,7 @@ impl InProcessExtension {
         let notifications = std::mem::take(&mut self.notifications);
         let mut changed = Vec::new();
         for msg in notifications {
-            if msg.method.as_deref() == Some("items_changed") {
+            if msg.method.as_deref() == Some(NOTIFY_ITEMS_CHANGED) {
                 let page_id = msg
                     .params
                     .as_ref()

@@ -34,6 +34,9 @@
 use chrono::{DateTime, Local, Utc};
 use dd_ext::{i18n::tr, run, Effect, ExtensionSpec};
 use dd_protocol::messages::{GetItemsParams, GetItemsResult, InvokeParams};
+use dd_protocol::methods::{
+    METHOD_HOST_OPEN_URL, METHOD_HOST_SET_CLIPBOARD, METHOD_HOST_SHOW_STATUS,
+};
 use dd_protocol::model::{CommandItem, CommandRef, CommandResult, Details, Icon, IconKind};
 use fuzzy_matcher::skim::SkimMatcherV2;
 use fuzzy_matcher::FuzzyMatcher;
@@ -843,7 +846,11 @@ fn spec() -> ExtensionSpec {
         // v3.3 P1：复制路径动作需要剪贴板能力——依据能力前置规则（§7.4），
         // 未声明的 host/* 请求将被宿主回 -32601，故 spec 与 manifest 必须同步
         //（一致性断言见 tests::spec_manifest_capabilities_consistent）。
-        capabilities: &["host/open_url", "host/show_status", "host/set_clipboard"],
+        capabilities: &[
+            METHOD_HOST_OPEN_URL,
+            METHOD_HOST_SHOW_STATUS,
+            METHOD_HOST_SET_CLIPBOARD,
+        ],
         log_tag: "dd-ext-filesearch",
         top_level: top_level_commands,
         fallback: Some(fallback_commands),
@@ -1060,7 +1067,7 @@ fn handle_invoke(params: &InvokeParams) -> (CommandResult, Vec<Effect>) {
                         duration_ms: Some(2000),
                     },
                     vec![Effect::HostRequest {
-                        method: "host/set_clipboard",
+                        method: METHOD_HOST_SET_CLIPBOARD,
                         params: serde_json::json!({ "text": path }),
                     }],
                 ),
@@ -1074,7 +1081,7 @@ fn handle_invoke(params: &InvokeParams) -> (CommandResult, Vec<Effect>) {
                 return (
                     CommandResult::Dismiss,
                     vec![Effect::HostRequest {
-                        method: "host/open_url",
+                        method: METHOD_HOST_OPEN_URL,
                         params: serde_json::json!({ "url": url }),
                     }],
                 );

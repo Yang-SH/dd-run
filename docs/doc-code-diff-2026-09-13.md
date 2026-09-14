@@ -1,7 +1,7 @@
 # 文档描述 ↔ 代码实现 差异清单（2026-09-13）
 
-> **状态**：复核通过，进入修复阶段 ｜ **版本**：v1.2 ｜ **最后更新**：2026-09-14
-> **阶段说明**：v1.0 为纯只读核对记录。v1.1 经三路独立复核（P 系 / M+E 系 / I+D+R+S 系逐条验真），修正了 9 处清单自身的不实或偏差条目（见 §1.2），并开始按"文档对齐代码"落实修复。v1.2 追加 §10，记录 09-13 复核之后由**代码侧改动**（而非文档对齐）消除的差异（P-06）。
+> **状态**：复核通过，进入修复阶段 ｜ **版本**：v1.3 ｜ **最后更新**：2026-09-14
+> **阶段说明**：v1.0 为纯只读核对记录。v1.1 经三路独立复核（P 系 / M+E 系 / I+D+R+S 系逐条验真），修正了 9 处清单自身的不实或偏差条目（见 §1.2），并开始按"文档对齐代码"落实修复。v1.2 追加 §10，记录 09-13 复核之后由**代码侧改动**（而非文档对齐）消除的差异（P-06）。v1.3 追加 §11，记录 O2 方法名常量层落地闭环的 P-18。
 
 ---
 
@@ -124,7 +124,7 @@
 | P-15 | 数据结构 | `protocol.md:146-147` | `result` 与 `error` 互斥；代码 `process.rs:221,617` **未强制**，并存时 `error` 优先 |
 | P-16 | 参数 | `protocol.md:682` | `close` 超时 1000 ms、超时即强杀；代码 `process.rs:41-42` 为**两段各 1000 ms**（等 result + 等退出），最坏 2000 ms |
 | P-17 | 业务逻辑 | `protocol.md:696` | 崩溃判定含「stdout EOF」；巡检路径 `app/health.rs:27` 仅以非 0 退出码计数，EOF 单独情形不触发 `record_crash`；但 invoke/get_items 失败路径在进程已退出（含 EOF/正常退出，`process.rs:442-443`）时同样调用（`invoke.rs:73`、`page.rs:134`） |
-| P-18 | 悬空 | `protocol.md:38-58` | §1.3 方法名无常量层，三处（`dd-ext/lib.rs:176`、`process.rs:173`、`host_actions.rs:38`）按**字符串字面量**分发 → 无常量级核对基线 |
+| P-18 | 悬空 | `protocol.md:38-58` | §1.3 方法名无常量层，三处（`dd-ext/lib.rs:176`、`process.rs:173`、`host_actions.rs:38`）按**字符串字面量**分发 → 无常量级核对基线 —— ✅ **已解决**（2026-09-14，见 §11） |
 | P-19 | 业务逻辑 | `protocol.md:183-189` | §4 状态机：代码**无**对应状态枚举，状态隐含于进程生命周期与 inflight 集合；`busy` 的宿主侧载体为 `ext_busy` Toast（`invoke.rs:120,152`、`page.rs:232,265`）；运行期崩溃（有缓存）回退 **stub**（`pool.rs:68-79`），启动期聚合失败不产出 items（`crates/dd-gui/src/aggregator.rs:495`）而非"一律 stub" |
 | P-20 | 参数 | `protocol.md:231` | `result.timeouts.*` 为对象可建议各阶段；代码 `messages.rs:110-114` 仅 `get_items_ms` 一个字段 |
 | P-21 | 参数 | `protocol.md:305-308` | `get_items` 的 `page_id` 必填，缺失属 `-32602`；代码 `dd-ext/lib.rs:272-311` 落入 `_` 分支回 **`-32005`** |
@@ -250,7 +250,7 @@ cargo +stable-x86_64-pc-windows-gnu test -p dd-protocol
 | `search-file.md` / `search.md` / `search-file-plan-review.md`（S 系 17 处） | §2/§4/§5/§6/§7 等 | **S-01（高）红线冲突：移除 `search.md` 的「无需 es.exe」/「仅要求 Everything 在运行」承诺**，恢复与红线条款一致；S-02 `^` 转义、S-03 幽灵函数名更正、S-04 常量位置、S-05 Arc 非 Weak、S-06 实例名未实现、S-07 30 条口径、S-09 两函数并存、S-10 `-n` 参数、S-11 标题与表对齐、S-12 三能力、S-13 `ShellExecuteW` 口径、S-14 空结果归因、S-15 双引号/超长补录、S-16 reveal 行号 |
 | 代码注释（3 处，纯注释） | `dd-ext/src/bin/search.rs:24,26`、`dd-host/src/builtin.rs:5-13`、`dd-gui/src/aggregator.rs:8-9` | S-08 超时注释残留 800ms 更正 + 查询直透补转义例外；M-15 「内置同样走清单注册」陈旧注释更正为「不通过清单文件注册、内存注册等效实现」 |
 
-**未修 / 留人工确认**：P-01（是否实现「回错 + 关连接」）、P-18（方法名常量层属代码重构，已登记 INDEX.md §5 未闭环项）、§5 存疑项中的设计决策（M-12/M-13/M-14/M-16/E-06/E-07 等已加现状注记，最终口径待人工定夺）。
+**未修 / 留人工确认**：P-01（是否实现「回错 + 关连接」）、~~P-18（方法名常量层属代码重构，已登记 INDEX.md §5 未闭环项）~~ ✅ 已于 2026-09-14 由代码侧闭环（见 §11）、§5 存疑项中的设计决策（M-12/M-13/M-14/M-16/E-06/E-07 等已加现状注记，最终口径待人工定夺）。
 
 ---
 
@@ -270,4 +270,22 @@ v1.2：记录 09-13 复核之后、由**代码侧改动**（而非「文档对�
 
 ---
 
-> **本阶段约束复述**：v1.0 为纯只读核对记录；v1.1 完成三路复核验真（修正清单自身 9 处）并落实上述修复，**已登记进 [`INDEX.md`](./INDEX.md)**（§3.E 清单与 §5 未闭环项）；v1.2 追加 §10，记录代码侧消除的差异（P-06）与过期数值的取代。
+## 11. 后续状态变更（2026-09-14，O2 方法名常量层）
+
+v1.2（续）：记录又一处由**代码侧重构**（而非「文档对齐代码」）消除的差异。触发项 = [`optimization-plan.md`](./optimization-plan.md) Phase 1 首项 **O2**。
+
+| ID | 变化 | 依据 |
+|---|---|---|
+| P-18 | ✅ **已解决** | 新增 `crates/dd-protocol/src/methods.rs` 常量层——协议 §1.3 全部 **12 个方法**（7 host→ext 请求 + 3 ext→host 请求 + 2 通知）各有常量，另提供 `HOST_METHODS`（清单 `capabilities` 白名单，`dd-host::manifest::HOST_CAPABILITIES` 改为其别名）、`HOST_METHOD_PREFIX`（§3.3 对端请求判别）、`ALL_METHODS`（比对基线）；宿主/扩展/CLI 的**生产代码**统一改为常量引用（逐文件清单与豁免说明见 [`optimization-plan.md`](./optimization-plan.md) §2.3.1）。P-18 指出的「无常量级核对基线」根因随之消失。 |
+
+**新增核对基线**：`crates/dd-protocol/tests/consistency.rs::method_constants_match_protocol_method_table` —— 测试期从 `docs/protocol.md` §1.3 两张表抽取方法名，与 `ALL_METHODS` **逐项同序**断言相等；文档增删方法或常量拼错即测试失败。P-18 的「无常量级核对基线」由此转为**机器可验**。
+
+**协议影响**：无。方法名取值、方向、章节均未变；`protocol.md` 仅在 §1.3 追加「实现侧单一来源」注记（不含语义变更），v1.0 冻结契约不变。
+
+**验证**：`cargo fmt --all -- --check` 无差异；`cargo clippy --workspace --all-targets` 0 warning；`cargo test --workspace` **403 passed / 0 failed**（基线 402，+1）。
+
+**连带变更**：本文 §4 的 P-18 行已标注 ✅；§9「未修 / 留人工确认」中移除 P-18；[`INDEX.md`](./INDEX.md) §5 对应行改 ✅；[`protocol.md`](./protocol.md) §1.3 加实现侧注记；[`implementation.md`](./implementation.md) 里程碑总表与 §2 增记本批（**详述处为 `optimization-plan.md` §2.3.1**，本文与 implementation 只记结论与落点）。
+
+---
+
+> **本阶段约束复述**：v1.0 为纯只读核对记录；v1.1 完成三路复核验真（修正清单自身 9 处）并落实上述修复，**已登记进 [`INDEX.md`](./INDEX.md)**（§3.E 清单与 §5 未闭环项）；v1.2 追加 §10/§11，记录代码侧消除的差异（P-06、P-18）与过期数值的取代。

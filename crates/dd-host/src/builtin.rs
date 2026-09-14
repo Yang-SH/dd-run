@@ -21,6 +21,8 @@
 
 use std::path::Path;
 
+use dd_protocol::methods::{METHOD_HOST_OPEN_URL, METHOD_HOST_SET_CLIPBOARD};
+
 use crate::manifest::{from_builtin, LoadedExtension};
 
 /// 单个内置扩展的注册描述。
@@ -73,7 +75,7 @@ pub const BUILTINS: &[BuiltinSpec] = &[
         // 自述：顶层固定可缓存；但含兜底能力 → host_frozen=false（§6.3 fresh）
         frozen: true,
         has_fallback: true,
-        capabilities: &["host/set_clipboard"],
+        capabilities: &[METHOD_HOST_SET_CLIPBOARD],
     },
     BuiltinSpec {
         exe: "dd-ext-system",
@@ -91,7 +93,7 @@ pub const BUILTINS: &[BuiltinSpec] = &[
         // 含兜底能力 → host_frozen=false（§6.3 fresh）
         frozen: true,
         has_fallback: true,
-        capabilities: &["host/open_url"],
+        capabilities: &[METHOD_HOST_OPEN_URL],
     },
     BuiltinSpec {
         exe: "dd-ext-shell",

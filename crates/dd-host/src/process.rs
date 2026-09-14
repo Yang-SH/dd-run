@@ -22,6 +22,10 @@ use dd_protocol::messages::{
     InitializeResult, InvokeParams, ItemsChangedParams, RawMessage, RpcError, TransportInfo,
     JSONRPC_VERSION,
 };
+use dd_protocol::methods::{
+    HOST_METHOD_PREFIX, METHOD_CLOSE, METHOD_FALLBACK_COMMANDS, METHOD_GET_COMMAND,
+    METHOD_INITIALIZE, METHOD_INVOKE, METHOD_TOP_LEVEL_COMMANDS, NOTIFY_ITEMS_CHANGED,
+};
 use dd_protocol::model::{CommandItem, CommandResult};
 
 use crate::manifest::{current_platform, LoadedExtension, HOST_CAPABILITIES};
@@ -185,7 +189,9 @@ pub enum MessageKind {
 /// 再按有无 `id` 区分响应与通知。**两端 id 空间独立**，靠发出方向区分。
 pub fn classify(msg: &RawMessage) -> MessageKind {
     match (&msg.method, msg.id) {
-        (Some(method), Some(_)) if method.starts_with("host/") => MessageKind::HostRequest,
+        (Some(method), Some(_)) if method.starts_with(HOST_METHOD_PREFIX) => {
+            MessageKind::HostRequest
+        }
         (Some(_), None) => MessageKind::Notification,
         (None, Some(id)) => MessageKind::Response(id),
         _ => MessageKind::Unknown,
@@ -355,7 +361,7 @@ impl ExtensionProcess {
             locale: None,
         };
         let value = self.call(
-            "initialize",
+            METHOD_INITIALIZE,
             serde_json::to_value(params)?,
             TIMEOUT_INITIALIZE,
         )?;
@@ -379,7 +385,7 @@ impl ExtensionProcess {
     /// §6.1 取首屏顶层命令。
     pub fn top_level_commands(&mut self) -> Result<Vec<CommandItem>, ProtocolError> {
         let value = self.call(
-            "top_level_commands",
+            METHOD_TOP_LEVEL_COMMANDS,
             serde_json::json!({}),
             TIMEOUT_TOP_LEVEL_COMMANDS,
         )?;
@@ -394,7 +400,7 @@ impl ExtensionProcess {
     /// 宿主应回退 stub 并向用户报错）；`Err` 才是协议/超时/进程故障。
     pub fn get_command(&mut self, id: &str) -> Result<Option<CommandItem>, ProtocolError> {
         let value = self.call(
-            "get_command",
+            METHOD_GET_COMMAND,
             serde_json::to_value(GetCommandParams { id: id.to_string() })?,
             TIMEOUT_GET_COMMAND,
         )?;
@@ -408,7 +414,7 @@ impl ExtensionProcess {
     /// **空列表表示该 provider 无兜底能力**（协议 §6.2：宿主以结果非空判定 fresh）。
     pub fn fallback_commands(&mut self) -> Result<Vec<CommandItem>, ProtocolError> {
         let value = self.call(
-            "fallback_commands",
+            METHOD_FALLBACK_COMMANDS,
             serde_json::json!({}),
             TIMEOUT_FALLBACK_COMMANDS,
         )?;
@@ -423,14 +429,14 @@ impl ExtensionProcess {
     /// （要求 `result` 字段）包一层，否则成功响应会报「missing field `result`」
     /// （M2 修复记录，见 dd-gui `invoke_on` 注释）。
     pub fn invoke(&mut self, params: &InvokeParams) -> Result<CommandResult, ProtocolError> {
-        let value = self.call("invoke", serde_json::to_value(params)?, TIMEOUT_INVOKE)?;
+        let value = self.call(METHOD_INVOKE, serde_json::to_value(params)?, TIMEOUT_INVOKE)?;
         let result: CommandResult = serde_json::from_value(value)?;
         Ok(result)
     }
 
     /// §6.6 优雅关闭：发 `close` → 等 result → 等进程自行退出；超时则强杀。
     pub fn close(mut self) -> Result<(), CloseError> {
-        self.call("close", serde_json::json!({}), TIMEOUT_CLOSE_RESPONSE)
+        self.call(METHOD_CLOSE, serde_json::json!({}), TIMEOUT_CLOSE_RESPONSE)
             .map_err(CloseError::Protocol)?;
 
         // §6.6 后置规则 1：此后不再期待任何响应，只等进程退出
@@ -523,7 +529,7 @@ impl ExtensionProcess {
                             let _ = self.answer_host_request(&msg);
                         }
                         _ => {
-                            if msg.method.as_deref() == Some("items_changed") {
+                            if msg.method.as_deref() == Some(NOTIFY_ITEMS_CHANGED) {
                                 // §7.1：params 可缺省，缺省即"顶层"
                                 let page_id = msg
                                     .params

@@ -5,6 +5,9 @@ use crate::app::PaletteApp;
 use dd_gui::result;
 use dd_gui::result::HostAction;
 use dd_protocol::messages::{OpenUrlParams, RawMessage, SetClipboardParams, ShowStatusParams};
+use dd_protocol::methods::{
+    METHOD_HOST_OPEN_URL, METHOD_HOST_SET_CLIPBOARD, METHOD_HOST_SHOW_STATUS,
+};
 use eframe::egui;
 
 impl PaletteApp {
@@ -36,7 +39,7 @@ impl PaletteApp {
             return;
         };
         match method {
-            "host/show_status" => {
+            METHOD_HOST_SHOW_STATUS => {
                 let Ok(params) = serde_json::from_value::<ShowStatusParams>(
                     msg.params.clone().unwrap_or(serde_json::Value::Null),
                 ) else {
@@ -49,7 +52,7 @@ impl PaletteApp {
                 );
                 self.show_toast(params.message, params.duration_ms);
             }
-            "host/set_clipboard" => {
+            METHOD_HOST_SET_CLIPBOARD => {
                 let Ok(params) = serde_json::from_value::<SetClipboardParams>(
                     msg.params.clone().unwrap_or(serde_json::Value::Null),
                 ) else {
@@ -70,7 +73,7 @@ impl PaletteApp {
                     Err(_) => eprintln!("[dd-gui] host/set_clipboard 线程异常（ext={ext_id}）"),
                 }
             }
-            "host/open_url" => {
+            METHOD_HOST_OPEN_URL => {
                 let Ok(params) = serde_json::from_value::<OpenUrlParams>(
                     msg.params.clone().unwrap_or(serde_json::Value::Null),
                 ) else {

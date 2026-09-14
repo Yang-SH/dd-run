@@ -19,8 +19,10 @@ use serde::{Deserialize, Serialize};
 pub const SCHEMA_VERSION: &str = "1.0";
 
 /// 宿主可提供的 `host/*` 方法全集（§7 校验规则 9 的白名单，取值见协议 §1.3）。
-pub const HOST_CAPABILITIES: [&str; 3] =
-    ["host/show_status", "host/set_clipboard", "host/open_url"];
+///
+/// 别名自 [`dd_protocol::methods::HOST_METHODS`]——方法名的唯一来源在 dd-protocol，
+/// 此处只保留清单语义下的名字，避免同一字符串两处定义而漂移（O2）。
+pub const HOST_CAPABILITIES: [&str; 3] = dd_protocol::methods::HOST_METHODS;
 
 /// §3 清单文件（18 字段）。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

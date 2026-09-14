@@ -28,6 +28,11 @@ use dd_protocol::messages::{
     GetItemsResult, InitializeResult, InvokeParams, ItemsChangedParams, ProviderInfo, RawMessage,
     JSONRPC_VERSION,
 };
+use dd_protocol::methods::{
+    METHOD_CLOSE, METHOD_GET_COMMAND, METHOD_GET_ITEMS, METHOD_HOST_OPEN_URL,
+    METHOD_HOST_SET_CLIPBOARD, METHOD_HOST_SHOW_STATUS, METHOD_INITIALIZE, METHOD_INVOKE,
+    METHOD_TOP_LEVEL_COMMANDS, NOTIFY_ITEMS_CHANGED,
+};
 use dd_protocol::model::{
     CommandItem, CommandRef, CommandResult, Details, Icon, IconKind, MetadataEntry,
 };
@@ -105,19 +110,19 @@ fn handle(line: &str, out: &mut dyn Write) -> bool {
 
     log(&format!("<- {method} (id={id})"));
     match method.as_str() {
-        "initialize" => {
+        METHOD_INITIALIZE => {
             let result =
                 serde_json::to_value(initialize_result()).expect("序列化 InitializeResult");
             send_result(out, id, result);
         }
-        "top_level_commands" => {
+        METHOD_TOP_LEVEL_COMMANDS => {
             let result = serde_json::to_value(CommandListResult {
                 commands: top_level_commands(),
             })
             .expect("序列化 CommandListResult");
             send_result(out, id, result);
         }
-        "get_command" => {
+        METHOD_GET_COMMAND => {
             let parsed = msg
                 .params
                 .and_then(|v| serde_json::from_value::<GetCommandParams>(v).ok());
@@ -145,7 +150,7 @@ fn handle(line: &str, out: &mut dyn Write) -> bool {
                     .expect("序列化 GetCommandResult"),
             );
         }
-        "invoke" => {
+        METHOD_INVOKE => {
             let parsed = msg
                 .params
                 .and_then(|v| serde_json::from_value::<InvokeParams>(v).ok());
@@ -185,7 +190,7 @@ fn handle(line: &str, out: &mut dyn Write) -> bool {
                 "m4.host.show_status" => {
                     send_host_request(
                         out,
-                        "host/show_status",
+                        METHOD_HOST_SHOW_STATUS,
                         &serde_json::json!({
                             "message": "M4 host/show_status：Toast 显示成功".to_string(),
                             "state": "success",
@@ -196,7 +201,7 @@ fn handle(line: &str, out: &mut dyn Write) -> bool {
                 "m4.host.copy" | "sample.copy" | "sample.copy.plain" => {
                     send_host_request(
                         out,
-                        "host/set_clipboard",
+                        METHOD_HOST_SET_CLIPBOARD,
                         &serde_json::json!({
                             "text": "dd-run M4 clipboard demo：3.14159".to_string(),
                         }),
@@ -205,7 +210,7 @@ fn handle(line: &str, out: &mut dyn Write) -> bool {
                 "m4.host.open_url" => {
                     send_host_request(
                         out,
-                        "host/open_url",
+                        METHOD_HOST_OPEN_URL,
                         &serde_json::json!({
                             "url": "https://github.com/Yang-SH/dd-run".to_string(),
                         }),
@@ -214,7 +219,7 @@ fn handle(line: &str, out: &mut dyn Write) -> bool {
                 _ => {}
             }
         }
-        "get_items" => {
+        METHOD_GET_ITEMS => {
             let parsed = msg
                 .params
                 .and_then(|v| serde_json::from_value::<GetItemsParams>(v).ok());
@@ -250,7 +255,7 @@ fn handle(line: &str, out: &mut dyn Write) -> bool {
                 );
             }
         }
-        "close" => {
+        METHOD_CLOSE => {
             // §6.6 后置规则 2：返回 result 后尽快自行退出
             send_result(out, id, serde_json::json!({}));
             return true;
@@ -279,9 +284,9 @@ fn initialize_result() -> InitializeResult {
         // M4（host/* 执行端验证，见 m4-record.md P2）：声明后宿主才应答
         // 并执行真实副作用（Toast / 剪贴板 / 开 URL，§7.4 能力前置）。
         capabilities: vec![
-            "host/show_status".to_string(),
-            "host/set_clipboard".to_string(),
-            "host/open_url".to_string(),
+            METHOD_HOST_SHOW_STATUS.to_string(),
+            METHOD_HOST_SET_CLIPBOARD.to_string(),
+            METHOD_HOST_OPEN_URL.to_string(),
         ],
         timeouts: None,
     }
@@ -539,11 +544,11 @@ fn send_items_changed(out: &mut dyn Write, page_id: Option<String>) {
         out,
         &serde_json::json!({
             "jsonrpc": JSONRPC_VERSION,
-            "method": "items_changed",
+            "method": NOTIFY_ITEMS_CHANGED,
             "params": params
         }),
     );
-    log("-> items_changed");
+    log(&format!("-> {NOTIFY_ITEMS_CHANGED}"));
 }
 
 /// §3.3：扩展向宿主发 `host/*` **请求**（带 id，等待应答）。

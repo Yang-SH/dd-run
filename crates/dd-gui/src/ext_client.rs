@@ -24,6 +24,7 @@ use dd_host::process::{CloseError, ExtensionProcess, ProtocolError, TIMEOUT_GET_
 use dd_protocol::messages::{
     GetItemsParams, GetItemsResult, InitializeResult, InvokeParams, RawMessage,
 };
+use dd_protocol::methods::METHOD_GET_ITEMS;
 use dd_protocol::model::{CommandItem, CommandResult};
 
 use crate::ext_inprocess::InProcessExtension;
@@ -134,7 +135,7 @@ impl ExtClient {
                     search_text,
                 };
                 let value = serde_json::to_value(&params)?;
-                let value = p.call("get_items", value, TIMEOUT_GET_ITEMS)?;
+                let value = p.call(METHOD_GET_ITEMS, value, TIMEOUT_GET_ITEMS)?;
                 Ok(serde_json::from_value(value)?)
             }
             Self::InProcess(p) => p.get_items(page_id, search_text.as_deref()),

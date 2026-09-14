@@ -1,6 +1,6 @@
 # dd-run Extension Protocol v1.0
 
-> **状态**：已冻结 ｜ **版本**：v1.0 ｜ **最后更新**：2026-09-13（变更须走 §13 协议演进规则）
+> **状态**：已冻结 ｜ **版本**：v1.0 ｜ **最后更新**：2026-09-14（变更须走 §13 协议演进规则）
 > **受众**：写宿主的人与写扩展的人——这是二者之间**唯一的硬契约**。
 > **上手路径**：第一次写扩展请先读 [`extensions.md`](./extensions.md)（那份是"路径"，本文是"规范"）。
 > **上游依据**：[`cmdpal-platform-agnostic-design.md`](../cmdpal-platform-agnostic-design.md) §5（扩展契约）、§6（宿主模型）。
@@ -60,6 +60,8 @@
 > **为什么 `fallback_commands` 单列**：设计文档 §6.3 规定"含顶层 `IFallbackProvider` 能力者一律视为 **fresh**"，宿主要靠 `FallbackCommands()` **是否非空**来判定。若不设此方法，fresh 判定在协议层无落点。
 >
 > **命名注记**：`IFallbackProvider` 是 dd-run 的命名；上游 SDK（`v0.101.2362.0`）原名 `IFallbackHandler`（见 `Microsoft.CommandPalette.Extensions.idl` 第 390 行）。本文档涉及"上游如此"的表述一律指 dd-run 重命名后的口径。
+>
+> **实现侧单一来源（2026-09-14 起）**：上表 12 个方法名在代码侧已收敛为常量层——`dd-protocol` crate 导出 `methods` 模块（`METHOD_*` / `NOTIFY_*` / `HOST_METHODS` / `HOST_METHOD_PREFIX` / `ALL_METHODS`），宿主、扩展运行时与 CLI 的**生产代码一律引用常量**，不再散落裸字符串字面量（优化项 O2 / 差异清单 P-18 已闭环）。常量与本表的**逐项同序**比对由 `crates/dd-protocol/tests/consistency.rs::method_constants_match_protocol_method_table` 在测试期强制——**本表是 SSOT**，改表必须同步改常量，否则测试红。本节**不含任何协议语义变更**，v1.0 契约不变。
 
 ---
 

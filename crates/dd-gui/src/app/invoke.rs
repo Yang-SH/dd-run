@@ -7,6 +7,7 @@ use crate::ext_client::ExtClient;
 use dd_gui::result;
 use dd_host::manifest::LoadedExtension;
 use dd_protocol::messages::InvokeParams;
+use dd_protocol::methods::METHOD_GET_COMMAND;
 use dd_protocol::model::{CommandRef, CommandResult};
 use eframe::egui;
 use std::sync::mpsc;
@@ -189,7 +190,7 @@ impl PaletteApp {
             if skip_lookup {
                 "跳过 get_command（兜底模板）"
             } else {
-                "get_command"
+                METHOD_GET_COMMAND
             }
         );
         self.inflight.insert(ext.manifest.id.clone());
