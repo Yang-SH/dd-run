@@ -194,16 +194,16 @@ fn load_cjk_font_definitions() -> Option<egui::FontDefinitions> {
     // 码位，插在图标字体之前无抢字形风险；缺文件（< Vista）仅记日志。
     let latin_candidate = r"C:\Windows\Fonts\segoeui.ttf";
     if let Some(data) = load_font_file(latin_candidate) {
-            fonts
-                .font_data
-                .insert("segoe".to_owned(), std::sync::Arc::new(data));
-            // 载入顺序仅决定 font_data 注册；最终族序由下方 F3 重排统一确定
-            // （segoe 置顶 = 拉丁主字，图标字体仍居末位不抢 PUA 码位）。
-            fonts
-                .families
-                .entry(egui::FontFamily::Proportional)
-                .or_default()
-                .push("segoe".to_owned());
+        fonts
+            .font_data
+            .insert("segoe".to_owned(), std::sync::Arc::new(data));
+        // 载入顺序仅决定 font_data 注册；最终族序由下方 F3 重排统一确定
+        // （segoe 置顶 = 拉丁主字，图标字体仍居末位不抢 PUA 码位）。
+        fonts
+            .families
+            .entry(egui::FontFamily::Proportional)
+            .or_default()
+            .push("segoe".to_owned());
         fonts
             .families
             .entry(egui::FontFamily::Monospace)
@@ -771,7 +771,10 @@ pub fn apply_window_chrome(hwnd: isize, corner: crate::settings::CornerPref) {
             std::mem::size_of::<i32>() as u32,
         );
         if hr != 0 {
-            eprintln!("[dd-gui] DWMWA_TRANSITIONS_FORCEDISABLED 应用失败（hr=0x{:x}）", hr);
+            eprintln!(
+                "[dd-gui] DWMWA_TRANSITIONS_FORCEDISABLED 应用失败（hr=0x{:x}）",
+                hr
+            );
         }
     }
 }

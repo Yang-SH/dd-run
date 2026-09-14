@@ -406,8 +406,11 @@ impl PaletteApp {
                 ui.vertical(|ui| {
                     ui.set_min_height(36.0);
                     ui.label(
-                        dd_gui::theme::semibold_title(crate::text::t(lang, "set.backdrop.name"), 14.0)
-                            .color(p.text),
+                        dd_gui::theme::semibold_title(
+                            crate::text::t(lang, "set.backdrop.name"),
+                            14.0,
+                        )
+                        .color(p.text),
                     );
                     ui.add(
                         egui::Label::new(
@@ -430,7 +433,11 @@ impl PaletteApp {
             });
             // ── 行 1：材质三选 pill（无材质 / 云母 / 亚克力，P1）──
             card.add_space(8.0);
-            card.label(egui::RichText::new(crate::text::t(lang, "set.material.name")).size(14.0).color(p.text));
+            card.label(
+                egui::RichText::new(crate::text::t(lang, "set.material.name"))
+                    .size(14.0)
+                    .color(p.text),
+            );
             card.add_space(2.0);
             card.label(
                 egui::RichText::new(crate::text::t(lang, "set.material.desc"))
@@ -444,15 +451,9 @@ impl PaletteApp {
                 let avail = ui.available_width();
                 let pill_w = (avail - 2.0 * gap) / 3.0;
                 for (i, (backdrop, key)) in [
-                    (
-                        dd_gui::settings::Backdrop::None,
-                        "set.material.none",
-                    ),
+                    (dd_gui::settings::Backdrop::None, "set.material.none"),
                     (dd_gui::settings::Backdrop::Mica, "set.material.mica"),
-                    (
-                        dd_gui::settings::Backdrop::Acrylic,
-                        "set.material.acrylic",
-                    ),
+                    (dd_gui::settings::Backdrop::Acrylic, "set.material.acrylic"),
                 ]
                 .into_iter()
                 .enumerate()
@@ -504,7 +505,7 @@ impl PaletteApp {
             });
             card.add_space(6.0);
             let (slider_changed, slider_released) =
-                draw_opacity_slider(card, material_active, &mut opacity_tmp, p, dark);
+                draw_opacity_slider(card, material_active, &mut opacity_tmp, p);
             if slider_changed {
                 opacity_changed = true;
             }
@@ -513,7 +514,11 @@ impl PaletteApp {
             }
             // ── 行 3：窗口圆角三选 pill（P3；与材质无关恒可用）──
             card.add_space(8.0);
-            card.label(egui::RichText::new(crate::text::t(lang, "set.corner.name")).size(14.0).color(p.text));
+            card.label(
+                egui::RichText::new(crate::text::t(lang, "set.corner.name"))
+                    .size(14.0)
+                    .color(p.text),
+            );
             card.add_space(2.0);
             card.label(
                 egui::RichText::new(crate::text::t(lang, "set.corner.desc"))
@@ -551,7 +556,11 @@ impl PaletteApp {
             });
             // ── 行 4：面板边框三选 pill（P4；仅材质生效时绘制 → 未生效置灰）──
             card.add_space(8.0);
-            card.label(egui::RichText::new(crate::text::t(lang, "set.border.name")).size(14.0).color(p.text));
+            card.label(
+                egui::RichText::new(crate::text::t(lang, "set.border.name"))
+                    .size(14.0)
+                    .color(p.text),
+            );
             card.add_space(2.0);
             card.label(
                 egui::RichText::new(crate::text::t(lang, "set.border.desc"))
@@ -635,8 +644,11 @@ impl PaletteApp {
                 ui.vertical(|ui| {
                     ui.set_min_height(36.0);
                     ui.label(
-                        dd_gui::theme::semibold_title(crate::text::t(lang, "set.density.name"), 14.0)
-                            .color(p.text),
+                        dd_gui::theme::semibold_title(
+                            crate::text::t(lang, "set.density.name"),
+                            14.0,
+                        )
+                        .color(p.text),
                     );
                     ui.add(
                         egui::Label::new(
@@ -677,8 +689,15 @@ impl PaletteApp {
                         ui.add_space(gap);
                     }
                     let selected = current == density;
-                    if draw_density_pill(ui, pill_w, crate::text::t(lang, key), selected, p, dark, false)
-                    {
+                    if draw_density_pill(
+                        ui,
+                        pill_w,
+                        crate::text::t(lang, key),
+                        selected,
+                        p,
+                        dark,
+                        false,
+                    ) {
                         pick = Some(density);
                     }
                 }
@@ -714,8 +733,11 @@ impl PaletteApp {
                 ui.vertical(|ui| {
                     ui.set_min_height(36.0);
                     ui.label(
-                        dd_gui::theme::semibold_title(crate::text::t(lang, "set.openview.name"), 14.0)
-                            .color(p.text),
+                        dd_gui::theme::semibold_title(
+                            crate::text::t(lang, "set.openview.name"),
+                            14.0,
+                        )
+                        .color(p.text),
                     );
                     ui.add(
                         egui::Label::new(
@@ -785,8 +807,11 @@ impl PaletteApp {
                 ui.vertical(|ui| {
                     ui.set_min_height(36.0);
                     ui.label(
-                        dd_gui::theme::semibold_title(crate::text::t(lang, "set.hotkey.name"), 14.0)
-                            .color(p.text),
+                        dd_gui::theme::semibold_title(
+                            crate::text::t(lang, "set.hotkey.name"),
+                            14.0,
+                        )
+                        .color(p.text),
                     );
                     ui.add(
                         egui::Label::new(
@@ -880,8 +905,11 @@ impl PaletteApp {
                 ui.vertical(|ui| {
                     ui.set_min_height(36.0);
                     ui.label(
-                        dd_gui::theme::semibold_title(crate::text::t(lang, "set.autostart.name"), 14.0)
-                            .color(p.text),
+                        dd_gui::theme::semibold_title(
+                            crate::text::t(lang, "set.autostart.name"),
+                            14.0,
+                        )
+                        .color(p.text),
                     );
                     ui.add_space(2.0);
                     ui.add(
@@ -948,8 +976,11 @@ impl PaletteApp {
                         ui.vertical(|ui| {
                             ui.set_min_height(36.0);
                             ui.label(
-                                dd_gui::theme::semibold_title(crate::text::t(lang_eff, "settings.lang.name"), 14.0)
-                                    .color(p.text),
+                                dd_gui::theme::semibold_title(
+                                    crate::text::t(lang_eff, "settings.lang.name"),
+                                    14.0,
+                                )
+                                .color(p.text),
                             );
                             ui.add_space(2.0);
                             // 关键修复：wrap() 让长描述在左列范围内换行
@@ -1704,7 +1735,11 @@ pub(crate) fn draw_density_pill(
     ui.painter()
         .rect_stroke(rect, radius, stroke, egui::StrokeKind::Inside);
     let label_color = if dim {
-        if selected { p.text2 } else { p.text3 }
+        if selected {
+            p.text2
+        } else {
+            p.text3
+        }
     } else if selected {
         p.text
     } else {
@@ -1731,11 +1766,12 @@ fn draw_opacity_slider(
     enabled: bool,
     value: &mut u8,
     p: &theme::Palette,
-    dark: bool,
 ) -> (bool, bool) {
     let height = 20.0;
-    let (rect, _) =
-        ui.allocate_exact_size(egui::vec2(ui.available_width(), height), egui::Sense::hover());
+    let (rect, _) = ui.allocate_exact_size(
+        egui::vec2(ui.available_width(), height),
+        egui::Sense::hover(),
+    );
     let id = ui.id().with("opacity_slider");
     let resp = ui.interact(rect, id, egui::Sense::click_and_drag());
     let mut changed = false;
@@ -1767,11 +1803,18 @@ fn draw_opacity_slider(
         ui.painter().rect_filled(
             egui::Rect::from_min_max(rail.min, egui::pos2(fill_right, rail.max.y)),
             rail_radius,
-            if enabled { p.accent_stroke } else { p.border_strong },
+            if enabled {
+                p.accent_stroke
+            } else {
+                p.border_strong
+            },
         );
     }
     // 钮：16px 白底 + border-strong 描边（悬停/拖动加粗）；禁用置灰
-    let thumb_center = egui::pos2(fill_right.clamp(rail.left() + 8.0, rail.right() - 8.0), rail_y);
+    let thumb_center = egui::pos2(
+        fill_right.clamp(rail.left() + 8.0, rail.right() - 8.0),
+        rail_y,
+    );
     let active = enabled && (resp.hovered() || resp.dragged());
     let thumb_fill = if enabled {
         egui::Color32::WHITE
@@ -1792,7 +1835,10 @@ fn slider_value(left: f32, width: f32, x: f32) -> u8 {
     if width <= 0.0 {
         return 0;
     }
-    ((x - left) / width).clamp(0.0, 1.0).mul_add(100.0, 0.5).floor() as u8
+    ((x - left) / width)
+        .clamp(0.0, 1.0)
+        .mul_add(100.0, 0.5)
+        .floor() as u8
 }
 
 /// 功能态 ToggleSwitch（§08.1 v4.7「材质开关」行；v4.9 放大到 Fluent 规格

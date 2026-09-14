@@ -32,9 +32,7 @@ use std::panic::AssertUnwindSafe;
 
 use dd_ext::{serve_line, ExtensionSpec};
 use dd_host::manifest::{current_platform, HOST_CAPABILITIES};
-use dd_host::process::{
-    route_messages, CloseError, ProtocolError, DIAGNOSTIC_BUS_CAP,
-};
+use dd_host::process::{route_messages, CloseError, ProtocolError, DIAGNOSTIC_BUS_CAP};
 use dd_protocol::framing::DEFAULT_MAX_MESSAGE_BYTES;
 use dd_protocol::messages::{
     error_codes, CommandListResult, GetCommandParams, GetCommandResult, GetItemsParams,

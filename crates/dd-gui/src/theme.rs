@@ -352,8 +352,8 @@ pub const TINT_CAP_ACRYLIC: f32 = 1.0;
 
 /// 材质激活时面板底的浓淡层 alpha **上限**（P2 v2 直控式，2026-09-13）；
 /// `None` = 材质未生效（回退不透明面板底）。v5 起上限按材质定档、两主题一致
-/// （`dark` 参数保留以稳定调用点签名）。
-pub fn panel_tint_cap(dark: bool, backdrop: crate::settings::Backdrop) -> Option<f32> {
+/// （`dark` 参数保留以稳定调用点签名、不参与换算——以 `_dark` 标注）。
+pub fn panel_tint_cap(_dark: bool, backdrop: crate::settings::Backdrop) -> Option<f32> {
     use crate::settings::Backdrop;
     match backdrop {
         Backdrop::None => None,
@@ -386,6 +386,7 @@ pub fn panel_tint_with_opacity(
 ///   平滑过渡（accent 竖条仍由 `row.rs` 绘制，选中辨识度不变）；
 /// - **回退**（无材质 / 未生效）：`row_hover` / `row_selected` 实色——既有观
 ///   感不变。
+///
 /// 供 `row.rs` 结果行专用；卡片/设置项等其余 hover 维持实色不变。
 #[derive(Debug, Clone, Copy)]
 pub struct RowFills {
@@ -395,11 +396,18 @@ pub struct RowFills {
     pub selected: Color32,
 }
 
-pub fn row_fills(dark: bool, backdrop: crate::settings::Backdrop, backdrop_active: bool) -> RowFills {
+pub fn row_fills(
+    dark: bool,
+    backdrop: crate::settings::Backdrop,
+    backdrop_active: bool,
+) -> RowFills {
     use crate::settings::Backdrop;
     let p = Palette::of(dark);
     if !backdrop_active || backdrop == Backdrop::None {
-        return RowFills { hover: p.row_hover, selected: p.row_selected };
+        return RowFills {
+            hover: p.row_hover,
+            selected: p.row_selected,
+        };
     }
     match (dark, backdrop) {
         (true, Backdrop::Mica) => RowFills {
@@ -418,7 +426,10 @@ pub fn row_fills(dark: bool, backdrop: crate::settings::Backdrop, backdrop_activ
             hover: Color32::from_rgba_unmultiplied(0, 0, 0, 9),
             selected: Color32::from_rgba_unmultiplied(0, 0, 0, 15),
         },
-        (_, Backdrop::None) => RowFills { hover: p.row_hover, selected: p.row_selected },
+        (_, Backdrop::None) => RowFills {
+            hover: p.row_hover,
+            selected: p.row_selected,
+        },
     }
 }
 
@@ -435,7 +446,11 @@ pub fn card_fill(dark: bool, glass_card: bool) -> Color32 {
     if !glass_card {
         return p.card;
     }
-    let a: u8 = if dark { CARD_GLASS_ALPHA_DARK } else { CARD_GLASS_ALPHA_LIGHT };
+    let a: u8 = if dark {
+        CARD_GLASS_ALPHA_DARK
+    } else {
+        CARD_GLASS_ALPHA_LIGHT
+    };
     Color32::from_rgba_unmultiplied(p.card.r(), p.card.g(), p.card.b(), a)
 }
 
@@ -936,7 +951,7 @@ mod tests {
         );
         // cap 排序（材质语义：亚克力拉满可全实、云母拉满保留采色语义）——本条
         // 即真机反馈「调透明度不明显」的修复锚点
-        assert!(TINT_CAP_MICA >= 0.75 && TINT_CAP_ACRYLIC > TINT_CAP_MICA);
+        const { assert!(TINT_CAP_MICA >= 0.75 && TINT_CAP_ACRYLIC > TINT_CAP_MICA) };
         // 无材质恒 None（滑杆在该档置灰，换算层同口径）
         assert_eq!(panel_tint_with_opacity(true, Backdrop::None, 50), None);
     }
@@ -967,21 +982,39 @@ mod tests {
         let dm = row_fills(true, Backdrop::Mica, true);
         let da = row_fills(true, Backdrop::Acrylic, true);
         for f in [&lm, &la, &dm, &da] {
-            assert!(f.hover.a() < 255 && f.selected.a() < 255, "材质档必须全玻璃");
-            assert!(f.selected.a() > f.hover.a(), "selected 必须重于 hover（平滑过渡）");
+            assert!(
+                f.hover.a() < 255 && f.selected.a() < 255,
+                "材质档必须全玻璃"
+            );
+            assert!(
+                f.selected.a() > f.hover.a(),
+                "selected 必须重于 hover（平滑过渡）"
+            );
         }
         // 云母档强于亚克力档
-        assert!(lm.hover.a() > la.hover.a(), "亮色：云母 hover > 亚克力 hover");
-        assert!(dm.hover.a() > da.hover.a(), "暗色：云母 hover > 亚克力 hover");
+        assert!(
+            lm.hover.a() > la.hover.a(),
+            "亮色：云母 hover > 亚克力 hover"
+        );
+        assert!(
+            dm.hover.a() > da.hover.a(),
+            "暗色：云母 hover > 亚克力 hover"
+        );
         // 定值锚点（亮·云母 黑 7%/10%、暗·云母 白 7.8%/10.2%、亚克力减半）
         assert_eq!(lm.hover, Color32::from_rgba_unmultiplied(0, 0, 0, 18));
         assert_eq!(lm.selected, Color32::from_rgba_unmultiplied(0, 0, 0, 26));
         assert_eq!(dm.hover, Color32::from_rgba_unmultiplied(255, 255, 255, 20));
-        assert_eq!(dm.selected, Color32::from_rgba_unmultiplied(255, 255, 255, 26));
+        assert_eq!(
+            dm.selected,
+            Color32::from_rgba_unmultiplied(255, 255, 255, 26)
+        );
         assert_eq!(la.hover, Color32::from_rgba_unmultiplied(0, 0, 0, 9));
         assert_eq!(la.selected, Color32::from_rgba_unmultiplied(0, 0, 0, 15));
         assert_eq!(da.hover, Color32::from_rgba_unmultiplied(255, 255, 255, 10));
-        assert_eq!(da.selected, Color32::from_rgba_unmultiplied(255, 255, 255, 15));
+        assert_eq!(
+            da.selected,
+            Color32::from_rgba_unmultiplied(255, 255, 255, 15)
+        );
     }
 
     /// 设置卡填充（2026-09-13）：非玻璃 = 实色 card；玻璃 = card 色 × alpha
@@ -991,7 +1024,11 @@ mod tests {
         for dark in [true, false] {
             let p = Palette::of(dark);
             assert_eq!(card_fill(dark, false), p.card, "回退路径 = 实色卡");
-            let expected_a = if dark { CARD_GLASS_ALPHA_DARK } else { CARD_GLASS_ALPHA_LIGHT };
+            let expected_a = if dark {
+                CARD_GLASS_ALPHA_DARK
+            } else {
+                CARD_GLASS_ALPHA_LIGHT
+            };
             assert_eq!(
                 card_fill(dark, true),
                 Color32::from_rgba_unmultiplied(p.card.r(), p.card.g(), p.card.b(), expected_a),

@@ -884,18 +884,43 @@ mod tests {
         };
         let parsed = Settings::parse_json(&s.to_json_string());
         assert_eq!(parsed.material_opacity, 40);
-        assert_eq!(parsed.corner_pref, CornerPref::Small, "{} 往返一致", CornerPref::Small.label());
-        assert_eq!(parsed.border_mode, BorderMode::Accent, "{} 往返一致", BorderMode::Accent.label());
+        assert_eq!(
+            parsed.corner_pref,
+            CornerPref::Small,
+            "{} 往返一致",
+            CornerPref::Small.label()
+        );
+        assert_eq!(
+            parsed.border_mode,
+            BorderMode::Accent,
+            "{} 往返一致",
+            BorderMode::Accent.label()
+        );
     }
 
     #[test]
     fn material_opacity_out_of_range_and_type_corruption() {
         // 越界 clamp 到 0–100（滑杆口径）；负数/类型损坏 → 默认 40
-        assert_eq!(Settings::parse_json(r#"{"material_opacity":57}"#).material_opacity, 57);
-        assert_eq!(Settings::parse_json(r#"{"material_opacity":0}"#).material_opacity, 0);
-        assert_eq!(Settings::parse_json(r#"{"material_opacity":100}"#).material_opacity, 100);
-        assert_eq!(Settings::parse_json(r#"{"material_opacity":255}"#).material_opacity, 100);
-        assert_eq!(Settings::parse_json(r#"{"material_opacity":-3}"#).material_opacity, 40);
+        assert_eq!(
+            Settings::parse_json(r#"{"material_opacity":57}"#).material_opacity,
+            57
+        );
+        assert_eq!(
+            Settings::parse_json(r#"{"material_opacity":0}"#).material_opacity,
+            0
+        );
+        assert_eq!(
+            Settings::parse_json(r#"{"material_opacity":100}"#).material_opacity,
+            100
+        );
+        assert_eq!(
+            Settings::parse_json(r#"{"material_opacity":255}"#).material_opacity,
+            100
+        );
+        assert_eq!(
+            Settings::parse_json(r#"{"material_opacity":-3}"#).material_opacity,
+            40
+        );
         assert_eq!(
             Settings::parse_json(r#"{"material_opacity":"half"}"#).material_opacity,
             40

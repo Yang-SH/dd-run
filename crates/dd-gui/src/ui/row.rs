@@ -106,7 +106,11 @@ pub(crate) fn draw_item_row(
                     .unwrap_or(0.0);
                 // 标题可用宽 = 剩余宽 − 右列文本宽 − 12px 间隙。
                 let title_avail = (ui.available_width()
-                    - if trail_w > 0.0 { trail_w + TRAIL_GAP } else { 0.0 })
+                    - if trail_w > 0.0 {
+                        trail_w + TRAIL_GAP
+                    } else {
+                        0.0
+                    })
                 .max(1.0);
                 // 标题：占满中列，过长截断。**左对齐贴图标**——`add_sized` 默认
                 // centered_and_justified 会把短标题居中（真机反馈 2026-09-12），
@@ -331,7 +335,11 @@ mod tests {
             "\\\\server\\share",
             "UNC 保留服务器与共享名"
         );
-        assert_eq!(file_location("no-separator"), "no-separator", "无分隔符原样返回");
+        assert_eq!(
+            file_location("no-separator"),
+            "no-separator",
+            "无分隔符原样返回"
+        );
     }
 
     #[test]
