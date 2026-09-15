@@ -58,7 +58,7 @@ jobs:
           Get-ChildItem dist -Filter *.zip | Select-Object Name, Length
 
       - name: Attach to GitHub Release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           files: dist/dd-run-*-portable.zip
           body: |
