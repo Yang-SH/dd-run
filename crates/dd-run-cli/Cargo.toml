@@ -13,3 +13,5 @@ dd-ext = { path = "../dd-ext" }
 dd-host = { path = "../dd-host" }
 dd-protocol = { path = "../dd-protocol" }
 serde_json = "1"
+# O4 可观测性：`log` 仅为 facade（零传递依赖），后端由 dd-protocol::logging 提供。
+log = "0.4"

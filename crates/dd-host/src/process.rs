@@ -16,6 +16,7 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
+use dd_protocol::envelope::{self, Envelope};
 use dd_protocol::framing::{encode, Decoder, Frame, DEFAULT_MAX_MESSAGE_BYTES};
 use dd_protocol::messages::{
     error_codes, CommandListResult, GetCommandParams, GetCommandResult, HostInfo, InitializeParams,
@@ -211,27 +212,36 @@ pub struct RoutedMessages {
     pub host_requests: Vec<RawMessage>,
     /// §7.1 通知（如 `items_changed`）。
     pub notifications: Vec<RawMessage>,
-    /// 未匹配到 in-flight 请求的响应 / 非 `host/*` 的带 id 消息 / jsonrpc 版本不符（§3.3）。
+    /// 未匹配到 in-flight 请求的响应 / 非 `host/*` 的带 id 消息 / 信封非法（§3.2/§3.4）。
     pub unmatched: Vec<RawMessage>,
 }
 
 /// 把一批消息路由到「响应 / `host/*` 请求 / 通知 / 未匹配」。
 ///
 /// - `request_id` = 期望匹配的响应 id（发起方自增计数器）。
-/// - 非法 JSON-RPC 信封（`RawMessage` 反序列化失败）**直接忽略、不致命**（§9.3）。
+/// - 非法 JSON-RPC 信封（§3.2/§3.4 校验失败）**不参与分发**，仅留痕、不致命（§9.3）；
+///   校验规则与扩展侧共用 [`dd_protocol::envelope`]（单一来源）。
 /// - 性能提示：`serve_line` 的返回**响应在前、副作用在后**，故本函数不提前返回，
 ///   一次遍历把同批次的 `host/*` 与通知全部收齐，与子进程「先收响应、副作用入队」
 ///   的终态等价。
 pub fn route_messages(request_id: u64, outputs: Vec<serde_json::Value>) -> RoutedMessages {
     let mut routed = RoutedMessages::default();
     for value in outputs {
-        let Ok(msg) = serde_json::from_value::<RawMessage>(value) else {
-            continue; // 非合法信封：忽略不致命（§9.3）
+        let msg = match envelope::validate_value(value) {
+            Envelope::Valid(msg) => msg,
+            // in-process 路径不该出现非法信封（消息由本进程的 `serve_line` 产出），
+            // 出现即实现侧缺陷；留痕以便诊断，不致命。
+            Envelope::InvalidRequest { id, reason } => {
+                routed
+                    .unmatched
+                    .push(unmatched_marker(id, Some(reason.kind())));
+                continue;
+            }
+            Envelope::ParseError => {
+                routed.unmatched.push(unmatched_marker(None, None));
+                continue;
+            }
         };
-        if msg.jsonrpc != JSONRPC_VERSION {
-            routed.unmatched.push(msg);
-            continue;
-        }
         match classify(&msg) {
             MessageKind::HostRequest => routed.host_requests.push(msg),
             MessageKind::Notification => routed.notifications.push(msg),
@@ -249,6 +259,19 @@ pub fn route_messages(request_id: u64, outputs: Vec<serde_json::Value>) -> Route
         }
     }
     routed
+}
+
+/// 为「信封非法」的消息造留痕载体：`RawMessage` 表达不了非法信封本身，
+/// 故把原因放进 `params.invalid_reason`。仅诊断用，不参与分发。
+fn unmatched_marker(id: Option<u64>, invalid_reason: Option<&str>) -> RawMessage {
+    RawMessage {
+        jsonrpc: JSONRPC_VERSION.to_string(),
+        id,
+        method: None,
+        params: invalid_reason.map(|r| serde_json::json!({ "invalid_reason": r })),
+        result: None,
+        error: None,
+    }
 }
 
 /// §13 协议版本格式为 `MAJOR.MINOR`（**两段**），与清单 `version` 的 semver
@@ -517,12 +540,14 @@ impl ExtensionProcess {
         loop {
             match self.rx.try_recv() {
                 Ok(Frame::Message(line)) => {
-                    let Ok(msg) = serde_json::from_str::<RawMessage>(&line) else {
-                        continue;
+                    let msg = match envelope::validate(&line) {
+                        Envelope::Valid(msg) => msg,
+                        // §3.2/§3.4：非法信封 → 回错（`-32700` / `-32600`）后继续，非致命（§9.3）
+                        other => {
+                            let _ = self.reply_envelope_error(&other);
+                            continue;
+                        }
                     };
-                    if msg.jsonrpc != JSONRPC_VERSION {
-                        continue;
-                    }
                     match classify(&msg) {
                         // §7.4：host/* 请求 → 应答并记录（UI 层消费执行副作用）
                         MessageKind::HostRequest => {
@@ -544,8 +569,13 @@ impl ExtensionProcess {
                         }
                     }
                 }
-                // 超限/非法编码的通知：与 call 侧同口径，忽略不致命
-                Ok(_) => {}
+                // §2.3 + §9.3：超限帧 → 回 `-32600` 并**关闭连接**（`-32600` 中唯一致命的场景）
+                Ok(Frame::TooLarge { size, max }) => {
+                    self.abort_oversized(size, max);
+                    break;
+                }
+                // §2.2 规则 6：非 UTF-8 无对应 JSON-RPC 错误码，通知路径静默丢弃
+                Ok(Frame::InvalidUtf8) => {}
                 Err(TryRecvError::Empty) | Err(TryRecvError::Disconnected) => break,
             }
         }
@@ -593,7 +623,9 @@ impl ExtensionProcess {
                     }
                 }
                 Ok(Frame::TooLarge { size, max }) => {
-                    return Err(ProtocolError::MessageTooLarge { size, max })
+                    // §2.3 + §9.3：回 `-32600` 并关闭连接（致命——继续读取会导致流错位）
+                    self.abort_oversized(size, max);
+                    return Err(ProtocolError::MessageTooLarge { size, max });
                 }
                 Ok(Frame::InvalidUtf8) => return Err(ProtocolError::InvalidUtf8),
                 Err(RecvTimeoutError::Timeout) => {
@@ -613,12 +645,14 @@ impl ExtensionProcess {
         line: &str,
         waiting_id: u64,
     ) -> Result<Option<serde_json::Value>, ProtocolError> {
-        let msg: RawMessage = serde_json::from_str(line)?;
-        if msg.jsonrpc != JSONRPC_VERSION {
-            // §3.2：缺 jsonrpc 或非 "2.0" → 非法信封，按 §9.3 不致命，忽略
-            push_capped(&mut self.unmatched, msg);
-            return Ok(None);
-        }
+        let msg = match envelope::validate(line) {
+            Envelope::Valid(msg) => msg,
+            // §3.2/§3.4：非法信封 → 回错（`-32700` / `-32600`）后继续等目标响应（§9.3 不致命）
+            other => {
+                self.reply_envelope_error(&other)?;
+                return Ok(None);
+            }
+        };
         match classify(&msg) {
             MessageKind::HostRequest => {
                 self.answer_host_request(&msg)?;
@@ -644,6 +678,43 @@ impl ExtensionProcess {
                 Ok(None)
             }
         }
+    }
+
+    /// 把信封校验失败的结果回给对端（`-32700` / `-32600`），并留痕进 [`Self::unmatched`]。
+    ///
+    /// **非致命**：连接保持（§9.3）。致命的那一支是超限帧，见 [`Self::abort_oversized`]。
+    fn reply_envelope_error(&mut self, result: &Envelope) -> Result<(), ProtocolError> {
+        let (id, reason) = match result {
+            Envelope::InvalidRequest { id, reason } => (*id, Some(reason.kind())),
+            _ => (None, None),
+        };
+        push_capped(&mut self.unmatched, unmatched_marker(id, reason));
+        match result.to_error_response() {
+            Some(response) => self.write_message(&response),
+            None => Ok(()),
+        }
+    }
+
+    /// §2.3 + §9.3：超限帧的处置——回 `-32600 Invalid Request`（id 无法可靠取得，用 `null`）
+    /// 并**关闭连接**。关闭即终止子进程：继续读取会导致流错位，且扩展已无法自证同步。
+    ///
+    /// `-32600` 有多类触发，§9.3 只把「消息超上限」这一支列为致命；批处理 / 非法 `jsonrpc`
+    /// 等走 [`Self::reply_envelope_error`]，回错后连接保持。
+    fn abort_oversized(&mut self, size: usize, max: usize) {
+        let response = dd_protocol::envelope::error_response(
+            None,
+            error_codes::INVALID_REQUEST,
+            "Invalid Request",
+            Some(serde_json::json!({
+                "reason": "message_too_large",
+                "size": size,
+                "max": max,
+            })),
+        );
+        // 尽力送达：对端已错位时写入失败属预期，不应掩盖原始超限错误
+        let _ = self.write_message(&response);
+        let _ = self.child.kill();
+        let _ = self.child.wait();
     }
 
     /// §7.4 能力前置：扩展只能用 `initialize` 里声明过的 `host/*` 方法，
@@ -821,7 +892,7 @@ mod tests {
             serde_json::to_value(request(1, "host/set_clipboard")).unwrap(),
             serde_json::to_value(notification("items_changed")).unwrap(),
             serde_json::to_value(response(99)).unwrap(), // id 不符 → unmatched
-            serde_json::json!({ "garbage": true }),      // 非法信封 → 忽略
+            serde_json::json!({ "garbage": true }),      // 信封非法 → 也留痕 unmatched
         ];
         let routed = route_messages(7, outputs);
         let ok = match routed.response {
@@ -839,8 +910,16 @@ mod tests {
             routed.notifications[0].method.as_deref(),
             Some("items_changed")
         );
-        assert_eq!(routed.unmatched.len(), 1, "id 不符的响应进 unmatched");
+        assert_eq!(
+            routed.unmatched.len(),
+            2,
+            "id 不符的响应 + 信封非法者都进 unmatched（后者仅留痕，不致命）"
+        );
         assert_eq!(routed.unmatched[0].id, Some(99));
+        assert_eq!(
+            routed.unmatched[1].params.as_ref().unwrap()["invalid_reason"],
+            "missing_jsonrpc"
+        );
     }
 
     /// M9：错误响应映射为 `Err(RpcError)`，且**不影响**同批次副作用的路由
@@ -912,6 +991,28 @@ mod tests {
         assert_eq!(
             classify(&request(1, "top_level_commands")),
             MessageKind::Unknown
+        );
+    }
+
+    #[test]
+    fn route_messages_marks_invalid_envelopes_without_fatal() {
+        // §3.2/§3.4：非法信封不参与分发，仅留痕（§9.3 非致命）；
+        // 同批次里的合法响应仍必须匹配成功。
+        let outputs = vec![
+            serde_json::json!([{ "jsonrpc": "2.0", "id": 1, "method": "initialize" }]),
+            serde_json::json!({ "jsonrpc": "1.0", "id": 2, "method": "initialize" }),
+            serde_json::json!({ "jsonrpc": "2.0", "id": 1, "result": { "ok": true } }),
+        ];
+        let routed = route_messages(1, outputs);
+        assert!(routed.response.is_some(), "合法响应仍应匹配 in-flight id");
+        assert_eq!(routed.unmatched.len(), 2, "两条非法信封应留痕");
+        assert_eq!(
+            routed.unmatched[0].params.as_ref().unwrap()["invalid_reason"],
+            "batch_array"
+        );
+        assert_eq!(
+            routed.unmatched[1].params.as_ref().unwrap()["invalid_reason"],
+            "unsupported_jsonrpc_version"
         );
     }
 

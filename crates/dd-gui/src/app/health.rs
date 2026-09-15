@@ -31,7 +31,7 @@ impl PaletteApp {
             })
             .collect();
         for (id, crashed, detail) in exited {
-            eprintln!(
+            log::debug!(
                 "[dd-gui] 扩展进程已退出：{id}（{}，移除保活，点击命令将重新拉起）{}",
                 if crashed {
                     "崩溃/非 0 退出码"
@@ -75,7 +75,7 @@ impl PaletteApp {
                 .last_access(&id)
                 .map(|t| t.elapsed().as_secs())
                 .unwrap_or(0);
-            eprintln!(
+            log::debug!(
                 "[dd-gui] warm 空闲回收：{id}（空闲 {idle}s ≥ {}s，close+释放，回落 stub）",
                 WARM_IDLE_TTL.as_secs()
             );
@@ -112,7 +112,7 @@ impl PaletteApp {
             if let Some(d) = detail {
                 error.push_str(&format!("（诊断：{d}）"));
             }
-            eprintln!(
+            log::debug!(
                 "[dd-gui] 扩展 {ext_id} 连续崩溃 {n} 次 ≥ {MAX_CONSECUTIVE_CRASHES}，标记暂时不可用（设置→扩展管理可手动重试）；诊断：{}",
                 detail.unwrap_or("无")
             );
@@ -125,7 +125,7 @@ impl PaletteApp {
                 s.status = SourceStatus::Failed { error };
             }
         } else {
-            eprintln!(
+            log::debug!(
                 "[dd-gui] 扩展 {ext_id} 连续崩溃 {n}/{MAX_CONSECUTIVE_CRASHES} 次；诊断：{}",
                 detail.unwrap_or("无")
             );
@@ -136,7 +136,7 @@ impl PaletteApp {
     pub(crate) fn reset_crash(&mut self, ext_id: &str) {
         if let Some(g) = self.crash_guards.get_mut(ext_id) {
             if g.is_tripped() || g.consecutive() > 0 {
-                eprintln!("[dd-gui] 扩展 {ext_id} 恢复成功，清零连续崩溃计数");
+                log::warn!("[dd-gui] 扩展 {ext_id} 恢复成功，清零连续崩溃计数");
             }
             g.reset();
         }

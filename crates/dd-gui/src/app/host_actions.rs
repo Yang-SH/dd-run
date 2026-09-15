@@ -43,12 +43,13 @@ impl PaletteApp {
                 let Ok(params) = serde_json::from_value::<ShowStatusParams>(
                     msg.params.clone().unwrap_or(serde_json::Value::Null),
                 ) else {
-                    eprintln!("[dd-gui] host/show_status 参数解析失败（ext={ext_id}）");
+                    log::warn!("[dd-gui] host/show_status 参数解析失败（ext={ext_id}）");
                     return;
                 };
-                eprintln!(
+                log::debug!(
                     "[dd-gui] host/show_status（ext={ext_id}）：{} state={:?}",
-                    params.message, params.state
+                    params.message,
+                    params.state
                 );
                 self.show_toast(params.message, params.duration_ms);
             }
@@ -56,7 +57,7 @@ impl PaletteApp {
                 let Ok(params) = serde_json::from_value::<SetClipboardParams>(
                     msg.params.clone().unwrap_or(serde_json::Value::Null),
                 ) else {
-                    eprintln!("[dd-gui] host/set_clipboard 参数解析失败（ext={ext_id}）");
+                    log::warn!("[dd-gui] host/set_clipboard 参数解析失败（ext={ext_id}）");
                     return;
                 };
                 let result = std::thread::spawn(move || {
@@ -66,21 +67,21 @@ impl PaletteApp {
                 })
                 .join();
                 match result {
-                    Ok(Ok(())) => eprintln!("[dd-gui] host/set_clipboard（ext={ext_id}）成功"),
+                    Ok(Ok(())) => log::debug!("[dd-gui] host/set_clipboard（ext={ext_id}）成功"),
                     Ok(Err(e)) => {
-                        eprintln!("[dd-gui] host/set_clipboard（ext={ext_id}）失败：{e}")
+                        log::warn!("[dd-gui] host/set_clipboard（ext={ext_id}）失败：{e}")
                     }
-                    Err(_) => eprintln!("[dd-gui] host/set_clipboard 线程异常（ext={ext_id}）"),
+                    Err(_) => log::warn!("[dd-gui] host/set_clipboard 线程异常（ext={ext_id}）"),
                 }
             }
             METHOD_HOST_OPEN_URL => {
                 let Ok(params) = serde_json::from_value::<OpenUrlParams>(
                     msg.params.clone().unwrap_or(serde_json::Value::Null),
                 ) else {
-                    eprintln!("[dd-gui] host/open_url 参数解析失败（ext={ext_id}）");
+                    log::warn!("[dd-gui] host/open_url 参数解析失败（ext={ext_id}）");
                     return;
                 };
-                eprintln!("[dd-gui] host/open_url（ext={ext_id}）：{}", params.url);
+                log::debug!("[dd-gui] host/open_url（ext={ext_id}）：{}", params.url);
                 // v3.3 P1.5 修复：`file://` 协议改走 ShellExecute 自动派发——
                 // 目录 → Explorer 窗口；文件 → 关联程序（此前一律 webbrowser，
                 // 目录变浏览器索引页、`.txt`/`.html` 走浏览器而非关联程序）。
@@ -91,15 +92,15 @@ impl PaletteApp {
                 // （`file://host/share`）也从原来的 None 变成受支持的 UNC 路径。
                 if let Some(path) = crate::platform::resolve_file_url_to_path(&params.url) {
                     if let Err(e) = crate::platform::open_path(&path) {
-                        eprintln!(
+                        log::debug!(
                             "[dd-gui] host/open_url ShellExecute 失败（ext={ext_id}, path={path}）：{e}"
                         );
                     }
                 } else if let Err(e) = webbrowser::open(&params.url) {
-                    eprintln!("[dd-gui] host/open_url 浏览器打开失败（ext={ext_id}）：{e}");
+                    log::warn!("[dd-gui] host/open_url 浏览器打开失败（ext={ext_id}）：{e}");
                 }
             }
-            other => eprintln!("[dd-gui] 未知 host/* 请求：{other}（ext={ext_id}，已应答忽略）"),
+            other => log::debug!("[dd-gui] 未知 host/* 请求：{other}（ext={ext_id}，已应答忽略）"),
         }
     }
 }

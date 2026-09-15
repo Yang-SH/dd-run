@@ -275,7 +275,7 @@ impl PaletteApp {
         if self.stack.current().is_settings {
             return;
         }
-        eprintln!("[dd-gui] 打开设置页（PageStack 推页）");
+        log::debug!("[dd-gui] 打开设置页（PageStack 推页）");
         self.settings_category = SettingsCategory::default();
         self.stack.push(PageState::settings());
     }
@@ -289,7 +289,7 @@ impl PaletteApp {
         if self.settings.theme == pref {
             return;
         }
-        eprintln!("[dd-gui] 主题偏好变更：{} → 立即生效并保存", pref.label());
+        log::debug!("[dd-gui] 主题偏好变更：{} → 立即生效并保存", pref.label());
         self.settings.theme = pref;
         ctx.set_theme(theme::theme_preference(pref));
         // v4.7 D31：材质生效时同步 DWM 明暗染色（跟随新主题；best-effort）
@@ -316,7 +316,7 @@ impl PaletteApp {
         if self.settings.backdrop == backdrop {
             return;
         }
-        eprintln!("[dd-gui] 窗口材质：{} → 立即生效并保存", backdrop.label());
+        log::debug!("[dd-gui] 窗口材质：{} → 立即生效并保存", backdrop.label());
         self.settings.backdrop = backdrop;
         self.settings.save();
         self.refresh_backdrop(ctx);
@@ -349,7 +349,7 @@ impl PaletteApp {
         if self.settings.corner_pref == pref {
             return;
         }
-        eprintln!("[dd-gui] 窗口圆角：{} → 立即生效并保存", pref.label());
+        log::debug!("[dd-gui] 窗口圆角：{} → 立即生效并保存", pref.label());
         self.settings.corner_pref = pref;
         self.settings.save();
         if let Some(hwnd) = self.hwnd {
@@ -367,7 +367,7 @@ impl PaletteApp {
         if self.settings.border_mode == mode {
             return;
         }
-        eprintln!("[dd-gui] 面板边框：{} → 立即生效并保存", mode.label());
+        log::info!("[dd-gui] 面板边框：{} → 立即生效并保存", mode.label());
         self.settings.border_mode = mode;
         self.settings.save();
         if self.backdrop_active {
@@ -478,7 +478,7 @@ impl PaletteApp {
         if self.settings.open_view == view {
             return;
         }
-        eprintln!("[dd-gui] 首屏视图变更：{}", view.label());
+        log::debug!("[dd-gui] 首屏视图变更：{}", view.label());
         self.settings.open_view = view;
         self.stack.root_mut().list.set_empty_view(if show_all {
             dd_gui::state::EmptyQueryView::All
@@ -495,7 +495,7 @@ impl PaletteApp {
         if self.settings.search_apps == on {
             return;
         }
-        eprintln!("[dd-gui] 搜索应用：{on}");
+        log::debug!("[dd-gui] 搜索应用：{on}");
         self.settings.search_apps = on;
         self.stack.root_mut().list.set_apps_hidden(!on);
         self.settings.save();
@@ -506,7 +506,7 @@ impl PaletteApp {
     /// 立即持久化 + 置脏标记；**离开设置页时**由 `ui()` 的 size-diff 收口点
     /// 消费并全量重聚合（websearch 进程须以新环境变量重启才能生效）。
     pub(crate) fn apply_search_engines(&mut self, ctx: &egui::Context) {
-        eprintln!(
+        log::debug!(
             "[dd-gui] 搜索引擎配置变更：{} 个引擎已保存（离开设置页后重新聚合生效）",
             self.settings.search_engines.len()
         );
@@ -518,7 +518,7 @@ impl PaletteApp {
     /// 搜索引擎配置变更后的全量重聚合：重走 scan → 注入引擎环境 → collect
     /// → 替换 Root 列表（复用首屏聚合的全部既有机制，含进程替换与 LRU）。
     pub(crate) fn restart_aggregation(&mut self) {
-        eprintln!("[dd-gui] 搜索引擎配置变更 → 重新聚合首屏");
+        log::debug!("[dd-gui] 搜索引擎配置变更 → 重新聚合首屏");
         // 进程将以新环境变量（搜索引擎/语言）重启：作废已缓存的兜底模板与
         // 在途拉取，否则会残留旧引擎/旧语言的兜底项（如仅启用 Bing 仍显示
         // 全部搜索引擎的「在 X 搜索 …」）。下一帧由新进程重新拉取正确模板。

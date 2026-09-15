@@ -39,3 +39,26 @@ jobs:
 
       - name: Format check
         run: cargo fmt --all --check
+
+  # O3 依赖治理（docs/optimization-plan.md §2.5）：与平台无关，放 linux runner 最快。
+  # - cargo-audit：RustSec 漏洞扫描，发现 vulnerability 即失败（默认门槛；unmaintained/
+  #   informational 只警告不阻塞，避免第三方仓库的软性告警卡死 CI）。
+  # - cargo-machete：死依赖检测（O3 原方案是 cargo-udeps，但它需要 nightly 工具链且
+  #   每次冷编译整个依赖树，CI 成本高；machete 基于 identifier 匹配、stable 秒级，
+  #   对本项目规模足够——若出现误报，用 workspace 层的 [package.metadata.ignore] 豁免）。
+  audit:
+    name: dependencies (audit + machete)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install cargo-audit & cargo-machete (prebuilt)
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-audit,cargo-machete
+
+      - name: Security audit (RustSec advisory-db)
+        run: cargo audit
+
+      - name: Unused dependencies
+        run: cargo machete

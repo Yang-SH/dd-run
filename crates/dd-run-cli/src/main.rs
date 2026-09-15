@@ -61,6 +61,10 @@ enum Command {
 }
 
 fn main() -> ExitCode {
+    // O4：装配日志后端（级别取 `DDRUN_LOG`，未设 = debug）。自检 CLI 的协议输出走
+    // stdout，日志恒走 stderr，两者互不污染。
+    dd_protocol::logging::init();
+
     let args: Vec<String> = std::env::args().skip(1).collect();
     let mut command: Option<Command> = None;
     let mut dir: Option<PathBuf> = None;
@@ -83,19 +87,19 @@ fn main() -> ExitCode {
             "--ext-id" => match iter.next() {
                 Some(value) => ext_id = Some(value.clone()),
                 None => {
-                    eprintln!("错误：`--ext-id` 缺少扩展 id");
+                    log::warn!("错误：`--ext-id` 缺少扩展 id");
                     return ExitCode::FAILURE;
                 }
             },
             "--extensions-dir" => match iter.next() {
                 Some(value) => dir = Some(PathBuf::from(value)),
                 None => {
-                    eprintln!("错误：`--extensions-dir` 缺少目录参数");
+                    log::warn!("错误：`--extensions-dir` 缺少目录参数");
                     return ExitCode::FAILURE;
                 }
             },
             other => {
-                eprintln!("错误：未知参数 `{other}`");
+                log::warn!("错误：未知参数 `{other}`");
                 print_usage();
                 return ExitCode::FAILURE;
             }

@@ -125,7 +125,7 @@ impl PaletteApp {
                             }
                             None => {
                                 self.icon_failed.insert(icon.value.clone());
-                                eprintln!(
+                                log::debug!(
                                     "[dd-gui] path 图标读盘/解码失败：{}（回落占位 glyph，本次会话不再重试）",
                                     icon.value
                                 );

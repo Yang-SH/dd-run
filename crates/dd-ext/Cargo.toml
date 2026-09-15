@@ -10,6 +10,8 @@ publish = false
 dd-protocol = { path = "../dd-protocol" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+# O4 可观测性：日志走 `log` facade，后端由 dd-protocol::logging 提供（恒 stderr）。
+log = "0.4"
 anyhow = "1"
 fuzzy-matcher = "0.3"          # 文件名/路径模糊评分（纯 Rust，零 C 依赖）
 chrono = "0.4"                  # 文件修改时间 → Unix 秒（近因加分；手搓 civil→days 易错，用成熟库保证正确）

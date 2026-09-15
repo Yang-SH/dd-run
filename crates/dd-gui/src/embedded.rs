@@ -63,7 +63,7 @@ pub fn materialize() -> Option<PathBuf> {
         Err(e) => {
             // 物化失败（磁盘满/权限）不致命：宿主回退 exe 同目录发现；
             // 若同目录也无扩展则按既有逻辑给出空扩展提示。
-            eprintln!("[dd-gui] 内嵌扩展物化失败（回退 exe 同目录发现）：{e}");
+            log::warn!("[dd-gui] 内嵌扩展物化失败（回退 exe 同目录发现）：{e}");
             None
         }
     }

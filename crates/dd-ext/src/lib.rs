@@ -28,10 +28,11 @@
 
 use std::io::{self, Read, Write};
 
+use dd_protocol::envelope::{self, error_response, Envelope};
 use dd_protocol::framing::{encode, Decoder, Frame};
 use dd_protocol::messages::{
     error_codes, CommandListResult, GetCommandParams, GetCommandResult, GetItemsParams,
-    GetItemsResult, InitializeResult, InvokeParams, ProviderInfo, RawMessage, JSONRPC_VERSION,
+    GetItemsResult, InitializeResult, InvokeParams, ProviderInfo, JSONRPC_VERSION,
 };
 use dd_protocol::methods::{
     METHOD_CLOSE, METHOD_FALLBACK_COMMANDS, METHOD_GET_COMMAND, METHOD_GET_ITEMS,
@@ -108,6 +109,9 @@ pub struct ExtensionSpec {
 
 /// 运行扩展主循环（进程入口）：读 stdin 的 NDJSON，逐条响应，直到 `close` 或 stdin EOF。
 pub fn run(spec: &ExtensionSpec) {
+    // O4：扩展子进程装配日志后端（恒 stderr——§2.5 规定 stdout 只出协议消息）。
+    dd_protocol::logging::init();
+
     let mut stdin = io::stdin().lock();
     let mut stdout = io::stdout().lock();
 
@@ -121,12 +125,39 @@ pub fn run(spec: &ExtensionSpec) {
             Ok(n) => {
                 let mut should_exit = false;
                 for frame in decoder.push(&buf[..n]) {
-                    if let Frame::Message(line) = frame {
-                        let (outputs, exit) = serve_line(spec, &line);
-                        for msg in outputs {
-                            send(spec, &mut stdout, &msg);
+                    match frame {
+                        Frame::Message(line) => {
+                            let (outputs, exit) = serve_line(spec, &line);
+                            for msg in outputs {
+                                send(spec, &mut stdout, &msg);
+                            }
+                            should_exit |= exit;
                         }
-                        should_exit |= exit;
+                        // §2.3 + §9.3：超限帧 → 回 `-32600`（id 无法可靠取得，用 `null`）
+                        // 并**关闭连接**（退出进程）——继续读取会导致流错位。
+                        Frame::TooLarge { size, max } => {
+                            log(
+                                spec,
+                                &format!("单条消息 {size} 字节超过上限 {max} 字节，关闭（§2.3）"),
+                            );
+                            send(
+                                spec,
+                                &mut stdout,
+                                &error_response(
+                                    None,
+                                    error_codes::INVALID_REQUEST,
+                                    "Invalid Request",
+                                    Some(serde_json::json!({
+                                        "reason": "message_too_large",
+                                        "size": size,
+                                        "max": max,
+                                    })),
+                                ),
+                            );
+                            should_exit = true;
+                        }
+                        // §2.2 规则 6：非 UTF-8 视同无效帧（无对应 JSON-RPC 错误码），丢弃
+                        Frame::InvalidUtf8 => log(spec, "收到非 UTF-8 帧，已丢弃（§2.2 规则 6）"),
                     }
                 }
                 if should_exit {
@@ -144,32 +175,18 @@ pub fn run(spec: &ExtensionSpec) {
 
 /// 处理单行请求（纯函数，便于单测）。返回 `(待发送消息列表, 是否应退出)`。
 pub fn serve_line(spec: &ExtensionSpec, line: &str) -> (Vec<serde_json::Value>, bool) {
-    let msg: RawMessage = match serde_json::from_str(line) {
-        Ok(msg) => msg,
-        Err(_) => {
-            // §9.2：无法解析的行 → -32700（id 无法取得，故为 null）
-            return (
-                vec![make_error(
-                    None,
-                    error_codes::PARSE_ERROR,
-                    "Parse error",
-                    None,
-                )],
-                false,
-            );
+    let msg = match envelope::validate(line) {
+        Envelope::Valid(msg) => msg,
+        // §3.2/§3.4 的 `-32600` 与 §9.2 的 `-32700` 由共享校验层判定（单一来源，
+        // 与宿主侧逐条一致）：批处理数组、缺 `jsonrpc`、非 `"2.0"`、`id` 类型非法、
+        // `params` 非对象、`result`/`error` 并存均在此拦下。回错后连接保持（§9.3 非致命）。
+        other => {
+            let err = other
+                .to_error_response()
+                .expect("Envelope 非 Valid 时必有错误响应");
+            return (vec![err], false);
         }
     };
-    if msg.jsonrpc != JSONRPC_VERSION {
-        return (
-            vec![make_error(
-                msg.id,
-                error_codes::INVALID_REQUEST,
-                "Invalid Request",
-                None,
-            )],
-            false,
-        );
-    }
 
     // §3.3：只有"有 method 且有 id"才是请求；通知与响应本扩展不处理
     let (Some(method), Some(id)) = (msg.method.clone(), msg.id) else {
@@ -207,7 +224,7 @@ pub fn serve_line(spec: &ExtensionSpec, line: &str) -> (Vec<serde_json::Value>, 
                 .and_then(|v| serde_json::from_value::<GetCommandParams>(v).ok());
             let Some(params) = parsed else {
                 return (
-                    vec![make_error(
+                    vec![error_response(
                         Some(id),
                         error_codes::INVALID_PARAMS,
                         "Invalid params",
@@ -237,7 +254,7 @@ pub fn serve_line(spec: &ExtensionSpec, line: &str) -> (Vec<serde_json::Value>, 
                 .and_then(|v| serde_json::from_value::<InvokeParams>(v).ok());
             let Some(params) = parsed else {
                 return (
-                    vec![make_error(
+                    vec![error_response(
                         Some(id),
                         error_codes::INVALID_PARAMS,
                         "Invalid params",
@@ -302,7 +319,7 @@ pub fn serve_line(spec: &ExtensionSpec, line: &str) -> (Vec<serde_json::Value>, 
                         &format!("-> get_items {page_id_for_err} => 无子页（-32005）"),
                     );
                     (
-                        vec![make_error(
+                        vec![error_response(
                             Some(id),
                             error_codes::PAGE_NOT_FOUND,
                             "Page not found",
@@ -318,7 +335,7 @@ pub fn serve_line(spec: &ExtensionSpec, line: &str) -> (Vec<serde_json::Value>, 
             (vec![make_result(id, serde_json::json!({}))], true)
         }
         other => (
-            vec![make_error(
+            vec![error_response(
                 Some(id),
                 error_codes::METHOD_NOT_FOUND,
                 "Method not found",
@@ -377,18 +394,8 @@ fn make_result(id: u64, result: serde_json::Value) -> serde_json::Value {
     serde_json::json!({ "jsonrpc": JSONRPC_VERSION, "id": id, "result": result })
 }
 
-fn make_error(
-    id: Option<u64>,
-    code: i32,
-    message: &str,
-    data: Option<serde_json::Value>,
-) -> serde_json::Value {
-    let mut error = serde_json::json!({ "code": code, "message": message });
-    if let Some(data) = data {
-        error["data"] = data;
-    }
-    serde_json::json!({ "jsonrpc": JSONRPC_VERSION, "id": id, "error": error })
-}
+// 注：错误响应构造统一走 `dd_protocol::envelope::error_response`（单一来源，O1）——
+// 宿主与扩展两侧的 `-32700`/`-32600` 形状因此由同一份代码保证。
 
 /// §2.2：一行一条紧凑 JSON，以 `\n` 结尾；失败只记日志（§2.5 日志走 stderr）。
 fn send(spec: &ExtensionSpec, out: &mut dyn Write, value: &serde_json::Value) {
@@ -406,7 +413,7 @@ fn send(spec: &ExtensionSpec, out: &mut dyn Write, value: &serde_json::Value) {
 
 /// §2.5：日志只走 stderr。
 fn log(spec: &ExtensionSpec, message: &str) {
-    eprintln!("[{}] {message}", spec.log_tag);
+    log::debug!("[{}] {message}", spec.log_tag);
 }
 
 #[cfg(test)]
@@ -702,6 +709,61 @@ mod tests {
         let line = r#"{"jsonrpc":"1.0","id":1,"method":"initialize","params":{}}"#;
         let (out, _) = serve_line(&spec(), line);
         assert_eq!(out[0]["error"]["code"], error_codes::INVALID_REQUEST);
+    }
+
+    #[test]
+    fn batch_array_returns_32600_not_32700() {
+        // §3.4：批处理数组 → -32600（此前误回 -32700），且非致命（§9.3）
+        let line = r#"[{"jsonrpc":"2.0","id":1,"method":"initialize"}]"#;
+        let (out, exit) = serve_line(&spec(), line);
+        assert_eq!(out[0]["error"]["code"], error_codes::INVALID_REQUEST);
+        assert_eq!(out[0]["error"]["data"]["reason"], "batch_array");
+        assert!(out[0]["id"].is_null(), "取不到 id → null（§2.3）");
+        assert!(!exit, "信封错误非致命");
+    }
+
+    #[test]
+    fn missing_jsonrpc_returns_32600_and_keeps_id() {
+        let line = r#"{"id":4,"method":"top_level_commands","params":{}}"#;
+        let (out, _) = serve_line(&spec(), line);
+        assert_eq!(out[0]["error"]["code"], error_codes::INVALID_REQUEST);
+        assert_eq!(out[0]["error"]["data"]["reason"], "missing_jsonrpc");
+        assert_eq!(out[0]["id"], 4, "id 可解析时回带上（§2.3）");
+    }
+
+    #[test]
+    fn invalid_id_type_returns_32600_with_null_id() {
+        let line = r#"{"jsonrpc":"2.0","id":"1","method":"initialize"}"#;
+        let (out, _) = serve_line(&spec(), line);
+        assert_eq!(out[0]["error"]["code"], error_codes::INVALID_REQUEST);
+        assert_eq!(out[0]["error"]["data"]["reason"], "invalid_id");
+        assert!(out[0]["id"].is_null());
+    }
+
+    #[test]
+    fn non_object_params_returns_32600() {
+        let line = r#"{"jsonrpc":"2.0","id":5,"method":"get_items","params":[]}"#;
+        let (out, _) = serve_line(&spec(), line);
+        assert_eq!(out[0]["error"]["code"], error_codes::INVALID_REQUEST);
+        assert_eq!(out[0]["error"]["data"]["reason"], "non_object_params");
+    }
+
+    #[test]
+    fn result_and_error_together_returns_32600() {
+        let line = r#"{"jsonrpc":"2.0","id":6,"result":{},"error":{"code":-32603,"message":"x"}}"#;
+        let (out, _) = serve_line(&spec(), line);
+        assert_eq!(out[0]["error"]["code"], error_codes::INVALID_REQUEST);
+        assert_eq!(out[0]["error"]["data"]["reason"], "result_and_error");
+    }
+
+    #[test]
+    fn null_id_response_is_accepted_not_rejected() {
+        // ⚠️ 回归：`"id": null` 是本协议自身错误响应的合法形状（§2.3）。
+        // 若判为非法，对端收到合法错误响应会被再次判非法 → 往返互喷。
+        let line = r#"{"jsonrpc":"2.0","id":null,"error":{"code":-32700,"message":"Parse error"}}"#;
+        let (out, exit) = serve_line(&spec(), line);
+        assert!(out.is_empty(), "响应不是请求，不应回复：{out:?}");
+        assert!(!exit);
     }
 
     #[test]

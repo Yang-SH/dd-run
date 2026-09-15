@@ -643,7 +643,7 @@ impl Settings {
             Err(e) => {
                 // 不存在属首次运行的常态，不算错误；其他读盘失败记日志后回落默认。
                 if e.kind() != std::io::ErrorKind::NotFound {
-                    eprintln!(
+                    log::debug!(
                         "[dd-gui] 配置读取失败（{}）：{e}，回落默认设置",
                         path.display()
                     );
@@ -657,19 +657,19 @@ impl Settings {
     /// 不阻断 UI——下次启动回落上次成功落盘的值或默认）。
     pub fn save(&self) {
         let Some(path) = config_file() else {
-            eprintln!("[dd-gui] 配置目录不可定位，设置未持久化");
+            log::debug!("[dd-gui] 配置目录不可定位，设置未持久化");
             return;
         };
         let dir = path.parent().map(std::path::Path::to_path_buf);
         if let Some(dir) = dir {
             if let Err(e) = std::fs::create_dir_all(&dir) {
-                eprintln!("[dd-gui] 配置目录创建失败（{}）：{e}", dir.display());
+                log::warn!("[dd-gui] 配置目录创建失败（{}）：{e}", dir.display());
                 return;
             }
         }
         match std::fs::write(&path, self.to_json_string()) {
-            Ok(()) => eprintln!("[dd-gui] 设置已保存：{}", path.display()),
-            Err(e) => eprintln!("[dd-gui] 配置写入失败（{}）：{e}", path.display()),
+            Ok(()) => log::info!("[dd-gui] 设置已保存：{}", path.display()),
+            Err(e) => log::warn!("[dd-gui] 配置写入失败（{}）：{e}", path.display()),
         }
     }
 }

@@ -600,3 +600,65 @@ fn roundtrip_m4_host_requests_are_answered_and_recorded() {
 
     process.close().expect("优雅关闭");
 }
+
+/// §2.3 + §9.3：超限消息的**致命**处置——扩展收到超限帧后回 `-32600` 并关闭连接。
+///
+/// 做法：宿主发出超过 1 MiB 的请求（`params` 塞满），扩展侧 `Decoder` 判定
+/// `Frame::TooLarge` → 回 `-32600`（`id: null`，超限帧无法可靠取 id）→ 退出进程；
+/// 宿主随即收 stdout EOF。`-32600` 有多类触发，§9.3 只把「消息超上限」列为致命。
+#[test]
+fn oversized_request_closes_connection_with_32600() {
+    let tmp = TempDir::new("oversized");
+    let Some(ext) = load_sample(&tmp) else {
+        eprintln!(
+            "SKIP: dd-ext-sample 未构建，先 `cargo build`（cargo test --workspace 会自动构建）"
+        );
+        return;
+    };
+
+    let mut process = ExtensionProcess::spawn(&ext).expect("spawn 示例扩展");
+    process.initialize("1.0", "0.1.0").expect("握手成功");
+
+    // 构造 > 1 MiB（§2.3 默认上限 1 048 576 B）的请求：query 撑到上限以上
+    let big = "x".repeat(1_100_000);
+    let params = serde_json::json!({
+        "id": "m2.toast",
+        "sender": "top_level",
+        "context": { "query": big },
+    });
+
+    let outcome = process.call("invoke", params, TIMEOUT_INVOKE);
+
+    // 扩展按 §2.3 关闭连接（自行退出）→ 宿主读线程收 EOF
+    assert!(
+        matches!(outcome, Err(ProtocolError::ProcessExited)),
+        "扩展应在超限后关闭连接（宿主收 EOF），实际 {outcome:?}"
+    );
+
+    // 扩展回的 `-32600` 带 `id: null`，不匹配任何 in-flight id → 归入 unmatched 留痕
+    let reply = process
+        .unmatched
+        .iter()
+        .find(|m| {
+            m.error
+                .as_ref()
+                .is_some_and(|e| e.code == error_codes::INVALID_REQUEST)
+        })
+        .unwrap_or_else(|| panic!("应收到扩展回的 -32600：{:?}", process.unmatched));
+    assert_eq!(reply.id, None, "超限帧无法可靠取得 id → 回 null（§2.3）");
+    assert_eq!(
+        reply.error.as_ref().unwrap().data.as_ref().unwrap()["reason"],
+        "message_too_large"
+    );
+
+    // 进程退出（§9.3：超限属致命场景）——注意 EOF 先于「进程记录退出」到达，
+    // `has_exited` 底层是 `try_wait`，故轮询等待而非立即断言（避免时序竞态）。
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+    while !process.has_exited() && std::time::Instant::now() < deadline {
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    assert!(
+        process.has_exited(),
+        "超限属致命场景，连接应已关闭（进程退出）"
+    );
+}

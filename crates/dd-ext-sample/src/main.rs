@@ -22,10 +22,11 @@
 use std::io::{self, Read, Write};
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 
+use dd_protocol::envelope::{self, error_response, Envelope};
 use dd_protocol::framing::{encode, Decoder, Frame};
 use dd_protocol::messages::{
     error_codes, CommandListResult, GetCommandParams, GetCommandResult, GetItemsParams,
-    GetItemsResult, InitializeResult, InvokeParams, ItemsChangedParams, ProviderInfo, RawMessage,
+    GetItemsResult, InitializeResult, InvokeParams, ItemsChangedParams, ProviderInfo,
     JSONRPC_VERSION,
 };
 use dd_protocol::methods::{
@@ -48,6 +49,9 @@ const PAGE_ID: &str = "m2.page";
 static PAGE_FETCHES: AtomicUsize = AtomicUsize::new(0);
 
 fn main() {
+    // O4：扩展子进程同样装配日志后端（恒 stderr，§2.5 禁止污染 stdout）。
+    dd_protocol::logging::init();
+
     let stdin = io::stdin();
     let mut stdin = stdin.lock();
     let stdout = io::stdout();
@@ -63,10 +67,33 @@ fn main() {
             Ok(n) => {
                 let mut should_exit = false;
                 for frame in decoder.push(&buf[..n]) {
-                    if let Frame::Message(line) = frame {
-                        if handle(&line, &mut stdout) {
+                    match frame {
+                        Frame::Message(line) => {
+                            if handle(&line, &mut stdout) {
+                                should_exit = true;
+                            }
+                        }
+                        // §2.3 + §9.3：超限帧 → 回 `-32600`（id 无法可靠取得，用 `null`）
+                        // 并**关闭连接**（退出）；继续读取会导致流错位。
+                        Frame::TooLarge { size, max } => {
+                            log(&format!(
+                                "单条消息 {size} 字节超过上限 {max} 字节，关闭（§2.3）"
+                            ));
+                            send_error(
+                                &mut stdout,
+                                None,
+                                error_codes::INVALID_REQUEST,
+                                "Invalid Request",
+                                Some(serde_json::json!({
+                                    "reason": "message_too_large",
+                                    "size": size,
+                                    "max": max,
+                                })),
+                            );
                             should_exit = true;
                         }
+                        // §2.2 规则 6：非 UTF-8 视同无效帧（无对应 JSON-RPC 错误码），丢弃
+                        Frame::InvalidUtf8 => log("收到非 UTF-8 帧，已丢弃（§2.2 规则 6）"),
                     }
                 }
                 if should_exit {
@@ -84,24 +111,16 @@ fn main() {
 
 /// 处理一条消息；返回 `true` 表示已处理 `close`、可以退出。
 fn handle(line: &str, out: &mut dyn Write) -> bool {
-    let msg: RawMessage = match serde_json::from_str(line) {
-        Ok(msg) => msg,
-        Err(_) => {
-            // §9.2：无法解析的行 → -32700（id 无法取得，故为 null）
-            send_error(out, None, error_codes::PARSE_ERROR, "Parse error", None);
+    let msg = match envelope::validate(line) {
+        Envelope::Valid(msg) => msg,
+        // §3.2/§3.4：`-32700` / `-32600` 由共享校验层判定（与宿主、dd-ext 同一份规则）。
+        other => {
+            if let Some(err) = other.to_error_response() {
+                send(out, &err);
+            }
             return false;
         }
     };
-    if msg.jsonrpc != JSONRPC_VERSION {
-        send_error(
-            out,
-            msg.id,
-            error_codes::INVALID_REQUEST,
-            "Invalid Request",
-            None,
-        );
-        return false;
-    }
 
     // §3.3：只有"有 method 且有 id"才是请求；通知与响应本示例不处理
     let (Some(method), Some(id)) = (msg.method.clone(), msg.id) else {
@@ -599,14 +618,8 @@ fn send_error(
     message: &str,
     data: Option<serde_json::Value>,
 ) {
-    let mut error = serde_json::json!({ "code": code, "message": message });
-    if let Some(data) = data {
-        error["data"] = data;
-    }
-    send(
-        out,
-        &serde_json::json!({ "jsonrpc": JSONRPC_VERSION, "id": id, "error": error }),
-    );
+    // 形状统一来自 `dd_protocol::envelope::error_response`（单一来源，O1）
+    send(out, &error_response(id, code, message, data));
 }
 
 /// §2.2：一行一条紧凑 JSON，以 `\n` 结尾。
@@ -625,5 +638,5 @@ fn send(out: &mut dyn Write, value: &serde_json::Value) {
 
 /// §2.5：日志只走 stderr。
 fn log(message: &str) {
-    eprintln!("[dd-ext-sample] {message}");
+    log::debug!("[dd-ext-sample] {message}");
 }

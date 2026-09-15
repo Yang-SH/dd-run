@@ -48,22 +48,22 @@ impl PaletteApp {
                         }
                         if stub_reheat {
                             self.mark_source_warm(&ext_id);
-                            eprintln!("[dd-gui] 桩复热成功：ext={ext_id} 转 warm（LRU 保活）");
+                            log::debug!("[dd-gui] 桩复热成功：ext={ext_id} 转 warm（LRU 保活）");
                         }
                         let action = result::resolve(&command_result);
-                        eprintln!("[dd-gui] invoke 成功：{command_result:?} → 动作 {action:?}");
+                        log::debug!("[dd-gui] invoke 成功：{command_result:?} → 动作 {action:?}");
                         self.apply_action(ctx, action, &ext_id);
                     }
                     Err(e) => {
                         if stub_reheat {
                             // 复热失败：新进程不归还（drop 即强杀），扩展保持 stub（A6 回退）
-                            eprintln!("[dd-gui] 桩复热失败：ext={ext_id}，回退 stub：{e}");
+                            log::warn!("[dd-gui] 桩复热失败：ext={ext_id}，回退 stub：{e}");
                         } else if let Some(mut p) = proc {
                             if p.has_exited() {
                                 // A8：进程在调用期间崩溃——丢弃死进程，命令回落 stub
                                 // （下次点击走复热 spawn），宿主继续运行；连续计数进熔断（§11）。
                                 let detail = p.failure_detail();
-                                eprintln!(
+                                log::debug!(
                                     "[dd-gui] invoke 失败：ext={ext_id} 进程已退出（A8 崩溃恢复），丢弃死进程回落 stub：{e}{}",
                                     detail
                                         .as_deref()
@@ -77,7 +77,7 @@ impl PaletteApp {
                                 self.store_warm_process(ext_id.clone(), p);
                             }
                         }
-                        eprintln!("[dd-gui] invoke 失败：{e}");
+                        log::warn!("[dd-gui] invoke 失败：{e}");
                         self.show_error_toast(self.tr("toast.invoke_fail").replace("{e}", &e));
                     }
                 }
@@ -117,12 +117,12 @@ impl PaletteApp {
     /// M4：熔断（连续崩溃，§11）的扩展**不再尝试 spawn**，等重启/手动重试。
     pub(crate) fn dispatch_invoke(&mut self, ext_id: &str, params: InvokeParams) {
         if self.invoke_rx.is_some() || self.inflight.contains(ext_id) {
-            eprintln!("[dd-gui] invoke 失败：ext={ext_id} 上一请求仍在处理");
+            log::warn!("[dd-gui] invoke 失败：ext={ext_id} 上一请求仍在处理");
             self.show_toast_kind(ToastKind::Error, self.tr("toast.ext_busy"), Some(2_000));
             return;
         }
         if self.is_crash_tripped(ext_id) {
-            eprintln!("[dd-gui] invoke 拒绝：ext={ext_id} 暂时不可用（连续崩溃熔断）");
+            log::warn!("[dd-gui] invoke 拒绝：ext={ext_id} 暂时不可用（连续崩溃熔断）");
             self.show_toast_kind(
                 ToastKind::Error,
                 self.tr("toast.ext_unavailable").replace("{id}", ext_id),
@@ -138,7 +138,7 @@ impl PaletteApp {
             let skip_lookup = self.fallback_store.contains_template(ext_id, &params.id);
             self.start_invoke_reheat(&ext, params, skip_lookup); // 桩复热
         } else {
-            eprintln!("[dd-gui] invoke 失败：ext={ext_id} 无扩展信息");
+            log::warn!("[dd-gui] invoke 失败：ext={ext_id} 无扩展信息");
             self.show_error_toast(self.tr("toast.ext_missing"));
         }
     }
@@ -147,9 +147,9 @@ impl PaletteApp {
     pub(crate) fn start_invoke(&mut self, ext_id: &str, params: InvokeParams) {
         self.last_command_id = Some(params.id.clone());
         self.last_invoke = Some(params.clone()); // Confirm 重发沿用
-        eprintln!("[dd-gui] invoke 发起：ext={ext_id} cmd={}", params.id);
+        log::debug!("[dd-gui] invoke 发起：ext={ext_id} cmd={}", params.id);
         let Some(idx) = self.processes.iter().position(|(id, _)| id == ext_id) else {
-            eprintln!("[dd-gui] invoke 失败：ext={ext_id} 进程不可用（可能 in-flight）");
+            log::warn!("[dd-gui] invoke 失败：ext={ext_id} 进程不可用（可能 in-flight）");
             self.show_error_toast(self.tr("toast.ext_busy"));
             return;
         };
@@ -183,7 +183,7 @@ impl PaletteApp {
     ) {
         self.last_command_id = Some(params.id.clone());
         self.last_invoke = Some(params.clone());
-        eprintln!(
+        log::debug!(
             "[dd-gui] 桩复热：ext={} cmd={}（spawn→initialize→{}→invoke）",
             ext.manifest.id,
             params.id,

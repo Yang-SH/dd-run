@@ -71,7 +71,9 @@ impl PaletteApp {
                             }
                             if stub_reheat {
                                 self.mark_source_warm(&ext_id);
-                                eprintln!("[dd-gui] 桩复热成功：ext={ext_id} 转 warm（LRU 保活）");
+                                log::debug!(
+                                    "[dd-gui] 桩复热成功：ext={ext_id} 转 warm（LRU 保活）"
+                                );
                             }
                             let items_raw = res.items;
                             let is_loading = res.is_loading;
@@ -79,7 +81,7 @@ impl PaletteApp {
                                 .iter()
                                 .map(|cmd| aggregator::to_panel_item(cmd, &ext_id, "", lang))
                                 .collect();
-                            eprintln!(
+                            log::debug!(
                                 "[dd-gui] get_items 成功：page={page_id} items={}",
                                 items.len()
                             );
@@ -91,7 +93,7 @@ impl PaletteApp {
                             // 按最新 query 补拉。非过期结果走下方正常落地。
                             let landing_query = self.stack.current().list.query().to_owned();
                             if landing_is_stale(&landing_query, req_search.as_deref()) {
-                                eprintln!(
+                                log::debug!(
                                     "[dd-gui] get_items 结果过期：req={req_search:?} cur={landing_query:?} → 不落地 + 重武装补拉"
                                 );
                                 self.stack.current_mut().begin_refetch(Instant::now());
@@ -141,12 +143,12 @@ impl PaletteApp {
                         Err(e) => {
                             if stub_reheat {
                                 // 复热失败：不保活新进程、扩展保持 stub（A6 回退）
-                                eprintln!("[dd-gui] 桩复热失败：ext={ext_id}，回退 stub：{e}");
+                                log::warn!("[dd-gui] 桩复热失败：ext={ext_id}，回退 stub：{e}");
                             } else if let Some(mut p) = proc {
                                 if p.has_exited() {
                                     // A8：进程在 get_items 期间崩溃——丢弃死进程，回落 stub
                                     let detail = p.failure_detail();
-                                    eprintln!(
+                                    log::debug!(
                                         "[dd-gui] get_items 失败：ext={ext_id} 进程已退出（A8 崩溃恢复），丢弃死进程回落 stub：{e}{}",
                                         detail
                                             .as_deref()
@@ -159,7 +161,7 @@ impl PaletteApp {
                                     self.store_warm_process(ext_id.clone(), p);
                                 }
                             }
-                            eprintln!("[dd-gui] get_items 失败：page={page_id}：{e}");
+                            log::warn!("[dd-gui] get_items 失败：page={page_id}：{e}");
                             let page = self.stack.current_mut();
                             page.clear_refetch(); // 落地（失败）：撤销延迟骨架标记
                                                   // v3.3：失败落地同样保留页内 query（不吞掉 loading 期间输入）
@@ -195,7 +197,7 @@ impl PaletteApp {
                         // 进程已死或复热失败：丢弃（drop 即强杀/清理），回落 stub
                         self.drop_source_to_stub(&ext_id);
                     }
-                    eprintln!("[dd-gui] get_items 结果作废：已离开 page={page_id}");
+                    log::debug!("[dd-gui] get_items 结果作废：已离开 page={page_id}");
                 }
             }
             Err(TryRecvError::Empty) => {}
@@ -261,7 +263,7 @@ impl PaletteApp {
                                         // 骨架（快速补拉不闪骨架，慢补拉才显示）；不清空态文案（交由落地统一替换）。
         self.stack.current_mut().begin_refetch(Instant::now());
         if self.page_rx.is_some() || self.inflight.contains(ext_id) {
-            eprintln!("[dd-gui] get_items 失败：ext={ext_id} 上一请求仍在处理");
+            log::warn!("[dd-gui] get_items 失败：ext={ext_id} 上一请求仍在处理");
             let page = self.stack.current_mut();
             page.clear_refetch(); // 未真正发起 → 撤销延迟骨架（否则 250ms 后误显示）
             page.is_loading = false;
@@ -269,7 +271,7 @@ impl PaletteApp {
             return;
         }
         if self.is_crash_tripped(ext_id) {
-            eprintln!("[dd-gui] get_items 拒绝：ext={ext_id} 暂时不可用（连续崩溃熔断）");
+            log::warn!("[dd-gui] get_items 拒绝：ext={ext_id} 暂时不可用（连续崩溃熔断）");
             let page = self.stack.current_mut();
             page.clear_refetch(); // 未真正发起 → 撤销延迟骨架
             page.is_loading = false;
@@ -297,7 +299,7 @@ impl PaletteApp {
     pub(crate) fn fetch_page_warm(&mut self, ext_id: &str, page_id: &str, search: Option<String>) {
         let lang = self.lang_effective;
         let Some(idx) = self.processes.iter().position(|(id, _)| id == ext_id) else {
-            eprintln!("[dd-gui] get_items 失败：ext={ext_id} 进程不可用（可能 in-flight）");
+            log::warn!("[dd-gui] get_items 失败：ext={ext_id} 进程不可用（可能 in-flight）");
             let page = self.stack.current_mut();
             page.clear_refetch(); // 未真正发起 → 撤销延迟骨架
             page.is_loading = false;
@@ -333,7 +335,7 @@ impl PaletteApp {
         search: Option<String>,
         command_id: Option<String>,
     ) {
-        eprintln!(
+        log::debug!(
             "[dd-gui] 桩复热：ext={} page={page_id}（spawn→initialize→get_command→get_items）",
             ext.manifest.id
         );

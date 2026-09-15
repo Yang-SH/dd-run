@@ -1,0 +1,14 @@
+# O3 依赖治理（docs/optimization-plan.md §2.5）：「可升级」维度的落地。
+# 方案原文是 cargo-outdated，但其安装与元数据编译成本高且无提醒机制；
+# Dependabot 是同等能力的零维护替代——按月检查（低打扰），发现新版本自动开 PR。
+# 漏洞维度（RustSec）由 ci.yml 的 audit job 承担，二者互补。
+version: 2
+updates:
+  - package-ecosystem: cargo
+    directory: /
+    schedule:
+      interval: monthly
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly

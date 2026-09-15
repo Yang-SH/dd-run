@@ -178,7 +178,7 @@ fn ensure_icon_file() -> Option<std::path::PathBuf> {
     };
     if stale {
         fs::write(&path, APP_ICO)
-            .map_err(|e| eprintln!("[dd-gui] app.ico 物化失败（托盘降级）：{e}"))
+            .map_err(|e| log::warn!("[dd-gui] app.ico 物化失败（托盘降级）：{e}"))
             .ok()?;
     }
     Some(path)
@@ -231,7 +231,7 @@ fn message_loop(tx: Sender<TrayEvent>, ctx: eframe::egui::Context, click_flag: A
         )
     };
     if hicon.is_null() {
-        eprintln!(
+        log::debug!(
             "[dd-gui] 托盘图标加载失败（{ico_path:?} @ {px}px，托盘降级）：{}",
             std::io::Error::last_os_error()
         );
@@ -247,7 +247,7 @@ fn message_loop(tx: Sender<TrayEvent>, ctx: eframe::egui::Context, click_flag: A
         wc.hInstance = hinstance;
         wc.lpszClassName = class_name.as_ptr();
         if RegisterClassW(&wc) == 0 {
-            eprintln!(
+            log::debug!(
                 "[dd-gui] 托盘窗口类注册失败（托盘降级）：{}",
                 std::io::Error::last_os_error()
             );
@@ -268,7 +268,7 @@ fn message_loop(tx: Sender<TrayEvent>, ctx: eframe::egui::Context, click_flag: A
             std::ptr::null(),
         );
         if hwnd.is_null() {
-            eprintln!(
+            log::debug!(
                 "[dd-gui] 托盘窗口创建失败（托盘降级）：{}",
                 std::io::Error::last_os_error()
             );
@@ -299,14 +299,14 @@ fn message_loop(tx: Sender<TrayEvent>, ctx: eframe::egui::Context, click_flag: A
         let tip = to_wide(TOOLTIP);
         nid.szTip[..tip.len()].copy_from_slice(&tip); // 长度 ≤128 由测试守卫
         if Shell_NotifyIconW(NIM_ADD, &nid) == 0 {
-            eprintln!(
+            log::debug!(
                 "[dd-gui] Shell_NotifyIconW(NIM_ADD) 失败（托盘降级）：{}",
                 std::io::Error::last_os_error()
             );
             return;
         }
     }
-    eprintln!("[dd-gui] 托盘已注册（{px}px 图标，dpi={dpi}）");
+    log::info!("[dd-gui] 托盘已注册（{px}px 图标，dpi={dpi}）");
 
     // 4) 消息循环（结构同 hotkey：GetMessage 阻塞，进程退出即终止线程）。
     loop {

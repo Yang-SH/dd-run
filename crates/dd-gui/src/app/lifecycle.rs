@@ -12,7 +12,7 @@ impl PaletteApp {
     // ── 窗口可见性 ───────────────────────────────────────────
 
     pub(crate) fn show(&mut self, ctx: &egui::Context) {
-        eprintln!("[dd-gui] show()：visible→false→true，重置状态并唤起");
+        log::debug!("[dd-gui] show()：visible→false→true，重置状态并唤起");
         self.visible = true;
         self.paint_hide_frame = false; // 显示时清掉可能残留的隐藏帧标记
         self.ever_focused = false;
@@ -81,10 +81,10 @@ impl PaletteApp {
         // `chrome_begin` 在循环结束后补执行。
         if self.native_resize {
             self.hide_pending = true;
-            eprintln!("[dd-gui] hide()：原生模态循环在途 → 推迟至循环结束后执行");
+            log::debug!("[dd-gui] hide()：原生模态循环在途 → 推迟至循环结束后执行");
             return;
         }
-        eprintln!("[dd-gui] hide()：visible→false（Visible(false) 排队）");
+        log::debug!("[dd-gui] hide()：visible→false（Visible(false) 排队）");
         self.panel_open.store(false, Ordering::Relaxed);
         self.hide_desync_since = None;
         // v4.17 亚克力体验优化：面板关闭时 take 鼠标守卫并**立即恢复默认光标**。
@@ -142,7 +142,7 @@ impl PaletteApp {
             Some(rounded)
         };
         if next != self.settings.panel_size {
-            eprintln!(
+            log::debug!(
                 "[dd-gui] 面板尺寸落盘：{w:.0}×{h:.0}（记忆 {}）",
                 {
                     match next {
@@ -159,7 +159,7 @@ impl PaletteApp {
     /// 扩展请求 `Dismiss`（协议 §8.3：关闭面板）：清空页面栈回 Root 再隐藏，
     /// 下次唤起回到首页——与 `Hide`（保留状态）形成可观察区别。
     pub(crate) fn dismiss(&mut self, ctx: &egui::Context) {
-        eprintln!("[dd-gui] Dismiss：清空页面栈回 Root 后隐藏");
+        log::debug!("[dd-gui] Dismiss：清空页面栈回 Root 后隐藏");
         self.stack.go_home();
         self.stack.root_mut().list.reset();
         self.hide(ctx);
@@ -168,7 +168,7 @@ impl PaletteApp {
     /// 扩展请求 `Hide`（协议 §8.3：隐藏但不关闭、保留状态）：
     /// 下次唤起不复位查询与选中，仍回到调用时的页面栈位置。
     pub(crate) fn hide_keep_state(&mut self, ctx: &egui::Context) {
-        eprintln!("[dd-gui] Hide：保留状态隐藏（下次唤起不复位）");
+        log::debug!("[dd-gui] Hide：保留状态隐藏（下次唤起不复位）");
         self.hide(ctx);
         self.reset_on_show = false;
     }
@@ -230,7 +230,7 @@ impl PaletteApp {
                 // 10C.2「退出」：唯一显式退出入口；关闭窗口 → run_native 返回
                 // → main 返回 → 进程结束（托盘图标由系统随进程死亡移除）。
                 TrayEvent::Exit => {
-                    eprintln!("[dd-gui] 托盘菜单：退出（结束进程）");
+                    log::info!("[dd-gui] 托盘菜单：退出（结束进程）");
                     // v4.12 D37：退出前兜底落盘拉伸尺寸（面板可见时直接退出
                     // 不经 hide()——hide 落盘会漏掉这一路径）。
                     self.persist_panel_size(ctx);

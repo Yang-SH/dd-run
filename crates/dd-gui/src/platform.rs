@@ -78,12 +78,12 @@ pub fn setup_cjk_fonts(ctx: &egui::Context) {
                 Some(fonts) => {
                     ctx.set_fonts(fonts);
                     ctx.request_repaint();
-                    eprintln!(
+                    log::debug!(
                         "[dd-gui] CJK 字体后台加载完成（{} ms），已热替换；首帧为默认字体",
                         started.elapsed().as_millis()
                     );
                 }
-                None => eprintln!("[dd-gui] 未找到任何 CJK 字体，中文可能显示为方块"),
+                None => log::debug!("[dd-gui] 未找到任何 CJK 字体，中文可能显示为方块"),
             }
         })
         .expect("spawn cjk-fonts thread");
@@ -102,12 +102,12 @@ fn load_font_file(path: &str) -> Option<egui::FontData> {
             Ok(mmap) => {
                 let len = mmap.len();
                 let leaked: &'static [u8] = &*Box::leak(Box::new(mmap));
-                eprintln!("[dd-gui] 字体 mmap 化：{path}（{len} B，文件页，不计私有提交）");
+                log::debug!("[dd-gui] 字体 mmap 化：{path}（{len} B，文件页，不计私有提交）");
                 Some(egui::FontData::from_static(leaked))
             }
             Err(e) => {
                 let bytes = std::fs::read(path).ok()?;
-                eprintln!(
+                log::debug!(
                     "[dd-gui] 字体 mmap 失败（{e}），回落整读：{path}（{} B）",
                     bytes.len()
                 );
@@ -166,7 +166,7 @@ fn load_cjk_font_definitions() -> Option<egui::FontDefinitions> {
                 .push("cjk".to_owned());
             any_loaded = true;
         } else {
-            eprintln!("[dd-gui] 读 CJK 字体 {path} 失败");
+            log::warn!("[dd-gui] 读 CJK 字体 {path} 失败");
         }
     }
     if let Some(data) = load_font_file(sym_candidate) {
@@ -187,7 +187,9 @@ fn load_cjk_font_definitions() -> Option<egui::FontDefinitions> {
             .push("sym".to_owned());
         any_loaded = true;
     } else {
-        eprintln!("[dd-gui] 未找到 {sym_candidate}（符号字体）；M3 桩态 ◌ 等符号可能仍显示为方块");
+        log::debug!(
+            "[dd-gui] 未找到 {sym_candidate}（符号字体）；M3 桩态 ◌ 等符号可能仍显示为方块"
+        );
     }
     // Segoe UI 拉丁/符号扩展后援（v4.12 真机修复）：U+A78B 等 msyh/seguisym
     // 缺失的拉丁修饰符码位落到这里（见函数 doc 注释的取证记录）。零 PUA
@@ -209,7 +211,7 @@ fn load_cjk_font_definitions() -> Option<egui::FontDefinitions> {
             .entry(egui::FontFamily::Monospace)
             .or_default()
             .push("segoe".to_owned());
-        eprintln!("[dd-gui] 已加载拉丁后援字体：{latin_candidate}");
+        log::info!("[dd-gui] 已加载拉丁后援字体：{latin_candidate}");
     }
     if let Some(path) = icon_candidates
         .into_iter()
@@ -232,12 +234,12 @@ fn load_cjk_font_definitions() -> Option<egui::FontDefinitions> {
                 .or_default()
                 .push("icons".to_owned());
             any_loaded = true;
-            eprintln!("[dd-gui] 已加载图标字体：{path}");
+            log::info!("[dd-gui] 已加载图标字体：{path}");
         } else {
-            eprintln!("[dd-gui] 读图标字体 {path} 失败");
+            log::warn!("[dd-gui] 读图标字体 {path} 失败");
         }
     } else {
-        eprintln!("[dd-gui] 未找到图标字体（SegoeIcons/segmdl2）；glyph 图标将显示为方块");
+        log::debug!("[dd-gui] 未找到图标字体（SegoeIcons/segmdl2）；glyph 图标将显示为方块");
     }
 
     // F3 拉丁主字纠偏（2026-09-13）：显式重排 Proportional 族序——只做两个
@@ -282,7 +284,7 @@ fn load_cjk_font_definitions() -> Option<egui::FontDefinitions> {
     );
 
     if !any_loaded {
-        eprintln!("[dd-gui] 未找到任何 CJK 字体，中文可能显示为方块");
+        log::debug!("[dd-gui] 未找到任何 CJK 字体，中文可能显示为方块");
         return None;
     }
     Some(fonts)
@@ -309,18 +311,18 @@ impl PaletteApp {
 
         let mut pt = POINT { x: 0, y: 0 };
         if unsafe { GetCursorPos(&mut pt) } == 0 {
-            eprintln!("[dd-gui] 居中：GetCursorPos 失败，保持原位显示");
+            log::warn!("[dd-gui] 居中：GetCursorPos 失败，保持原位显示");
             return None;
         }
         let monitor = unsafe { MonitorFromPoint(pt, MONITOR_DEFAULTTONEAREST) };
         if monitor.is_null() {
-            eprintln!("[dd-gui] 居中：MonitorFromPoint 无结果，保持原位显示");
+            log::debug!("[dd-gui] 居中：MonitorFromPoint 无结果，保持原位显示");
             return None;
         }
         let mut info: MONITORINFO = unsafe { std::mem::zeroed() };
         info.cbSize = std::mem::size_of::<MONITORINFO>() as u32;
         if unsafe { GetMonitorInfoW(monitor, &mut info) } == 0 {
-            eprintln!("[dd-gui] 居中：GetMonitorInfoW 失败，保持原位显示");
+            log::warn!("[dd-gui] 居中：GetMonitorInfoW 失败，保持原位显示");
             return None;
         }
         let work = info.rcWork; // 工作区（物理像素，不含任务栏）
@@ -353,18 +355,18 @@ impl PaletteApp {
 
         let mut pt = POINT { x: 0, y: 0 };
         if unsafe { GetCursorPos(&mut pt) } == 0 {
-            eprintln!("[dd-gui] 居中：GetCursorPos 失败，保持原位显示");
+            log::warn!("[dd-gui] 居中：GetCursorPos 失败，保持原位显示");
             return;
         }
         let monitor = unsafe { MonitorFromPoint(pt, MONITOR_DEFAULTTONEAREST) };
         if monitor.is_null() {
-            eprintln!("[dd-gui] 居中：MonitorFromPoint 无结果，保持原位显示");
+            log::debug!("[dd-gui] 居中：MonitorFromPoint 无结果，保持原位显示");
             return;
         }
         let mut info: MONITORINFO = unsafe { std::mem::zeroed() };
         info.cbSize = std::mem::size_of::<MONITORINFO>() as u32;
         if unsafe { GetMonitorInfoW(monitor, &mut info) } == 0 {
-            eprintln!("[dd-gui] 居中：GetMonitorInfoW 失败，保持原位显示");
+            log::warn!("[dd-gui] 居中：GetMonitorInfoW 失败，保持原位显示");
             return;
         }
         let work = info.rcWork;
@@ -374,7 +376,7 @@ impl PaletteApp {
         let win_h = target.1 * ppp;
         let cx = work.left as f32 + ((work.right - work.left) as f32 - win_w) * 0.5;
         let cy = work.top as f32 + ((work.bottom - work.top) as f32 - win_h) * 0.5;
-        eprintln!(
+        log::debug!(
             "[dd-gui] 唤起居中：光标屏工作区=({},{} {}x{}) 目标={}x{} → ({}, {})",
             work.left,
             work.top,
@@ -680,7 +682,7 @@ pub fn apply_system_backdrop(hwnd: isize, backdrop: SystemBackdrop) -> bool {
         )
     };
     if hr != 0 {
-        eprintln!(
+        log::debug!(
             "[dd-gui] DWMWA_SYSTEMBACKDROP_TYPE 应用失败（hr=0x{:x}）→ 回退不透明面板",
             hr
         );
@@ -710,7 +712,7 @@ pub fn set_immersive_dark(hwnd: isize, dark: bool) -> bool {
         )
     };
     if hr != 0 {
-        eprintln!(
+        log::debug!(
             "[dd-gui] DWMWA_USE_IMMERSIVE_DARK_MODE 应用失败（hr=0x{:x}）",
             hr
         );
@@ -758,7 +760,7 @@ pub fn apply_window_chrome(hwnd: isize, corner: crate::settings::CornerPref) {
             std::mem::size_of::<i32>() as u32,
         );
         if hr != 0 {
-            eprintln!(
+            log::debug!(
                 "[dd-gui] DWMWA_WINDOW_CORNER_PREFERENCE 应用失败（hr=0x{:x}），保持系统默认圆角",
                 hr
             );
@@ -771,7 +773,7 @@ pub fn apply_window_chrome(hwnd: isize, corner: crate::settings::CornerPref) {
             std::mem::size_of::<i32>() as u32,
         );
         if hr != 0 {
-            eprintln!(
+            log::debug!(
                 "[dd-gui] DWMWA_TRANSITIONS_FORCEDISABLED 应用失败（hr=0x{:x}）",
                 hr
             );
@@ -808,7 +810,7 @@ pub fn set_window_border(hwnd: isize, color: Option<egui::Color32>) {
         )
     };
     if hr != 0 {
-        eprintln!("[dd-gui] DWMWA_BORDER_COLOR 应用失败（hr=0x{:x}）", hr);
+        log::warn!("[dd-gui] DWMWA_BORDER_COLOR 应用失败（hr=0x{:x}）", hr);
     }
 }
 
@@ -832,7 +834,7 @@ pub fn system_accent_color() -> Option<egui::Color32> {
     // SAFETY：两个出参指针均为本地变量，HRESULT 判定后使用。
     let hr = unsafe { DwmGetColorizationColor(&mut colorref, &mut opaque) };
     if hr != 0 {
-        eprintln!(
+        log::debug!(
             "[dd-gui] DwmGetColorizationColor 失败（hr=0x{hr:x}），强调色描边回落 Palette::accent"
         );
         return None;

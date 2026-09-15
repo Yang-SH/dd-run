@@ -76,7 +76,7 @@ impl PaletteApp {
         anchor: egui::Pos2,
     ) {
         let rows = context_menu_rows(self.lang_effective, item);
-        eprintln!(
+        log::debug!(
             "[dd-gui] 右键菜单：item={} category={:?}（{} 项）",
             item.id,
             item.result_category,
@@ -154,7 +154,7 @@ impl PaletteApp {
                     .filtered()
                     .any(|(i, it)| i == state.visible_idx && it.id == state.item_id);
                 if !current_matches {
-                    eprintln!(
+                    log::debug!(
                         "[dd-gui] 右键菜单：列表已刷新，丢弃陈旧激活（item={}）",
                         state.item_id
                     );
@@ -168,11 +168,11 @@ impl PaletteApp {
                 self.confirm_selected();
             }
             CtxAction::RunAsAdmin { path } => match run_as_admin(path) {
-                Ok(()) => eprintln!("[dd-gui] 以管理员身份运行请求已发起：{path}"),
+                Ok(()) => log::debug!("[dd-gui] 以管理员身份运行请求已发起：{path}"),
                 Err(e) => self.show_error_toast(self.tr("ctx.admin_fail").replace("{e}", &e)),
             },
             CtxAction::RevealInFolder { path } => match reveal_in_folder(path) {
-                Ok(()) => eprintln!("[dd-gui] 已在资源管理器中定位：{path}"),
+                Ok(()) => log::debug!("[dd-gui] 已在资源管理器中定位：{path}"),
                 Err(e) => self.show_error_toast(self.tr("ctx.locate_fail").replace("{e}", &e)),
             },
             CtxAction::CopyText { text } => {
@@ -190,7 +190,7 @@ impl PaletteApp {
                     .find(|(i, it)| *i == state.visible_idx && it.id == state.item_id)
                     .map(|(_, it)| it.clone())
                 else {
-                    eprintln!(
+                    log::debug!(
                         "[dd-gui] 右键菜单：列表已刷新，丢弃陈旧激活（item={}）",
                         state.item_id
                     );
@@ -199,9 +199,10 @@ impl PaletteApp {
                 let query = self.stack.current().list.query().to_owned();
                 let params =
                     dd_gui::result::context_menu_invoke_params(command_id, &state.item_id, &query);
-                eprintln!(
+                log::debug!(
                     "[dd-gui] 右键菜单：扩展动作 {}（ext={}）",
-                    command_id, item.ext_id
+                    command_id,
+                    item.ext_id
                 );
                 self.dispatch_invoke(&item.ext_id, params);
             }

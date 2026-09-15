@@ -72,7 +72,7 @@ impl PaletteApp {
             .expect("target 来自 processes，必在");
         let (_, mut proc) = self.processes.remove(idx);
         self.inflight.insert(ext_id.clone());
-        eprintln!("[dd-gui] 拉取兜底模板：ext={ext_id}");
+        log::debug!("[dd-gui] 拉取兜底模板：ext={ext_id}");
         let (tx, rx) = mpsc::channel();
         thread::spawn(move || {
             let result = dd_gui::fallback::fetch_fallback_commands(&mut proc);
@@ -114,14 +114,14 @@ impl PaletteApp {
         match result {
             Ok(templates) => {
                 self.fallback_store.store(&ext_id, &name, templates);
-                eprintln!(
+                log::debug!(
                     "[dd-gui] 兜底模板就绪：ext={ext_id}（{} 条）",
                     self.fallback_store.template_count(&ext_id)
                 );
                 ctx.request_repaint(); // 模板到达 → 立即重绘展示兜底项
             }
             Err(e) => {
-                eprintln!("[dd-gui] fallback_commands 失败：ext={ext_id}：{e}（本会话不再重试）");
+                log::warn!("[dd-gui] fallback_commands 失败：ext={ext_id}：{e}（本会话不再重试）");
                 self.fallback_store.store_failure(&ext_id);
             }
         }

@@ -154,13 +154,14 @@ impl PaletteApp {
                 for s in &self.sources {
                     match &s.status {
                         SourceStatus::Stub { commands } => {
-                            eprintln!(
+                            log::debug!(
                                 "[dd-gui] 冷启动：{} 读桩 {} 命令（frozen，未拉起进程 A6）",
-                                s.name, commands
+                                s.name,
+                                commands
                             );
                         }
                         SourceStatus::Warm { commands } => {
-                            eprintln!("[dd-gui] 冷启动：{} warm（{} 命令）", s.name, commands);
+                            log::info!("[dd-gui] 冷启动：{} warm（{} 命令）", s.name, commands);
                         }
                         SourceStatus::Failed { .. } => {}
                     }
@@ -170,7 +171,7 @@ impl PaletteApp {
                     // A2 拆分日志：total = 进程启动→首屏就绪；agg = 数据平面（scan+collect+flatten）。
                     // 差额 = GUI 初始化 + wgpu + 字体加载（msyh.ttc 数十 MB），R2 要求记录瓶颈而非调目标。
                     let gui_init_ms = total_ms.saturating_sub(payload.agg_ms);
-                    eprintln!(
+                    log::debug!(
                         "[dd-gui] 冷启动完成：{total_ms} ms（A2 目标 <200ms：数据就绪 {} ms + GUI 初始化/字体加载 ~{gui_init_ms} ms，记录实测不调目标）",
                         payload.agg_ms
                     );

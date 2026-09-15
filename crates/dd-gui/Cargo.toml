@@ -17,6 +17,8 @@ dd-protocol = { path = "../dd-protocol" }
 # M9：内置扩展 in-process 调用（直接 `dd_ext::serve_line`，不 spawn 子进程）。
 dd-ext = { path = "../dd-ext" }
 serde_json = "1"
+# O4 可观测性：`log` 仅为 facade（零传递依赖），后端由 dd-protocol::logging 提供。
+log = "0.4"
 eframe = { version = "0.36", default-features = false, features = [
     "glow",
     "default_fonts",

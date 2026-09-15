@@ -183,7 +183,7 @@
 - 验证：`fmt --all --check` 干净、`clippy --workspace --all-targets -- -D warnings` 0 告警、workspace 测试全绿；宿主侧 **8 条**单测（原 5 条改写为「候选列表」口径 + 新增 3 条，含一条真实文件系统夹具：`report%20final.txt` 存在 → 命中字面文件；删除后 → 回退 `report final.txt`），扩展侧新增 **4 条**（本地/CJK/`%`/`#` 不编码、UNC authority、退化形态、UNC invoke 端到端 URL）。
 - **环境洼地记录**：本机 Bash 会话 `APPDATA` 为空（`USERPROFILE`/`TEMP` 正常），`cache_dir()` 依赖它 → 未导出时 `dd-ext-apps` 的图标抽取两条测试必失败（覆盖率 0%，因 PNG 无法落盘），`export APPDATA="C:\Users\<user>\AppData\Roaming"` 后 12/12 全过。测试前先看一眼 APPDATA，别把环境缺失误判成代码回归。
 
-## [0.1.0]
+## [0.1.0] - 2026-09-06
 
 ### 新增
 

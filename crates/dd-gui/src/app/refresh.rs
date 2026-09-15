@@ -45,7 +45,7 @@ impl PaletteApp {
             }
         }
         if top_changed {
-            eprintln!(
+            log::debug!(
                 "[dd-gui] 收到顶层 items_changed → {}ms 后 Root 全量重聚合（A9）",
                 REFRESH_WINDOW.as_millis()
             );
@@ -63,7 +63,7 @@ impl PaletteApp {
             self.show_toast(self.tr("toast.cmd_updated"), Some(1_500));
         }
         if let Some(pid) = hit {
-            eprintln!(
+            log::debug!(
                 "[dd-gui] 收到 items_changed page={pid} → {}ms 后全量重拉",
                 REFRESH_WINDOW.as_millis()
             );
@@ -90,7 +90,7 @@ impl PaletteApp {
                 let page_id = refresh.page_id.clone();
                 self.refresh = None;
                 if top {
-                    eprintln!("[dd-gui] 顶层 items_changed 合并窗口到期 → Root 全量重聚合（A9）");
+                    log::debug!("[dd-gui] 顶层 items_changed 合并窗口到期 → Root 全量重聚合（A9）");
                     self.restart_aggregation();
                 } else {
                     self.refetch_page_if_current(&page_id);
@@ -101,7 +101,7 @@ impl PaletteApp {
         if let Some(due) = &self.page_query_debounce {
             if Instant::now() >= *due {
                 self.page_query_debounce = None;
-                eprintln!(
+                log::debug!(
                     "[dd-gui] 页内二次输入去抖到期 → 按最新 query 重拉当前页（v3.3 边打边搜）"
                 );
                 let page = self.stack.current();
@@ -119,7 +119,7 @@ impl PaletteApp {
         // 用户可能已离开通知来源页（如已 GoBack）→ 目标页非当前页时丢弃，
         // 避免拉取一个不可见的页（结果也只会被 poll_page 作废）。
         if page.page_id.as_deref() != Some(page_id) {
-            eprintln!("[dd-gui] 页级刷新作废：已离开 page={page_id}");
+            log::debug!("[dd-gui] 页级刷新作废：已离开 page={page_id}");
             return;
         }
         let (ext_id, query) = (page.ext_id.clone(), page.list.query().to_owned());

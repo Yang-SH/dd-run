@@ -482,7 +482,7 @@ mod ipc {
 
     /// 记录一条传输层诊断（stderr，不污染 stdout 的 NDJSON 协议）。
     fn log(msg: &str) {
-        eprintln!("[{TAG}] {msg}");
+        log::debug!("[{TAG}] {msg}");
     }
 
     /// IPC 查询；失败按阈值触发 client 重建。返回 `FileEntry` 列表或错误串（由上层回落）。
@@ -534,7 +534,7 @@ fn search(q: &str, limit: usize) -> anyhow::Result<Vec<FileEntry>> {
     {
         match ipc::search(q, limit) {
             Ok(entries) => return Ok(entries),
-            Err(e) => eprintln!("[dd-ext-filesearch] IPC 查询失败（{e}），回落 es.exe"),
+            Err(e) => log::warn!("[dd-ext-filesearch] IPC 查询失败（{e}），回落 es.exe"),
         }
     }
     search_via_es(q, limit)

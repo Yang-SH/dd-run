@@ -45,6 +45,11 @@ use dd_host::cache::{ColdStartTimer, FrozenCache};
 use dd_host::manifest;
 
 fn main() -> eframe::Result {
+    // O4：装配日志后端（级别取环境变量 `DDRUN_LOG`，未设时 = debug，与接入前
+    // 「所有 eprintln! 都输出」等价）。后端恒写 stderr——GUI 子系统无控制台，
+    // 真机排障请从终端启动，或重定向：`dd-run.exe 2> dd-run.log`。
+    dd_protocol::logging::init();
+
     // A2 冷启动计时起点：**进程进入 main 即开始**，覆盖 eframe 窗口创建 +
     // 聚合全过程（M6 批次 6.2 起 CJK 字体改为后台线程加载，不在主路径上——
     // 旧注释"覆盖字体加载 22MB"已随异步化失效，首帧用 egui 默认字体）。

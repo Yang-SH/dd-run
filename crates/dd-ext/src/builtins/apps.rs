@@ -303,9 +303,9 @@ mod sys {
 
             // ① shell:AppsFolder：应用本体（UWP + 桌面应用），对齐 PowerToys CmdPal
             match collect_apps_folder(&mut apps, &mut seen) {
-                Ok(n) => eprintln!("[dd-ext-apps] AppsFolder 枚举到 {n} 个应用"),
+                Ok(n) => log::debug!("[dd-ext-apps] AppsFolder 枚举到 {n} 个应用"),
                 Err(e) => {
-                    eprintln!("[dd-ext-apps] AppsFolder 枚举失败（仅用开始菜单 .lnk 兜底）：{e}")
+                    log::warn!("[dd-ext-apps] AppsFolder 枚举失败（仅用开始菜单 .lnk 兜底）：{e}")
                 }
             }
 
@@ -412,7 +412,7 @@ mod sys {
 
             // 按显示名排序（列表稳定、可预测）
             apps.sort_by_key(|a| a.title.to_lowercase());
-            eprintln!(
+            log::debug!(
                 "[dd-ext-apps] 枚举到 {} 个应用{}",
                 apps.len(),
                 if apps.len() >= MAX_APPS {

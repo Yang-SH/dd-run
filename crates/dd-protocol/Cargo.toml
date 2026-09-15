@@ -9,3 +9,7 @@ publish = false
 [dependencies]
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+# O4 可观测性：`log` 仅为 facade（零传递依赖），后端由本 crate 的 `logging` 模块自带。
+# `std` 必须显式开启：`set_boxed_logger` 在 `alloc` 之下，默认 feature 在 workspace
+# 合并后可能被别的依赖关掉（实测踩到），显式声明最稳。
+log = { version = "0.4", features = ["std"] }

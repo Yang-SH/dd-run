@@ -450,6 +450,7 @@ dependencies = [
  "everything-ipc",
  "fuzzy-matcher",
  "image",
+ "log",
  "serde",
  "serde_json",
  "windows-sys 0.61.2",
@@ -460,6 +461,7 @@ name = "dd-ext-sample"
 version = "0.1.1"
 dependencies = [
  "dd-protocol",
+ "log",
  "serde_json",
 ]
 
@@ -473,6 +475,7 @@ dependencies = [
  "dd-protocol",
  "eframe",
  "image",
+ "log",
  "memmap2",
  "nucleo",
  "pinyin",
@@ -495,6 +498,7 @@ dependencies = [
 name = "dd-protocol"
 version = "1.0.0"
 dependencies = [
+ "log",
  "serde",
  "serde_json",
 ]
@@ -506,6 +510,7 @@ dependencies = [
  "dd-ext",
  "dd-host",
  "dd-protocol",
+ "log",
  "serde_json",
 ]
 

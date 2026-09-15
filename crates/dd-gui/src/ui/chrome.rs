@@ -106,10 +106,10 @@ pub(crate) fn chrome_begin(app: &mut PaletteApp, ctx: &egui::Context) {
             .native_resize_since
             .is_some_and(|t| t.elapsed() >= std::time::Duration::from_secs(3));
         if expired && !released {
-            eprintln!("[dd-gui] chrome：模态旗标超 3s 未清（释放事件疑似丢失）→ 强制清除");
+            log::warn!("[dd-gui] chrome：模态旗标超 3s 未清（释放事件疑似丢失）→ 强制清除");
         }
         if released || expired {
-            eprintln!("[dd-gui] chrome：原生模态循环结束（旗标清除 + 强制重绘 + 刷新材质）");
+            log::debug!("[dd-gui] chrome：原生模态循环结束（旗标清除 + 强制重绘 + 刷新材质）");
             app.native_resize = false;
             app.native_resize_since = None;
             // v4.12 真机修复：原生缩放/拖拽模态循环结束后的首帧强制重绘，
@@ -122,7 +122,7 @@ pub(crate) fn chrome_begin(app: &mut PaletteApp, ctx: &egui::Context) {
             // 循环内会被 Windows 忽略）在循环结束后补执行。
             if app.hide_pending {
                 app.hide_pending = false;
-                eprintln!("[dd-gui] chrome：补执行模态循环内推迟的 hide()");
+                log::debug!("[dd-gui] chrome：补执行模态循环内推迟的 hide()");
                 app.hide(ctx);
             }
         }
@@ -152,7 +152,7 @@ pub(crate) fn chrome_begin(app: &mut PaletteApp, ctx: &egui::Context) {
         if pointer.primary_down() {
             if let Some(pos) = pointer.latest_pos() {
                 if pos.distance(origin) > DRAG_THRESHOLD {
-                    eprintln!("[dd-gui] chrome：发 StartDrag（原生拖拽模态循环开始）");
+                    log::debug!("[dd-gui] chrome：发 StartDrag（原生拖拽模态循环开始）");
                     ctx.send_viewport_cmd(egui::ViewportCommand::StartDrag);
                     // v4.12 真机修复：StartDrag 进入原生模态循环后 egui 不收
                     // 事件；循环结束后必须立即重绘，否则窗口可能停留在空白底。

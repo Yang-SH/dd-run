@@ -562,7 +562,7 @@ impl eframe::App for PaletteApp {
                 if crate::platform::is_window_visible(hwnd) {
                     let since = *self.hide_desync_since.get_or_insert(Instant::now());
                     if since.elapsed() >= std::time::Duration::from_millis(500) {
-                        eprintln!(
+                        log::debug!(
                             "[dd-gui] 可见性自愈：visible=false 但窗口 OS 可见 >500ms（疑似模态循环内 hide 被忽略）→ 恢复绘制"
                         );
                         self.hide_desync_since = None;
@@ -608,7 +608,7 @@ impl eframe::App for PaletteApp {
         if !self.visible {
             // 隐藏当帧：仍绘制一次面板内容（纯色空帧 = 闪黑），不做任何交互处理。
             if !self.paint_hide_frame {
-                eprintln!("[dd-gui] ui()：早返回（visible=false 且非隐藏帧）→ 本帧不绘制");
+                log::debug!("[dd-gui] ui()：早返回（visible=false 且非隐藏帧）→ 本帧不绘制");
                 return;
             }
             self.paint_hide_frame = false;
@@ -621,7 +621,7 @@ impl eframe::App for PaletteApp {
             let icon_n = self.icon_cache.len();
             if icon_n > 0 {
                 self.icon_cache.clear();
-                eprintln!("[dd-gui] 隐藏收尾：icon_cache 清空（{icon_n} 项纹理）");
+                log::debug!("[dd-gui] 隐藏收尾：icon_cache 清空（{icon_n} 项纹理）");
             }
             crate::platform::trim_working_set();
             return;

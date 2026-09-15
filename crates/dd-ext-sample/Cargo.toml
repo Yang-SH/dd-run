@@ -9,3 +9,5 @@ publish = false
 [dependencies]
 dd-protocol = { path = "../dd-protocol" }
 serde_json = "1"
+# O4 可观测性：日志走 `log` facade，后端由 dd-protocol::logging 提供（恒 stderr）。
+log = "0.4"

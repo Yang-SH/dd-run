@@ -49,7 +49,7 @@ impl PaletteApp {
             thread::spawn(move || {
                 let _ = proc.close();
             });
-            eprintln!("[dd-gui] LRU 驱逐：{victim}（warm 超容量，close+释放，命令回落 stub）");
+            log::warn!("[dd-gui] LRU 驱逐：{victim}（warm 超容量，close+释放，命令回落 stub）");
         }
         self.lru.remove(victim);
         if let Some(s) = self.sources.iter_mut().find(|s| s.id == victim) {

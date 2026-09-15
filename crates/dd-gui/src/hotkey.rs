@@ -153,9 +153,10 @@ fn message_loop(
         );
         if ok == 0 {
             // 启动失败降级（不 panic）：可能被其他启动器占用；设置页换键可修复
-            eprintln!(
+            log::debug!(
                 "[dd-gui] 全局热键注册失败（{}+{}），降级为无热键运行——可在设置页更换",
-                current.0, current.1
+                current.0,
+                current.1
             );
             let _ = tx.send(HotkeyEvent::ReRegistered(false));
         }
@@ -170,7 +171,7 @@ fn message_loop(
                 break;
             }
             if r == -1 {
-                eprintln!("GetMessage failed");
+                log::debug!("GetMessage failed");
                 break;
             }
             if msg.message == WM_HOTKEY {
@@ -185,7 +186,7 @@ fn message_loop(
                     current = new;
                     let _ = tx.send(HotkeyEvent::ReRegistered(true));
                 } else {
-                    eprintln!("[dd-gui] 新热键注册失败（{}+{}），回滚旧键", new.0, new.1);
+                    log::warn!("[dd-gui] 新热键注册失败（{}+{}），回滚旧键", new.0, new.1);
                     let re = RegisterHotKey(
                         std::ptr::null_mut(),
                         HOTKEY_ID,
@@ -193,7 +194,7 @@ fn message_loop(
                         current.1,
                     );
                     if re == 0 {
-                        eprintln!("[dd-gui] 旧键回滚注册也失败——降级为无热键");
+                        log::warn!("[dd-gui] 旧键回滚注册也失败——降级为无热键");
                     }
                     let _ = tx.send(HotkeyEvent::ReRegistered(false));
                 }
