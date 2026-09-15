@@ -19,7 +19,7 @@ jobs:
     name: build + portable zip + GitHub Release
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       # tag（ vX.Y.Z）必须与 crates/dd-gui/Cargo.toml 的 version 一致，防错发。
       - name: Verify tag matches Cargo.toml version
