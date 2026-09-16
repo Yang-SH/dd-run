@@ -528,16 +528,90 @@ mod ipc {
     }
 }
 
+// ─── O7 定因：`get_items` 分阶段计时（仅诊断，不参与业务判断）──────────
+/// 最近一次 `get_items` 的分段耗时（毫秒）与所用通道。
+///
+/// 用途：A-33-05 的性能定因（`docs/search-file-p2-acceptance-2026-09-15.md` §4.1）。
+/// 外部测量只能**跨运行比较**（空查询 / 无命中 / 命中三档）推出「IPC ≈12.5ms、
+/// 评分 ≈16ms」；本结构让扩展**自报同一次调用**的分段值，消除跨运行比较的误差。
+#[derive(Clone, Copy)]
+struct QueryTiming {
+    /// `results` / `hint` / `guide` / `error`
+    kind: &'static str,
+    /// `ipc` / `ipc->es` / `es` / `none`
+    channel: &'static str,
+    /// 通道内耗时（IPC 或回落 `es.exe`）；不含探活（探活在 `get_file_items` 内单独计时）。
+    query_ms: f64,
+    score_ms: f64,
+    items: usize,
+}
+
+impl QueryTiming {
+    const NONE: Self = Self {
+        kind: "",
+        channel: "",
+        query_ms: 0.0,
+        score_ms: 0.0,
+        items: 0,
+    };
+}
+
+thread_local! {
+    /// 扩展对 `get_items` 是单线程处理（stdin 循环 + 同步查询 + 同步评分），
+    /// 故用线程局部即可；查询应答窗口线程不触碰该槽。
+    static LAST_TIMING: std::cell::Cell<QueryTiming> =
+        const { std::cell::Cell::new(QueryTiming::NONE) };
+}
+
+fn elapsed_ms(since: Instant) -> f64 {
+    since.elapsed().as_secs_f64() * 1000.0
+}
+
+fn patch_timing(f: impl FnOnce(&mut QueryTiming)) {
+    LAST_TIMING.with(|cell| {
+        let mut t = cell.get();
+        f(&mut t);
+        cell.set(t);
+    });
+}
+
+fn take_timing() -> QueryTiming {
+    LAST_TIMING.with(|cell| cell.get())
+}
+
 /// 搜索：**IPC 主通道优先**，失败回落 `es.exe`（§9.2 P2）。
+///
+/// 顺带把「用了哪条通道 / 通道内耗时」写入 [`QueryTiming`]，供 `get_items` 输出计时日志。
 fn search(q: &str, limit: usize) -> anyhow::Result<Vec<FileEntry>> {
     #[cfg(windows)]
     {
+        let t_ipc = Instant::now();
         match ipc::search(q, limit) {
-            Ok(entries) => return Ok(entries),
-            Err(e) => log::warn!("[dd-ext-filesearch] IPC 查询失败（{e}），回落 es.exe"),
+            Ok(entries) => {
+                patch_timing(|t| {
+                    t.channel = "ipc";
+                    t.query_ms = elapsed_ms(t_ipc);
+                });
+                return Ok(entries);
+            }
+            Err(e) => {
+                log::warn!("[dd-ext-filesearch] IPC 查询失败（{e}），回落 es.exe");
+                patch_timing(|t| {
+                    t.channel = "ipc->es";
+                    t.query_ms = elapsed_ms(t_ipc);
+                });
+            }
         }
     }
-    search_via_es(q, limit)
+    let t_es = Instant::now();
+    let out = search_via_es(q, limit);
+    patch_timing(|t| {
+        if t.channel.is_empty() {
+            t.channel = "es";
+        }
+        t.query_ms += elapsed_ms(t_es);
+    });
+    out
 }
 
 /// 回落通道：经 Everything 官方命令行工具 `es.exe`（进程调用，走本机 IPC）检索。
@@ -913,28 +987,61 @@ fn fallback_commands() -> Vec<CommandItem> {
 
 /// §6.3 子页内容构造器：返回 `files.results` 页的当前查询文件项。
 fn get_file_items(params: &GetItemsParams) -> GetItemsResult {
-    get_file_items_with(params, everything_available())
+    let t_start = Instant::now();
+    let available = everything_available();
+    let probe_ms = elapsed_ms(t_start);
+    let result = get_file_items_with(params, available);
+    let t = take_timing();
+    // O7 A-33-05 定因：每次 `get_items` 输出一行分段计时（debug；默认级别即可见）。
+    log::debug!(
+        "[dd-ext-filesearch] get_items 计时: kind={} total={:.2}ms probe={:.2}ms channel={} query={:.2}ms score={:.2}ms items={}",
+        t.kind,
+        elapsed_ms(t_start),
+        probe_ms,
+        if t.channel.is_empty() { "none" } else { t.channel },
+        t.query_ms,
+        t.score_ms,
+        t.items
+    );
+    result
 }
 
 /// 可用性注入版（§9.3 L1：单测不依赖 Everything/es.exe——离线确定性）。
 fn get_file_items_with(params: &GetItemsParams, available: bool) -> GetItemsResult {
     let query = params.search_text.as_deref().unwrap_or("").trim();
     if query.is_empty() {
+        let items = vec![hint_item()];
+        patch_timing(|t| {
+            t.kind = "hint";
+            t.channel = "none";
+            t.query_ms = 0.0;
+            t.score_ms = 0.0;
+            t.items = items.len();
+        });
         return GetItemsResult {
-            items: vec![hint_item()],
+            items,
             has_more_items: false,
             is_loading: false,
         };
     }
     if !available {
+        let items = vec![guide_item()];
+        patch_timing(|t| {
+            t.kind = "guide";
+            t.channel = "none";
+            t.query_ms = 0.0;
+            t.score_ms = 0.0;
+            t.items = items.len();
+        });
         return GetItemsResult {
-            items: vec![guide_item()],
+            items,
             has_more_items: false,
             is_loading: false,
         };
     }
     match search(query, RESULT_LIMIT) {
         Ok(entries) => {
+            let t_score = Instant::now();
             // matcher / 近期阈值每查询构造一次（原逐条构造，见 score 文档注释）
             let matcher = SkimMatcherV2::default();
             let recency_floor = now_7days_unix();
@@ -948,17 +1055,31 @@ fn get_file_items_with(params: &GetItemsParams, available: bool) -> GetItemsResu
                 .take(RESULT_LIMIT)
                 .map(|(_, e)| to_command_item(&e))
                 .collect();
+            let score_ms = elapsed_ms(t_score);
+            patch_timing(|t| {
+                t.kind = "results";
+                t.score_ms = score_ms;
+                t.items = items.len();
+            });
             GetItemsResult {
                 items,
                 has_more_items: false,
                 is_loading: false,
             }
         }
-        Err(e) => GetItemsResult {
-            items: vec![error_item(&e.to_string())],
-            has_more_items: false,
-            is_loading: false,
-        },
+        Err(e) => {
+            let items = vec![error_item(&e.to_string())];
+            patch_timing(|t| {
+                t.kind = "error";
+                t.score_ms = 0.0;
+                t.items = items.len();
+            });
+            GetItemsResult {
+                items,
+                has_more_items: false,
+                is_loading: false,
+            }
+        }
     }
 }
 
@@ -1317,6 +1438,55 @@ mod tests {
         );
         assert_eq!(r.items.len(), 1);
         assert!(r.items[0].id == "files.guide" || r.items[0].id == "files.error");
+    }
+
+    /// O7 定因用：计时槽在各分支都被填充（离线确定性，不依赖 Everything/es.exe）。
+    #[test]
+    fn timing_slot_records_kind_channel_and_items() {
+        let hint = get_file_items_with(
+            &GetItemsParams {
+                page_id: PAGE_ID.into(),
+                search_text: Some("   ".into()),
+            },
+            true,
+        );
+        let t = take_timing();
+        assert_eq!(t.kind, "hint");
+        assert_eq!(t.channel, "none");
+        assert_eq!(t.items, hint.items.len());
+        assert_eq!(t.query_ms, 0.0, "提示项不应走任何查询通道");
+
+        let guide = get_file_items_with(
+            &GetItemsParams {
+                page_id: PAGE_ID.into(),
+                search_text: Some("anything".into()),
+            },
+            false,
+        );
+        let t = take_timing();
+        assert_eq!(t.kind, "guide");
+        assert_eq!(t.channel, "none");
+        assert_eq!(t.items, guide.items.len());
+        assert_eq!(t.query_ms, 0.0, "引导项不查通道");
+    }
+
+    /// 计时槽按次覆盖（不是累计值），否则日志会把上一次的耗时串到本次。
+    #[test]
+    fn timing_slot_is_overwritten_per_call() {
+        patch_timing(|t| {
+            t.kind = "stale";
+            t.items = 999;
+        });
+        let _ = get_file_items_with(
+            &GetItemsParams {
+                page_id: PAGE_ID.into(),
+                search_text: None,
+            },
+            true,
+        );
+        let t = take_timing();
+        assert_eq!(t.kind, "hint", "上一次的值必须被本次覆盖");
+        assert_ne!(t.items, 999);
     }
 
     // ─── es 输出解析（纯函数，fixture 离线，不依赖 es / Everything）──
