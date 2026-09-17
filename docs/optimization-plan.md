@@ -247,7 +247,7 @@
 **验收结果**：
 
 - **本地**：`cargo audit` 与 `cargo machete` 均**零发现**；`cargo fmt --all -- --check` 无差异；`cargo clippy --workspace --all-targets` 0 warning；`cargo test --workspace` **422 passed / 0 failed**（本批无 Rust 代码改动，与上批持平）。
-- **CI**：新增 job 的语法与缩进已静态核对；**首次实际运行结果须待提交后确认**（本地无 GitHub Actions 执行环境，如实记录）。
+- **CI**：新增 job 的语法与缩进已静态核对 → **2026-09-16 已在 runner 上实跑确认**：`dependencies (audit + machete)` job **success**（main@`9936ead`）；Dependabot 亦已生效，开出 4 个更新 PR（eframe 0.36.2 / pinyin 0.11.0 / actions/checkout 7 / action-gh-release 3），其分支 CI 亦全绿。
 
 **未覆盖（如实记录）**：unmaintained / unsound / yanked 类告警当前**只警告不阻塞**。若后续要收紧，可把 `audit` 步骤改为 `cargo audit --deny warnings`，但那会把第三方仓库的软性告警一并变成红灯，建议先评估噪音量再定。
 

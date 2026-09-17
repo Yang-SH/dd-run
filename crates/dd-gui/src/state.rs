@@ -388,6 +388,7 @@ impl PanelState {
         // `sort_by_key` 为稳定排序：同分项保持原始顺序（切片 2 行为测试守卫）
         scored.sort_by_key(|&(_, s)| std::cmp::Reverse(s));
         self.visible = scored.into_iter().map(|(i, _)| i).collect();
+        #[cfg(debug_assertions)]
         log::debug!(
             "[dd-gui] A3 过滤：{n} 项 → {} 命中，query {} 字符，耗时 {} µs",
             self.visible.len(),

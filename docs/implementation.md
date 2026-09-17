@@ -23,12 +23,12 @@
 | M9 内置扩展进程内化 | ✅ 已关闭 | 2026-09-11 | 5 内置扩展改 in-process，单文件分发，进程隔离仅第三方 | [m9-inprocess-builtins](./m9-inprocess-builtins.md) |
 | v5.2 UI 优化 B1–B8 | ✅ 已关闭 | 2026-09-13 `815e212..da0589c` | 字重/强调色/滚动条/下划线/结果行/设置页/悬停/自适应 | [cmdpal-ui-optimization-v5.html](../cmdpal-ui-optimization-v5.html) |
 | 图标与字体优化 I1/I2/F1/F2 | ✅ 已关闭 | 2026-09-12 `3545d3f` | 占位 glyph / I2 显式色 / F1 token 化 / F2 密度三档（I3 未做） | [icons-typography-plan](./icons-typography-plan.md) |
-| O2 协议方法名常量层 | ✅ 已落地 | 2026-09-14（工作副本，未提交） | 12 个方法名收敛为 `dd-protocol::methods` 单一来源，全仓生产代码改用常量 + 一致性测试锁 SSOT | [§2 O2](#o2--协议方法名常量层2026-09-14-落地) |
-| O1 协议错误码接线 | ✅ 已落地 | 2026-09-15（工作副本，未提交） | `-32600`/`-32700` 处置收口为 `dd-protocol::envelope` 单一来源；超限帧由静默丢弃改为「回错 + 关连接」（协议 §2.3/§9.3 补齐，v1.0 零改动） | [§2 O1](#o1--协议错误码接线2026-09-15-落地) |
-| O3 依赖治理 | ✅ 已落地 | 2026-09-15（工作副本，未提交） | CI 新增 `audit` job（`cargo audit` 漏洞 + `cargo machete` 死依赖）+ Dependabot 管更新；本地实跑均零发现 | [§2 O3](#o3--依赖治理2026-09-15-落地) |
-| O8 文档卫生 | ✅ 已落地 | 2026-09-15（工作副本，未提交） | CHANGELOG `[0.1.0]` 补日期、行尾确认合规；I3（真机依赖）与 LRU 容量（功能项）经取证不在本项范围，已逐条记档 | [§2 O8](#o8--文档卫生2026-09-15-落地) |
-| O4 可观测性/日志 | ✅ 已落地 | 2026-09-15（工作副本，未提交） | `log` facade + 自写 stderr 后端；131 处 `eprintln!` 分级（debug 85/warn 39/info 7）；`DDRUN_LOG` 开关实测生效，**默认 debug = 与改造前逐行等价** | [§2 O4](#o4--可观测性日志2026-09-15-落地) |
-| O7 文件搜索 P2 真机验收 | 🟨 首轮完成 | 2026-09-15（验收报告，未提交） | A-33-07/A-33-10 ✅；A-33-06/A-33-08 ⚠️ 部分；A-33-05 ❌ 性能未达标；缺 `es.exe` 阻塞 2 项 | [验收报告](./search-file-p2-acceptance-2026-09-15.md) |
+| O2 协议方法名常量层 | ✅ 已落地 | 2026-09-14（已提交 `6ee4931`） | 12 个方法名收敛为 `dd-protocol::methods` 单一来源，全仓生产代码改用常量 + 一致性测试锁 SSOT | [§2 O2](#o2--协议方法名常量层2026-09-14-落地) |
+| O1 协议错误码接线 | ✅ 已落地 | 2026-09-15（已提交 `c26035e`） | `-32600`/`-32700` 处置收口为 `dd-protocol::envelope` 单一来源；超限帧由静默丢弃改为「回错 + 关连接」（协议 §2.3/§9.3 补齐，v1.0 零改动） | [§2 O1](#o1--协议错误码接线2026-09-15-落地) |
+| O3 依赖治理 | ✅ 已落地 | 2026-09-15（已提交 `c26035e`） | CI 新增 `audit` job（`cargo audit` 漏洞 + `cargo machete` 死依赖）+ Dependabot 管更新；本地实跑均零发现 | [§2 O3](#o3--依赖治理2026-09-15-落地) |
+| O8 文档卫生 | ✅ 已落地 | 2026-09-15（已提交 `c26035e`） | CHANGELOG `[0.1.0]` 补日期、行尾确认合规；I3（真机依赖）与 LRU 容量（功能项）经取证不在本项范围，已逐条记档 | [§2 O8](#o8--文档卫生2026-09-15-落地) |
+| O4 可观测性/日志 | ✅ 已落地 | 2026-09-15（已提交 `c26035e`） | `log` facade + 自写 stderr 后端；131 处 `eprintln!` 分级（debug 85/warn 39/info 7）；`DDRUN_LOG` 开关实测生效，**默认 debug = 与改造前逐行等价** | [§2 O4](#o4--可观测性日志2026-09-15-落地) |
+| O7 文件搜索 P2 真机验收 | ⚠️ 首轮完成（阈值修订后 A-33-05 达标） | 2026-09-15 / 16（已提交 `c26035e` + `9936ead`） | A-33-07/A-33-10 ✅；A-33-06/A-33-08 ⚠️ 部分；**A-33-05 经阈值修订后 ✅**；缺 `es.exe` 阻塞基线与回落分支 | [验收报告](./search-file-p2-acceptance-2026-09-15.md) |
 
 ## 产物与分发（2026-09-13 实测）
 
@@ -298,7 +298,7 @@
 
 **问题**：B5 把行内副标题移入 hover tooltip 后，文件搜索结果的**文件地址完全不可见**（真机反馈）；此前旧布局虽有行内地址，但受「标题剩余 ≥48px 才画 + 最多 240px 截断」门控，长文件名时整段丢弃。
 
-**方案**（演示页 [`docs/file-search-result-redesign.html`](./file-search-result-redesign.html)，未提交）：
+**方案**（演示页 [`docs/file-search-result-redesign.html`](./file-search-result-redesign.html)）：
 
 | 决策 | 说明 |
 |---|---|
@@ -420,7 +420,7 @@
 | GUI / CLI 替换 | ✅ | `dd-gui/src/ext_inprocess.rs`（7 调用 + 通知判别 + `close` 帧）、`ext_client.rs`、`app/host_actions.rs`、`app/invoke.rs`、`dd-run-cli/src/main.rs` |
 | 一致性测试（新增核对基线） | ✅ | `crates/dd-protocol/tests/consistency.rs::method_constants_match_protocol_method_table`：运行时抽 `protocol.md` §1.3 两表，与 `ALL_METHODS` 逐项同序断言 |
 
-**验证**：`cargo fmt --all -- --check` 无差异；`cargo clippy --workspace --all-targets` 0 warning；`cargo test --workspace` **403 passed / 0 failed**（基线 402，+1）。工作副本**未提交**。
+**验证**：`cargo fmt --all -- --check` 无差异；`cargo clippy --workspace --all-targets` 0 warning；`cargo test --workspace` **403 passed / 0 failed**（基线 402，+1）。
 
 ---
 
@@ -440,7 +440,7 @@
 
 **行为变更（须知悉）**：超限帧从**静默丢弃**改为**回错 + 关连接**；`route_messages` 对非法信封由「完全忽略」改为「留痕进 `unmatched`」（既有断言随之由 1 条改为 2 条）。
 
-**验证**：`cargo fmt --all -- --check` 无差异；`cargo clippy --workspace --all-targets` 0 warning；`cargo test --workspace` **422 passed / 0 failed**（基线 403，+19）；`dd-run-cli --conformance --ext-id com.ddrun.calc` 9 步全绿。工作副本**未提交**。
+**验证**：`cargo fmt --all -- --check` 无差异；`cargo clippy --workspace --all-targets` 0 warning；`cargo test --workspace` **422 passed / 0 failed**（基线 403，+19）；`dd-run-cli --conformance --ext-id com.ddrun.calc` 9 步全绿。
 
 **明确未做**：`-32002` 启用、`PageInfo` 接线——须走协议 §13 `MINOR` 演进，仍为 [INDEX](./INDEX.md) §5 待人工决策项。
 
@@ -459,7 +459,7 @@
 
 **替换说明**：两处替换（udeps → machete、outdated → Dependabot）的理由与实测依据见方案 §2.5.1。
 
-**验证**：`cargo fmt --all -- --check` 无差异；`cargo clippy --workspace --all-targets` 0 warning；`cargo test --workspace` **422 passed / 0 failed**（本批无 Rust 代码改动，与上批持平）。**CI 首次实际运行结果待提交后确认**（本地无 GitHub Actions 环境）。工作副本**未提交**。
+**验证**：`cargo fmt --all -- --check` 无差异；`cargo clippy --workspace --all-targets` 0 warning；`cargo test --workspace` **422 passed / 0 failed**（本批无 Rust 代码改动，与上批持平）。**CI 实跑已确认**（2026-09-16）：`dependencies (audit + machete)` job 在 runner 上 **success**（main@`9936ead`），Dependabot 已开 4 个更新 PR。
 
 **未覆盖**：unmaintained / unsound / yanked 类告警当前只警告不阻塞；收紧方式（`--deny warnings`）与权衡见方案 §2.5.1。
 
@@ -476,7 +476,7 @@
 | I3 图标 32px 回退 | ⏸ 保留不做 | 设计文档 [`icons-typography-plan.md`](./icons-typography-plan.md) 已定「视真机效果再定，不阻塞交付」——属**真机依赖项**（Phase 2 范畴） |
 | LRU 容量可配 | 🔵 转功能项 | `pool.rs` 为编译期常量；需 Settings 字段 + 设置页行 + 持久化 + 消费点改造，**明确不在 O8 范围**，待单独立项 |
 
-**验证**：`cargo fmt --all -- --check` 无差异；`cargo clippy --workspace --all-targets` 0 warning；`cargo test --workspace` **422 passed / 0 failed**（本批无代码改动）。工作副本**未提交**。
+**验证**：`cargo fmt --all -- --check` 无差异；`cargo clippy --workspace --all-targets` 0 warning；`cargo test --workspace` **422 passed / 0 failed**（本批无代码改动）。
 
 **结论**：Phase 1 四项（O2/O1/O3/O8）全部落地。
 
@@ -495,7 +495,7 @@
 | 开关 | ✅ | `DDRUN_LOG=off/error/warn/info/debug/trace`，支持 target 定向 `warn,dd_ext=debug`（最长前缀优先） |
 | 默认值 | ✅ | **`debug`**——与改造前「所有 `eprintln!` 都输出」等价，引入分级不减少既有可观测性 |
 
-**验证**：`DDRUN_LOG=debug` → stderr 7 行、`info`/`warn`/`off` → 0 行、不设环境变量 → 7 行（= 默认等价）；四档下 stdout 恒 14 行且 `dd-run-cli --conformance` 全绿（**协议纯度保持**）；`fmt --all -- --check` 无差异；`clippy --workspace --all-targets` 0 warning；`cargo test --workspace` **430 passed / 0 failed**（基线 422，+8 日志单测）。工作副本**未提交**。
+**验证**：`DDRUN_LOG=debug` → stderr 7 行、`info`/`warn`/`off` → 0 行、不设环境变量 → 7 行（= 默认等价）；四档下 stdout 恒 14 行且 `dd-run-cli --conformance` 全绿（**协议纯度保持**）；`fmt --all -- --check` 无差异；`clippy --workspace --all-targets` 0 warning；`cargo test --workspace` **430 passed / 0 failed**（基线 422，+8 日志单测）。
 
 **保留/未做**：测试与 `build.rs` 的 `eprintln!` 保留（非运行时日志）；GUI release 无控制台，排障需重定向 `2> dd-run.log`（已注于 `main.rs`）；方案原文的「结构化日志」未做（验收只要求分级与开关）；**真机复现（扩展崩溃/超时链路）待用户执行**。
 
@@ -521,7 +521,7 @@
 
 **未闭环 5 项**（待决策 / 待环境）：A-33-05 目标「修订目标 / 换通道对照 / 标 blocked」三选一、`es.exe` 前置、GUI 端到端「输入到首屏 ≤200 ms」、A-33-03 的 `%`/`#` 打开验证、A-33-08 剩余矩阵单元 —— 见 [验收报告](./search-file-p2-acceptance-2026-09-15.md) §5。
 
-**验证**（首轮）：本批**无 Rust 代码改动**（新增 1 个 Python 验收脚本 + 文档回写）。**2026-09-16 追加** `search.rs` 计时插桩（+2 单测）后三关复跑：`fmt --all -- --check` 无差异、`clippy --workspace --all-targets` 0 warning、`cargo test --workspace` **432 passed / 0 failed**（430 → +2）。工作副本**未提交**。
+**验证**（首轮）：本批**无 Rust 代码改动**（新增 1 个 Python 验收脚本 + 文档回写）。**2026-09-16 追加** `search.rs` 计时插桩（+2 单测）后三关复跑：`fmt --all -- --check` 无差异、`clippy --workspace --all-targets` 0 warning、`cargo test --workspace` **432 passed / 0 failed**（430 → +2）。
 
 ---
 

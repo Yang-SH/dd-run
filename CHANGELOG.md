@@ -4,6 +4,14 @@
 
 ## [Unreleased]
 
+### 修复（release 构建阻塞：A3 埋点 cfg 守卫漏配导致分发包无法产出，2026-09-16）
+
+- **症状**：`cargo build --release` 在 `dd-gui` 报 `error[E0425]: cannot find value 'start' in this scope`（`crates/dd-gui/src/state.rs:395`）→ **单文件分发包自 2026-09-13 起无法产出**（`dist/` 长期停留在 `378b89d` 之前的构建，`tools/package.sh` 静默失败在宿主构建步）。
+- **根因**：`378b89d`（perf：热路径去重复开销）按要求把 `recompute_visible` 的 A3 计时埋点改为 `#[cfg(debug_assertions)]`（release 免一次 `Instant::now()`/帧），但**只改了 `let start` 定义、漏改使用它的日志调用** —— release（`debug_assertions` 关闭）下该变量不存在。三关（fmt / clippy / test）与 CI 四关**均为 debug profile**，不覆盖 release 编译，故长期未暴露。
+- **修复**：为日志调用补上同一 `#[cfg(debug_assertions)]` 守卫（`state.rs` +1 行），即补全 `378b89d` 已声明的设计意图；**行为不变**（该埋点本就仅 debug 构建输出，release 下不产生该次计时与日志）。
+- **重新产出**：`bash tools/package.sh` → `dist/dd-run-0.1.1.exe`（8.70 MB）+ `dist/dd-run-0.1.1-portable.zip`（4.36 MB，含 `extensions.d/` sidecar 与清单）。
+- **验证**：release 宿主启动正常（事件循环存活）；`dist/extensions.d/dd-ext-search.exe` 经协议驱动正常（`hint`/`empty`/`results` 三类响应齐全，IPC 往返 p50 11.27 ms）；`dd-run-cli --conformance --ext-id com.ddrun.calc` 9 步全绿；三关复跑 fmt 无差异 / clippy 0 告警 / `cargo test --workspace` 432 passed。
+
 ### 优化（窗口材质与边框：材质单选 pill + 不透明度滑杆 + 圆角/边框三选 P1–P4，2026-09-13）
 
 - **设置卡更名「窗口材质与边框」**，参考 DeskBox「外观 → 窗口材质与边框」能力面（源码取证），原「云母/亚克力」两互斥开关行重构为四行结构；视觉契约与规格表见根目录 `cmdpal-window-material-effects.html` 效果页。

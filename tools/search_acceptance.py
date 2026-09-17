@@ -376,10 +376,14 @@ def cmd_breakdown(args: argparse.Namespace) -> int:
         "extension_exe": str(exe),
         "n_per_case": args.n,
         "cases": result,
+        # ⚠️ 口径说明（2026-09-16）：以下 derived 是**跨场景相减**的粗分，仅给出量级参考。
+        # 实测证明「hit − ipc」**不等于**评分成本（评分实测仅 ≈0.3 ms）——该差值主要来自
+        # IPC 查询耗时随查询词变化，详见 docs/search-file-p2-acceptance-2026-09-15.md §4.1.1。
+        # 权威分段请读扩展自报的 `get_items 计时:` 行（search.rs 的 QueryTiming）。
         "derived": {
             "probe_plus_pipe_p50_ms": probe,
             "ipc_roundtrip_p50_ms": round(ipc - probe, 3),
-            "scoring_plus_payload_p50_ms": round(hit - ipc, 3),
+            "hit_vs_nomatch_delta_p50_ms": round(hit - ipc, 3),
         },
         "stderr": ext.stderr_snapshot()[-20:],
     }
