@@ -118,7 +118,9 @@ impl PaletteApp {
             HostAction::KeepOpen => {}
             HostAction::GoToPage { page_id } => {
                 let ext_id = ext_id.to_string();
-                self.open_page(&ext_id, &page_id, None, None);
+                // 扩展主动 `GoToPage`：没有「被点击项标题」可用，页标题留空
+                // → placeholder 回落「筛选命令…」（不把原始 page_id 显示给用户）。
+                self.open_page(&ext_id, &page_id, None, None, None);
             }
             HostAction::ShowToast {
                 message,

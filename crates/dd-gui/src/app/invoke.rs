@@ -106,7 +106,13 @@ impl PaletteApp {
             CommandRef::Page { page_id } => {
                 let page_id = page_id.clone();
                 let search = (!query.is_empty()).then_some(query);
-                self.open_page(&item.ext_id, &page_id, search, Some(item.id.clone()));
+                self.open_page(
+                    &item.ext_id,
+                    &page_id,
+                    search,
+                    Some(item.id.clone()),
+                    Some(item.title.clone()),
+                );
             }
         }
     }

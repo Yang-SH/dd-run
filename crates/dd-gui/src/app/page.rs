@@ -223,15 +223,26 @@ impl PaletteApp {
     ///
     /// `command_id` = 被点击的 `Page` 命令 id（桩复热时按协议 §6.4 先 `get_command` 校验）；
     /// `GoToPage` 动作无对应命令点击，传 `None`。
+    ///
+    /// `title` = **页标题的来源**，进搜索框 placeholder（设计稿 §07.1 D2）：
+    /// - 点击入口项进页 → 传**被点击项标题**（人类可读）；
+    /// - `f ` 前缀直达等无入口项的场景 → 传宿主本地化文案；
+    /// - 扩展 `GoToPage` 效果 → `None` → placeholder 回落「筛选命令…」。
+    ///
+    /// ⚠️ 此前这里直接把 `page_id` 当标题，导致 placeholder 显示「在「files.results」中筛选…」
+    /// （原始 id 泄漏给用户）；协议侧 `PageInfo` 定为**不传递**（`protocol.md` §8.5），
+    /// 故标题一律由宿主侧信息提供。
     pub(crate) fn open_page(
         &mut self,
         ext_id: &str,
         page_id: &str,
         search: Option<String>,
         command_id: Option<String>,
+        title: Option<String>,
     ) {
+        let title = title.unwrap_or_default();
         self.stack
-            .push(PageState::nested(page_id, page_id, ext_id, Vec::new()));
+            .push(PageState::nested(page_id, title, ext_id, Vec::new()));
         self.stack.current_mut().is_loading = true;
         // 进嵌套页即聚焦搜索框（截图反馈：进入文件搜索后输入框无光标 → 无法直接键入）
         self.want_focus = true;

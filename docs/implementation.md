@@ -28,7 +28,8 @@
 | O3 依赖治理 | ✅ 已落地 | 2026-09-15（已提交 `c26035e`） | CI 新增 `audit` job（`cargo audit` 漏洞 + `cargo machete` 死依赖）+ Dependabot 管更新；本地实跑均零发现 | [§2 O3](#o3--依赖治理2026-09-15-落地) |
 | O8 文档卫生 | ✅ 已落地 | 2026-09-15（已提交 `c26035e`） | CHANGELOG `[0.1.0]` 补日期、行尾确认合规；I3（真机依赖）与 LRU 容量（功能项）经取证不在本项范围，已逐条记档 | [§2 O8](#o8--文档卫生2026-09-15-落地) |
 | O4 可观测性/日志 | ✅ 已落地 | 2026-09-15（已提交 `c26035e`） | `log` facade + 自写 stderr 后端；131 处 `eprintln!` 分级（debug 85/warn 39/info 7）；`DDRUN_LOG` 开关实测生效，**默认 debug = 与改造前逐行等价** | [§2 O4](#o4--可观测性日志2026-09-15-落地) |
-| O7 文件搜索 P2 真机验收 | ⚠️ 首轮完成（阈值修订后 A-33-05 达标） | 2026-09-15 / 16（已提交 `c26035e` + `9936ead`） | A-33-07/A-33-10 ✅；A-33-06/A-33-08 ⚠️ 部分；**A-33-05 经阈值修订后 ✅**；缺 `es.exe` 阻塞基线与回落分支 | [验收报告](./search-file-p2-acceptance-2026-09-15.md) |
+| O7 文件搜索 P2 真机验收 | ✅ 已落地（两轮完成） | 2026-09-15 / **2026-09-17**（已提交 `c26035e` + `9936ead`；第二轮工作副本） | A-33-05 / A-33-06 / A-33-07 / A-33-10 **通过**（基线降幅 91.27%、回落分支 3/3 返回真实结果）；A-33-08 ⚠️ 部分（跨环境矩阵）＝唯一红线来源；**同批修 `es.exe` 失败静默为空结果的缺陷** | [验收报告](./search-file-p2-acceptance-2026-09-15.md) |
+| 协议两项定稿（`-32002` / `PageInfo`） | ✅ 已定稿 | 2026-09-17（工作副本） | `-32002` 判为**扩展侧可用错误码**（宿主不产出）、`PageInfo` **维持不传递**；`protocol.md` §9.2/§8.5 注记改终态口径，INDEX §5 两项关闭 | [§2 协议两项定稿](#协议两项定稿-32002--pageinfo2026-09-17-定稿) |
 
 ## 产物与分发（2026-09-13 实测）
 
@@ -442,7 +443,7 @@
 
 **验证**：`cargo fmt --all -- --check` 无差异；`cargo clippy --workspace --all-targets` 0 warning；`cargo test --workspace` **422 passed / 0 failed**（基线 403，+19）；`dd-run-cli --conformance --ext-id com.ddrun.calc` 9 步全绿。
 
-**明确未做**：`-32002` 启用、`PageInfo` 接线——须走协议 §13 `MINOR` 演进，仍为 [INDEX](./INDEX.md) §5 待人工决策项。
+**明确未做（O1 范围内）**：`-32002` 启用、`PageInfo` 接线 —— 二者已于 **2026-09-17 定稿**（`-32002` = 扩展侧可用错误码、宿主不产出；`PageInfo` = 维持不传递），不再是开放项，详见 [§2 协议两项定稿](#协议两项定稿-32002--pageinfo2026-09-17-定稿)。
 
 ---
 
@@ -519,9 +520,49 @@
 
 **红线复述**：A-33-06 / A-33-08 未**全**通过前，用户文档不得承诺「无需 `es.exe`」。
 
-**未闭环 5 项**（待决策 / 待环境）：A-33-05 目标「修订目标 / 换通道对照 / 标 blocked」三选一、`es.exe` 前置、GUI 端到端「输入到首屏 ≤200 ms」、A-33-03 的 `%`/`#` 打开验证、A-33-08 剩余矩阵单元 —— 见 [验收报告](./search-file-p2-acceptance-2026-09-15.md) §5。
+**未闭环 3 项**（待环境 / 待真机 GUI）：A-33-08 剩余矩阵单元（Win10 / Everything 1.5 / 提升 / 命名实例，**当前唯一红线来源**）、GUI 端到端「输入到首屏 ≤200 ms」、A-33-03 的 `%`/`#` 打开验证 —— 见 [验收报告](./search-file-p2-acceptance-2026-09-15.md) §5。
+
+**2026-09-17 第二轮（补 `es.exe`，报告 v1.3）**：安装 ES 1.1.0.37（`%LOCALAPPDATA%\Microsoft\WindowsApps\es.exe`，在用户 PATH 上）后补齐两项此前「无法验证」的半项，并把测量口径修硬：
+
+| 项目 | 结果 |
+|---|---|
+| A-33-05 基线半 | 同参 `es.exe` ×200 次 p95 **324.213 ms** vs IPC p95 **28.300 ms** → **降幅 91.27 % ≥ 50 %** ✅（IPC 门禁复测 1000 次 p50 24.156／p95 28.300，通道 `ipc` 1000/1000） |
+| A-33-06 回落半 | **3/3 回落 `es.exe` 且返回 30 条真实结果**（通道 `ipc->es`，total 225–282 ms）✅；形态①（两者均不可用）复测 20/20 引导项 |
+| A-33-10 | 恢复判据改为**通道级**（`channel == "ipc"`）：第 8 次查询／15.16 s 回 IPC（旧「有响应」判据会在 8.59 s 误报恢复） |
+| 产品缺陷（新发现，已修） | `es.exe` 以 `rc=8` 失败时错误只在 **stderr**，而旧 `run_es` 丢弃 stderr + 忽略退出码 → **静默当成「无结果」**（用户见空列表无提示）。修法：新增纯函数 `interpret_es_output(status, stdout, stderr)`（仅 `rc=0` 按无结果，`rc≠0` 转 `Err` 并保留 stderr 文案 → 落成可读 `files.error` 项），`run_es` 改**双管道并发消费**并带出退出码；+1 单测（5 个断言面） |
+| 测量闸门（脚本） | ① `wait_ipc_ready`：计时前必须等到 `channel=ipc`（否则测得的是 **0.14 ms 的引导项**，得出「假达标」——本轮实测踩到）；② 通道直方图（门禁以 `all_queries_over_ipc` 为前提）；③ 通道级恢复判据；④ `run_es` 基线实采 |
 
 **验证**（首轮）：本批**无 Rust 代码改动**（新增 1 个 Python 验收脚本 + 文档回写）。**2026-09-16 追加** `search.rs` 计时插桩（+2 单测）后三关复跑：`fmt --all -- --check` 无差异、`clippy --workspace --all-targets` 0 warning、`cargo test --workspace` **432 passed / 0 failed**（430 → +2）。
+
+---
+
+### 协议两项定稿（`-32002` / `PageInfo`，2026-09-17 定稿）
+
+出处：`INDEX.md` §5 两项开放项 + `doc-audit-2026-09-13.md` §6.1 #1/#2。**均不改协议语义**（版本仍 v1.0），只把注记从「待接线」改写为**终态口径**并关闭开放项。
+
+| 项目 | 状态 | 落点 |
+|---|---|---|
+| `-32002 command_not_found` | ✅ 定稿：**扩展侧可用错误码、宿主不产出** | `protocol.md` §9.2 表格行 + 注记改写（去掉「保留码、待接线」）。实测依据：Python 示例确实产出该码（`examples/python-minimal/dd_ext_pymin.py`），内置扩展与 `dd-ext-sample` 回 `ShowToast` 属**合法实现选择**（各带专属文案） |
+| `PageInfo` | ✅ 定稿：**维持不传递**（v1.0 预留定义） | `protocol.md` §8.5 注记改写：`GetItemsResult` 不携带页元信息，宿主页标题取自**宿主侧信息**；启用须走 §13 `MINOR` |
+| 页标题来源（`PageInfo` 决策的落地） | ✅ 已修 | 嵌套页标题此前**直接用原始 `page_id`**（`app/page.rs` 把 `page_id` 同时当标题）→ placeholder 显示「在「files.results」中筛选…」；现改为「被点击项标题 / 本地化扩展名（`f ` 直达）/ 空（扩展 `GoToPage`）→ 回落『筛选命令…』」，并修正 `navigation.rs` 中「标题来自 `PageInfo.title`」的**过期注释** |
+
+**验证**：`protocol.md` 的 JSON 示例未动（`cargo test -p dd-protocol` 通过，workspace **433 passed**）。
+
+### 文件搜索回落通道静默失败修复 + 工具一致性（2026-09-17）
+
+出处：[验收报告](./search-file-p2-acceptance-2026-09-15.md) §4.2.1。**属产品缺陷修复**（用户可见行为变更）。
+
+| 项目 | 状态 | 落点 |
+|---|---|---|
+| `es.exe` 失败被静默当成「无结果」 | ✅ 已修 | `dd-ext/src/bin/search.rs`：新增纯函数 `interpret_es_output(status, stdout, stderr)`（仅 `rc=0` 按无结果；`rc≠0` → `Err` 并保留 stderr 文案）；`run_es` 改 **stdout/stderr 双管道并发消费** + 带出退出码；`search_via_es` 不再自行解析。触发场景实测为 `rc=8`「Everything IPC not found」（错误只在 stderr） |
+| 新增单测 | ✅ | `interpret_es_output_separates_no_result_from_failure`（rc=0 空输出仍为无结果 / rc=0 合法 JSON / **rc=8 必须 Err 且带文案与退出码** / 无退出码 / rc=0 但非法 JSON 仍报错） |
+| `--conformance` 对 `has_fallback=false` 扩展**必红** | ✅ 已修 | `dd-run-cli/src/main.rs`：`has_fallback=false` 时**跳过** step 4（宿主按声明不会调用该方法，扩展不实现该分发臂合法）→ 示例扩展自检由「`-32601` 红灯」改为**9 步全过**；内置（`has_fallback=true`）路径无回归（step 4 仍校验一致性） |
+| `ext_inprocess.rs` 测试辅助与生产路由不同步 | ✅ 已修 | 测试内的 `route_serve_line` 由**手工复刻** `classify` + `jsonrpc` 检查改为**委托生产实现** `dd_host::process::route_messages`（单一来源；旧版不过 `envelope::validate`、不收集 `unmatched`，喂非法信封会静默跳过） |
+| `doc-code-diff` P-13 复核 | ✅ 已消除 | `protocol.md` §2.2 规则 6 已定义非 UTF-8 帧处置 → §4/§6 两行标 ✅（见 `doc-code-diff` §13） |
+
+**行为变更（须知悉）**：`es.exe` 自身失败时，用户由「**空结果列表（无提示）**」改为看到**可读错误项** `files.error`（文案指向安装/运行 Everything 与 `DDRUN_ES_PATH`）。正常路径（IPC 成功 / es 成功）行为不变。
+
+**验证**：`cargo fmt --all -- --check` 无差异；`cargo clippy --workspace --all-targets` **0 warning**；`cargo test --workspace` **433 passed / 0 failed**（432 + 1 新单测）；`--conformance --ext-id com.ddrun.calc` 9 步全绿；`--conformance --extensions-dir <示例目录>` 9 步全过（此前第 4 步必红）。
 
 ---
 
@@ -543,6 +584,21 @@
 | A12 | 协议双向方法齐全，能力调用不阻塞 UI | M0 + M1 |
 
 > A2 / A3 为**设计预期、非已证事实**（设计文档 §8.3、§11）。实测不达标时，做法是**记录实测值与瓶颈并据此决策**，而不是下调目标值以通过验收。
+
+### 3.1 测试基线台账（2026-09-17 建立）
+
+> 由来：`doc-audit-2026-09-13.md` §6.1 #6 —— 各文档的测试数快照跨度大（40 → 433），回归时难以判断「是否变少」。**口径统一为 `cargo test --workspace` 的 passed 总数**（本机 windows-gnu），**每次落地一批后追加一行**；任何下降即视为回归缺陷。
+
+| 时点 | passed | 变化来源 |
+|---|---|---|
+| 2026-09-14 | 402 | 基线（含当日清理批：fmt + 4 处既有告警） |
+| 2026-09-14 | 403 | +1：O2 方法名常量 ↔ `protocol.md` §1.3 一致性测试 |
+| 2026-09-15 | 422 | +19：O1 封套校验（`dd-protocol` 11 / `dd-ext` 6 / `dd-host` 1 / roundtrip 端到端 1） |
+| 2026-09-15 | 430 | +8：O4 日志（`Filters` 解析等） |
+| 2026-09-16 | 432 | +2：O7 计时插桩（`QueryTiming` 槽） |
+| 2026-09-17 | **433** | +1：文件搜索回落失败判定（`interpret_es_output`） |
+
+**两条使用注意**：① `crates/dd-host/tests/roundtrip*.rs` 在 `dd-ext-sample.exe` **未构建时会打印 SKIP 并 return**（计入 passed），故凡涉及协议/扩展行为，先 `cargo build -p dd-ext-sample` 再跑；② 「三关全绿」与 CI 四关**均为 debug profile**，`#[cfg(debug_assertions)]` 类 release-only 编译错误检不到 —— 交付/发布前必须实跑 `cargo build --release`（见 §7 构建环境记档与 `CHANGELOG` 的 release 阻塞条目）。
 
 ---
 

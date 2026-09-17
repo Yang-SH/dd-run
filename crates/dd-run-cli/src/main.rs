@@ -830,40 +830,54 @@ fn conformance_after_open(
     }
 
     // ④ fallback_commands（§6.2）—— 非空 ⟺ has_fallback
-    let fallback = match call_json(
-        &mut backend,
-        METHOD_FALLBACK_COMMANDS,
-        serde_json::json!({}),
-        process::TIMEOUT_FALLBACK_COMMANDS,
-    ) {
-        Ok(v) => v
-            .get("commands")
-            .and_then(Value::as_array)
-            .cloned()
-            .unwrap_or_default(),
-        Err(e) => {
-            check.fail("4) fallback", e);
-            return summarize(check, started);
-        }
-    };
-    if fallback_is_consistent(fallback.len(), init.provider.has_fallback) {
+    //
+    // ⚠️ `has_fallback=false` 时**跳过调用**：宿主按声明不会调用该方法，扩展不实现该分发臂
+    // 是**合法**的（`dd-ext-sample` 即如此，清单 `has_fallback: false`）。旧实现无条件调用，
+    // 把合法示例判成 `-32601` 红灯 —— 属「工具 ↔ 契约」判据不一致（2026-09-17 修）。
+    let fallback = if !init.provider.has_fallback {
         check.pass(
             "4) fallback",
-            format!(
-                "{} 条模板 · has_fallback={} · 一致",
-                fallback.len(),
-                init.provider.has_fallback
-            ),
+            "has_fallback=false → 宿主不调用该方法，跳过（§6.2）",
         );
+        Vec::new()
     } else {
-        check.fail(
-            "4) fallback",
-            format!(
-                "返回 {} 条但 has_fallback={} —— §6.2 要求两者一致（非空 ⟺ 具备兜底能力）",
-                fallback.len(),
-                init.provider.has_fallback
-            ),
-        );
+        match call_json(
+            &mut backend,
+            METHOD_FALLBACK_COMMANDS,
+            serde_json::json!({}),
+            process::TIMEOUT_FALLBACK_COMMANDS,
+        ) {
+            Ok(v) => v
+                .get("commands")
+                .and_then(Value::as_array)
+                .cloned()
+                .unwrap_or_default(),
+            Err(e) => {
+                check.fail("4) fallback", e);
+                return summarize(check, started);
+            }
+        }
+    };
+    if init.provider.has_fallback {
+        if fallback_is_consistent(fallback.len(), init.provider.has_fallback) {
+            check.pass(
+                "4) fallback",
+                format!(
+                    "{} 条模板 · has_fallback={} · 一致",
+                    fallback.len(),
+                    init.provider.has_fallback
+                ),
+            );
+        } else {
+            check.fail(
+                "4) fallback",
+                format!(
+                    "返回 {} 条但 has_fallback={} —— §6.2 要求两者一致（非空 ⟺ 具备兜底能力）",
+                    fallback.len(),
+                    init.provider.has_fallback
+                ),
+            );
+        }
     }
     for item in &fallback {
         let id = item.get("id").and_then(Value::as_str).unwrap_or_default();

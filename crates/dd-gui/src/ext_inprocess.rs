@@ -277,7 +277,6 @@ fn catch(spec: &ExtensionSpec, line: &str) -> Result<(Vec<serde_json::Value>, bo
 mod tests {
     use super::*;
     use dd_ext::Effect;
-    use dd_host::process::{classify, MessageKind};
     use dd_protocol::model::{CommandRef, Icon, IconKind, Sender};
 
     /// 测试用最小 spec：顶层 2 命令、fallback 1 模板、invoke 分发（含 host 请求与
@@ -484,33 +483,28 @@ mod tests {
 
     // ── R1 逐字节等价：in-process 路由后的消息集 == serve_line 直接产出 ──
 
-    /// 手工把 `serve_line` 输出按与 `InProcessExtension` 相同的 `classify` 规则分类，
-    /// 得到 (response, host_requests, notifications)，用于与适配器内部状态对比。
+    /// 测试内路由辅助：**直接复用生产实现** `dd_host::process::route_messages`（单一来源），
+    /// 返回 (response, host_requests, notifications)，用于与适配器内部状态对比。
+    ///
+    /// ⚠️ 2026-09-17 修：此前这里是**手工复刻**的 `classify` + `jsonrpc` 检查，与真实
+    /// `route_messages` 已不同步（它不过 `envelope::validate`、也不收集 `unmatched`，
+    /// 喂非法信封会静默跳过）——测试结论可能因此失真。改为委托生产路由后，
+    /// 「宿主怎么路由」只有一处定义。
+    /// `request_id` 必须与 fixture 请求的 `id` 一致（响应按 id 匹配）。
     fn route_serve_line(
         spec: &ExtensionSpec,
         line: &str,
+        request_id: u64,
     ) -> (Option<serde_json::Value>, Vec<RawMessage>, Vec<RawMessage>) {
         let (outputs, _) = serve_line(spec, line);
-        let mut response = None;
-        let mut host = Vec::new();
-        let mut notes = Vec::new();
-        for value in outputs {
-            let Ok(msg) = serde_json::from_value::<RawMessage>(value) else {
-                continue;
-            };
-            if msg.jsonrpc != JSONRPC_VERSION {
-                continue;
-            }
-            match classify(&msg) {
-                MessageKind::HostRequest => host.push(msg),
-                MessageKind::Notification => notes.push(msg),
-                MessageKind::Response(_) => {
-                    response = Some(msg.result.unwrap_or(serde_json::Value::Null))
-                }
-                MessageKind::Unknown => {}
-            }
-        }
-        (response, host, notes)
+        let routed = dd_host::process::route_messages(request_id, outputs);
+        let response = match routed.response {
+            Some(Ok(v)) => Some(v),
+            // 错误响应保留错误对象（旧手工版会把它压成 `null`，丢信息）
+            Some(Err(e)) => Some(serde_json::json!({ "error": e })),
+            None => None,
+        };
+        (response, routed.host_requests, routed.notifications)
     }
 
     #[test]
@@ -530,8 +524,8 @@ mod tests {
             .unwrap();
         let ext_host = ext.drain_host_requests();
 
-        // serve_line 直出（subprocess stdout 的来源）
-        let (resp, host, notes) = route_serve_line(&spec, &line);
+        // serve_line 直出（subprocess stdout 的来源）；fixture 请求 id = 9
+        let (resp, host, notes) = route_serve_line(&spec, &line, 9);
 
         // 响应字节一致（响应 id 由宿主侧 next_id 决定，确定性）
         let result_json = serde_json::to_value(&result).unwrap();

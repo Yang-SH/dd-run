@@ -587,7 +587,7 @@ discovered → spawned → initializing → ready ⇄ busy ─┤
 
 页元信息（设计文档 §4.5）。
 
-> ⚠️ **v1.0 现状（核对至 2026-09-13）**：`PageInfo` 类型已在 `dd-protocol` 定义，但**运行时不传递**——`GetItemsResult`（§6.3）只含 `items` / `has_more_items` / `is_loading`，**不携带页元信息**。宿主渲染页标题与占位文本目前取自 `CommandItem` 与本地页面栈状态，**不得依赖 `get_items` 回传 `PageInfo`**。将来若接线，按 §13 递增 `MINOR`。
+> ⚠️ **v1.0 定稿（2026-09-17）**：`PageInfo` 类型已在 `dd-protocol` 定义，但**运行时不传递，且定为不传递**——`GetItemsResult`（§6.3）只含 `items` / `has_more_items` / `is_loading`，**不携带页元信息**。宿主渲染页标题取自**被点击项标题**（`f ` 前缀直达等无来源的命令点击则回退本地化文案），**不依赖 `get_items` 回传 `PageInfo`**；故该类型在 v1.0 属**预留定义**（为将来「由扩展自定义页标题」留位）。若启用，按 §13 递增 `MINOR`，并同步本注记与 §6.3。
 
 ```json
 {"type":"list","page_id":"calc.history","title":"History","placeholder_text":"Search history","is_loading":false,"show_details":true,"has_more_items":false,"grid":{"columns":4}}
@@ -676,16 +676,17 @@ discovered → spawned → initializing → ready ⇄ busy ─┤
 | 码        | 名称                     | 触发                                | 建议宿主行为                |
 | -------- | ---------------------- | --------------------------------- | --------------------- |
 | `-32001` | `extension_timeout`    | 请求超时未响应                           | 记日志；可重试一次；仍失败则标 stub  |
-| `-32002` | `command_not_found`    | ⚠️ **保留码，当前实现未产出**（见本条注记） | 提示用户；从列表移除该项          |
+| `-32002` | `command_not_found`    | **扩展 handler** 判定该 `id` 不可执行（**由扩展产出、宿主不产出**，见本条注记） | 提示用户；从列表移除该项          |
 | `-32003` | `provider_unavailable` | 扩展进程已退出或不可用                       | 回退 stub；下次激活时重新 spawn |
 | `-32004` | `version_mismatch`     | 协议版本不兼容                           | 关闭进程；标记扩展不可用          |
 | `-32005` | `page_not_found`       | `page_id` 不存在或已失效                 | 返回上一级；刷新页面栈           |
 
-> ⚠️ **`-32002` 的现状与边界（核对至 2026-09-13）**：
+> ⚠️ **`-32002` 的口径（2026-09-17 定稿，不再作为开放项）**：
 >
-> - **当前实现不产出此码**：常量 `error_codes::COMMAND_NOT_FOUND` 已在 `dd-protocol` 定义，但宿主与 `dd-ext` 共享运行时**均无抛出点**。「命令不存在」由**各扩展自身的 handler** 兜底：内置扩展（system/websearch/shell）回普通结果 `ShowToast`（各带专属文案，`builtins/system.rs:173` 等），示例扩展回「未知命令」提示（`dd-ext-sample/src/main.rs:528`）；**随 [`extensions.md`](./extensions.md) 发布的 Python 示例则确实回 `-32002 command_not_found`**（`examples/python-minimal/dd_ext_pymin.py:307-308`）。
+> - **由扩展侧产出**：常量 `error_codes::COMMAND_NOT_FOUND` 定义于 `dd-protocol`，产出点是**扩展自身的 handler**——扩展判定「该 `id` 不是本扩展可执行的命令」时回此码。随 [`extensions.md`](./extensions.md) 发布的 Python 示例即如此（`examples/python-minimal/dd_ext_pymin.py`）。
+> - **宿主与内置运行时不产出**：宿主不掌握扩展的命令表；内置扩展（system/websearch/shell）与 `dd-ext-sample` 选择回普通结果 `ShowToast`（各带专属文案，`builtins/system.rs` 等）——这是**合法的实现选择**（先提示、不打断），不是缺陷。
 > - **与 §6.4 的边界**：`get_command` 查不到时返回 `result.command = null`，这是**正常结果**、**不是**错误，不得用 `-32002` 表达。上表把 `get_command` 列为该码的触发场景属历史表述，已更正。
-> - **结论**：`-32002` 在 v1.0 属「已保留、待接线」的码。扩展不得依赖宿主会发出它；若将来启用，须同时更新本节与 §6.4。
+> - **结论（终态）**：该码**不是「保留码」**，而是**扩展侧可用的标准错误码**；扩展可自行选择回该码或回普通结果。**扩展不得依赖宿主会发出它。** 原「已保留、待接线」表述作废。
 
 ### 9.3 错误处置通则
 

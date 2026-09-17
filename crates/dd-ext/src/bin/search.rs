@@ -180,46 +180,94 @@ fn es_exe_path() -> Option<PathBuf> {
     None
 }
 
-/// 执行 es.exe 并返回 stdout（**按代码页解码**：es 经管道输出为系统 OEM 代码页
-/// GBK，必须 `decode_output` 转 UTF-8，否则中文路径损坏，见下方 decode 模块）。
+/// `es.exe` 输出 → 结果：**区分「无匹配结果」与「es 自身失败」**。
 ///
-/// 读取放在子线程持续消费管道，避免输出较多时子进程写满管道阻塞（死锁）；
-/// 主线程用 `recv_timeout` 做超时兜底（宿主 `get_items` 超时仅 2000ms）。
-fn run_es(exe: &std::path::Path, args: &[&str]) -> anyhow::Result<String> {
+/// ⚠️ 实测（2026-09-17，A-33-06 复测）：
+/// - **无匹配结果** = stdout 为空串 **且 `rc=0`**（旧注释「es 无结果输出空字符串」只对 rc=0 成立）；
+/// - **本会话无可用 Everything 实例** = `rc=8` 且错误**只写在 stderr**
+///   （`Error 8: Everything IPC not found. Please make sure Everything is running.`）。
+///
+/// 旧实现丢弃 stderr（`Stdio::null()`）又忽略退出码，两者不可分辨 → 「IPC 挂 + es 不可达」
+/// 的双故障态被静默降级成**空结果列表**，而 §9.4 A-33-06 要求此时给可读引导；
+/// 本函数把失败显式转成 `Err`，由 `get_file_items_with` 落成 `files.error` 项。
+fn interpret_es_output(
+    status: Option<i32>,
+    stdout: &str,
+    stderr: &str,
+) -> anyhow::Result<Vec<FileEntry>> {
+    if status == Some(0) {
+        return parse_response(stdout);
+    }
+    let detail = stderr.trim();
+    let code = match status {
+        Some(c) => format!("退出码 {c}"),
+        None => "异常终止（无退出码）".to_string(),
+    };
+    Err(anyhow::anyhow!(
+        "es.exe {code}{}",
+        if detail.is_empty() {
+            String::new()
+        } else {
+            format!("：{detail}")
+        }
+    ))
+}
+
+/// 执行 `es.exe`：stdout 与 stderr **双管道并发消费**（避免输出较多时写满管道阻塞），
+/// 主线程 `recv_timeout` 做超时兜底（宿主 `get_items` 超时仅 2000ms），并**带出退出码**。
+/// 输出**按代码页解码**（es 经管道输出为系统 OEM 代码页 GBK，必须 `decode_output`
+/// 转 UTF-8，否则中文路径损坏，见下方 decode 模块）。
+fn run_es(exe: &std::path::Path, args: &[&str]) -> anyhow::Result<Vec<FileEntry>> {
     let mut child = std::process::Command::new(exe)
         .args(args)
         .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::null())
+        .stderr(std::process::Stdio::piped())
         .spawn()
         .map_err(|e| anyhow::anyhow!("启动 es.exe 失败：{e}"))?;
     let mut stdout = child
         .stdout
         .take()
         .ok_or_else(|| anyhow::anyhow!("无法获取 es.exe stdout"))?;
+    let mut stderr = child
+        .stderr
+        .take()
+        .ok_or_else(|| anyhow::anyhow!("无法获取 es.exe stderr"))?;
     let (tx, rx) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
         let mut buf = Vec::new();
         let r = stdout.read_to_end(&mut buf).map(|_| buf);
         let _ = tx.send(r);
     });
-    match rx.recv_timeout(ES_TIMEOUT) {
-        Ok(Ok(bytes)) => {
-            let _ = child.wait();
-            Ok(decode_output(&bytes))
-        }
+    let (tx_err, rx_err) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let mut buf = Vec::new();
+        let r = stderr.read_to_end(&mut buf).map(|_| buf);
+        let _ = tx_err.send(r);
+    });
+    let out_bytes = match rx.recv_timeout(ES_TIMEOUT) {
+        Ok(Ok(bytes)) => bytes,
         Ok(Err(e)) => {
+            let _ = child.kill();
             let _ = child.wait();
-            Err(anyhow::anyhow!("读取 es.exe 输出失败：{e}"))
+            return Err(anyhow::anyhow!("读取 es.exe 输出失败：{e}"));
         }
         Err(_) => {
             let _ = child.kill();
             let _ = child.wait();
-            Err(anyhow::anyhow!(
+            return Err(anyhow::anyhow!(
                 "es.exe 查询超时（>{}ms）",
                 ES_TIMEOUT.as_millis()
-            ))
+            ));
         }
-    }
+    };
+    // stderr 通常极短（错误文案），读失败/超时按空处理，不影响主判定
+    let err_bytes = rx_err.recv_timeout(ES_TIMEOUT).ok().and_then(|r| r.ok());
+    let status = child.wait().ok().and_then(|s| s.code());
+    interpret_es_output(
+        status,
+        &decode_output(&out_bytes),
+        &decode_output(err_bytes.as_deref().unwrap_or_default()),
+    )
 }
 
 // ─── es.exe 输出解码（GBK 乱码修复）───────────────────────────────
@@ -626,11 +674,11 @@ fn search_via_es(q: &str, limit: usize) -> anyhow::Result<Vec<FileEntry>> {
         q.to_string()
     };
     let n = limit.to_string();
-    let out = run_es(
+    // run_es 负责「输出 + 退出码 + stderr」三者的判定（无结果 vs es 失败），此处不再解析。
+    run_es(
         &exe,
         &["-json", "-n", &n, "-size", "-dm", "-attributes", &query],
-    )?;
-    parse_response(&out)
+    )
 }
 
 // ─── 评分（归一化到 0~1）────────────────────────────────────────────
@@ -1524,11 +1572,48 @@ mod tests {
 
     #[test]
     fn parse_response_empty_output_means_no_results() {
-        // ⚠️ 实测：es 无结果时输出**空字符串**，不是 []——必须按空结果处理
+        // ⚠️ 实测：es **无结果**时（rc=0）输出为空字符串，不是 []——必须按空结果处理。
+        // （rc≠0 的失败不得走这条路径，见 `interpret_es_output_separates_no_result_from_failure`）
         let entries = parse_response("").expect("空输出应视为无结果而非报错");
         assert!(entries.is_empty());
         let entries = parse_response("  \n ").expect("纯空白亦视为无结果");
         assert!(entries.is_empty());
+    }
+
+    /// 2026-09-17 修复锚点：`es.exe` **失败**（rc≠0，错误只在 stderr）必须报错，
+    /// 不得与「无匹配结果」混为一谈——否则「IPC 挂 + es 不可达」会静默显示空列表。
+    #[test]
+    fn interpret_es_output_separates_no_result_from_failure() {
+        // ① rc=0 + 空输出 = 真的无匹配结果（既有语义，不得回归）
+        assert!(interpret_es_output(Some(0), "", "")
+            .expect("rc=0 空输出应视为无结果")
+            .is_empty());
+        // ② rc=0 + 合法 JSON = 正常结果
+        let ok = interpret_es_output(
+            Some(0),
+            r#"[{"filename":"C:\\a.txt","size":1,"date_modified":0,"attributes":32}]"#,
+            "",
+        )
+        .expect("rc=0 合法输出应解析成功");
+        assert_eq!(ok.len(), 1);
+        // ③ rc=8 + 空 stdout（本机实测的真实形态）→ 必须 Err，且保留 es 的 stderr 文案
+        let err = interpret_es_output(
+            Some(8),
+            "",
+            "Error 8: Everything IPC not found. Please make sure Everything is running.",
+        )
+        .err()
+        .expect("rc≠0 应报错");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("Everything IPC not found"),
+            "应带出 stderr：{msg}"
+        );
+        assert!(msg.contains('8'), "应带出退出码：{msg}");
+        // ④ 异常终止（无退出码）同样算失败
+        assert!(interpret_es_output(None, "", "boom").is_err());
+        // ⑤ rc=0 但输出非法 JSON → 仍按解析错误（不因 rc=0 就放过）
+        assert!(interpret_es_output(Some(0), "not json", "").is_err());
     }
 
     // ─── GBK 解码（es 管道输出为系统 OEM 代码页，非 UTF-8）───

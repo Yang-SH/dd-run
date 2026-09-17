@@ -120,7 +120,7 @@
 
 | ID | 类型 | 位置 | 摘要 |
 |---|---|---|---|
-| P-13 | 文档未覆盖 | `protocol.md:85-87` | 非 UTF-8 行：文档未定义处置与错误码；代码 `framing.rs:20` 产出 `Frame::InvalidUtf8`（行产出点 `framing.rs:73`）→ `ProtocolError::InvalidUtf8`，`as_rpc_error` 返回 `None`（无错误码） |
+| P-13 | 文档未覆盖 | `protocol.md:85-87` | 非 UTF-8 行：文档未定义处置与错误码；代码 `framing.rs:20` 产出 `Frame::InvalidUtf8`（行产出点 `framing.rs:73`）→ `ProtocolError::InvalidUtf8`，`as_rpc_error` 返回 `None`（无错误码） —— ✅ **已消除**（2026-09-17 复核）：`protocol.md` §2.2 规则 6 已明确定义处置（宿主 `call` 路径返 `InvalidUtf8`、通知路径与扩展帧循环静默丢弃，**无对应 JSON-RPC 错误码**），文档侧缺口不复存在 |
 | P-14 | 数据结构 | `protocol.md:145` | `params` 若出现必须是对象；代码 `messages.rs:47` `Option<Value>` 不校验，**数组亦被接受** —— ✅ **已解决**（2026-09-15，见 §12） |
 | P-15 | 数据结构 | `protocol.md:146-147` | `result` 与 `error` 互斥；代码 `process.rs:221,617` **未强制**，并存时 `error` 优先 —— ✅ **已解决**（2026-09-15，见 §12） |
 | P-16 | 参数 | `protocol.md:682` | `close` 超时 1000 ms、超时即强杀；代码 `process.rs:41-42` 为**两段各 1000 ms**（等 result + 等退出），最坏 2000 ms |
@@ -202,7 +202,7 @@
 
 | ID | 代码位置 | 未入文档的行为 |
 |---|---|---|
-| P-13 | `framing.rs:19`、`process.rs:578` | 非 UTF-8 帧的专门错误类型 `InvalidUtf8`（且无对应 JSON-RPC 错误码） |
+| P-13 | `framing.rs:19`、`process.rs:578` | 非 UTF-8 帧的专门错误类型 `InvalidUtf8`（且无对应 JSON-RPC 错误码）—— ✅ **已消除**（2026-09-17 复核）：已由 `protocol.md` §2.2 规则 6 覆盖 |
 | M-02 | `manifest.rs:280-296` | Windows 可执行文件扩展名补全顺序（`.exe` → `.cmd` → `.bat`）与"同名无扩展名文件优先命中"的坑 |
 | M-04 | `manifest.rs:498-516` | 目录 `NotFound` 与 IO 错误的差异化处置 |
 | E-10 | `process.rs:30-42` | `get_command` 一档超时（5000 ms） |
@@ -318,10 +318,22 @@ v1.3：记录第三处由**代码侧实现**（而非「文档对齐代码」）
 
 **验证**：`cargo fmt --all -- --check` 无差异；`cargo clippy --workspace --all-targets` 0 warning；`cargo test --workspace` **422 passed / 0 failed**（基线 403，+19）；`dd-run-cli --conformance --ext-id com.ddrun.calc` 9 步全绿。新增端到端测试 `roundtrip::oversized_request_closes_connection_with_32600` 以**真实子进程**验证「超限 → 回 `-32600` → 关连接 → 进程退出」。
 
-**仍在待决策（本批未动）**：`-32002 command_not_found` 无产出点、`PageInfo` 运行时不传递——二者属 §13 `MINOR` 演进范畴，保持 [`INDEX.md`](./INDEX.md) §5 状态。
+**仍在待决策（本批未动）**：~~`-32002 command_not_found` 无产出点、`PageInfo` 运行时不传递——二者属 §13 `MINOR` 演进范畴，保持 [`INDEX.md`](./INDEX.md) §5 状态。~~ → **已于 2026-09-17 定稿**（见 §13）。
 
 **连带变更**：本文 §2 的 P-01 详细条目补「处置」说明；§3 表（P-02/P-03/P-04）、§4 表（P-14/P-15）、§5 表（P-01/P-15）均标注 ✅；§9「未修 / 留人工确认」移除 P-01；[`INDEX.md`](./INDEX.md) §5 对应行改 ✅；[`protocol.md`](./protocol.md) §2.3/§3.2/§3.4/§9.3 更新实现现状注记；[`implementation.md`](./implementation.md) 里程碑总表与 §2 增记本批（**详述处为 `optimization-plan.md` §2.2.1**）。
 
 ---
 
-> **本阶段约束复述**：v1.0 为纯只读核对记录；v1.1 完成三路复核验真（修正清单自身 9 处）并落实上述修复，**已登记进 [`INDEX.md`](./INDEX.md)**（§3.E 清单与 §5 未闭环项）；v1.2 追加 §10/§11，记录代码侧消除的差异（P-06、P-18）与过期数值的取代；v1.3 追加 §12，记录 P-01 及其同批协议错误码差异的闭环。
+## 13. 后续状态变更（2026-09-17）
+
+| 清单条目 | 变更 | 依据 / 落点 |
+|---|---|---|
+| **P-13**（非 UTF-8 帧「文档未覆盖」，§4 与 §6 两行） | ✅ **已消除** | `protocol.md` **§2.2 规则 6** 已定义该帧的处置与「无对应 JSON-RPC 错误码」（宿主 `call` 路径返 `InvalidUtf8`、通知路径与扩展帧循环静默丢弃）；文档侧缺口不复存在，§4 与 §6 两行同步标 ✅ |
+| **E-01 领域**（`-32002` 归因，§2 详细条目） | ✅ **口径定稿** | `-32002` 判为**扩展侧可用错误码**（宿主与内置运行时不产出）；`protocol.md` §9.2 表格行与注记由「保留码、待接线」改写为**终态口径**，[`INDEX.md`](./INDEX.md) §5 该项关闭 |
+| `PageInfo`（INDEX §5 独立项，非本清单条目） | ✅ **口径定稿** | 明确**维持不传递**（v1.0 预留定义）；`protocol.md` §8.5 注记改写，宿主页标题改由宿主侧信息提供（顺带修掉嵌套页标题显示原始 `page_id` 的缺陷，见 [`implementation.md`](./implementation.md) §2） |
+
+> **性质**：三项均**不改协议语义**（v1.0 零改动，仅注记口径与实现侧行为修正），故本文不升版本号；`INDEX.md` §5 两项开放项随本批关闭。
+
+---
+
+> **本阶段约束复述**：v1.0 为纯只读核对记录；v1.1 完成三路复核验真（修正清单自身 9 处）并落实上述修复，**已登记进 [`INDEX.md`](./INDEX.md)**（§3.E 清单与 §5 未闭环项）；v1.2 追加 §10/§11，记录代码侧消除的差异（P-06、P-18）与过期数值的取代；v1.3 追加 §12，记录 P-01 及其同批协议错误码差异的闭环；追加 §13，记录 P-13 复核消除与两项协议口径定稿。

@@ -27,7 +27,10 @@ pub struct PageState {
     /// 该页内容所属扩展的清单 id（**Root 为空**——它是多扩展聚合结果）；
     /// 嵌套页的刷新（`items_changed` → `get_items`）据此定位子进程。
     pub ext_id: String,
-    /// 页标题（嵌套页来自 `PageInfo.title`）。
+    /// 页标题（进搜索框 placeholder，设计稿 §07.1 D2）。
+    /// **由宿主侧提供**：点击入口项进页 = 被点击项标题；`f ` 前缀直达 = 本地化扩展名；
+    /// 扩展 `GoToPage` 无来源 → 空串（placeholder 回落「筛选命令…」）。
+    /// ⚠️ 协议 `PageInfo` 定为**不传递**（`protocol.md` §8.5），本字段不来自扩展。
     pub title: String,
     /// 该页的列表状态机（过滤/选中/环绕/夹紧）。
     pub list: PanelState,

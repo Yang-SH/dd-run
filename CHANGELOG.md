@@ -4,6 +4,31 @@
 
 ## [Unreleased]
 
+### 修复（文件搜索回落通道静默失败：`es.exe` 失败被当成「无结果」，2026-09-17）
+
+- **现象**：IPC 不可用且 `es.exe` 也失败时，文件搜索页显示**空列表**（「无匹配结果」），**没有任何提示** —— 用户无从判断是「没搜到」还是「工具坏了」。
+- **根因**：`run_es` 把 `es.exe` 的 stderr 丢弃（`Stdio::null()`）且**忽略退出码**，而 `parse_response("")` 被刻意设计为「空输出 = 无匹配结果」→ 二者叠加使「es 失败」与「真的没搜到」**无法区分**。实测失败形态：`es.exe` 以 **`rc=8`** 退出，错误只写在 stderr（`Error 8: Everything IPC not found. Please make sure Everything is running.`）。
+- **修复**：新增纯函数 `interpret_es_output(status, stdout, stderr)` 收口判定 —— 仅 `rc=0` 按「无结果」处理（保持既有语义），`rc≠0` 一律转 `Err` 并**保留 es 的 stderr 文案**，由上层落成可读的 `files.error` 项（文案指向安装/运行 Everything 与 `DDRUN_ES_PATH`）；`run_es` 改为 **stdout/stderr 双管道并发消费**（避免写满管道阻塞）并带出退出码。
+- **验证**：新增单测 `interpret_es_output_separates_no_result_from_failure`（5 个断言面，含「`rc=8` + 空 stdout 必须报错且带 stderr 文案与退出码」）；三关 `fmt` 无差异 / `clippy` 0 / `cargo test --workspace` **433 passed**。
+
+### 修复（嵌套页标题显示原始 `page_id`，2026-09-17）
+
+- **现象**：进入嵌套页后搜索框 placeholder 显示 **「在「files.results」中筛选…」** —— 把扩展内部的页 id 直接暴露给用户。
+- **根因**：`open_page` 把 `page_id` **同时当作页标题**（`PageState::nested(page_id, page_id, …)`），而该标题被渲染进 placeholder。
+- **修复**：标题改由**宿主侧信息**提供 —— 点击入口项进页 = **被点击项标题**；`f ` 前缀直达 = 本地化扩展名（`ext.name.filesearch`）；扩展 `GoToPage` 无来源 → 空 → placeholder 回落「筛选命令…」。同步修正 `navigation.rs` 中「标题来自 `PageInfo.title`」的过期注释（协议侧 `PageInfo` 定为**不传递**，见下）。
+
+### 变更（协议两项定稿：`-32002` 与 `PageInfo`，2026-09-17）
+
+- **`-32002 command_not_found`**：改为**终态口径** —— 该码**由扩展 handler 产出**（随指南发布的 Python 示例即产出）、**宿主与内置运行时不产出**（内置回 `ShowToast` 属合法实现选择）；不再是「保留码、待接线」。协议 v1.0 **零改动**（仅注记改写）。
+- **`PageInfo`**：明确**维持不传递**（v1.0 预留定义）—— `GetItemsResult` 不携带页元信息，宿主页标题取自宿主侧信息；将来启用须走 §13 `MINOR`。
+
+### 修复（`--conformance` 对 `has_fallback=false` 扩展误报红灯，2026-09-17）
+
+- **现象**：对 `dd-ext-sample`（清单 `has_fallback: false`）跑 `--conformance`，第 `4) fallback` 步**必红** `-32601`，整体自检失败 —— 而该示例**完全合规**。
+- **根因**：自检器无条件调用 `fallback_commands`；而 §6.2 的判据是「返回非空 ⟺ `has_fallback`」，扩展在 `has_fallback=false` 时**不必实现**该分发臂（宿主也不会调用）。
+- **修复**：`has_fallback=false` 时**跳过**该步并明示原因；`has_fallback=true` 仍校验一致性。内置扩展（`has_fallback=true`）路径无回归，示例扩展自检由「红灯」变为 **9 步全过**。
+- **顺带**：`dd-gui` 测试内的 `route_serve_line` 由手工复刻路由改为**委托生产实现** `dd_host::process::route_messages`（单一来源），消除「测试辅助与真实路由不同步」的潜在脆弱点。
+
 ### 修复（release 构建阻塞：A3 埋点 cfg 守卫漏配导致分发包无法产出，2026-09-16）
 
 - **症状**：`cargo build --release` 在 `dd-gui` 报 `error[E0425]: cannot find value 'start' in this scope`（`crates/dd-gui/src/state.rs:395`）→ **单文件分发包自 2026-09-13 起无法产出**（`dist/` 长期停留在 `378b89d` 之前的构建，`tools/package.sh` 静默失败在宿主构建步）。

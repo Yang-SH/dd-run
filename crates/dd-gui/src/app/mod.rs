@@ -509,7 +509,16 @@ impl PaletteApp {
             file_search_drill_target(&q, self.file_drill.as_deref(), self.file_search_present())
         {
             self.file_drill = Some(q.clone());
-            self.open_page(FILE_SEARCH_EXT_ID, FILE_SEARCH_PAGE_ID, Some(rest), None);
+            // `f ` 前缀直达没有「被点击项」→ 用宿主本地化的扩展名作页标题
+            // （否则 placeholder 会显示原始 page_id `files.results`）。
+            let title = self.tr("ext.name.filesearch").to_string();
+            self.open_page(
+                FILE_SEARCH_EXT_ID,
+                FILE_SEARCH_PAGE_ID,
+                Some(rest),
+                None,
+                Some(title),
+            );
             // 标记首次落地需回填搜索框（poll_page 消耗），避免结果回来后框被清空
             self.file_drill_armed = true;
         } else if !q.starts_with(FILE_SEARCH_PREFIX) {
