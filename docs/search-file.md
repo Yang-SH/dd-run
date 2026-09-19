@@ -1,6 +1,6 @@
 # dd-run 文件搜索执行方案
 
-> **状态**：生效中 ｜ **版本**：v3.9 ｜ **最后更新**：2026-09-19
+> **状态**：生效中 ｜ **版本**：v3.11 ｜ **最后更新**：2026-09-19
 > **关联**：[protocol.md](./protocol.md) · [search.md](./search.md) · [search-file-ctrl-f-icons-plan.md](./search-file-ctrl-f-icons-plan.md)
 
 ---
@@ -813,7 +813,7 @@ Win10/11 × Everything 1.4/1.5 分别执行：运行/退出、IPC 可用/不可�
 | A-33-02 | 每结果最多 3 动作；30 条均可生成合法 pid；`PATH_INDEX` 始终 `<=1024` | 离线测试 + 1000 次压力 |
 | A-33-03 | open/reveal/copy 三动作成功率 100%（各 100 次，含空格/Unicode）；失败均有 Toast 无错误副作用 | L1/L2/L3 日志；⚠️ `%`/`#` 实际打开随 §4 一并验证 |
 | A-33-04 | manifest 与 `spec` 能力集合相等；宿主拒绝未声明能力返回可观测错误 | 契约测试 + 宿主集成 |
-| A-33-05 | IPC 查询 p50 <30ms、p95 <50ms（**2026-09-16 修订**；原 <10ms/<30ms 低于 Everything 引擎地板。p99/max 为**观察项**、不作门禁）；相对 `run_es` 基线 p95 降 ≥50%（端到端另设「输入到首屏 ≤200ms」） | ✅ **通过**：门禁内 1000 次 p50 **24.156**／p95 **28.300 ms**（09-17，通道 `ipc` 1000/1000）；**基线 p95 324.213ms → 降幅 91.27% ≥50%**——[报告](./search-file-p2-acceptance-2026-09-15.md) §4.1 / §4.1.1 |
+| A-33-05 | IPC 查询 p50 <30ms、p95 <50ms（**2026-09-16 修订**；原 <10ms/<30ms 低于 Everything 引擎地板。p99/max 为**观察项**、不作门禁）；相对 `run_es` 基线 p95 降 ≥50%（端到端另设「输入到首屏 ≤200ms」） | ✅ **通过**：门禁内 1000 次 p50 **24.156**／p95 **28.300 ms**（09-17，通道 `ipc` 1000/1000）；**基线 p95 324.213ms → 降幅 91.27% ≥50%**——[报告](./search-file-p2-acceptance-2026-09-15.md) §4.1 / §4.1.1；**端到端「输入到首屏」已插桩待真机采样**（v3.11，见 §10.7） |
 | A-33-06 | IPC 不可用 100% 回落 es.exe；均不可用 100% 返回引导项；单请求 ≤2000ms | ✅ **通过**：引导项分支 20/20（max 760ms ≤2000ms）；**回落分支 3/3 返回真实结果**（通道 `ipc->es`）——[报告](./search-file-p2-acceptance-2026-09-15.md) §4.2 / §4.2.1 |
 | A-33-07 | 连续 1000 次无崩溃/线程句柄增长/PATH_INDEX 超限；RSS 增长 <10% | ✅ **通过**：1000 次无崩溃；RSS 稳态 +5.86%、序列非单调；线程恒 5、句柄恒 159——[报告](./search-file-p2-acceptance-2026-09-15.md) §4.3 |
 | A-33-08 | Win10/11 × 1.4/1.5 × 完整性级别 × 1.5 实例名 矩阵全有结果或明确不支持；UIPI 受限可观测回落 | ⚠️ **部分覆盖**：本机单元有结果、回落可观测；Win10／1.5／提升／命名实例未覆盖——[报告](./search-file-p2-acceptance-2026-09-15.md) §4.4（**当前唯一红线来源**） |
@@ -913,6 +913,9 @@ Win10/11 × Everything 1.4/1.5 分别执行：运行/退出、IPC 可用/不可�
 | v3.6 | 2026-09-19 | **进入方式 +4**：新增面板内 `Ctrl+F` 一键直达（任意页；栈深恒 2；仅 Root 查询带入）；文件结果图标由 12 类 glyph 改 **Windows Shell 真实图标**（`Icon::Path` + `file-icons/` 落盘缓存，失败回落 glyph）；图标管线（HICON→PNG + 缓存）自 `apps` 上移为 `dd_ext::shell_icon` 共享；协议/清单零改动。**两处未达标如实记档**：按真实路径档首抽 703.8 ms、sidecar 体积 +104.5 KB | 部分被 v3.7 取代（`f ` 前缀直达移除） |
 | v3.7 | 2026-09-19 | **移除 `f ` 前缀直达文件搜索**：`FILE_SEARCH_PREFIX` / `file_search_drill_target()` / `maybe_drill_file_search()` / `file_drill` + `file_drill_armed` 状态 / `page.rs` 落地回填分支全部删除，`Ctrl+F` 查询带入不再剥离前缀；**`f ` 回归普通搜索词**，进入方式收敛为**三条**（§6.1、§10.1）。测试 448 → **447**（删 1 个前缀专属用例） | ❌ 当前生效 |
 | v3.8 | 2026-09-19 | **用户文档口径变更（零代码改动）**：**解除 `es.exe` 前置表述** —— `search.md` 由「仍建议安装 / 已发布版本仍依赖」改为「**Everything 在运行即可用，`es.exe` 为可选回落通道**」（§1 由「前置条件」改「准备事项」、故障排查 / 已知边界 / 升级说明 / FAQ 逐处改写）；README 双语文档表同步 | ❌ 当前生效（与 v3.7 并行：v3.7 = 代码，v3.8 = 用户文档口径） |
+| v3.9 | 2026-09-19 | **E1：图标按真实路径档首抽 191–704 ms 修复**——按键分层（`path:` 键一律下沉后台，同步 `icon_ms` 0.32 ms）+ 后台 4 worker 补齐 + `items_changed` 自动刷新（协议/宿主零改动）；`search-file-ctrl-f-icons-plan.md` §6.2 增 A-IC-08/09/10 | 部分被 v3.10 追加（sidecar 体积） |
+| v3.11 | 2026-09-19 | **端到端感知指标插桩**：宿主侧 E2E 首屏计时（`dd-gui::app::e2e`，input→paint = 去抖/进页等待 + `get_items` 往返 + 落地→`draw_panel` 完成），debug 日志 `E2E 首屏:`；判读工具 `tools/gui_e2e_parse.py`（p50/p95 + 200ms 门禁）；**真机采样待做**（§10.7） | ❌ 当前生效 |
+| v3.10 | 2026-09-19 | **E2：sidecar 体积回到预算内**——零依赖 PNG 编码器 `dd_ext::png`（固定 Huffman deflate + LZ77 + 三档行滤波），`image[png]` 转 dev-dependency；sidecar **912,384 → 831,488 B**、`A-IC-06` 转 **PASS**；宿主 `dd-run.exe` 同步 −12,800 B | ❌ 当前生效 |
 
 ---
 
@@ -985,12 +988,12 @@ Win10/11 × Everything 1.4/1.5 分别执行：运行/退出、IPC 可用/不可�
 - **缓存体量**：多轮查询后 `file-icons/` 为 **39–88 个 PNG / 34–63 KB**（单图均值 ≈ 670 B；随查询集合增长，键空间见 §10.2）。
 - **验收工具（可复现）**：`tools/icon_acceptance.py`（A-IC-01/02a/02b/02c/04/06 六项判定 + JSON 证据）；落地期的一次性探针留档于 `target/acceptance/`（`icon_probe.py`、`icon_probe3.py`）。
 
-### 10.4 未达标项与处置选项（**E1 已处置达标** / E2 待决策）
+### 10.4 未达标项与处置选项（**E1 / E2 均已处置达标**）
 
 | # | 未达标项 | 实测 vs 预算 | 根因 |
 | --- | --- | --- | --- |
 | E1 | 「按真实路径」档首次抽取延迟 | **191–704 ms** vs ≤ 40 ms（30 新键；随文件构成波动，见 §10.3）→ **✅ 已于 2026-09-19 处置达标：同步档 0.32 ms，见 §10.5** | 该档每键一次 Shell 抽取（≈ 6–25 ms/键），**键数随结果条数线性增长**；扩展名档每查询仅 1–3 个新键。另：扩展名档冷启首档实测 **40.29 ms** 亦压线（余量 0） |
-| E2 | sidecar 体积 | **912,384 B（+139.5 KB）** vs ≤ 64 KB（E1 落地后实测；原 876,544 B）→ **探针已证可修复（−96,768 B），实施待决策，见 §10.5 末段** | 共享管线把 PNG 编码器（`image[png]`）与 GDI 管线链入 sidecar；宿主 `dd-run.exe` 仅 **+3,072 B** |
+| E2 | sidecar 体积 | **831,488 B（增量 61,952 B ≈ 60.5 KB）** vs ≤ 64 KB → **✅ 已于 2026-09-19 处置达标**（零依赖 PNG 编码器，见 §10.6；余量 3,584 B 压线） | 共享管线把 PNG 编码器（`image[png]`）与 GDI 管线链入 sidecar；宿主 `dd-run.exe` 仅 **+3,072 B** |
 
 E1 处置选项（**✅ 已采纳「O1 限流 + O4 异步补齐」的组合**，2026-09-19 落地为「分层异步 + 自动刷新」，详见 §10.5；下表保留为决策留痕）：
 
@@ -1001,7 +1004,7 @@ E1 处置选项（**✅ 已采纳「O1 限流 + O4 异步补齐」的组合**，
 | O3 | 接受现状（命中后 0.13 ms） | 「边打边搜」在 exe 密集查询的首次会多 ~0.7 s |
 | O4 | 异步补齐（扩展后台抽图 + `items_changed` 通知宿主重拉） | 协议零改动但实现量最大，且会触发整页重拉 |
 
-E2 处置选项：① **修订预算**——宿主**单文件**才是分发约束，sidecar 体积非交付红线（改造前 +104.5 KB，占 sidecar 13.6%；**E1 落地后 +139.5 KB**）；② **改存储格式绕开 `image[png]` 依赖** —— **2026-09-19 探针实测可省 −96,768 B**（876,544 → 779,776 B），实施后 sidecar ≈ 818 KB、增量 ≈ 48 KB ✅ 回到预算内（需自写零依赖 PNG 编码器，~130 行 + 单测）。**E2 待用户决策**。
+E2 处置（**已采纳选项 ②，2026-09-19 用户决策**，落地记录见 §10.6）：自写零依赖 PNG 编码器 `dd_ext::png`（`image` 转 dev-dependency），**实测 sidecar 912,384 → 831,488 B（−80,896 B）**，相对改造前基线 769,536 B 增量 **61,952 B ≤ 65,536 B** ✅ 回到预算内（余量 3,584 B 压线）。探针预期（≈818 KB / 48 KB）与实测（831 KB / 60.5 KB）的差值 ≈ 15.9 KB = 新编码器自身代码。决策留痕——未采纳的备选：① **修订预算**（宿主**单文件**才是分发约束，sidecar 体积非交付红线；改造前 +104.5 KB，占 sidecar 13.6%；E1 落地后 +139.5 KB）。
 
 ### 10.5 E1 处置落地：图标分层（同步 / 后台）+ 自动刷新（2026-09-19）
 
@@ -1029,6 +1032,53 @@ E2 处置选项：① **修订预算**——宿主**单文件**才是分发约�
 
 **新增成本**：`dd-ext-search.exe` 876,544 → **912,384 B（+35,840 B）**；叠加 E2 未处置 → 相对改造前基线 769,536 B 的增量为 **142,848 B（预算 64 KB ❌）**。
 
-**E2 探针结论（2026-09-19 实测）**：临时让 `shell_icon` 不再调用 `image`（短路 `hicon_to_png`）后构建，sidecar **876,544 → 779,776 B（−96,768 B）** —— 证明 `image` 依赖确实是体积主因；若按 §10.4 的 E2 选项 ② 实施（自写零依赖 PNG 编码器，`image` 转 dev-dependency），预期 sidecar ≈ **818 KB**、增量 ≈ **48 KB** → **回到 64 KB 预算内**。**该实施待决策**。
+**E2 探针结论（2026-09-19 实测）**：临时让 `shell_icon` 不再调用 `image`（短路 `hicon_to_png`）后构建，sidecar **876,544 → 779,776 B（−96,768 B）** —— 证明 `image` 依赖确实是体积主因；若按 §10.4 的 E2 选项 ② 实施（自写零依赖 PNG 编码器，`image` 转 dev-dependency），预期 sidecar ≈ **818 KB**、增量 ≈ **48 KB** → **回到 64 KB 预算内**。→ **已于同日实施（选项 ②），见 §10.6**。
 
 **测试与构建**：`cargo test --workspace` **452 passed / 0 failed**（447 基线 + 5 新增单测：`path_keys_are_deferred_to_background` / `icon_budget_expires` / `icon_job_dedup_keeps_single_inflight` / `notify_without_hook_is_noop` / `installed_notifier_receives_page_id_from_other_thread`）；`fmt` 无差异 / `clippy --workspace --all-targets` **0 告警** / `release` 构建 exit 0。
+
+### 10.6 E2 处置落地：零依赖 PNG 编码器（2026-09-19）
+
+**决策**：采纳 §10.4 选项 ②——自写零依赖 PNG 编码器 `dd_ext::png`，把 `image[png]` 从依赖剥除（转 **dev-dependency**，仅单测用作解码 oracle），sidecar 体积回到 `A-IC-06` 的 64 KB 预算内。
+
+**做法**（新增 `crates/dd-ext/src/png.rs` + `shell_icon.rs` 两处编码点切换 + `Cargo.toml`）：
+
+1. `png::encode_rgba(w, h, rgba)`：PNG 魔数 + IHDR + IDAT + IEND，每块 CRC-32；IDAT = zlib 流（固定 Huffman 单块 deflate + 贪心 LZ77，窗口 32 KiB）+ Adler-32；行滤波在 None / Sub / Up 三档取产物最小者。刻意不做：动态 Huffman、多块流、隔行、调色板（图标小图无可感知收益）。
+2. `shell_icon.rs` 的 `hicon_to_png` / `bitmap_to_png` 编码尾部改调 `encode_rgba`（Shell 抽取、alpha 修正、缓存逻辑零改动）；`builtins::apps` 经共享模块自动继承。
+3. **正确性验证不是自证**：`image` 保留为 dev-dependency，单测用它**解码自产 PNG 并逐字节比对像素**（平坦 / 渐变 / 圆图标 / 噪声 / 1×1 / 1×300 六组往返）+ 块结构走查（块序列 / CRC 自洽 / IHDR 字段）+ Adler / CRC 已知向量；交付产物不含 `image`。
+
+表：E2 前后实测（2026-09-19，release 直驱）。
+
+| 项 | E2 前 | E2 后 |
+| --- | --- | --- |
+| `dd-ext-search.exe` | 912,384 B（相对基线增量 142,848 B ❌） | **831,488 B（增量 61,952 B ≈ 60.5 KB ✅，余量 3,584 B 压线）** |
+| 宿主 `dd-run.exe` | 8,790,528 B | **8,777,728 B（−12,800 B**；in-process 侧的 `image` 编码链同步被剥除） |
+| `A-IC-06`（验收工具，两轮一致） | FAIL | **PASS** |
+| 图标缓存体量（file-icons，51 文件） | — | **24,456 B**（≈479 B/个，与 `image` 编码产物同量级） |
+
+**八项判定**：A-IC-01 / 02a / 02c / 04 / 06 / 08 / 10 七项 **PASS**（`tools/icon_acceptance.py --cold` 两轮、独立冷缓存口径）；仅 **A-IC-02b ⚠️**（见下）。
+
+**A-IC-02b 如实记档（负载敏感压线项，非本批回归）**：两轮冷缓存首档 **50.29 / 66.84 ms**（判据 ≤40、观察线 60），其余三档 13.08–27.12 ms；同轮**缓存命中**亦由 0.10 ms 抬至 0.14–0.21 ms → 全档整体抬升指向**机器负载**（验收期间 dd-run 常驻实例 + Everything 在跑，且刚完成全量 release 构建），而非编码器：编码单张 32×32 实测 **0.6188 ms**（`cargo test --release` 探针，500 次均值；debug 口径 8.52 ms 为上界），远小于观察到的 10–25 ms 波动。该判据在 E1 批次即压线（40.29 ms，余量 0），建议在**空闲机器**复测定标。
+
+**独立第三方校验（Python zlib / binascii，与 Rust 实现无关）**：file-icons **51/51**、apps-icons **88/88** 全过（块 CRC 自洽 + zlib 解压长度吻合 + 行滤波还原通过）；**apps 真机回归**：release `dd-ext-apps.exe` 冷缓存全量重抽 90 项 → 88 项 `icon.type=path`（2 glyph），PNG 全部落盘且合法。
+
+**验证**：`cargo test --workspace` **462 passed / 0 failed**（452 + 10：png.rs 往返 6 + 结构 1 + 入参拒绝 1 + 长度/距离码表边界 1 + 校验和已知向量 1）；`fmt` 无差异 / `clippy --workspace --all-targets` **0 告警** / `release` 构建 exit 0。
+
+**dist 重打包（已闭环，同日稍后）**：实例关闭后重跑 `bash tools/package.sh` **exit 0**——`dist/dd-run-0.1.1.exe` **8,780,800 B**、`extensions.d/dd-ext-search.exe` **831,488 B**（与源码构建逐字节同源）；分发级冒烟全过：conformance 内置 9 步 exit 0 / 示例扩展 9 步（step 4 = 「has_fallback=false → 宿主不调用该方法，跳过（§6.2）」）/ GUI 5s 事件循环存活 / sidecar breakdown 通道 `ipc` 三档齐全（hint p50 0.137 / empty 13.30 / results 27.8 ms）/ zip 重建后成员与未压缩体积一致。
+
+### 10.7 端到端感知指标插桩：E2E 首屏计时（2026-09-19）
+
+验收报告 §5 #4「输入到首屏 ≤ 200 ms」此前只有扩展侧往返（A-33-05），GUI 段无数据——本批在宿主侧补齐插桩，**真机采样待做**。
+
+**口径**（上界：不含 egui 呈现 / 垂直同步）：
+
+| 段 | 起点 | 终点 | 含义 |
+| --- | --- | --- | --- |
+| 等待 | 页内 query 最后一次输入变化（`panel.rs` 变化检测 / 带词进页回填） | `get_items` 实际分派 | 去抖窗口（200 ms）+ 调度间隙 |
+| 往返 | 分派 | 结果落地（非过期分支） | 后台线程 + IPC / 协议往返 |
+| 渲染 | 落地 | 本帧 `draw_panel` 完成 | egui 即时模式：落地与绘制同帧 |
+
+**落点**：新增 `crates/dd-gui/src/app/e2e.rs`（`E2eSample` 三段分解纯函数 + `e2e_report` 帧尾结算 + 3 单测）；接线：`app/mod.rs`（3 计时字段 + `draw_panel` 后结算，可见/隐藏帧两处）、`app/page.rs`（分派点 / 非过期落地建样本 / 失败与离页清理 / 带词进页起点）、`ui/panel.rs`（页内输入变化 = 起点）。埋点为**常驻 `log::debug!`**（不加 `#[cfg(debug_assertions)]`——感知指标属 release 真机口径；常态成本 3 个 `Option<Instant>` + 每次落地一条日志）。已知边界：结算遇面板隐藏会在隐藏帧结算，总时长含隐藏期，判读时按上下文甄别离群值。
+
+**采样与判读（可复现）**：`dist\dd-run-0.1.1.exe 2> gui.log`（或 debug 构建）跑会话（`Ctrl+F` 进文件搜索页输入若干查询）→ `python tools/gui_e2e_parse.py gui.log` → 输出 total/wait/rtt/paint 的 min/p50/p95/max + 门禁判定（p95 < 200 → PASS，exit 0；有超预算样本列出行号）。
+
+**验证**：`cargo test --workspace` **465 passed / 0 failed**（462 + 3）；`fmt` 无差异 / `clippy --workspace --all-targets` **0 告警** / release 构建 exit 0。

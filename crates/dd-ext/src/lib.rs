@@ -49,6 +49,11 @@ pub mod i18n;
 /// 拿到规格做 in-process 调用。
 pub mod builtins;
 
+/// 零依赖 PNG 编码器（E2，2026-09-19）：RGBA8 → PNG 字节流。
+/// 仅为剥掉 `image[png]` 依赖（实测 sidecar −96,768 B）；正确性由单测用
+/// `image`（dev-dependency）解码比对保证。
+pub mod png;
+
 /// 共享图标管线（2026-09-19）：Windows Shell 图标 → PNG → 落盘缓存。
 /// 使用者：`builtins::apps`（应用图标 48px）与 `bin/search`（文件类型图标 32px）。
 /// 上移原因见模块文档（同一管线含 4 处真机坑，双份实现易漂移）。

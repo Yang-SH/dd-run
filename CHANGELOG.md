@@ -4,13 +4,30 @@
 
 ## [Unreleased]
 
+### 新增（GUI 端到端首屏计时插桩：A-33-05 感知指标「输入→首屏 ≤200ms」，2026-09-19）
+
+- **背景**：验收报告 §5 #4 此前只有扩展侧往返（A-33-05 的 IPC p50/p95），「输入到首屏 ≤200ms」的 GUI 段无数据——本批在宿主侧补齐插桩，**真机采样待做**。
+- **口径**：`input→paint` 三段分解 = ①去抖/进页等待（页内 query 最后一次输入变化 → `get_items` 实际分派）+ ②`get_items` 往返（分派 → 非过期落地）+ ③渲染（落地 → 本帧 `draw_panel` 完成）。**上界**：不含 egui 呈现/垂直同步。
+- **实现**：新增 `dd-gui/src/app/e2e.rs`（`E2eSample` 三段分解纯函数 + `e2e_report` 帧尾结算 + 3 单测）；接线 `app/mod.rs`（3 计时字段 + `draw_panel` 后结算，可见/隐藏帧两处）、`app/page.rs`（分派点 / 非过期落地建样本 / 失败与离页清理 / 带词进页起点）、`ui/panel.rs`（页内 query 变化 = 起点）。埋点**常驻 `log::debug!`**（不加 `debug_assertions` 守卫——感知指标属 release 真机口径；常态成本可忽略）。
+- **采样判读（可复现）**：`dist\dd-run-0.1.1.exe 2> gui.log` 跑会话（`Ctrl+F` 进文件搜索页输入若干查询）→ `python tools/gui_e2e_parse.py gui.log` → min/p50/p95/max + 门禁判定（p95 < 200 → PASS）。
+- **验证**：`cargo test --workspace` **465 passed**（462 + 3）/ `fmt` 无差异 / `clippy --workspace --all-targets` **0 告警** / release 构建 exit 0。
+
+### 优化（文件搜索图标：sidecar 体积回到预算内——零依赖 PNG 编码器，E2，2026-09-19）
+
+- **决策**：采纳下条 E1 记录中的「E2 选项 ②」——自写零依赖 PNG 编码器，`image[png]` 由 `[dependencies]` 移至 `[dev-dependencies]`（仅单测解码 oracle，不进交付产物）；未采纳「修订预算」。
+- **实现**：新增 `crates/dd-ext/src/png.rs`（`encode_rgba`：PNG 魔数 + IHDR/IDAT/IEND + 块 CRC-32 + zlib 流[固定 Huffman deflate + 贪心 LZ77，窗口 32 KiB] + Adler-32；行滤波 None/Sub/Up 三档取产物最小）；`shell_icon.rs` 的 `hicon_to_png` / `bitmap_to_png` 编码尾部切换（Shell 抽取 / alpha 修正 / 缓存零改动，apps 经共享模块继承）。刻意不做动态 Huffman / 多块流 / 隔行 / 调色板（图标小图无可感知收益）。
+- **正确性验证（非自证）**：单测用 `image`（dev-dependency）解码自产 PNG 并**逐字节比对像素**（平坦 / 渐变 / 圆图标 / 噪声 / 1×1 / 1×300 六组往返）+ 块结构走查 + Adler/CRC 已知向量；另以 **Python zlib / binascii**（与 Rust 实现无关）复验真机产物：file-icons **51/51**、apps-icons **88/88** 全过；release `dd-ext-apps.exe` 冷缓存回归 88 项 path 图标齐全。
+- **实测**：`dd-ext-search.exe` **912,384 → 831,488 B（−80,896 B）**，相对改造前基线 769,536 B 增量 **61,952 B ≤ 65,536 B（A-IC-06 转 PASS，余量 3,584 B 压线）**；宿主 `dd-run.exe` 同步 **−12,800 B**（in-process 侧编码链剥除）；`cargo test --workspace` **462 passed**（452 + 10）；fmt 无差异 / clippy 0 告警 / release exit 0；`tools/icon_acceptance.py --cold` 两轮其余判定全 PASS。
+- **如实记档**：A-IC-02b（扩展名档首抽）两轮 50.29 / 66.84 ms（判据 ≤40、观察线 60）——同轮缓存命中亦由 0.10 抬至 0.14–0.21 ms，且编码单张 32×32 实测仅 0.6188 ms（release 探针）→ 判为**机器负载敏感压线项**（E1 批次即压线 40.29 ms），非本批回归；建议空闲机器复测定标。
+- **dist（同日已闭环）**：实例关闭后 `bash tools/package.sh` exit 0——`dd-run-0.1.1.exe` **8,780,800 B**、`dd-ext-search.exe` **831,488 B**；分发级冒烟全过（conformance 内置/示例各 9 步、GUI 5s 存活、sidecar 通道 `ipc`、zip 成员校验）。
+
 ### 修复（文件搜索图标：按真实路径档首抽 191–704 ms → 分层异步 + 自动刷新，E1，2026-09-19）
 
 - **根因**：`get_items` 在同步路径上逐条 `SHGetFileInfoW` 抽图，且 `.exe`/`.lnk`/`.msi`/`.url` 按**真实路径**分键 → 键数随结果条数线性增长（30 条 = 30 次抽取 × 6–25 ms，冷缓存实测 191–704 ms）。在 `A-IC-02` 的「首次 ≤ 40 ms」预算下，**单键最坏成本已占 62%** —— 同步路径几乎没有优化空间（抽 1 个 exe 就吃掉大半预算）。
 - **修复（分层异步 + 自动刷新）**：① **按键分层** —— `path:` 键**一律不进同步路径**（立即返回类别 glyph + 投递后台），`ext:`/`dir`/`noext` 键同键复用留在同步路径，并受 `ICON_SYNC_BUDGET = 15 ms` 时间预算兜底；② **后台 worker** 4 线程（首次入队惰性启动、按键去重、取任务时才持队列锁）抽图并写落盘 + 进程内缓存；③ 补齐后按 `ICON_NOTIFY_THROTTLE = 200 ms` 节流发 §7.1 `items_changed(files.results)` → 宿主**既有**链路（命中当前页 → 100 ms 合并窗口 → 重拉）自动把 glyph 换成真实图标。**协议零改动、宿主零改动**；`dd-ext/src/lib.rs` 新增跨线程通知器（共享 stdout 加锁，`write_all + flush` 同临界区，消息不交错；未安装时 no-op）。
 - **实测**（`tools/icon_acceptance.py --cold`，release sidecar 直驱）：按真实路径档**同步** `icon_ms` **191–704 ms → 0.32 ms** ✅；后台补齐后重查 **`path=30 / glyph=0`，0.09 ms** ✅；`.lnk` 批补齐后 `path=17 / glyph=13`（不可访问路径回落仍生效）✅；按扩展名首抽 32.23 ms、缓存命中 0.10 ms、10 次查询全 `kind=results` ✅。
 - **行为变更**：首次查询中的 exe/lnk/msi/url 行**先显示类别图标**，约 0.2–0.8 s 后自动替换为真实图标（用户无需再输入）。
-- **代价与新证据**：`dd-ext-search.exe` 876,544 → **912,384 B（+35,840 B）**；**E2 探针**（临时剥离 `image` 调用后构建）实测 **876,544 → 779,776 B（−96,768 B）** → 若实施 E2 选项 ②（自写零依赖 PNG 编码器 + `image` 转 dev-dependency），sidecar ≈ **818 KB**、增量 ≈ **48 KB**，回到 64 KB 预算内。**E2 待决策**。
+- **代价与新证据**：`dd-ext-search.exe` 876,544 → **912,384 B（+35,840 B）**；**E2 探针**（临时剥离 `image` 调用后构建）实测 **876,544 → 779,776 B（−96,768 B）** → 若实施 E2 选项 ②（自写零依赖 PNG 编码器 + `image` 转 dev-dependency），sidecar ≈ **818 KB**、增量 ≈ **48 KB**，回到 64 KB 预算内。**E2 已于同日实施（见上条优化记录）**。
 - **验证**：`cargo test --workspace` **452 passed / 0 failed**（447 基线 + 5 新增单测）；`fmt` 无差异 / `clippy --workspace --all-targets` **0 告警** / `cargo build --release` **exit 0**；`tools/icon_acceptance.py --cold` 8 项判定中 7 项 PASS（仅 A-IC-06 体积项因 E2 未实施而 FAIL）。
 
 ### 文档（文件搜索用户指南解除 `es.exe` 前置表述，2026-09-19）

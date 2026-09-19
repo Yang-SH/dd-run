@@ -1,5 +1,7 @@
 //! 主面板：搜索栏 + 列表 + 页脚。
 
+use std::time::Instant;
+
 use crate::app::PaletteApp;
 use crate::text::footer_action_text;
 use crate::text::nested_search_placeholder;
@@ -160,6 +162,7 @@ impl PaletteApp {
                 // set_query 内部 q == self.state.query 时早退，故 query 未变（非按键帧）
                 // 不会误触发；连续打字会持续刷新去抖到期时刻。
                 if is_nested && query_changed {
+                    self.e2e_input_at = Some(Instant::now()); // E2E：页内输入变化 = 感知计时起点
                     self.schedule_page_query_debounce();
                 }
                 // M4 宿主 fallback：查询变化后同步兜底展示/拉取（页面借用已释放）

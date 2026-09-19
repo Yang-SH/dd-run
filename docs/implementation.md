@@ -30,7 +30,7 @@
 | O4 可观测性/日志 | ✅ 已落地 | 2026-09-15（已提交 `c26035e`） | `log` facade + 自写 stderr 后端；131 处 `eprintln!` 分级（debug 85/warn 39/info 7）；`DDRUN_LOG` 开关实测生效，**默认 debug = 与改造前逐行等价** | [§2 O4](#o4--可观测性日志2026-09-15-落地) |
 | O7 文件搜索 P2 真机验收 | ✅ 已落地（两轮完成） | 2026-09-15 / **2026-09-17**（已提交 `c26035e` + `9936ead`；第二轮工作副本） | A-33-05 / A-33-06 / A-33-07 / A-33-10 **通过**（基线降幅 91.27%、回落分支 3/3 返回真实结果）；A-33-08 ⚠️ 部分（跨环境矩阵）＝唯一红线来源；**同批修 `es.exe` 失败静默为空结果的缺陷** | [验收报告](./search-file-p2-acceptance-2026-09-15.md) |
 | 协议两项定稿（`-32002` / `PageInfo`） | ✅ 已定稿 | 2026-09-17（工作副本） | `-32002` 判为**扩展侧可用错误码**（宿主不产出）、`PageInfo` **维持不传递**；`protocol.md` §9.2/§8.5 注记改终态口径，INDEX §5 两项关闭 | [§2 协议两项定稿](#协议两项定稿-32002--pageinfo2026-09-17-定稿) |
-| 文件搜索 `Ctrl+F` + Shell 真实图标（v3.6） | ✅ 已落地（两处 ⚠️ 待决策） | 2026-09-19（工作副本） | 宿主 `Ctrl+F` 任意页直达文件搜索（栈深恒 2、Root 查询带入）；文件结果图标改 **Shell 真实图标**（`Icon::Path` + `file-icons/` 落盘缓存，失败回落 glyph）；图标管线自 apps 上移共享；协议/清单零改动。**未达标**：按真实路径档首抽 **703.8 ms**、sidecar **+104.5 KB** | [§2](#文件搜索-ctrlf-直达--shell-真实图标v36-2026-09-19-落地) · [search-file §10](./search-file.md) |
+| 文件搜索 `Ctrl+F` + Shell 真实图标（v3.6） | ✅ 已落地（两项未达标已处置：E1 / E2） | 2026-09-19（工作副本） | 宿主 `Ctrl+F` 任意页直达文件搜索（栈深恒 2、Root 查询带入）；文件结果图标改 **Shell 真实图标**（`Icon::Path` + `file-icons/` 落盘缓存，失败回落 glyph）；图标管线自 apps 上移共享；协议/清单零改动。未达标两项已处置（E1：首抽 703.8 ms → 同步 0.32 ms；E2：sidecar +104.5 KB → 增量 61,952 B ≤ 64 KB） | [§2](#文件搜索-ctrlf-直达--shell-真实图标v36-2026-09-19-落地) · [search-file §10](./search-file.md) |
 
 ## 产物与分发（2026-09-13 实测）
 
@@ -635,11 +635,40 @@
 
 **实测（`tools/icon_acceptance.py --cold`，release sidecar）**：A-IC-02c 同步 `icon_ms` **0.32 ms**（原 191–704 ms）、A-IC-08 补齐后 `path=30 / glyph=0`（0.09 ms）、A-IC-04 `.lnk` 补齐后 `path=17 / glyph=13`、A-IC-02b 32.23 ms、A-IC-02a 0.10 ms、A-IC-10 十次查询全 `results`；**A-IC-06 仍 FAIL**（912,384 B，增量 142,848 B，E2 未实施）。
 
-**E2 探针**：临时剥离 `shell_icon` 的 `image` 调用后构建 → sidecar **876,544 → 779,776 B（−96,768 B）**；实施 E2 选项 ② 后预期 ≈ 818 KB、增量 ≈ 48 KB ✅，**待决策**。
+**E2 探针**：临时剥离 `shell_icon` 的 `image` 调用后构建 → sidecar **876,544 → 779,776 B（−96,768 B）**；实施 E2 选项 ② 后预期 ≈ 818 KB、增量 ≈ 48 KB ✅；→ **已于同日实施（实测 831,488 B / 增量 61,952 B，与探针预期之差 ≈ 15.9 KB 为新编码器自身代码），见下节**。
 
 **行为变更**：首次查询的 exe/lnk 行先显示类别图标，约 0.2–0.8 s 后自动替换为真实图标。
 
 **验证**：`cargo test --workspace` **452 passed / 0 failed**（447 + 5 新增）/ `fmt` 无差异 / `clippy --workspace --all-targets` **0 告警** / `release` 构建 exit 0。
+
+### 文件搜索：sidecar 体积回到预算内——零依赖 PNG 编码器（E2，2026-09-19）
+
+用户决策：采纳 `search-file.md` §10.4 选项 ②（自写零依赖 PNG 编码器；未采纳「修订预算」）。
+
+| 项目 | 状态 | 落点 |
+|---|---|---|
+| 零依赖 PNG 编码器 | ✅ | 新增 `crates/dd-ext/src/png.rs`：`encode_rgba`（IHDR/IDAT/IEND + 块 CRC-32 + zlib 流[固定 Huffman deflate + 贪心 LZ77] + Adler-32；行滤波 None/Sub/Up 取最小） |
+| 编码点切换 | ✅ | `dd-ext/src/shell_icon.rs`：`hicon_to_png` / `bitmap_to_png` 尾部改调 `png::encode_rgba`（apps 经共享模块继承） |
+| 依赖治理 | ✅ | `dd-ext/Cargo.toml`：`image[png]` 由 `[dependencies]` 移至 `[dev-dependencies]`（仅单测解码 oracle，不进交付产物） |
+| 验收 | ✅ | `A-IC-06` 转 **PASS**（831,488 B，增量 61,952 B ≤ 65,536 B，余量压线）；八项判定 7 PASS + A-IC-02b ⚠️（负载敏感压线，判因与复测建议见 [`search-file.md`](./search-file.md) §10.6） |
+
+**实测**：sidecar 912,384 → **831,488 B**（−80,896 B）；宿主 `dd-run.exe` −12,800 B；`cargo test --workspace` **462 passed**（452 + 10）；fmt 无差异 / clippy 0 告警 / release exit 0。独立第三方校验（Python zlib + CRC）：file-icons 51/51、apps-icons 88/88；apps 真机回归 88 项 path 图标齐全。**详述唯一出处：[`search-file.md`](./search-file.md) §10.6**。
+
+**dist 重打包（已闭环，同日稍后）**：`bash tools/package.sh` exit 0，`dist/extensions.d/dd-ext-search.exe` **831,488 B** 与源码构建同源；分发级冒烟全过：conformance 内置 9 步 exit 0 / 示例扩展 9 步（step 4 = 「has_fallback=false → 宿主不调用该方法，跳过（§6.2）」）/ GUI 5s 事件循环存活 / sidecar breakdown 通道 `ipc` 三档齐全（hint p50 0.137 / empty 13.30 / results 27.8 ms）/ zip 重建后成员与未压缩体积一致。（详述见 [`search-file.md`](./search-file.md) §10.6）。
+
+### GUI 端到端首屏计时插桩（A-33-05 感知指标，2026-09-19）
+
+验收报告 §5 #4「输入到首屏 ≤ 200 ms」补齐宿主侧插桩（此前仅扩展侧往返）；**真机采样待做**。
+
+| 项目 | 状态 | 落点 |
+|---|---|---|
+| E2E 样本与结算 | ✅ | 新增 `dd-gui/src/app/e2e.rs`：`E2eSample`（等待/往返/渲染三段分解纯函数）+ `e2e_report`（`draw_panel` 完成后结算，可见/隐藏帧两处）+ 3 单测 |
+| 埋点接线 | ✅ | `app/mod.rs`（3 计时字段）、`app/page.rs`（分派点 / 非过期落地建样本 / 失败与离页清理 / 带词进页起点）、`ui/panel.rs`（页内 query 变化 = 感知起点） |
+| 判读工具 | ✅ | `tools/gui_e2e_parse.py`：解析 `E2E 首屏:` 日志 → min/p50/p95/max + 200ms 门禁判定（p95 < 200 → exit 0） |
+
+**口径**：`input→paint` 上界不含 egui 呈现 / 垂直同步；常驻 `log::debug!`（无 debug_assertions 守卫）。**详述唯一出处：[`search-file.md`](./search-file.md) §10.7**。
+
+**验证**：`cargo test --workspace` **465 passed**（462 + 3）/ `fmt` 无差异 / `clippy` 0 告警 / release 构建 exit 0。
 
 ## 3. 验收映射总表
 
@@ -677,6 +706,8 @@
 | 2026-09-19 | **448** | +12：本批（Ctrl+F 直达 5 + Shell 真实图标 7，后者含 `shell_icon` 4 项） |
 | 2026-09-19 | 447 | −1：移除 `f ` 前缀直达（删其专属用例 `file_drill_prefix_still_works`；`ctrl_f_query_source_rules` 改锚定「前缀不剥离」） |
 | 2026-09-19 | **452** | +5：**E1 图标分层异步**（`path_keys_are_deferred_to_background` / `icon_budget_expires` / `icon_job_dedup_keeps_single_inflight` / `notify_without_hook_is_noop` / `installed_notifier_receives_page_id_from_other_thread`） |
+| 2026-09-19 | **462** | +10：**E2 零依赖 PNG 编码器**（`png.rs`：往返 6 项[平坦/渐变/圆图标/噪声/1×1/1×300] + 结构走查 + 入参拒绝 + 长度/距离码表边界 + Adler/CRC 已知向量；`image` 转 dev-dependency 作解码 oracle） |
+| 2026-09-19 | **465** | +3：**E2E 首屏计时**（`app/e2e.rs`：三段分解 + 饱和不 panic + 系统发起等待为 0） |
 
 **两条使用注意**：① `crates/dd-host/tests/roundtrip*.rs` 在 `dd-ext-sample.exe` **未构建时会打印 SKIP 并 return**（计入 passed），故凡涉及协议/扩展行为，先 `cargo build -p dd-ext-sample` 再跑；② 「三关全绿」与 CI 四关**均为 debug profile**，`#[cfg(debug_assertions)]` 类 release-only 编译错误检不到 —— 交付/发布前必须实跑 `cargo build --release`（见 §7 构建环境记档与 `CHANGELOG` 的 release 阻塞条目）。
 
@@ -793,5 +824,8 @@
 | 2026-09-19 | 模糊排序字段分层；应用列表调试工具过滤；文件搜索 `Ctrl+F` 直达 + Shell 真实图标（v3.6）；移除 `f ` 前缀直达（v3.7）；设计稿回同步 **v4.18** | ✅ 工作副本（447 passed） |
 | 2026-09-19 | 文件搜索用户文档**解除 `es.exe` 前置表述**（`search.md` v1.3 / `search-file.md` v3.8）；dist 按 v3.6/v3.7 重打包 | ✅ 工作副本（零代码改动） |
 | 2026-09-19 | **E1 修复**：图标按真实路径档首抽 191–704 ms → 分层异步（同步 0.32 ms）+ 后台补齐 + 自动刷新；E2 探针实测可省 −96,768 B | ✅ 工作副本（452 passed） |
+| 2026-09-19 | **E2 落地**：零依赖 PNG 编码器（`image` 转 dev-dependency），sidecar 912,384 → 831,488 B、A-IC-06 转 PASS；apps/file 图标 PNG 过第三方校验 | ✅ 工作副本（462 passed） |
+| 2026-09-19 | **E2E 首屏计时插桩**：宿主侧 input→paint 三段分解（`app/e2e.rs` + `tools/gui_e2e_parse.py`），A-33-05 感知指标待真机采样 | ✅ 工作副本（465 passed） |
+| 2026-09-19 | **dist 重打包**（E2 + E2E 插桩同源）+ 分发级冒烟：conformance 内置 9 步 / 示例 9 步（step 4 按 `has_fallback` 跳过）/ GUI 5s 存活 / sidecar 通道 `ipc` / zip 成员校验 | ✅ `dd-run-0.1.1.exe` 8,780,800 B · sidecar 831,488 B |
 
 > 构建环境记档：本机 windows-gnu 链接需补 `as.exe`（与 dlltool 同目录）与 `libshlwapi.a`（2026-09-03 修复）；跑测试前须 `export APPDATA`（否则 apps 图标抽取测试必失败，见 CHANGELOG）。

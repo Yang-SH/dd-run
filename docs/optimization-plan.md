@@ -111,7 +111,7 @@
 **已知残留（如实记录）**：
 
 1. **宿主侧「扩展发来超限帧」无独立端到端测试**——现有示例扩展不会主动发超限消息。该分支（`call` / `poll_notifications` 的 `TooLarge`）由 `framing` 单测（保证产出 `TooLarge`）与下述扩展侧端到端共同覆盖，代码为「写 `-32600` → `kill` → `wait`」三步无分支逻辑。
-2. **`--conformance` 对 `dd-ext-sample` 在第 `4) fallback` 步报 `-32601`**——经核对 HEAD 版本，该示例**从未实现** `fallback_commands` 分发臂（清单 `has_fallback: false`），而 conformance 第 4 步无条件调用该方法。属**既存**的「工具 ↔ 示例」判据不一致，**与本批无关**（内置扩展走 `dd-ext` 库、具备该臂，自检 9 步全绿）。留待 O8 或专项决策。
+2. **`--conformance` 对 `dd-ext-sample` 在第 `4) fallback` 步报 `-32601`**——经核对 HEAD 版本，该示例**从未实现** `fallback_commands` 分发臂（清单 `has_fallback: false`），而 conformance 第 4 步无条件调用该方法。属**既存**的「工具 ↔ 示例」判据不一致，**与本批无关**（内置扩展走 `dd-ext` 库、具备该臂，自检 9 步全绿）。→ **✅ 已修（2026-09-17 批次「工具一致性」随附）**：`has_fallback=false` 时跳过 step 4 并明示原因（`main.rs::fallback_is_consistent` 纯函数 + 四象限单测，见 `implementation.md` §2 对应行）；2026-09-19 打包冒烟复核：示例扩展 conformance **9 步全过**、内置 9 步无回归。
 
 **纪律备注**：本批仅改工作副本，**未 commit**（按项目约定由人工审核提交）。
 

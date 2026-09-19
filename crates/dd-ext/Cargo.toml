@@ -17,8 +17,10 @@ fuzzy-matcher = "0.3"          # 文件名/路径模糊评分（纯 Rust，零 C
 chrono = "0.4"                  # 文件修改时间 → Unix 秒（近因加分；手搓 civil→days 易错，用成熟库保证正确）
 
 # M6（apps.rs 对齐 PowerToys CmdPal）：
-# - image[png]：HICON → GetDIBits → RgbaImage → PngEncoder 写 PNG（bytes），
-#   复用 dd-gui 的 PNG 解码链路（resolve_icons）。仅启用 png，不开默认 features 全家桶。
+# - HICON → GetDIBits → RGBA → PNG（bytes）由 crate 内零依赖编码器 `dd_ext::png` 完成
+#   （E2，2026-09-19：原用 image[png] 的 PngEncoder，实测把整条 PNG 编码链（含 fdeflate）
+#   链入 sidecar，增量超既有 A-IC-06 预算 64 KB；剥离后实测 −96,768 B）。
+#   编码正确性由单测用 image（dev-dependency）解码比对，不进交付产物。
 # - windows-sys 0.61 features：
 #   - `Win32_UI_Shell`：SHGetKnownFolderIDList/SHCreateItemFromIDList/SHCreateItemFromParsingName/
 #     SHGetFileInfoW/SIGDN_*/SIIGBF_*/FOLDERID_AppsFolder/BHID_EnumItems（AppsFolder 应用本体枚举 + 图标抽取）；
@@ -29,7 +31,6 @@ chrono = "0.4"                  # 文件修改时间 → Unix 秒（近因加分
 #   - `Win32_Storage_FileSystem`：SHGetFileInfoW 的入参 FILE_FLAGS_AND_ATTRIBUTES 所在 module。
 #   COM 接口结构（IShellItem/IEnumShellItems/IShellItemImageFactory）windows-sys 不生成，
 #   在 apps.rs 内手绘 vtable（IID 为 shobjidl_core/thumbcache 稳定公开值）。
-image = { version = "0.25", default-features = false, features = ["png"] }
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61", features = [
@@ -54,6 +55,11 @@ windows-sys = { version = "0.61", features = [
 # - default-features=false：默认 feature 为空（不引入 tokio/pe/folder）——显式声明以免日后默认 feature 变化引入异步运行时。
 # - 版本锁 =0.1.4：0.1.x 年更数版、API 可能变；docs.rs 快照存档，避免意外升级破坏编译。
 everything-ipc = { version = "=0.1.4", default-features = false }
+
+[dev-dependencies]
+# E2：仅单测用作 PNG 解码 oracle（校验 `dd_ext::png` 自产字节流）；**不参与 release 构建**，
+# 故不会进入 sidecar / 主 exe 体积。
+image = { version = "0.25", default-features = false, features = ["png"] }
 
 [[bin]]
 name = "dd-ext-apps"

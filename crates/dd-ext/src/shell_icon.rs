@@ -14,6 +14,9 @@
 //!
 //! 缓存布局：`<数据目录>/dd-run/cache/<prefix>-icons/<prefix>-<hash16>-<size>.png`
 //! （与 `dd_host::manifest::cache_dir()` 同源推导，见 [`cache_dir`]）。
+//!
+//! PNG 编码交由 [`crate::png`]（零依赖，E2，2026-09-19）——本模块只做 Shell/GDI 抽取、
+//! alpha 修正与缓存落盘，不负责字节流格式。
 
 use std::path::{Path, PathBuf};
 
@@ -176,7 +179,6 @@ pub unsafe fn shfileinfo_png(path: &Path) -> Option<Vec<u8>> {
 /// 本函数**不**释放该句柄，所有权仍归调用方（勿重复释放、勿与本函数并发使用同句柄）。
 #[cfg(windows)]
 pub unsafe fn hicon_to_png(hicon: *mut core::ffi::c_void) -> Option<Vec<u8>> {
-    use image::ImageEncoder;
     use windows_sys::Win32::Graphics::Gdi::{
         CreateCompatibleDC, DeleteDC, DeleteObject, GetDIBits, BITMAPINFO, BITMAPINFOHEADER,
         DIB_RGB_COLORS,
@@ -287,18 +289,9 @@ pub unsafe fn hicon_to_png(hicon: *mut core::ffi::c_void) -> Option<Vec<u8>> {
         }
     }
 
-    let img = image::RgbaImage::from_raw(w as u32, h as u32, buf)?;
-    let mut out = Vec::with_capacity(16 * 1024);
-    let encoder = image::codecs::png::PngEncoder::new(&mut out);
-    encoder
-        .write_image(
-            img.as_raw(),
-            w as u32,
-            h as u32,
-            image::ExtendedColorType::Rgba8,
-        )
-        .ok()?;
-    Some(out)
+    // E2：编码由 crate 内零依赖实现（原 `image::PngEncoder` 会把整条 PNG 编码链
+    // 链入 sidecar，实测 +139.5 KB）。
+    crate::png::encode_rgba(w as u32, h as u32, &buf)
 }
 
 /// 32bpp GDI HBITMAP → PNG bytes（直接 GetDIBits；alpha 保留，全零回退不透明）。
@@ -309,7 +302,6 @@ pub unsafe fn hicon_to_png(hicon: *mut core::ffi::c_void) -> Option<Vec<u8>> {
 /// **不**释放句柄（所有权归调用方），亦不得与同句柄的其他 GDI 操作并发。
 #[cfg(windows)]
 pub unsafe fn bitmap_to_png(hbm: windows_sys::Win32::Graphics::Gdi::HBITMAP) -> Option<Vec<u8>> {
-    use image::ImageEncoder;
     use windows_sys::Win32::Graphics::Gdi::{
         CreateCompatibleDC, DeleteDC, GetDIBits, BITMAPINFO, BITMAPINFOHEADER, DIB_RGB_COLORS,
     };
@@ -362,18 +354,9 @@ pub unsafe fn bitmap_to_png(hbm: windows_sys::Win32::Graphics::Gdi::HBITMAP) -> 
             px[3] = 0xff;
         }
     }
-    let img = image::RgbaImage::from_raw(w as u32, h as u32, buf)?;
-    let mut out = Vec::with_capacity(16 * 1024);
-    let encoder = image::codecs::png::PngEncoder::new(&mut out);
-    encoder
-        .write_image(
-            img.as_raw(),
-            w as u32,
-            h as u32,
-            image::ExtendedColorType::Rgba8,
-        )
-        .ok()?;
-    Some(out)
+    // E2：编码由 crate 内零依赖实现（原 `image::PngEncoder` 会把整条 PNG 编码链
+    // 链入 sidecar，实测 +139.5 KB）。
+    crate::png::encode_rgba(w as u32, h as u32, &buf)
 }
 
 /// 读 AND 掩码（1bpp）上半部 `h` 行，返回 (bits, stride)。失败 None。

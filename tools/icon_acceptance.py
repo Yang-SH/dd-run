@@ -13,7 +13,7 @@
 | A-IC-02b | 首次·按扩展名（每查询 1–3 个新键） | ≤ 40 ms（观察线 60 ms） |
 | A-IC-02c | 首次·按真实路径（`.exe` 30 个新键）**同步路径**（E1 修复后 `path:` 键下沉后台） | ≤ 40 ms |
 | A-IC-04 | 不可访问路径回落类别 glyph 且不崩（**等待后台补齐后重查 `.lnk` 批**） | 回落 + 真实图标并存且 `kind=results` |
-| A-IC-06 | sidecar 体积增量 vs 变更前基线 | ≤ 64 KB（**已知未达标项 E2**，处置见 §10.4） |
+| A-IC-06 | sidecar 体积增量 vs 变更前基线 | ≤ 64 KB（E2 已处置达标，2026-09-19；见 search-file.md §10.6） |
 | A-IC-08 | 后台补齐生效：等待后重查同一 `ext:exe` 查询（E1 修复） | `path` 图标 > 0 且 `icon_ms` ≤ 2 ms |
 | A-IC-10 | 稳定性：全部查询 `kind=results`（无异常回落 / 无崩溃） | 全部成立 |
 
@@ -259,7 +259,7 @@ def main() -> int:
         "A-IC-06",
         delta <= args.budget_bytes,
         f"sidecar={size} B，基线={args.baseline_bytes} B，增量={delta} B（预算 {args.budget_bytes} B）"
-        + ("　← 未达标 E2" if delta > args.budget_bytes else ""),
+        + ("　← 超预算" if delta > args.budget_bytes else ""),
     )
 
     cd = cache_dir()

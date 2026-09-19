@@ -1,5 +1,6 @@
 //! 嵌套页：`get_items` 发起（warm/复热）+ `poll_page` 结果落地。
 
+use crate::app::e2e::E2eSample;
 use crate::app::pool::get_items_on;
 use crate::app::PaletteApp;
 use crate::ext_client::ExtClient;
@@ -66,6 +67,7 @@ impl PaletteApp {
                 if self.stack.current().page_id.as_deref() == Some(page_id.as_str()) {
                     match result {
                         Ok(res) => {
+                            let e2e_landed_at = Instant::now(); // E2E：落地时刻（尽早捕获）
                             if let Some(p) = proc {
                                 self.store_warm_process(ext_id.clone(), p);
                             }
@@ -99,6 +101,10 @@ impl PaletteApp {
                                 self.stack.current_mut().begin_refetch(Instant::now());
                                 self.rearm_page_query_debounce();
                             } else {
+                                // E2E：非过期落地 → 先取计时起点（self 借用须早于 page 借用）
+                                let e2e_times =
+                                    self.e2e_input_at.take().zip(self.e2e_dispatch_at.take());
+                                let e2e_items = items.len(); // E2E：快照（下方 PanelState::new 会移走 items）
                                 let page = self.stack.current_mut();
                                 page.clear_refetch(); // 落地：撤销延迟骨架标记
                                 page.is_loading = false;
@@ -115,6 +121,18 @@ impl PaletteApp {
                                 page.list.set_passthrough(); // 嵌套页：扩展已过滤/排序，宿主不再二次过滤
                                 if !prev_query.is_empty() {
                                     page.list.set_query(prev_query.clone());
+                                }
+                                // E2E：建样本（page 借用至此已结束）——本帧 draw_panel
+                                // 完成时由 `e2e_report` 结算输出。
+                                if let Some((input_at, dispatch_at)) = e2e_times {
+                                    self.e2e_pending = Some(E2eSample {
+                                        page_id: page_id.clone(),
+                                        query_chars: prev_query.chars().count(),
+                                        items: e2e_items,
+                                        input_at,
+                                        dispatch_at,
+                                        landed_at: e2e_landed_at,
+                                    });
                                 }
                                 // 嵌套页落地后 query 已由 draw_searchbar 写回列表
                                 // （panel.rs），这里无需额外处理。
@@ -144,6 +162,7 @@ impl PaletteApp {
                                 }
                             }
                             log::warn!("[dd-gui] get_items 失败：page={page_id}：{e}");
+                            self.e2e_dispatch_at = None; // E2E：失败不计样本，input 保留供重拉续测
                             let page = self.stack.current_mut();
                             page.clear_refetch(); // 落地（失败）：撤销延迟骨架标记
                                                   // v3.3：失败落地同样保留页内 query（不吞掉 loading 期间输入）
@@ -178,6 +197,8 @@ impl PaletteApp {
                         self.drop_source_to_stub(&ext_id);
                     }
                     log::debug!("[dd-gui] get_items 结果作废：已离开 page={page_id}");
+                    self.e2e_input_at = None; // E2E：已离页，测量作废
+                    self.e2e_dispatch_at = None;
                 }
             }
             Err(TryRecvError::Empty) => {}
@@ -234,6 +255,7 @@ impl PaletteApp {
         if let Some(q) = search.as_deref() {
             if !q.is_empty() {
                 self.stack.current_mut().list.set_query(q.to_string());
+                self.e2e_input_at = Some(Instant::now()); // E2E：带词进页（Ctrl+F / 入口项）= 感知起点
             }
         }
         self.dispatch_fetch_page(ext_id, page_id, search, command_id);

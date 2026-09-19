@@ -6,6 +6,7 @@
 
 pub(crate) mod aggregate;
 pub(crate) mod ctx_menu;
+pub(crate) mod e2e;
 pub(crate) mod fallback_flow;
 pub(crate) mod health;
 pub(crate) mod host_actions;
@@ -21,6 +22,7 @@ pub(crate) mod toast;
 pub use aggregate::{spawn_aggregation, AggregatePayload};
 
 use crate::app::ctx_menu::CtxMenuState;
+use crate::app::e2e::E2eSample;
 use crate::app::fallback_flow::FallbackFetchOutcome;
 use crate::app::invoke::InvokeOutcome;
 use crate::app::page::PageOutcome;
@@ -254,6 +256,13 @@ pub struct PaletteApp {
     /// `tick_refresh` 用当前页 query 重新拉 `get_items`（v3.3：边打边搜）。
     /// `None` = 无待拉取；`Some(t)` = 在 `t` 之后拉取。仅在嵌套页输入非空时调度。
     pub(crate) page_query_debounce: Option<Instant>,
+    /// E2E 首屏计时（A-33-05 感知指标，见 [`crate::app::e2e`]）：页内 query
+    /// 最后一次输入变化的时刻（`panel.rs` 变化检测 / 带词进页回填）。
+    pub(crate) e2e_input_at: Option<Instant>,
+    /// E2E：最近一次 `get_items` 真实分派时刻（busy / 熔断 gate 之后）。
+    pub(crate) e2e_dispatch_at: Option<Instant>,
+    /// E2E：已落地、待本帧绘制完成即结算的样本（`e2e_report` 帧尾消费）。
+    pub(crate) e2e_pending: Option<E2eSample>,
     /// 鼠标上一帧悬停的行索引。仅当本帧悬停行与它**不同**时才接管选中，
     /// 静止不动的鼠标不再每帧抢占键盘（Tab/↓）选中——修复鼠标/键盘选择互相干扰。
     pub(crate) last_hovered_index: Option<usize>,
@@ -428,6 +437,9 @@ impl PaletteApp {
             confirm: None,
             refresh: None,
             page_query_debounce: None,
+            e2e_input_at: None,
+            e2e_dispatch_at: None,
+            e2e_pending: None,
             last_hovered_index: None,
             last_pointer_pos: None,
             scroll_follow: true, // 键盘是主输入：初始允许滚动跟随
@@ -621,11 +633,12 @@ impl eframe::App for PaletteApp {
             }
             self.paint_hide_frame = false;
             self.draw_panel(ui);
-            // 内存优化 M3+M1（docs/memory-optimization-plan.md §3）：隐藏帧已画完，
-            // 此后整个隐藏期无绘制——图标纹理全部释放（下次唤起仅对可见行惰性
-            // 重解码，读的是落盘 PNG 缓存）+ 修剪工作集（页按需软故障回）。
-            // 挂在 paint_hide_frame 消费点而非 hide()：hide() 之后还要绘一帧
-            // 真实内容，先清会被复绘立即重填。
+            self.e2e_report(); // E2E：隐藏帧同样结算，避免隐藏期计入下次可见帧
+                               // 内存优化 M3+M1（docs/memory-optimization-plan.md §3）：隐藏帧已画完，
+                               // 此后整个隐藏期无绘制——图标纹理全部释放（下次唤起仅对可见行惰性
+                               // 重解码，读的是落盘 PNG 缓存）+ 修剪工作集（页按需软故障回）。
+                               // 挂在 paint_hide_frame 消费点而非 hide()：hide() 之后还要绘一帧
+                               // 真实内容，先清会被复绘立即重填。
             let icon_n = self.icon_cache.len();
             if icon_n > 0 {
                 self.icon_cache.clear();
@@ -732,6 +745,7 @@ impl eframe::App for PaletteApp {
         }
         crate::ui::chrome::chrome_begin(self, &ctx);
         self.draw_panel(ui);
+        self.e2e_report(); // E2E：本帧绘制完成 → 结算首屏样本（若落地发生在本帧）
         self.draw_toast(&ctx);
         self.draw_confirm(&ctx);
         self.draw_context_menu(&ctx, ui);
