@@ -27,6 +27,7 @@
 //! 未注册的方法 → `-32601 Method not found`（§9.2）。
 
 use std::io::{self, Read, Write};
+use std::sync::{Arc, Mutex};
 
 use dd_protocol::envelope::{self, error_response, Envelope};
 use dd_protocol::framing::{encode, Decoder, Frame};
@@ -55,6 +56,48 @@ pub mod shell_icon;
 
 /// §5.3：扩展回"不高于宿主所发版本"的版本；v1.0 阶段恒为 `"1.0"`。
 pub const PROTOCOL_VERSION: &str = "1.0";
+
+/// §7.1 `items_changed` 的**跨线程发送器**（2026-09-19，文件搜索图标后台补齐）。
+///
+/// 背景：`run()` 的主循环**阻塞在 stdin 读**上，扩展侧后台线程（如文件搜索的图标
+/// worker）若不能自行写 stdout，通知就只能等「下一次请求」捎带 —— 那会把「图标自动
+/// 补齐」退化成「下次输入才补齐」。故 `run()` 启动时经 [`install_notifier`] 注入共享
+/// stdout 写入器，任意线程可调 [`notify_items_changed`]；未安装（单测 / 非 `run()`）
+/// 时为 **no-op**（不影响任何既有行为）。
+///
+/// 不变量：写入器内部持 `Mutex`，`write_all` + `flush` 在同一临界区完成 →
+/// 后台通知与请求响应**不会交错**（§2.2 一行一条消息）。
+type Notifier = dyn Fn(Option<String>) + Send + Sync + 'static;
+
+/// 共享 stdout：主循环与后台通知共用同一把锁。
+pub(crate) type SharedOut = std::sync::Arc<std::sync::Mutex<std::io::Stdout>>;
+
+static NOTIFIER: std::sync::Mutex<Option<std::sync::Arc<Notifier>>> = std::sync::Mutex::new(None);
+
+/// 安装通知发送器（由 [`run`] 调用；**覆盖式**，便于单测重置）。
+pub fn install_notifier(f: impl Fn(Option<String>) + Send + Sync + 'static) {
+    if let Ok(mut g) = NOTIFIER.lock() {
+        *g = Some(std::sync::Arc::new(f));
+    }
+}
+
+/// 卸载通知发送器（进程收尾 / 单测重置用）。
+pub fn clear_notifier() {
+    if let Ok(mut g) = NOTIFIER.lock() {
+        *g = None;
+    }
+}
+
+/// §7.1：从**任意线程**发 `items_changed`（未安装发送器时 no-op）。
+pub fn notify_items_changed(page_id: Option<String>) {
+    let f = NOTIFIER
+        .lock()
+        .ok()
+        .and_then(|g| g.as_ref().map(std::sync::Arc::clone));
+    if let Some(f) = f {
+        f(page_id);
+    }
+}
 
 /// 一次 `invoke` 的副作用（在成功响应**之后**按序发给宿主）。
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -118,7 +161,17 @@ pub fn run(spec: &ExtensionSpec) {
     dd_protocol::logging::init();
 
     let mut stdin = io::stdin().lock();
-    let mut stdout = io::stdout().lock();
+    // 共享 stdout：主循环与后台通知（[`notify_items_changed`]）共用同一把锁，
+    // 保证「一次 write_all + flush」不被交错（§2.2）。
+    let stdout: SharedOut = Arc::new(Mutex::new(io::stdout()));
+    {
+        let tag = spec.log_tag;
+        let out = Arc::clone(&stdout);
+        install_notifier(move |page_id| {
+            let msg = make_items_changed(tag, page_id);
+            write_message(&out, tag, &msg);
+        });
+    }
 
     log(spec, "已启动，等待 initialize");
 
@@ -134,7 +187,7 @@ pub fn run(spec: &ExtensionSpec) {
                         Frame::Message(line) => {
                             let (outputs, exit) = serve_line(spec, &line);
                             for msg in outputs {
-                                send(spec, &mut stdout, &msg);
+                                write_message(&stdout, spec.log_tag, &msg);
                             }
                             should_exit |= exit;
                         }
@@ -145,9 +198,9 @@ pub fn run(spec: &ExtensionSpec) {
                                 spec,
                                 &format!("单条消息 {size} 字节超过上限 {max} 字节，关闭（§2.3）"),
                             );
-                            send(
-                                spec,
-                                &mut stdout,
+                            write_message(
+                                &stdout,
+                                spec.log_tag,
                                 &error_response(
                                     None,
                                     error_codes::INVALID_REQUEST,
@@ -286,10 +339,10 @@ pub fn serve_line(spec: &ExtensionSpec, line: &str) -> (Vec<serde_json::Value>, 
             for effect in effects {
                 match effect {
                     Effect::HostRequest { method, params } => {
-                        outputs.push(make_host_request(spec, method, params));
+                        outputs.push(make_host_request(spec.log_tag, method, params));
                     }
                     Effect::ItemsChanged { page_id } => {
-                        outputs.push(make_items_changed(spec, page_id));
+                        outputs.push(make_items_changed(spec.log_tag, page_id));
                     }
                 }
             }
@@ -370,13 +423,13 @@ fn initialize_result(spec: &ExtensionSpec) -> InitializeResult {
 /// §3.3：扩展向宿主发 `host/*` **请求**（带自增 id，等待应答——宿主在 in-flight
 /// 等待期间或空闲轮询时应答；本运行时 fire-and-forget，不阻塞主循环）。
 fn make_host_request(
-    spec: &ExtensionSpec,
+    log_tag: &str,
     method: &'static str,
     params: serde_json::Value,
 ) -> serde_json::Value {
     static REQ_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
     let id = REQ_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    log(spec, &format!("-> {method} (id={id})"));
+    log::debug!("[{log_tag}] -> {method} (id={id})");
     serde_json::json!({
         "jsonrpc": JSONRPC_VERSION,
         "id": id,
@@ -386,8 +439,8 @@ fn make_host_request(
 }
 
 /// §7.1 `items_changed` 通知；`page_id=None` 表示顶层命令变了。
-fn make_items_changed(spec: &ExtensionSpec, page_id: Option<String>) -> serde_json::Value {
-    log(spec, &format!("-> {NOTIFY_ITEMS_CHANGED}"));
+fn make_items_changed(log_tag: &str, page_id: Option<String>) -> serde_json::Value {
+    log::debug!("[{log_tag}] -> {NOTIFY_ITEMS_CHANGED}");
     serde_json::json!({
         "jsonrpc": JSONRPC_VERSION,
         "method": NOTIFY_ITEMS_CHANGED,
@@ -403,16 +456,21 @@ fn make_result(id: u64, result: serde_json::Value) -> serde_json::Value {
 // 宿主与扩展两侧的 `-32700`/`-32600` 形状因此由同一份代码保证。
 
 /// §2.2：一行一条紧凑 JSON，以 `\n` 结尾；失败只记日志（§2.5 日志走 stderr）。
-fn send(spec: &ExtensionSpec, out: &mut dyn Write, value: &serde_json::Value) {
+///
+/// 接受共享 stdout（[`SharedOut`]）：主循环与后台通知走同一条路径，
+/// 写与 flush 在同一临界区内完成，避免两条消息字节交错。
+fn write_message(out: &SharedOut, log_tag: &str, value: &serde_json::Value) {
     match serde_json::to_string(value) {
         Ok(line) => match encode(&line) {
             Ok(bytes) => {
-                let _ = out.write_all(&bytes);
-                let _ = out.flush();
+                if let Ok(mut w) = out.lock() {
+                    let _ = w.write_all(&bytes);
+                    let _ = w.flush();
+                }
             }
-            Err(_) => log(spec, "消息内含裸换行，已丢弃（§2.2 规则 2）"),
+            Err(_) => log::debug!("[{log_tag}] 消息内含裸换行，已丢弃（§2.2 规则 2）"),
         },
-        Err(e) => log(spec, &format!("序列化失败：{e}")),
+        Err(e) => log::debug!("[{log_tag}] 序列化失败：{e}"),
     }
 }
 
@@ -806,5 +864,41 @@ mod tests {
         assert_eq!(ctx.query.as_deref(), Some("x"));
         assert_eq!(ctx.selected_item_id.as_deref(), Some("fix.hello"));
         assert_eq!(ctx.confirmed, Some(true));
+    }
+
+    /// 通知器是全局单例 → 相关用例串行执行（避免并发安装互相覆盖）。
+    fn notifier_test_lock() -> std::sync::MutexGuard<'static, ()> {
+        static LOCK: Mutex<()> = Mutex::new(());
+        LOCK.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    /// E1/C1：未安装发送器时通知为 **no-op**（不 panic、无副作用）。
+    #[test]
+    fn notify_without_hook_is_noop() {
+        let _g = notifier_test_lock();
+        clear_notifier();
+        notify_items_changed(Some("files.results".into()));
+        notify_items_changed(None);
+    }
+
+    /// E1/C1：安装后**从其他线程**调用也能送达 `page_id` ——
+    /// 这是文件搜索图标 worker 依赖的契约。
+    #[test]
+    fn installed_notifier_receives_page_id_from_other_thread() {
+        let _g = notifier_test_lock();
+        static GOT: Mutex<Vec<Option<String>>> = Mutex::new(Vec::new());
+        GOT.lock().unwrap().clear();
+        install_notifier(|p| GOT.lock().unwrap().push(p));
+        std::thread::spawn(|| notify_items_changed(Some("files.results".into())))
+            .join()
+            .expect("worker 线程不应 panic");
+        assert_eq!(
+            GOT.lock().unwrap().as_slice(),
+            &[Some("files.results".to_string())],
+            "后台线程发的通知应原样送达"
+        );
+        clear_notifier();
+        notify_items_changed(Some("not.recorded".into()));
+        assert_eq!(GOT.lock().unwrap().len(), 1, "卸载后不得再收到");
     }
 }

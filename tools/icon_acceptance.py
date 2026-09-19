@@ -11,9 +11,11 @@
 | A-IC-01 | 同扩展名共图、跨类型异图（键 → 图标文件 → 内容指纹三元组对齐） | 全部成立 |
 | A-IC-02a | 缓存命中（同查询重复）单次 `icon_ms` | ≤ 2 ms / 30 条 |
 | A-IC-02b | 首次·按扩展名（每查询 1–3 个新键） | ≤ 40 ms（观察线 60 ms） |
-| A-IC-02c | 首次·按真实路径（`.exe` 30 个新键，**已知未达标项 E1**） | ≤ 40 ms（不达标即 FAIL 并如实报告） |
-| A-IC-04 | 不可访问路径回落类别 glyph 且不崩（`kind=results`） | 有回落且无异常 |
-| A-IC-06 | sidecar 体积增量 vs 变更前基线 | ≤ 64 KB（**已知未达标项 E2**） |
+| A-IC-02c | 首次·按真实路径（`.exe` 30 个新键）**同步路径**（E1 修复后 `path:` 键下沉后台） | ≤ 40 ms |
+| A-IC-04 | 不可访问路径回落类别 glyph 且不崩（**等待后台补齐后重查 `.lnk` 批**） | 回落 + 真实图标并存且 `kind=results` |
+| A-IC-06 | sidecar 体积增量 vs 变更前基线 | ≤ 64 KB（**已知未达标项 E2**，处置见 §10.4） |
+| A-IC-08 | 后台补齐生效：等待后重查同一 `ext:exe` 查询（E1 修复） | `path` 图标 > 0 且 `icon_ms` ≤ 2 ms |
+| A-IC-10 | 稳定性：全部查询 `kind=results`（无异常回落 / 无崩溃） | 全部成立 |
 
 用法（**必须**用带 psutil 的隔离 venv 解释器——`Ext` 顶层 import psutil）：
 
@@ -34,6 +36,7 @@ import json
 import os
 import pathlib
 import sys
+import time
 from collections import OrderedDict
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
@@ -154,9 +157,27 @@ def main() -> int:
     # 按扩展名档（第 2 次为缓存命中）→ 按真实路径档（第 2 次为命中）→ 回落档
     for q in ("ext:rs", "ext:rs", "ext:pdf", "ext:png", "ext:zip", "ext:exe", "ext:exe", "ext:lnk"):
         rep["queries"].append(run_query(ext, q))
+
+    # E1（2026-09-19 修复）：`path:` 键（exe/lnk/msi/url）**不进同步路径** —— 首查这批
+    # 结果应是类别 glyph；它们由扩展内后台 worker 抽图并落盘，故等待后重查同一查询应
+    # 变为真实图标（A-IC-08）。等待 1.5 s 有充分余量（30 键 / 4 worker，实测 0.3–0.8 s）。
+    time.sleep(1.5)
+    rep["queries"].append(run_query(ext, "ext:exe"))
+    rep["queries"].append(run_query(ext, "ext:lnk"))
     ext.stop()
 
-    q_rs_first, q_rs_hit, q_pdf, q_png, q_zip, q_exe_first, q_exe_hit, q_lnk = rep["queries"]
+    (
+        q_rs_first,
+        q_rs_hit,
+        q_pdf,
+        q_png,
+        q_zip,
+        q_exe_first,
+        q_exe_hit,
+        q_lnk,
+        q_exe_late,
+        q_lnk_late,
+    ) = rep["queries"]
 
     if q_rs_first["kind"] != "results":
         rep["env"] = "not_ready"
@@ -191,21 +212,44 @@ def main() -> int:
         f"按扩展名首抽 max={worst:.2f} ms（判据 ≤ {FIRST_MS}，观察线 {WATCH_MS}；各档 {firsts}）",
     )
 
-    # A-IC-02c：按真实路径首抽（30 新键）——已知未达标项 E1，按实测报告
+    # A-IC-02c（E1 修复后语义）：按真实路径档的**同步**耗时应 ≤ 40 ms —— `path:` 键已下沉
+    # 后台，同步路径只剩扩展名/目录键（或零抽取）；本档首查应几乎全 glyph（随后由 A-IC-08 验证补齐）。
     e1 = one_ms(q_exe_first)
     check(
         "A-IC-02c",
         e1 is not None and e1 <= FIRST_MS,
-        f"按真实路径首抽（30 新键）icon_ms={e1} ms（判据 ≤ {FIRST_MS}）"
-        + ("　← 未达标 E1，处置选项见 docs/search-file.md §10.4" if e1 and e1 > FIRST_MS else ""),
+        f"按真实路径档·同步 icon_ms={e1} ms（判据 ≤ {FIRST_MS}；本档 path={q_exe_first['icon_types']['path']}"
+        f" / glyph={q_exe_first['icon_types']['glyph']}，path 键已下沉后台）"
+        + ("　← 仍超预算，见 docs/search-file.md §10.4" if e1 and e1 > FIRST_MS else ""),
     )
 
-    # A-IC-04：不可访问路径回落类别 glyph 且不崩
-    lnk_glyph = q_lnk["icon_types"]["glyph"]
+    # A-IC-08（E1 修复）：等待后台 worker 补齐后重查 → 应给出真实图标且命中缓存。
+    late_ms = one_ms(q_exe_late)
+    check(
+        "A-IC-08",
+        q_exe_late["icon_types"]["path"] > 0 and late_ms is not None and late_ms <= HIT_MS,
+        f"后台补齐后重查：path={q_exe_late['icon_types']['path']} / glyph={q_exe_late['icon_types']['glyph']}，"
+        f"icon_ms={late_ms} ms（判据 path>0 且 ≤ {HIT_MS} ms）",
+    )
+
+    # A-IC-04：不可访问路径回落类别 glyph 且不崩。
+    # ⚠️ E1 后语义：`path:` 键不再同步抽取 → **首查必然全 glyph**，故判据取「等待后台补齐后
+    # 重查」的那一批：可访问的 `.lnk` 变真实图标、不可访问的（约 13/30）留在类别 glyph。
+    lnk_path = q_lnk_late["icon_types"]["path"]
+    lnk_glyph = q_lnk_late["icon_types"]["glyph"]
     check(
         "A-IC-04",
-        q_lnk["kind"] == "results" and lnk_glyph > 0 and q_lnk["icon_types"]["path"] > 0,
-        f".lnk 批：path={q_lnk['icon_types']['path']} / glyph={lnk_glyph}（回落生效且 kind={q_lnk['kind']}）",
+        q_lnk_late["kind"] == "results" and lnk_glyph > 0 and lnk_path > 0,
+        f".lnk 批（等待补齐后）：path={lnk_path} / glyph={lnk_glyph}"
+        f"（回落生效且 kind={q_lnk_late['kind']}；首查为 glyph={q_lnk['icon_types']['glyph']} 属预期）",
+    )
+
+    # A-IC-10：稳定性 —— 全部查询均为 results（无异常回落 / 无崩溃）
+    kinds = sorted({q["kind"] for q in rep["queries"]})
+    check(
+        "A-IC-10",
+        kinds == ["results"],
+        f"{len(rep['queries'])} 次查询的 kind 集合 = {kinds}（判据：全部 results）",
     )
 
     # A-IC-06：体积增量

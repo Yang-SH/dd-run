@@ -620,6 +620,27 @@
 
 **分发级冒烟（全绿）**：`dist/dev/dd-run-cli.exe --conformance --ext-id com.ddrun.calc` **9 步通过（exit 0）**；`dist/dd-run-0.1.1.exe` Popen 后 5 s 事件循环存活、terminate 干净；sidecar 直驱 `tools/search_acceptance.py breakdown` 通道 **`ipc`**（ready 0.11 s），三档 kind 齐全 —— `hint` p50 0.169 ms / `empty` 12.46 ms / `results`（窄命中）27.16 ms、宽命中 14.71 ms，与 09-17 验收基线一致；`--cold` 图标三档沿用 §10.3 记录。
 
+### 文件搜索：图标按真实路径档首抽 191–704 ms 修复（E1，2026-09-19）
+
+用户决策：采纳「**P1 分层异步 + C1 自动刷新**」（不动 40 ms 预算、不改「每程序自身图标」的键分级决策）。
+
+| 项目 | 状态 | 落点 |
+|---|---|---|
+| 按键分层（同步 / 后台） | ✅ | `dd-ext/src/bin/search.rs`：`key_needs_background()`（纯函数）+ `IconBudget`（`ICON_SYNC_BUDGET = 15 ms`）+ `lookup_icon_png(entry, budget)` |
+| 后台 worker | ✅ | `search.rs`：`enqueue_icon_job()`（按键去重 `ICON_INFLIGHT`、惰性起 4 线程，`IconJob` / `IconJobSender` 别名）+ `icon_worker_loop()`（取任务时才持锁） |
+| 自动刷新（C1） | ✅ | `search.rs::notify_icons_ready()`（`ICON_NOTIFY_THROTTLE = 200 ms` 节流）→ §7.1 `items_changed`；宿主 `refresh.rs` 既有链路零改动 |
+| 跨线程通知器（框架） | ✅ | `dd-ext/src/lib.rs`：`install_notifier()` / `clear_notifier()` / `notify_items_changed()` + `SharedOut` 共享 stdout（`write_message()` 取代 `send()`；`make_host_request` / `make_items_changed` 改收 `log_tag`） |
+| 验收工具适配 | ✅ | `tools/icon_acceptance.py`：A-IC-02c 改「同步口径」、新增 **A-IC-08**（后台补齐）/ **A-IC-10**（稳定性）、A-IC-04 改「等待补齐后重查」 |
+| 文档回写 | ✅ | `search-file.md` v3.9（§10.4 标已处置 + 新增 §10.5）、`search-file-ctrl-f-icons-plan.md` v1.3（§6.2 新增 A-IC-08/09/10 + 口径变更注）、`CHANGELOG`、`INDEX` |
+
+**实测（`tools/icon_acceptance.py --cold`，release sidecar）**：A-IC-02c 同步 `icon_ms` **0.32 ms**（原 191–704 ms）、A-IC-08 补齐后 `path=30 / glyph=0`（0.09 ms）、A-IC-04 `.lnk` 补齐后 `path=17 / glyph=13`、A-IC-02b 32.23 ms、A-IC-02a 0.10 ms、A-IC-10 十次查询全 `results`；**A-IC-06 仍 FAIL**（912,384 B，增量 142,848 B，E2 未实施）。
+
+**E2 探针**：临时剥离 `shell_icon` 的 `image` 调用后构建 → sidecar **876,544 → 779,776 B（−96,768 B）**；实施 E2 选项 ② 后预期 ≈ 818 KB、增量 ≈ 48 KB ✅，**待决策**。
+
+**行为变更**：首次查询的 exe/lnk 行先显示类别图标，约 0.2–0.8 s 后自动替换为真实图标。
+
+**验证**：`cargo test --workspace` **452 passed / 0 failed**（447 + 5 新增）/ `fmt` 无差异 / `clippy --workspace --all-targets` **0 告警** / `release` 构建 exit 0。
+
 ## 3. 验收映射总表
 
 | 验收项 | 内容 | 里程碑 |
@@ -655,6 +676,7 @@
 | 2026-09-19 | 436 | +1：应用列表调试诊断工具过滤（`apps::is_junk_title`；CHANGELOG 同名条目） |
 | 2026-09-19 | **448** | +12：本批（Ctrl+F 直达 5 + Shell 真实图标 7，后者含 `shell_icon` 4 项） |
 | 2026-09-19 | 447 | −1：移除 `f ` 前缀直达（删其专属用例 `file_drill_prefix_still_works`；`ctrl_f_query_source_rules` 改锚定「前缀不剥离」） |
+| 2026-09-19 | **452** | +5：**E1 图标分层异步**（`path_keys_are_deferred_to_background` / `icon_budget_expires` / `icon_job_dedup_keeps_single_inflight` / `notify_without_hook_is_noop` / `installed_notifier_receives_page_id_from_other_thread`） |
 
 **两条使用注意**：① `crates/dd-host/tests/roundtrip*.rs` 在 `dd-ext-sample.exe` **未构建时会打印 SKIP 并 return**（计入 passed），故凡涉及协议/扩展行为，先 `cargo build -p dd-ext-sample` 再跑；② 「三关全绿」与 CI 四关**均为 debug profile**，`#[cfg(debug_assertions)]` 类 release-only 编译错误检不到 —— 交付/发布前必须实跑 `cargo build --release`（见 §7 构建环境记档与 `CHANGELOG` 的 release 阻塞条目）。
 
@@ -770,5 +792,6 @@
 | 2026-09-17 | 协议两项定稿（`-32002` / `PageInfo`）；回落静默失败修复 + 工具一致性；O7 第二轮补测 | ✅ `9936ead`（A-33-05/06 改判通过） |
 | 2026-09-19 | 模糊排序字段分层；应用列表调试工具过滤；文件搜索 `Ctrl+F` 直达 + Shell 真实图标（v3.6）；移除 `f ` 前缀直达（v3.7）；设计稿回同步 **v4.18** | ✅ 工作副本（447 passed） |
 | 2026-09-19 | 文件搜索用户文档**解除 `es.exe` 前置表述**（`search.md` v1.3 / `search-file.md` v3.8）；dist 按 v3.6/v3.7 重打包 | ✅ 工作副本（零代码改动） |
+| 2026-09-19 | **E1 修复**：图标按真实路径档首抽 191–704 ms → 分层异步（同步 0.32 ms）+ 后台补齐 + 自动刷新；E2 探针实测可省 −96,768 B | ✅ 工作副本（452 passed） |
 
 > 构建环境记档：本机 windows-gnu 链接需补 `as.exe`（与 dlltool 同目录）与 `libshlwapi.a`（2026-09-03 修复）；跑测试前须 `export APPDATA`（否则 apps 图标抽取测试必失败，见 CHANGELOG）。

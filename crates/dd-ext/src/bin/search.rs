@@ -42,11 +42,11 @@ use dd_protocol::methods::{
 use dd_protocol::model::{CommandItem, CommandRef, CommandResult, Details, Icon, IconKind};
 use fuzzy_matcher::skim::SkimMatcherV2;
 use fuzzy_matcher::FuzzyMatcher;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{LazyLock, Mutex};
+use std::sync::{mpsc, Arc, LazyLock, Mutex};
 use std::time::{Duration, Instant};
 
 const EXT_ID: &str = "com.ddrun.filesearch";
@@ -875,13 +875,163 @@ fn icon_cache_key_for(path: &str, is_dir: bool) -> String {
 static ICON_CACHE: LazyLock<Mutex<HashMap<String, Option<PathBuf>>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
 
-/// 取该条目图标的 PNG 路径：进程内缓存 → 落盘缓存 → Shell 抽取（[`dd_ext::shell_icon`]）。
-/// 任一步失败 → `None`（调用方回落类别 glyph）。
-fn lookup_icon_png(entry: &FileEntry) -> Option<PathBuf> {
+/// 同步图标路径的**时间预算**（E1 修复，2026-09-19）：超过即停手，其余键交后台。
+///
+/// 依据：`A-IC-02` 的「首次 ≤ 40 ms」预算，而单键 Shell 抽取实测 6–25 ms（冷启峰值
+/// 更高）—— 同步路径必须给 IPC 往返与结果构造留余量，故取 15 ms；配合 `path:` 键
+/// **全部**下沉后台，同步实际只剩每查询 1–3 个扩展名键（实测 12.4–49.1 ms）。
+const ICON_SYNC_BUDGET: Duration = Duration::from_millis(15);
+
+/// 后台抽图并发度：`path:` 键（每程序自身图标）走后台，4 路足以把 30 键收敛到 ~0.3–0.8 s。
+const ICON_WORKER_THREADS: usize = 4;
+
+/// 后台补齐后的通知节流窗口：窗口内至多发一次 `items_changed`，避免 30 键逐个触发重拉。
+const ICON_NOTIFY_THROTTLE: Duration = Duration::from_millis(200);
+
+/// 该缓存键是否**必须走后台**抽取（纯函数，单测锚点）。
+///
+/// `path:<真实路径>`（`.exe`/`.lnk`/`.msi`/`.url`）每键一次 Shell 抽取、**键数随结果条数
+/// 线性增长**（30 条 → 冷缓存实测 191–704 ms）；而 `ext:` / `dir` / `noext` 键在同一次
+/// 查询内大量复用（每查询仅 1–3 个新键）。故前者一律下沉后台：首屏先给类别 glyph，
+/// 抽完落盘 + 进程内缓存后通知宿主重拉，替换为真实图标（协议零改动，走 §7.1）。
+fn key_needs_background(key: &str) -> bool {
+    key.starts_with("path:")
+}
+
+/// 同步图标预算：预算内允许一次「可能 6–25 ms」的同步抽取，余量耗尽即改投后台。
+struct IconBudget {
+    deadline: Instant,
+}
+
+impl IconBudget {
+    fn new(limit: Duration) -> Self {
+        Self {
+            deadline: Instant::now() + limit,
+        }
+    }
+
+    /// 是否还有余量做一次同步抽取。
+    fn allows_extraction(&self) -> bool {
+        Instant::now() < self.deadline
+    }
+}
+
+/// 后台图标任务：`(缓存键, 取样路径)`。
+type IconJob = (String, PathBuf);
+/// 后台任务发送端。
+type IconJobSender = mpsc::Sender<IconJob>;
+
+/// 后台图标任务队列（惰性初始化：**首次**需要下沉时才起 worker 线程）。
+static ICON_JOBS: LazyLock<Mutex<Option<IconJobSender>>> = LazyLock::new(|| Mutex::new(None));
+
+/// 在飞键集合：同键不重复入队（一次查询 30 条里同键常见，宿主重拉还会再请求）。
+static ICON_INFLIGHT: LazyLock<Mutex<HashSet<String>>> =
+    LazyLock::new(|| Mutex::new(HashSet::new()));
+
+/// 上一次 `items_changed` 通知时刻（节流用；`None` = 尚未通知过）。
+static ICON_LAST_NOTIFY: LazyLock<Mutex<Option<Instant>>> = LazyLock::new(|| Mutex::new(None));
+
+/// 投递后台抽图任务（按键去重）；首次调用顺带启动 worker 线程。
+fn enqueue_icon_job(key: String, sample: PathBuf) {
+    {
+        let mut inflight = match ICON_INFLIGHT.lock() {
+            Ok(g) => g,
+            Err(_) => return, // 锁中毒：放弃 = 本次回落 glyph（零退化）
+        };
+        if !inflight.insert(key.clone()) {
+            return; // 已在飞：不重复入队
+        }
+    }
+    // 首次入队时把节流计时起点前移：使「第一个键刚抽完」不会立刻触发一次重拉
+    //（那时多数键还没好，重拉价值低）——首次通知自然落在 ~ICON_NOTIFY_THROTTLE 之后。
+    if let Ok(mut last) = ICON_LAST_NOTIFY.lock() {
+        if last.is_none() {
+            *last = Some(Instant::now());
+        }
+    }
+    let tx = {
+        let mut guard = match ICON_JOBS.lock() {
+            Ok(g) => g,
+            Err(_) => return,
+        };
+        if guard.is_none() {
+            let (tx, rx) = mpsc::channel::<IconJob>();
+            let rx = Arc::new(Mutex::new(rx));
+            for i in 0..ICON_WORKER_THREADS {
+                let rx = Arc::clone(&rx);
+                // 线程名便于真机排查（扩展进程常驻，worker 与主循环并存）
+                let _ = std::thread::Builder::new()
+                    .name(format!("dd-ext-icon-{i}"))
+                    .spawn(move || icon_worker_loop(rx));
+            }
+            *guard = Some(tx);
+        }
+        guard.clone()
+    };
+    if let Some(tx) = tx {
+        let _ = tx.send((key, sample)); // 通道关闭（进程退出中）→ 丢弃，无副作用
+    }
+}
+
+/// worker 主循环：取任务 → 抽图（落盘 + 进程内缓存）→ 按节流通知宿主重拉。
+///
+/// 仅**取任务时**持 `rx` 锁（抽图期间不持锁），故多 worker 可真正并行。
+fn icon_worker_loop(rx: Arc<Mutex<mpsc::Receiver<IconJob>>>) {
+    loop {
+        let job = match rx.lock() {
+            Ok(g) => g.recv(),
+            Err(_) => return, // 锁中毒：该 worker 退出，不影响主流程
+        };
+        let Ok((key, sample)) = job else {
+            return; // 发送端已释放 → 进程退出中
+        };
+        let png = shell_icon::file_type_icon_png(&key, &sample, shell_icon::FILE_ICON_SIZE);
+        if let Ok(mut cache) = ICON_CACHE.lock() {
+            cache.insert(key.clone(), png.clone());
+        }
+        if let Ok(mut inflight) = ICON_INFLIGHT.lock() {
+            inflight.remove(&key);
+        }
+        if png.is_some() {
+            notify_icons_ready();
+        }
+    }
+}
+
+/// 按 [`ICON_NOTIFY_THROTTLE`] 节流地发 `items_changed`：宿主侧 `refresh.rs` 命中当前页
+/// → 100 ms 合并窗口 → 重拉该页；重拉时图标已进进程内缓存 → 真实图标替换类别 glyph。
+fn notify_icons_ready() {
+    let now = Instant::now();
+    let fire = {
+        let mut last = match ICON_LAST_NOTIFY.lock() {
+            Ok(g) => g,
+            Err(_) => return,
+        };
+        match *last {
+            Some(t) if now.duration_since(t) < ICON_NOTIFY_THROTTLE => false,
+            _ => {
+                *last = Some(now);
+                true
+            }
+        }
+    };
+    if fire {
+        dd_ext::notify_items_changed(Some(PAGE_ID.to_string()));
+    }
+}
+
+/// 取该条目图标的 PNG 路径：进程内缓存 → （`path:` 键下沉后台 / 余量内同步抽取）。
+/// 任一步失败或转为后台 → `None`（调用方回落类别 glyph，零退化）。
+fn lookup_icon_png(entry: &FileEntry, budget: &IconBudget) -> Option<PathBuf> {
     let path = entry.full_path();
     let key = icon_cache_key_for(&path, entry.is_dir);
     if let Some(cached) = ICON_CACHE.lock().ok().and_then(|m| m.get(&key).cloned()) {
         return cached;
+    }
+    // E1：真实路径键一律下沉后台（首屏绝不为逐个 exe 抽图买单）；同步余量耗尽同理。
+    if key_needs_background(&key) || !budget.allows_extraction() {
+        enqueue_icon_job(key, PathBuf::from(&path));
+        return None;
     }
     let png = shell_icon::file_type_icon_png(&key, Path::new(&path), shell_icon::FILE_ICON_SIZE);
     if let Ok(mut m) = ICON_CACHE.lock() {
@@ -906,11 +1056,11 @@ fn icon_from_png(png: Option<PathBuf>, entry: &FileEntry) -> Icon {
 }
 
 /// 文件结果项图标：**真实 Shell 图标优先**，失败回落类别 glyph。
-fn entry_icon(entry: &FileEntry) -> Icon {
-    icon_from_png(lookup_icon_png(entry), entry)
+fn entry_icon(entry: &FileEntry, budget: &IconBudget) -> Icon {
+    icon_from_png(lookup_icon_png(entry, budget), entry)
 }
 
-fn to_command_item(entry: &FileEntry) -> CommandItem {
+fn to_command_item(entry: &FileEntry, budget: &IconBudget) -> CommandItem {
     let path = entry.full_path();
     let pid = register_path(&path);
     // v3.3 P1（§9.2）：三个动作共享同一 pid（PATH_INDEX 单次注册），上下文菜单
@@ -936,7 +1086,7 @@ fn to_command_item(entry: &FileEntry) -> CommandItem {
         title: entry.name.clone(),
         subtitle: Some(path.clone()),
         // 真实 Shell 图标（`Icon::Path`）优先，失败回落类别 glyph（`entry_icon`）
-        icon: Some(entry_icon(entry)),
+        icon: Some(entry_icon(entry, budget)),
         section: Some(tr("文件", "Files").to_string()),
         tags: Some(vec!["files".to_string()]),
         details: Some(Details {
@@ -1182,10 +1332,14 @@ fn get_file_items_with(params: &GetItemsParams, available: bool) -> GetItemsResu
             // 结果项构造（含真实图标取用）单独计时：icon_ms 的引入把「评分」与
             // 「构造/取图」拆开，便于判断图标缓存是否真的生效（2026-09-19）。
             let t_icon = Instant::now();
+            // E1（2026-09-19）：同步路径受 [`ICON_SYNC_BUDGET`] 约束，且 `path:` 键
+            // （exe/lnk/msi/url）一律下沉后台 —— 冷缓存实测该档 191–704 ms，是首屏
+            // 唯一的大头；扩展名键同键复用，实测 12.4–49.1 ms，留在同步路径。
+            let budget = IconBudget::new(ICON_SYNC_BUDGET);
             let items: Vec<CommandItem> = scored
                 .into_iter()
                 .take(RESULT_LIMIT)
-                .map(|(_, e)| to_command_item(&e))
+                .map(|(_, e)| to_command_item(&e, &budget))
                 .collect();
             let icon_ms = elapsed_ms(t_icon);
             patch_timing(|t| {
@@ -1893,7 +2047,7 @@ mod tests {
     fn to_command_item_builds_three_actions_sharing_pid() {
         let _guard = path_index_guard(); // 与驱逐用例串行（见锁文档）
                                          // P1.1：三个动作共享同一路径 pid；「注册后立即 lookup」恒安全
-        let item = to_command_item(&sample_entry());
+        let item = to_command_item(&sample_entry(), &IconBudget::new(ICON_SYNC_BUDGET));
         let pid = item
             .id
             .strip_prefix("files.open.")
@@ -1927,7 +2081,7 @@ mod tests {
     #[test]
     fn resolve_path_action_validates_pid_and_context() {
         let _guard = path_index_guard(); // 与驱逐用例串行（见锁文档）
-        let item = to_command_item(&sample_entry());
+        let item = to_command_item(&sample_entry(), &IconBudget::new(ICON_SYNC_BUDGET));
         let pid = item.id["files.open.".len()..].to_string();
         use dd_protocol::messages::InvokeContext;
         let ctx = |sel: Option<String>| {
@@ -1971,7 +2125,7 @@ mod tests {
     #[test]
     fn invoke_copy_returns_toast_and_clipboard_effect_in_order() {
         let _guard = path_index_guard(); // 与驱逐用例串行（见锁文档）
-        let item = to_command_item(&sample_entry());
+        let item = to_command_item(&sample_entry(), &IconBudget::new(ICON_SYNC_BUDGET));
         let pid = item.id["files.open.".len()..].to_string();
         let (result, effects) = handle_invoke(&InvokeParams {
             id: format!("files.copy.{pid}"),
@@ -2053,7 +2207,7 @@ mod tests {
             modified_raw: "2024-05-30 12:34:56".into(),
             is_dir: false,
         };
-        let item = to_command_item(&entry);
+        let item = to_command_item(&entry, &IconBudget::new(ICON_SYNC_BUDGET));
         assert!(
             item.id.starts_with("files.open."),
             "id 应为 files.open.<u64>"
@@ -2326,6 +2480,54 @@ mod tests {
         let icon = icon_from_png(Some(png.clone()), &e);
         assert_eq!(icon.kind, IconKind::Path);
         assert_eq!(icon.value, png.to_string_lossy());
+    }
+
+    /// E1/C1：`path:` 键（每键一次 Shell 抽取、键数随结果线性）必须下沉后台；
+    /// 扩展名/目录/无扩展名键同键复用（每查询 1–3 新键）留在同步路径。
+    #[test]
+    fn path_keys_are_deferred_to_background() {
+        for key in [
+            r"path:c:\tool\app.exe",
+            r"path:c:\users\x\desktop\steam.lnk",
+            r"path:c:\a\b.msi",
+            r"path:c:\a\b.url",
+        ] {
+            assert!(key_needs_background(key), "{key} 应下沉后台");
+        }
+        for key in ["ext:rs", "ext:exe", "dir", "noext"] {
+            assert!(!key_needs_background(key), "{key} 应留在同步路径");
+        }
+    }
+
+    /// E1：同步预算耗尽后 `allows_extraction()` 必须为 false（键改投后台）。
+    #[test]
+    fn icon_budget_expires() {
+        assert!(
+            !IconBudget::new(Duration::ZERO).allows_extraction(),
+            "零预算 → 不得再做同步抽取"
+        );
+        assert!(
+            IconBudget::new(Duration::from_millis(50)).allows_extraction(),
+            "宽裕预算 → 允许同步抽取"
+        );
+    }
+
+    /// E1：同键重复入队只保留一个在飞任务（避免宿主重拉时重复抽图）。
+    #[test]
+    fn icon_job_dedup_keeps_single_inflight() {
+        let key = format!(r"path:c:\__ddrun_dedup_test__\{}.exe", std::process::id());
+        let inflight = ICON_INFLIGHT.lock().unwrap();
+        let before = inflight.len();
+        drop(inflight);
+        ICON_INFLIGHT.lock().unwrap().insert(key.clone());
+        ICON_INFLIGHT.lock().unwrap().insert(key.clone());
+        assert_eq!(
+            ICON_INFLIGHT.lock().unwrap().len(),
+            before + 1,
+            "同键二次插入不得增长（HashSet 去重语义 = 在飞去重）"
+        );
+        ICON_INFLIGHT.lock().unwrap().remove(&key);
+        assert_eq!(ICON_INFLIGHT.lock().unwrap().len(), before);
     }
 
     /// 缓存键分级（纯函数）：目录共图 / 普通类型按扩展名共图 /
