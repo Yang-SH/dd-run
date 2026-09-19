@@ -99,9 +99,6 @@ impl PaletteApp {
                                 self.stack.current_mut().begin_refetch(Instant::now());
                                 self.rearm_page_query_debounce();
                             } else {
-                                // 文件搜索自动进页：落地时回填搜索框查询文本（否则被清空）
-                                let drill_armed = self.file_drill_armed;
-                                let drill_q = self.file_drill.clone();
                                 let page = self.stack.current_mut();
                                 page.clear_refetch(); // 落地：撤销延迟骨架标记
                                 page.is_loading = false;
@@ -119,23 +116,8 @@ impl PaletteApp {
                                 if !prev_query.is_empty() {
                                     page.list.set_query(prev_query.clone());
                                 }
-                                // 备用：普通嵌套页（非文件搜索 drill）落地后 query 已由
-                                // draw_searchbar 写回列表（panel.rs），这里无需额外处理。
-                                if drill_armed {
-                                    self.file_drill_armed = false;
-                                    if page_id == crate::app::FILE_SEARCH_PAGE_ID {
-                                        if let Some(root_q) = &drill_q {
-                                            if let Some(rest) =
-                                                root_q.strip_prefix(crate::app::FILE_SEARCH_PREFIX)
-                                            {
-                                                let q = rest.trim_start().to_string();
-                                                if !q.is_empty() {
-                                                    page.list.set_query(q);
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
+                                // 嵌套页落地后 query 已由 draw_searchbar 写回列表
+                                // （panel.rs），这里无需额外处理。
                                 // 过期补偿已前移至落地前的 `landing_is_stale` 分支；
                                 // 此处为非过期结果，正常落地（query 保留 + drill 回填见上）。
                             }
@@ -184,8 +166,6 @@ impl PaletteApp {
                         }
                     }
                 } else {
-                    // 用户已离开来源页：清除文件搜索回填标记，避免后续落地误回填旧查询
-                    self.file_drill_armed = false;
                     // 成功（或 warm 失败但进程存活）仍归还进程——
                     // 它是扩展资产；复热失败或进程已死则不保活（A8：回落 stub）。
                     let proc_alive = proc.as_mut().map(|p| !p.has_exited()).unwrap_or(false);
@@ -226,7 +206,7 @@ impl PaletteApp {
     ///
     /// `title` = **页标题的来源**，进搜索框 placeholder（设计稿 §07.1 D2）：
     /// - 点击入口项进页 → 传**被点击项标题**（人类可读）；
-    /// - `f ` 前缀直达等无入口项的场景 → 传宿主本地化文案；
+    /// - 无入口项的场景（如 `Ctrl+F` 直达）→ 传宿主本地化文案；
     /// - 扩展 `GoToPage` 效果 → `None` → placeholder 回落「筛选命令…」。
     ///
     /// ⚠️ 此前这里直接把 `page_id` 当标题，导致 placeholder 显示「在「files.results」中筛选…」
@@ -248,7 +228,7 @@ impl PaletteApp {
         self.want_focus = true;
         // 根页查询回填页内搜索框（真机 2026-09-12：输入「测试」后点「文件搜索」，
         // 落地页输入框为空——根页查询虽已作为 search 传给 get_items，但页内框
-        // 不见 query，用户须重打一遍）。与 `f ` 前缀 drill 的回填语义对齐；
+        // 不见 query，用户须重打一遍）。与 `Ctrl+F` 直达进页的回填语义一致；
         // 落地后 poll_page 的 v3.3 保留逻辑沿用此值（cur_query == req_search
         // → 不触发过期补偿重拉）。
         if let Some(q) = search.as_deref() {

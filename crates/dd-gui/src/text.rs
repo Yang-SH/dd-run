@@ -83,7 +83,14 @@ const I18N: &[(&str, &str, &str)] = &[
     ("panel.loading", "正在加载…", "Loading…"),
     ("page.settings", "设置", "Settings"),
     // ── 主面板：搜索占位 / 空态 ──
-    ("ph.root", "搜索命令…", "Search commands…"),
+    // v0.1.4（2026-09-19）：根页 placeholder 追加 `Ctrl+F` 提示——该快捷键
+    // 无提示不可发现（方案 docs/search-file-ctrl-f-icons-plan.md §3.4）。
+    // 仅根页生效：嵌套页 placeholder 由 `ph.filter*` 承担，不重复提示。
+    (
+        "ph.root",
+        "搜索命令…（Ctrl+F 搜文件）",
+        "Search commands… (Ctrl+F for files)",
+    ),
     ("ph.filter", "筛选命令…", "Filter commands…"),
     ("ph.filter_in", "在「{title}」中筛选…", "Filter in \"{title}\"…"),
     (
@@ -163,6 +170,13 @@ const I18N: &[(&str, &str, &str)] = &[
         "Extension {id} is temporarily unavailable; restart the host to recover",
     ),
     ("page.ext_missing", "扩展信息缺失，无法打开页面", "Extension info missing; cannot open page"),
+    // v0.1.4（2026-09-19，方案 §3.1 D1-5）：`Ctrl+F` 直达但文件搜索不可用
+    // （扩展未加载 / 被禁用）→ 明确反馈，不留空白页。
+    (
+        "toast.filesearch_unavailable",
+        "文件搜索不可用（扩展未加载或已禁用）",
+        "File Search unavailable (extension not loaded or disabled)",
+    ),
     (
         "page.cmd_stale",
         "命令已失效：扩展未找到该命令（get_command 返回 null）",
@@ -295,7 +309,7 @@ const I18N: &[(&str, &str, &str)] = &[
     ),
     // ── 设置页 · 搜索行为开关（2026-09-12）──
     // （「优先搜索文件」开关同日加入、同日撤销：自动进页劫持常规搜索，
-    // 用户反馈后移除——`f ` 前缀直达保留。）
+    // 用户反馈后移除——当时保留 `f ` 前缀直达；该前缀亦已于 2026-09-19 移除，现由 `Ctrl+F` 一键直达承担。）
     ("set.search.apps.name", "搜索应用", "Search apps"),
     (
         "set.search.apps.desc",

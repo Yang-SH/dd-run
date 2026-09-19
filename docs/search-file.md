@@ -1,7 +1,7 @@
 # dd-run 文件搜索执行方案
 
-> **状态**：生效中 ｜ **版本**：v3.5 ｜ **最后更新**：2026-09-17
-> **关联**：[protocol.md](./protocol.md) · [search.md](./search.md)
+> **状态**：生效中 ｜ **版本**：v3.8 ｜ **最后更新**：2026-09-19
+> **关联**：[protocol.md](./protocol.md) · [search.md](./search.md) · [search-file-ctrl-f-icons-plan.md](./search-file-ctrl-f-icons-plan.md)
 
 ---
 
@@ -9,10 +9,11 @@
 
 - **传输层 = 双通道**：`everything-ipc` crate 为**主通道**（已落地），`es.exe` 为**回落通道**（代码均存在：`search.rs` 中 `everything_available()` 约 :129、`interpret_es_output()` 约 :193、`run_es()` 约 :220、`search_via_es()` 约 :666、`decode_with_codepage()` 约 :294）。**不是 HTTP、不是 TCP 自研**。
 - **回落失败不得静默**（2026-09-17 缺陷修复）：`es.exe` **以 `rc≠0`** 退出时（错误只在 stderr，如 `Error 8: Everything IPC not found.`）**不再**被当成「无结果」——`run_es` 带出退出码与 stderr，转 `Err` → 落成可读 `files.error` 项。仅 `rc=0` 且 stdout 为空才视为「无匹配结果」。
-- **已落地范围**：P0（占位项专属文案 / guide subtitle 对齐 es.exe 通道）、P1（`more_commands` 三动作 + `host/set_clipboard` + 宿主调用链）、P2（`everything-ipc` 主通道 + `es.exe` 回落）代码均已实施；§6 的 `f ` 前缀自动进页、页内二次输入 200ms 去抖重拉、`host/open_url` 经 `ShellExecuteW` 打开均已落地。
+- **已落地范围**：P0（占位项专属文案 / guide subtitle 对齐 es.exe 通道）、P1（`more_commands` 三动作 + `host/set_clipboard` + 宿主调用链）、P2（`everything-ipc` 主通道 + `es.exe` 回落）代码均已实施；§6 的页内二次输入 200ms 去抖重拉、`host/open_url` 经 `ShellExecuteW` 打开均已落地（§6.1 的 `f ` 前缀自动进页已于 2026-09-19 移除，见 §6.1 / §8 v3.7）。
 - **真机验收**：**A-33-05…A-33-10 两轮验收完成**（首轮 2026-09-15 / 第二轮 2026-09-17 补 `es.exe` 基线与回落分支，结论见 §4）—— **A-33-05 / A-33-06 / A-33-07 / A-33-10 通过**（A-33-05 含 2026-09-16 阈值修订 + 09-17 基线补测；A-33-06 两分支均实测），**A-33-08 ⚠️ 部分覆盖**（Win10 / Everything 1.5 / 提升 / 命名实例等环境单元未覆盖）；其余 A-33-01…A-33-04、A-33-09 已通过或代码已具备。
-- **用户承诺红线（2026-09-17 收窄）**：A-33-06 已通过 → 红线**仅剩 A-33-08 的跨环境覆盖**。是否把「无需 `es.exe` / Everything 运行中即可用」写入用户文档属**待决策项**（本文件不擅自改口径；`search.md` 现仍保留 `es.exe` 前置说明）。
+- **用户承诺口径（2026-09-19 定稿）**：A-33-06 已通过 → 红线**仅剩 A-33-08 的跨环境覆盖**。**`es.exe` 前置表述已解除**（用户决策）：`search.md` 改为「**Everything 在运行即可用，`es.exe` 为可选回落通道**」；A-33-08 未覆盖的环境（提升权限 / 命名实例 / Everything 1.5）以「直连不可用时回落」表述承接，**不作全覆盖承诺**。
 - **依赖与超时（唯一正确值，详见 §2）**：`everything-ipc = "=0.1.4"`（`default-features = false`）、`fuzzy-matcher`、`chrono`、`windows-sys 0.61`；**无 `windows 0.62`、无 `reqwest`/`urlencoding`/`tokio`/`async-trait`**；超时统一 `ES_TIMEOUT = 1200ms`（≤ 宿主 `get_items` 2000ms）。
+- **进入方式与图标（v3.7，2026-09-19）**：进入文件搜索共**三条**路径——顶层入口项 / 兜底模板 / **面板内 `Ctrl+F` 一键直达**（任意页生效、栈深恒 2、仅 Root 查询带入、扩展不可用给 Toast）；**原「根页 `f ` 前缀自动进页」已移除**（`f ` 回归普通搜索词，见 §6.1 / §8 v3.7）；文件结果图标由「按扩展名的 12 类 glyph」升级为 **Windows Shell 真实图标**（协议零改动走 `IconKind::Path`，落盘缓存 `file-icons/`），抽取失败回落类别 glyph。细则见 **§10**（含两处未达标如实记档）。
 
 ---
 
@@ -62,14 +63,14 @@
 - **P0（✅ 已实施）**：占位项专属文案（`files.hint`/`files.guide`/`files.error`）；`files.guide` subtitle 与模块注释对齐 es.exe 通道。
 - **P1（✅ 已实施）**：每结果注册同一 `PATH_INDEX` pid，生成三动作——默认打开 / 显示所在目录（`explorer /select` + `raw_arg`）/ 复制路径（`host/set_clipboard`）；`spec().capabilities` 与 `examples/extensions.d/com.ddrun.filesearch.json` 同时声明 `host/set_clipboard`；宿主已渲染 `more_commands` 并发送 `sender=context_menu` 的 `invoke`（L2 NDJSON 冒烟通过）。
 - **P2（✅ 代码已实施）**：`everything-ipc` 主通道 + `es.exe` 回落；L2 冒烟已验证 IPC 主通道真机返回真实结果。**真机验收 A-33-05…A-33-10 首轮已完成（2026-09-15，见 §4）**。
-- **宿主侧（✅ 已落地）**：§6 `f ` 前缀自动进页、页内二次输入 200ms 去抖重拉（`PAGE_QUERY_DEBOUNCE`，定义于 `refresh.rs` :13；`page.rs:115` 为调用点）、`host/open_url` 经 `ShellExecuteW(verb="open")` 打开（P1.5 修复，与 P2 互不依赖）。
+- **宿主侧（✅ 已落地）**：§6 页内二次输入 200ms 去抖重拉（`PAGE_QUERY_DEBOUNCE`，定义于 `refresh.rs` :13；`page.rs:115` 为调用点）、`host/open_url` 经 `ShellExecuteW(verb="open")` 打开（P1.5 修复，与 P2 互不依赖）。
 
 ---
 
 ## 4. 真机验收：A-33-05/06/07/08/10（两轮完成，2026-09-15 / 09-17）
 
 > **状态：两轮真机验收完成，除 A-33-08 的跨环境矩阵外均已通过**。逐项实测、耗时分解、复现命令与未闭环项见 **[文件搜索 P2 真机验收报告](./search-file-p2-acceptance-2026-09-15.md)**（本节只留结论，细节不重复）。A-33-01…A-33-04、A-33-09 已通过或代码已具备。
-> ⚠️ **红线（收窄后）**：A-33-06 已于 2026-09-17 两分支实测通过，红线**仅剩 A-33-08**（环境矩阵未覆盖）——用户文档是否解除 `es.exe` 前置表述**属待决策项**。
+> ⚠️ **红线（收窄后）**：A-33-06 已于 2026-09-17 两分支实测通过，红线**仅剩 A-33-08**（环境矩阵未覆盖）——`es.exe` 前置表述**已于 2026-09-19 解除**（见 §1 与 §8 v3.8）。
 
 表：两轮真机验收结论（环境：Windows 11 (26200) + Everything 1.4.1.1032；**首轮 `es.exe` 缺失，第二轮已装 ES 1.1.0.37**；第二轮产物 `sha256 ea2faf23…4aab6`）。
 
@@ -435,7 +436,7 @@ fn now_7days_unix() -> i64 {
 1. `bash tools/package.sh` 产出 `dist/dd-run-<版本>.exe` + 归集 `dist/extensions.d/`（file-search sidecar）。
 2. `docs/search.md`：前置条件 Everything 安装 + `es.exe` 可定位（无需 HTTP）；语法速查表；配置项 `DDRUN_ES_PATH`/`DDRUN_EVERYTHING_DIR`；明确 v0.1 仅 Windows。
 3. CHANGELOG："v0.1 文件搜索依赖 Everything（Windows）；fd 兜底 Provider 计划于 v0.2"。
-4. 真机走查：解压绿色 zip → `f ` 进文件搜索、升级覆盖 → tag → GitHub Release。
+4. 真机走查：解压绿色 zip → `Ctrl+F` 进文件搜索、升级覆盖 → tag → GitHub Release。
 
 ### 5.4 每日验收清单 D0–D6（历史）
 
@@ -548,8 +549,8 @@ graph TD
 
 | ID | 任务 | 目标文件 | 具体动作 | 验收 | 依赖 |
 | --- | --- | --- | --- | --- | --- |
-| **T-18** | 宿主 `f ` 前缀自动进页 | `crates/dd-gui/src/app/mod.rs`、`page.rs` | `FILE_SEARCH_PREFIX="f "` + `file_search_drill_target()` + `maybe_drill_file_search()` / `file_search_present()`；状态 `file_drill`/`file_drill_armed`。 | §6.1 便捷项；以该验收为回归基线。 | T-04, T-01 |
-| **T-19** | `poll_page` 回填查询 | `crates/dd-gui/src/app/page.rs`、`mod.rs` | `file_drill_armed` 命中则写回查询并消耗；Esc else 分支清 `file_drill_armed`。 | §6.3 边角。 | T-18 |
+| **T-18** | 宿主 `f ` 前缀自动进页 | `crates/dd-gui/src/app/mod.rs`、`page.rs` | `FILE_SEARCH_PREFIX="f "` + `file_search_drill_target()` + `maybe_drill_file_search()` / `file_search_present()`；状态 `file_drill`/`file_drill_armed`。 | ~~§6.1 便捷项；以该验收为回归基线。~~ ❌ **已移除（2026-09-19）**：常量 / 纯函数 / 方法 / 状态**全部删除**，`f ` 回归普通搜索词；直达入口由 `Ctrl+F` 承担（§10.1）。 | T-04, T-01 |
+| **T-19** | `poll_page` 回填查询 | `crates/dd-gui/src/app/page.rs`、`mod.rs` | `file_drill_armed` 命中则写回查询并消耗；Esc else 分支清 `file_drill_armed`。 | ~~§6.3 边角。~~ ❌ **已随 T-18 移除**：落地回填分支已删；现由 `open_page` 统一回填 + `poll_page` 的 v3.3 query 保留逻辑承担。 | T-18 |
 | **T-20** | `host/open_url` 开 `file://` | `crates/dd-gui/src/app/host_actions.rs` | ✅ 已落地：经 `platform::open_path` 的 `ShellExecuteW(verb="open")`（无 `cmd /c start` 兜底；`webbrowser::open` 仅用于 http(s)）。 | §6.3「`file://` 打开实测」。 | T-15 |
 | **T-27** | 防重与 Esc 语义 | `crates/dd-gui/src/app/mod.rs`、`page.rs` | 连续多帧仅进页一次；Esc 后不立即重进；清空复位可再进。 | 单测 + 真机勾选。 | T-18, T-19 |
 | **T-28** | 性能与健壮回归 | `crates/dd-ext/src/bin/search.rs`、宿主 | 速度 <200ms、TTL 内不重复探测；健壮不挂起；回归 5 扩展仍 `-32005`。 | `cargo test --workspace` 0 failed。 | T-17, T-19, T-06 |
@@ -561,7 +562,7 @@ graph TD
 | **T-21** | `package.sh` 归集 | `tools/package.sh`、`dist/` | 归集 `dd-ext-search.exe` + 清单进 `dist/extensions.d/`。 | `dist/extensions.d/` 含两者。 | T-17, T-05 |
 | **T-22** | 用户文档 | `docs/search.md` | Everything 安装 + es.exe + 语法速查 + 配置项 + 仅 Windows。 | 用户可照做搜到结果。 | T-17 |
 | **T-23** | CHANGELOG | `CHANGELOG.md` | 追加 v0.1 条目。 | 含条目。 | T-17 |
-| **T-24** | 发布构建 + 走查 | `dist/`、仓库 | `package.sh` + 真机走查（`f ` 进页 / 打开 / Esc / 升级）。 | §5.6.5 真机清单全过。 | T-21, T-20, T-22, T-23, T-27, T-28 |
+| **T-24** | 发布构建 + 走查 | `dist/`、仓库 | `package.sh` + 真机走查（`Ctrl+F` 进页 / 打开 / Esc / 升级）。 | §5.6.5 真机清单全过。 | T-21, T-20, T-22, T-23, T-27, T-28 |
 | **T-25** | GitHub Release | GitHub | tag + Release v0.1.0（Windows 绿色包）。 | 资产含 dist 产物。 | T-24 |
 
 #### 5.5.3 执行纪律
@@ -583,10 +584,10 @@ graph TD
 
 | 层 | 类型 | 覆盖范围 | 依赖 Everything | 运行方式 |
 | --- | --- | --- | --- | --- |
-| **L1** | 纯函数单测 | `path_to_file_url` / `filetime_to_unix`+`combine_filetime` / `guess_is_dir` / `norm` / `score` / `register_path`+`lookup_path` / `parse_response` / `to_command_item` / `handle_invoke` / `file_search_drill_target` | ❌ 否 | `cargo test --workspace` |
+| **L1** | 纯函数单测 | `path_to_file_url` / `filetime_to_unix`+`combine_filetime` / `guess_is_dir` / `norm` / `score` / `register_path`+`lookup_path` / `parse_response` / `to_command_item` / `handle_invoke` | ❌ 否 | `cargo test --workspace` |
 | **L2** | 契约测试（NDJSON） | stdin/stdout 驱动校验 `initialize`/`top_level_commands`/`fallback_commands`/`get_items`/`invoke` | ❌ 否（可注入） | `echo '<json>' \| cargo run -p dd-ext --bin dd-ext-search` |
 | **L3** | 集成测试（真实 Everything） | 端到端：探测→搜索→评分→映射 | ✅ 是 | `#[ignore]` + `--ignored` |
-| **L4** | 真机验收 | GUI：`f ` 进页、↑↓/Enter/Esc、打开、长跑、防重 | ✅ 是 | 真机走查 |
+| **L4** | 真机验收 | GUI：`Ctrl+F` 进页、↑↓/Enter/Esc、打开、长跑、防重 | ✅ 是 | 真机走查 |
 
 **硬规则**：L1/L2 必须在无 Everything、无 GUI 的干净 CI 全绿；L3/L4 可跳过，但被跳过用例须在 §5.6.5 清单人工执行勾选。
 
@@ -658,14 +659,14 @@ cargo test --workspace -- --ignored   # 可选 L3
 
 ## 6. 便捷 + 速度优化（已落地）
 
-> 用户诉求（2026-09-07）：文件搜索高频，要「更便捷、更快速」。决策：直达前缀 + 自动进页（§6.1）+ 扩展侧速度打磨（§6.2）。本节为已落地能力。
+> 用户诉求（2026-09-07）：文件搜索高频，要「更便捷、更快速」。决策：直达前缀 + 自动进页（§6.1）+ 扩展侧速度打磨（§6.2）。§6.2 为已落地能力；§6.1 的直达前缀**已于 2026-09-19 移除**（下方保留移除记录）。
 
-### 6.1 便捷：`f ` 前缀自动进页（宿主侧，零协议改动）
+### 6.1 便捷：`f ` 前缀自动进页（❌ 已于 2026-09-19 移除）
 
-- **触发**：根查询以 `f `（`FILE_SEARCH_PREFIX`）开头，且 `com.ddrun.filesearch` 已加载未禁用 → 每帧 `ui()` 经 `maybe_drill_file_search()` 自动 `open_page` 到 `files.results`，回填剩余查询。
-- **防抖/防重**：仅栈顶 Root 触发；同查询已进页不再重复；前缀消失即清 `file_drill`；Esc 返回 Root 不重置 `file_drill`（由 else 分支在「前缀消失」时复位）。
-- **协议零改动**：复用 `get_items(files.results, search_text)`；新增宿主纯函数 `file_search_drill_target` + `PaletteApp` 两方法。
-- 既有入口（顶层「文件搜索」+ fallback 模板）仍可用。
+- **原行为**：根查询以 `f `（`FILE_SEARCH_PREFIX`）开头且 `com.ddrun.filesearch` 已加载未禁用 → 每帧 `ui()` 经 `maybe_drill_file_search()` 自动 `open_page` 到 `files.results` 并回填剩余查询（含防重与 `file_drill` / `file_drill_armed` 落地回填，见 §5.5.2 T-18/T-19）。
+- **移除原因**：该前缀会**劫持根视图字面查询**（想搜字面 `f report` 也会被强制进页），而 v3.6 的 `Ctrl+F` 已提供更明确的一键直达 → 前缀的便捷收益被覆盖，代价不再划算。
+- **移除范围（全删，无死代码残留）**：`FILE_SEARCH_PREFIX` 常量、纯函数 `file_search_drill_target()`、`PaletteApp::maybe_drill_file_search()` 及其在 `ui()` 的每帧调用、状态 `file_drill` / `file_drill_armed`、`page.rs` 的落地回填分支与「离开来源页清标记」；`Ctrl+F` 的查询带入**不再剥离前缀**。**`f ` 自此是普通搜索词**（`f report` = 搜同时含 `f` 与 `report` 的项）。
+- **未改动（零行为变化）**：`open_page` 统一回填 + `poll_page` 的 v3.3 query 保留逻辑（`Ctrl+F` 带词进页仍生效）、顶层入口项、兜底模板、扩展侧与协议（完全不涉及）。路径现状见 §10.1（三条）。
 
 ### 6.2 速度：扩展侧打磨（零宿主改动）
 
@@ -681,7 +682,7 @@ cargo test --workspace -- --ignored   # 可选 L3
 
 ### 6.3 验收（acceptance）
 
-- [x] **便捷**：根视图 `f report` → 无需第二次 Enter 即进结果页并展示 Everything 前 30 条；搜索框保留 `report`。
+- [x] ~~**便捷**：根视图 `f report` → 无需第二次 Enter 即进结果页并展示 Everything 前 30 条；搜索框保留 `report`。~~（历史验收记录；该入口已于 2026-09-19 移除，现由 `Ctrl+F` 承担）
 - [ ] **防重**：连续多帧不重复进页；Esc 后不立即重进；清空复位可再进。
 - [ ] **速度**：在线时输入到填充主观 <200ms；`everything_available()` TTL 内不重复探测。
 - [ ] **健壮**：退出 Everything / es.exe 不可用 → 返回引导项，不挂起、不 panic。
@@ -690,9 +691,9 @@ cargo test --workspace -- --ignored   # 可选 L3
 
 ### 6.4 已知边界（已解决项记录）
 
-- **初始进页搜索框回填（✅ 已解决）**：`maybe_drill_file_search` 进页后标记 `file_drill_armed`，`poll_page` 落地时写回查询（`page.rs` + `mod.rs`）。
+- **初始进页搜索框回填（✅ 已解决，机制后随 §6.1 移除而收敛）**：原 `maybe_drill_file_search` 进页后标记 `file_drill_armed`、`poll_page` 落地时写回查询；现由 `open_page` 统一回填 + `poll_page` 的 v3.3 保留逻辑承担（`page.rs` + `mod.rs`），行为不变。
 - **结果页随二次输入实时重拉（✅ 已解决）**：宿主嵌套页 query 变化 → 200ms 去抖（`PAGE_QUERY_DEBOUNCE`，定义于 `refresh.rs` :13）重发 `get_items`；进嵌套页自动聚焦搜索框；不再本地二次模糊过滤。
-- **`f ` 前缀劫持根视图字面查询**：用户想搜字面 `f report` 会被进文件页，属设计取舍。
+- **`f ` 前缀劫持根视图字面查询（✅ 已消除）**：2026-09-19 移除前缀直达后，字面 `f report` 恢复为普通搜索（见 §6.1）。
 - **搜索超时（✅ 已解决）**：`ES_TIMEOUT = 1200ms` ≤ 宿主 2000ms，不再有「扩展 3s 兜底到不了」矛盾。
 - **引导项/占位项点击文案（✅ 已解决）**：`handle_invoke` 对 `files.hint`/`files.guide`/`files.error` 给专属 Toast；`files.guide` subtitle 对齐 es.exe 通道。
 
@@ -905,10 +906,13 @@ Win10/11 × Everything 1.4/1.5 分别执行：运行/退出、IPC 可用/不可�
 | 版本 | 日期 | 关键结论 | 是否被取代 |
 | --- | --- | --- | --- |
 | v3.1 | 2026-09-07 | 计划期：自创 `search`/`search_status` 方法 + 异步 Provider + 独立 Ctrl+F 面板；传输层设想 HTTP/TcpStream、`pct_encode` URL 编码 | ✅ 被 v3.3 推翻（协议已冻结不新增方法；运行时同步；传输非 HTTP） |
-| v3.2 | 2026-09-08 | 落地 `es.exe` 单一通道（`run_es`），修正为免安装 sidecar；`f ` 前缀自动进页 | 部分被 v3.3 取代（传输层扩展为双通道，es.exe 降回落）；便捷优化保留 |
+| v3.2 | 2026-09-08 | 落地 `es.exe` 单一通道（`run_es`），修正为免安装 sidecar；`f ` 前缀自动进页 | 部分被 v3.3 取代（传输层扩展为双通道，es.exe 降回落）；其中 `f ` 前缀直达**已于 v3.7 移除** |
 | v3.3 | 2026-09-08~10 | 传输层切 `everything-ipc` 主通道 + `es.exe` 回落（双通道均落地）；P0/P1/P2 代码实施；`path_to_file_url` 取代 `pct_encode`；超时统一 1200ms | 部分被 v3.4 追注（验收结论与 A-33-05 阈值已修订） |
 | v3.4 | 2026-09-16 | 首轮真机验收结论落地（A-33-07/A-33-10 ✅、A-33-06/A-33-08 ⚠️ 部分、A-33-05 见下）；**修订 A-33-05 性能阈值**：p50 <10→**<30 ms**、p95 <30→**<50 ms**（依据实测 Everything 引擎地板 11–25 ms，扩展自身 ≲1 ms）；新增分阶段计时日志用于定因 | 部分被 v3.5 取代（基线/回落分支已补齐） |
-| v3.5 | 2026-09-17 | **第二轮真机验收（装 `es.exe` 后补齐）**：A-33-05 基线 p95 324.21ms → 降幅 **91.27%**、A-33-06 回落分支 **3/3 返回真实结果** → 两项由「⚠️ 部分」改判 **✅ 通过**；A-33-10 恢复判据改为**通道级**（`channel=ipc`）；红线收窄为 **A-33-08**；同批修掉 **`es.exe` 失败被静默当成空结果**的产品缺陷（`rc≠0` → 可读 `files.error` 项） | ❌ 当前生效 |
+| v3.5 | 2026-09-17 | **第二轮真机验收（装 `es.exe` 后补齐）**：A-33-05 基线 p95 324.21ms → 降幅 **91.27%**、A-33-06 回落分支 **3/3 返回真实结果** → 两项由「⚠️ 部分」改判 **✅ 通过**；A-33-10 恢复判据改为**通道级**（`channel=ipc`）；红线收窄为 **A-33-08**；同批修掉 **`es.exe` 失败被静默当成空结果**的产品缺陷（`rc≠0` → 可读 `files.error` 项） | 部分被 v3.6 追加（进入方式 + 图标） |
+| v3.6 | 2026-09-19 | **进入方式 +4**：新增面板内 `Ctrl+F` 一键直达（任意页；栈深恒 2；仅 Root 查询带入）；文件结果图标由 12 类 glyph 改 **Windows Shell 真实图标**（`Icon::Path` + `file-icons/` 落盘缓存，失败回落 glyph）；图标管线（HICON→PNG + 缓存）自 `apps` 上移为 `dd_ext::shell_icon` 共享；协议/清单零改动。**两处未达标如实记档**：按真实路径档首抽 703.8 ms、sidecar 体积 +104.5 KB | 部分被 v3.7 取代（`f ` 前缀直达移除） |
+| v3.7 | 2026-09-19 | **移除 `f ` 前缀直达文件搜索**：`FILE_SEARCH_PREFIX` / `file_search_drill_target()` / `maybe_drill_file_search()` / `file_drill` + `file_drill_armed` 状态 / `page.rs` 落地回填分支全部删除，`Ctrl+F` 查询带入不再剥离前缀；**`f ` 回归普通搜索词**，进入方式收敛为**三条**（§6.1、§10.1）。测试 448 → **447**（删 1 个前缀专属用例） | ❌ 当前生效 |
+| v3.8 | 2026-09-19 | **用户文档口径变更（零代码改动）**：**解除 `es.exe` 前置表述** —— `search.md` 由「仍建议安装 / 已发布版本仍依赖」改为「**Everything 在运行即可用，`es.exe` 为可选回落通道**」（§1 由「前置条件」改「准备事项」、故障排查 / 已知边界 / 升级说明 / FAQ 逐处改写）；README 双语文档表同步 | ❌ 当前生效（与 v3.7 并行：v3.7 = 代码，v3.8 = 用户文档口径） |
 
 ---
 
@@ -928,3 +932,73 @@ Win10/11 × Everything 1.4/1.5 分别执行：运行/退出、IPC 可用/不可�
 
 > 行号均按「约 :NNN」标注，可能因代码漂移变化，以函数名为准。
 
+---
+
+## 10. v3.6：`Ctrl+F` 一键直达 + Shell 真实文件图标（2026-09-19 落地）
+
+> 决策与验收清单的完整版见专题方案 [`search-file-ctrl-f-icons-plan.md`](./search-file-ctrl-f-icons-plan.md)；本节是**生效口径**。
+
+### 10.1 进入方式（三条并存）
+
+表：进入文件搜索的全部路径。
+
+| # | 路径 | 触发条件 | 落点（约） |
+| --- | --- | --- | --- |
+| 1 | 顶层入口项「文件搜索」 | 首屏选中回车 | `search.rs::top_level_commands`（约 :1061） |
+| 2 | 兜底模板「在文件中搜索 {query}」 | 任意查询下的候选 | `search.rs::fallback_commands`（约 :1087） |
+| 3 | **`Ctrl+F` 一键直达**（v3.6 新增） | 面板内**任意页** | `app/keys.rs`（约 :42 消费）→ `app/mod.rs::open_file_search_from_panel`（约 :565） |
+
+- **语义**（方案 §3.2 状态转移表）：已在文件搜索页 → **幂等**（仅聚焦，输入与列表不变）；其他位置 → 先 `go_home()` 回 Root 再进页（**栈深恒为 2**，连按不累积）；**仅 Root 的查询带入**（trim 后非空且**原样**带入，空则空查询），设置页 / 其他嵌套页进**空查询**（那些页的 query 语义属于该页）；扩展未加载或被禁用 → **Error Toast**，不产生空页；连续崩溃熔断仍由 `dispatch_fetch_page` 既有判定承担。
+- **键位不冲突**：面板内键位仅 `Esc` / `↑` `↓` / `Tab` / `Shift+Tab` / `Enter` / `Ctrl+,` / `Shift+F10`；`Ctrl+F` 此前**全仓无绑定**（egui 0.36 的单行输入框亦无 Find 绑定）。确认对话框与右键菜单活跃时按键被先行吞掉（**不穿透**）；热键捕获模式下 `Ctrl+F` 仍可作为自定义全局热键候选。
+- **可发现性**：根页搜索框 placeholder 追加 `Ctrl+F 搜文件`（`text.rs` 的 `ph.root`）；嵌套页 placeholder 语义不变。
+- **设置页离开的脏标记**（搜索引擎 / 扩展启停 / 语言）仍由 `ui()` 既有 size-diff 收口点（`!want_settings` 分支）消费，本路径**无新接线**。
+
+### 10.2 图标：Shell 真实图标 → glyph 回落
+
+- **优先**：`dd_ext::shell_icon::file_type_icon_png` 抽 32×32 Shell 图标（`SHGetFileInfoW(SHGFI_ICON|SHGFI_LARGEICON)`，传**真实路径**）→ PNG 落盘缓存 `%APPDATA%\dd-run\cache\file-icons\file-<hash16>-32.png` → 经协议**零改动**的 `IconKind::Path` 回传；宿主既有 path 图标链路（读盘 → PNG/ICO 解码 → 纹理缓存 → 暗色本体检测）原样复用。
+- **缓存键分级**（`icon_cache_key_for`，纯函数）：目录 → `dir`；`.exe`/`.lnk`/`.msi`/`.url` → **真实路径**（每个程序 / 快捷方式自身图标）；其余 → `ext:<小写扩展名>`；无扩展名（含前导点文件）→ `noext`。进程内另有 `ICON_CACHE`（含**负缓存**），同一进程内同键零磁盘访问。
+- **回落**：抽取 / 编码 / 写盘任一失败 → 既有 12 类 Segoe glyph（`entry_glyph`）；非 Windows 目标编译通过且恒走 glyph。
+- **共享管线（去重）**：`HICON/HBITMAP → PNG`（掩码 alpha、掩码行 DWORD 对齐、`GetDIBits` 负高 top-down）与缓存三函数（目录 / 键 / PNG 魔数自愈）自 `builtins/apps.rs` **上移**为 `dd-ext/src/shell_icon.rs`——app 图标（48px，`IShellItemImageFactory` 优先）与文件图标（32px）共用一份实现；apps 行为逐字段不变（仅可见性与位置变化）。
+- **可观测性**：`get_items` 计时日志新增 `icon={:.2}ms`（结果项构造期，含取图）；`score_ms` 自 v3.6 起**不含**构造期。`tools/search_acceptance.py` 的 `TIMING_RE` 将 `icon=` 设为**可选段**（旧日志仍可解析）。
+
+### 10.3 真机实测（2026-09-19，release sidecar 直驱）
+
+**测量口径（先读）**：「首次」必须在**冷缓存**下测——热缓存会把 `ext:exe` 从 703.8 ms 降到 98.7 ms，从而把未达标误读成达标。复现命令：
+
+```bash
+# 需带 psutil 的隔离 venv（Ext 顶层 import psutil）
+~/.workbuddy/binaries/python/envs/default/Scripts/python.exe tools/icon_acceptance.py --cold
+# 证据 JSON → target/acceptance/icon-acceptance.json；退出码 0=全过 / 1=有 FAIL / 2=环境未就绪
+```
+
+表：`icon_ms` 三档实测（30 条结果 / 查询；通道均为 `ipc`；`--cold` 口径）。
+
+| 场景 | 实测 `icon_ms` | 方案判据 | 结论 |
+| --- | --- | --- | --- |
+| 缓存命中（同查询重复） | **0.09 / 0.10 / 0.39 / 0.44 ms**（多次采样） | ≤ 2 ms | ✅ |
+| 首次·按扩展名（每查询 1 个新键） | 冷启首档 **40.29 ms**（`ext:rs`，`SHGetFileInfoW` 冷启）→ 其余档 **9.29 / 10.57 / 10.76 ms** | ≤ 40 ms | ⚠️ **临界**（首档压线超出 0.29 ms，其余档留 ≥ 29 ms 余量） |
+| 首次·按真实路径（`.exe` / `.lnk`，每查询 30 个新键） | **191.04 ms**（普通文件批）～ **703.82 ms**（回收站 `$I*` 元数据批） | ≤ 40 ms | ❌ **未达标**（E1） |
+
+- **分级正确性**：`ext:rs` 30 条共用同一 PNG；`ext:pdf` / `ext:png` / `ext:zip` 各 1 张且内容指纹互异；`.lnk` 按路径分图（同一快捷方式的多个副本共享同一指纹 = 同一目标图标）；目录批（WER 报告目录、Steam 游戏目录、cargo 目录）统一落 `dir` 键。
+- **回落真机生效**：`ext:lnk` 30 条中 **13 条**（`C:\Users\CodexSandboxOffline\…`、`C:\Windows\ServiceProfiles\…` 等不可访问路径）取图失败 → 回落类别 glyph，无 panic、无空图标列。
+- **单键成本随文件构成波动**：普通文件 ≈ **6–11 ms/键**（191 ms ÷ 30），回收站 `$I*.exe` 这类 Shell 需额外解析的元数据文件 ≈ **23.5 ms/键**（703.8 ms ÷ 30）——「按路径档」的成本与结果条数**线性**相关，这是 E1 的根因。
+- **缓存体量**：多轮查询后 `file-icons/` 为 **39–88 个 PNG / 34–63 KB**（单图均值 ≈ 670 B；随查询集合增长，键空间见 §10.2）。
+- **验收工具（可复现）**：`tools/icon_acceptance.py`（A-IC-01/02a/02b/02c/04/06 六项判定 + JSON 证据）；落地期的一次性探针留档于 `target/acceptance/`（`icon_probe.py`、`icon_probe3.py`）。
+
+### 10.4 未达标项与处置选项（待决策）
+
+| # | 未达标项 | 实测 vs 预算 | 根因 |
+| --- | --- | --- | --- |
+| E1 | 「按真实路径」档首次抽取延迟 | **191–704 ms** vs ≤ 40 ms（30 新键；随文件构成波动，见 §10.3） | 该档每键一次 Shell 抽取（≈ 6–25 ms/键），**键数随结果条数线性增长**；扩展名档每查询仅 1–3 个新键。另：扩展名档冷启首档实测 **40.29 ms** 亦压线（余量 0） |
+| E2 | sidecar 体积 | **876,544 B（+104.5 KB）** vs ≤ 64 KB | 共享管线把 PNG 编码器（`image[png]`）与 GDI 管线链入 sidecar；宿主 `dd-run.exe` 仅 **+3,072 B** |
+
+E1 处置选项（**未擅自采纳任何一项**）：
+
+| 选项 | 做法 | 代价 |
+| --- | --- | --- |
+| **O1（建议）** | 单次查询**限流**：按路径档最多新抽 N 个键（建议 6 ≈ 140 ms 上限），其余先用 glyph（**不写负缓存**，后续查询 / 输入自然补齐） | 首次 exe 密集查询里部分行显示类别图标，视觉暂不统一 |
+| O2 | 把 `.exe`/`.lnk` 也降为**按扩展名共图**（撤销方案 D2-2 的按路径档） | 所有 exe 显示同一个图标，与资源管理器不一致 |
+| O3 | 接受现状（命中后 0.13 ms） | 「边打边搜」在 exe 密集查询的首次会多 ~0.7 s |
+| O4 | 异步补齐（扩展后台抽图 + `items_changed` 通知宿主重拉） | 协议零改动但实现量最大，且会触发整页重拉 |
+
+E2 处置选项：① **修订预算**——宿主**单文件**才是分发约束，sidecar 体积非交付红线（本轮实测 +104.5 KB，占 sidecar 13.6%）；② 改存储格式绕开 `image[png]` 依赖（省 ~40–60 KB，但需自写编码器、回落面变大）。

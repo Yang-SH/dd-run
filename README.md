@@ -26,7 +26,7 @@ Its architecture and extension contracts are **distilled from Microsoft PowerToy
 ## Highlights
 
 - **Keyboard-first**: the entire core loop (summon → search → select → execute → back → close) is 100% keyboard-driven.
-- **5 built-in extensions + file-search sidecar**: Apps, Calculator, System, Web Search, Shell run in-process; File Search (Everything-backed, Windows; direct entry via the `f ` query prefix) ships as a separate sidecar process.
+- **5 built-in extensions + file-search sidecar**: Apps, Calculator, System, Web Search, Shell run in-process; File Search (Everything-backed, Windows; press `Ctrl+F` in the panel) ships as a separate sidecar process.
 - **Pinyin matching**: CJK app names match by full Pinyin and initials (e.g. `jsq` → 计算器).
 - **Settings pages** (open with `Ctrl+,`): appearance (light/dark theme, Mica/Acrylic material), general (autostart, customizable global hotkey — default `Win+Alt+Space`), search-engine management (preset + custom engines with `{q}` templates), extension management (enable/disable per extension).
 - **Localized UI**: the panel follows the system display language.
@@ -74,13 +74,13 @@ Its architecture and extension contracts are **distilled from Microsoft PowerToy
 | Document | Contents | Audience |
 |---|---|---|
 | [`cmdpal-platform-agnostic-design.md`](./cmdpal-platform-agnostic-design.md) | **Design reference (upstream source)**: CmdPal's UI model, extension contracts, host model, built-in extension inventory, Rust reference implementation, acceptance criteria A1–A12 | Understand *why* it is designed this way |
-| [`cmdpal-ui-mockups.html`](./cmdpal-ui-mockups.html) | **Interactive UI spec** (v4.13): dark/light theme component gallery — root view, search, list/detail pages, settings cards, context menus, dialogs, toasts, loading skeletons. Later spec batches (v4.14–v4.17a) are recorded in [`docs/implementation.md`](./docs/implementation.md) §7 but not yet back-ported into this HTML | See what it looks like |
+| [`cmdpal-ui-mockups.html`](./cmdpal-ui-mockups.html) | **Interactive UI spec** (v4.18): dark/light theme component gallery — root view, search, list/detail pages, settings cards, context menus, dialogs, toasts, loading skeletons, keyboard walkthrough. v4.18 back-ports the file-search `Ctrl+F` direct entry, the panel key table (§6.5), real Shell icons and the placeholder copy (decisions D39–D41, acceptance group I). Behaviour-only batches v4.14–v4.17a are **not** in the HTML (no visual spec change; see [`docs/implementation.md`](./docs/implementation.md) §7) | See what it looks like |
 | [`docs/implementation.md`](./docs/implementation.md) | **Implementation plan**: milestones M0–M9, ADR decision records, A1–A12 acceptance mapping, current progress, follow-ups ledger | Write code |
 | [`docs/protocol.md`](./docs/protocol.md) | **dd-run Extension Protocol v1.0**: NDJSON framing, JSON-RPC envelope, methods, error codes, lifecycle state machine, timeouts and crash recovery | Host or extension authors |
 | [`docs/manifest-schema.md`](./docs/manifest-schema.md) | **Extension manifest schema**: field tables, per-platform config directories, minimal copyable example | Extension authors |
 | [`docs/extensions.md`](./docs/extensions.md) | **Writing an extension**: 10-minute path, the three hard rules, three Windows traps, `host/*` round-trips, self-check (`dd-run-cli --conformance`), debugging cookbook | Extension authors — **start here** |
-| [`docs/search-file.md`](./docs/search-file.md) | **File-search extension plan** (v3.3): Everything IPC upgrade, `more_commands`, `f ` prefix direct entry, performance budget | Extension authors |
-| [`docs/search.md`](./docs/search.md) | **File-search user guide** (v0.1.0+): Everything/es.exe setup, search syntax cheat sheet, troubleshooting | End users |
+| [`docs/search-file.md`](./docs/search-file.md) | **File-search spec** (v3.7): dual-channel transport (IPC primary + `es.exe` fallback), `Ctrl+F` direct entry, real Shell icons, real-machine acceptance & thresholds (two open gaps) | Extension authors |
+| [`docs/search.md`](./docs/search.md) | **File-search user guide** (v0.1.0+): Everything setup (`es.exe` is an optional fallback), search syntax cheat sheet, troubleshooting | End users |
 
 Suggested reading order: design doc §1–§7 (the model) → [`docs/implementation.md`](./docs/implementation.md) (what to build first) → [`docs/protocol.md`](./docs/protocol.md) + [`docs/manifest-schema.md`](./docs/manifest-schema.md) (build against these).
 
@@ -108,7 +108,7 @@ Full records and rationale live in the ADR section of [`docs/implementation.md`]
 
 - **M0–M4 closed**: protocol freeze → minimal panel → command execution & state machine → cache/lazy loading → 5 built-in extensions & robustness (commit `757f3b4`).
 - **M5 complete**: ueli-style UI redesign, batches 1–4.2 + six rounds of real-hardware feedback fixes (commit `5cf32b7`) + design-spec group C (loading skeletons, dialog overlays, toast intents).
-- **M6 complete** (verified on real hardware via the consolidated regression A–F on 2026-09-08): settings pages (appearance / general / search / extensions), Mica/Acrylic window material, tray icon, drag & resize, custom global hotkey, autostart, Pinyin search, i18n, cold-start CJK font background loading, and the file-search extension with `f ` direct entry (commits `a007656`…`2e5b3da`; UI spec batches v4.17/v4.17a — the mockup HTML file itself stops at v4.13).
+- **M6 complete** (verified on real hardware via the consolidated regression A–F on 2026-09-08): settings pages (appearance / general / search / extensions), Mica/Acrylic window material, tray icon, drag & resize, custom global hotkey, autostart, Pinyin search, i18n, cold-start CJK font background loading, and the file-search extension (now entered with `Ctrl+F`) (commits `a007656`…`2e5b3da`; UI spec batches v4.17/v4.17a — the mockup HTML file itself stops at v4.13).
 - **M7 closed** (release engineering, 2026-09-10): GitHub Actions CI (build / test / clippy `-D warnings` / fmt on windows-gnu), 256px icon tier in `assets/app.ico`. Distribution: **portable single-file only** (an Inno Setup installer was explored and then dropped — no installer code is kept); the file-search extension ships as a sidecar in `dist/extensions.d/`; the host scans an `extensions.d/` next to the executable, so the green zip is **unzip & run**. **v0.1.1** published 2026-09-10 via tag → GitHub Release.
 - **M8 closed** (extension ecosystem validation, 2026-09-10): a non-Rust (Python) extension walks the full protocol chain (`--conformance` 10/10 ✓); extension authoring guide + conformance self-check shipped.
 - **M9 closed** (in-process built-ins, 2026-09-11): the five built-in extensions now run **inside the host process** (no extension exes spawned or embedded) — single-file distribution; process isolation kept for third-party / sidecar extensions. Protocol v1.0 unchanged.

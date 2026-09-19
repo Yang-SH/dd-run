@@ -113,6 +113,7 @@ CmdPal 采用 **宿主（Host）+ 多扩展进程（Extension）** 的隔离架�
 - `↑`/`↓` 或 `Tab`/`Shift+Tab`：在列表项间移动
 - `Enter`：执行默认命令 / 进入页
 - `Esc`：关闭或返回上一级
+- `Ctrl+F`：文件搜索直达（**宿主侧便捷键，2026-09-19 落地**；任意页生效，键位总表见 [`docs/search-file.md`](./docs/search-file.md) §10.1）
 - 另外补充：上下文菜单快捷键由扩展通过 `ICommandContextItem.RequestedShortcut` 声明
 
 ### 4.4 列表项组成（ListItem Composition）

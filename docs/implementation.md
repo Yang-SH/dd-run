@@ -30,6 +30,7 @@
 | O4 可观测性/日志 | ✅ 已落地 | 2026-09-15（已提交 `c26035e`） | `log` facade + 自写 stderr 后端；131 处 `eprintln!` 分级（debug 85/warn 39/info 7）；`DDRUN_LOG` 开关实测生效，**默认 debug = 与改造前逐行等价** | [§2 O4](#o4--可观测性日志2026-09-15-落地) |
 | O7 文件搜索 P2 真机验收 | ✅ 已落地（两轮完成） | 2026-09-15 / **2026-09-17**（已提交 `c26035e` + `9936ead`；第二轮工作副本） | A-33-05 / A-33-06 / A-33-07 / A-33-10 **通过**（基线降幅 91.27%、回落分支 3/3 返回真实结果）；A-33-08 ⚠️ 部分（跨环境矩阵）＝唯一红线来源；**同批修 `es.exe` 失败静默为空结果的缺陷** | [验收报告](./search-file-p2-acceptance-2026-09-15.md) |
 | 协议两项定稿（`-32002` / `PageInfo`） | ✅ 已定稿 | 2026-09-17（工作副本） | `-32002` 判为**扩展侧可用错误码**（宿主不产出）、`PageInfo` **维持不传递**；`protocol.md` §9.2/§8.5 注记改终态口径，INDEX §5 两项关闭 | [§2 协议两项定稿](#协议两项定稿-32002--pageinfo2026-09-17-定稿) |
+| 文件搜索 `Ctrl+F` + Shell 真实图标（v3.6） | ✅ 已落地（两处 ⚠️ 待决策） | 2026-09-19（工作副本） | 宿主 `Ctrl+F` 任意页直达文件搜索（栈深恒 2、Root 查询带入）；文件结果图标改 **Shell 真实图标**（`Icon::Path` + `file-icons/` 落盘缓存，失败回落 glyph）；图标管线自 apps 上移共享；协议/清单零改动。**未达标**：按真实路径档首抽 **703.8 ms**、sidecar **+104.5 KB** | [§2](#文件搜索-ctrlf-直达--shell-真实图标v36-2026-09-19-落地) · [search-file §10](./search-file.md) |
 
 ## 产物与分发（2026-09-13 实测）
 
@@ -544,7 +545,7 @@
 |---|---|---|
 | `-32002 command_not_found` | ✅ 定稿：**扩展侧可用错误码、宿主不产出** | `protocol.md` §9.2 表格行 + 注记改写（去掉「保留码、待接线」）。实测依据：Python 示例确实产出该码（`examples/python-minimal/dd_ext_pymin.py`），内置扩展与 `dd-ext-sample` 回 `ShowToast` 属**合法实现选择**（各带专属文案） |
 | `PageInfo` | ✅ 定稿：**维持不传递**（v1.0 预留定义） | `protocol.md` §8.5 注记改写：`GetItemsResult` 不携带页元信息，宿主页标题取自**宿主侧信息**；启用须走 §13 `MINOR` |
-| 页标题来源（`PageInfo` 决策的落地） | ✅ 已修 | 嵌套页标题此前**直接用原始 `page_id`**（`app/page.rs` 把 `page_id` 同时当标题）→ placeholder 显示「在「files.results」中筛选…」；现改为「被点击项标题 / 本地化扩展名（`f ` 直达）/ 空（扩展 `GoToPage`）→ 回落『筛选命令…』」，并修正 `navigation.rs` 中「标题来自 `PageInfo.title`」的**过期注释** |
+| 页标题来源（`PageInfo` 决策的落地） | ✅ 已修 | 嵌套页标题此前**直接用原始 `page_id`**（`app/page.rs` 把 `page_id` 同时当标题）→ placeholder 显示「在「files.results」中筛选…」；现改为「被点击项标题 / 本地化扩展名（无入口项场景，如 `Ctrl+F` 直达）/ 空（扩展 `GoToPage`）→ 回落『筛选命令…』」，并修正 `navigation.rs` 中「标题来自 `PageInfo.title`」的**过期注释** |
 
 **验证**：`protocol.md` 的 JSON 示例未动（`cargo test -p dd-protocol` 通过，workspace **433 passed**）。
 
@@ -565,6 +566,59 @@
 **验证**：`cargo fmt --all -- --check` 无差异；`cargo clippy --workspace --all-targets` **0 warning**；`cargo test --workspace` **433 passed / 0 failed**（432 + 1 新单测）；`--conformance --ext-id com.ddrun.calc` 9 步全绿；`--conformance --extensions-dir <示例目录>` 9 步全过（此前第 4 步必红）。
 
 ---
+
+### 文件搜索 Ctrl+F 直达 + Shell 真实图标（v3.6，2026-09-19 落地）
+
+出处：专题方案 [`search-file-ctrl-f-icons-plan.md`](./search-file-ctrl-f-icons-plan.md)（决策 D1-x / D2-x）；**生效口径**见 [`search-file.md`](./search-file.md) §10。用户诉求：文件搜索改由「启动面板后 `Ctrl+F`」触发 + 查询结果显示文件图标。
+
+| 项目 | 状态 | 落点 |
+|---|---|---|
+| 面板内 `Ctrl+F` 一键直达（任意页；栈深恒 2；仅 Root 查询带入；扩展不可用给 Error Toast） | ✅ | `dd-gui/src/app/keys.rs`（按键消费，与 `Ctrl+,` 同层）、`app/mod.rs`（`open_file_search_from_panel` + 模块级纯决策 `file_search_source_query`）、`text.rs`（`ph.root` 加提示 + 新增 `toast.filesearch_unavailable`） |
+| 文件结果图标 → Windows Shell 真实图标（32×32，`Icon::Path`，失败回落类别 glyph） | ✅ | `dd-ext/src/shell_icon.rs`（**新增**共享管线 + `file_type_icon_png`）、`dd-ext/src/bin/search.rs`（`icon_cache_key_for` / `ICON_CACHE` / `icon_from_png` / `entry_icon` / `icon_ms` 计时） |
+| 图标管线去重（apps ↔ 文件搜索共用一份实现） | ✅ | `dd-ext/src/lib.rs` 注册模块；`builtins/apps.rs` 删除已上移的 4 个函数（`hicon_to_png`/`bitmap_to_png`/`shfileinfo_png`/`read_mask_bits`）与 3 个缓存函数，改调 `crate::shell_icon`（`−337/+72` 行，行为不变） |
+| 既有测试竞态修复（本批暴露） | ✅ | `search.rs` 测试模块新增 `PATH_INDEX_TEST_LOCK`：`path_index_evicts_beyond_capacity` 按 id 阈值清空 `PATH_INDEX`，会连带清掉并行用例的 pid（接入真实图标后**并行 5/5 必现**）；8 个读回索引的用例统一持锁，生产逻辑零改动 |
+| 验收工具同步 | ✅ | `tools/search_acceptance.py`：`TIMING_RE` 增**可选** `icon=` 段、`parse_timing` 输出 `icon_ms`（旧日志仍可解析）；**新增 `tools/icon_acceptance.py`**（A-IC 六项自动判定 + JSON 证据 + 退出码，`--cold` 冷缓存口径） |
+
+**实测（本机 windows-gnu）**：`fmt` 无差异 / `clippy --workspace --all-targets` **0 告警** / `cargo test --workspace` **448 passed**（436 + 12）；`cargo build --release` **exit 0**；真机直驱 release sidecar：缓存命中 `icon_ms` **0.13–0.44 ms**（30 条）、按扩展名首抽 **12.4–49.1 ms**、**按真实路径首抽 703.8 ms（30 新键）**；`file-icons/` 54 文件 / 36,841 B。
+
+**两处未达标（如实记档，处置待用户决策，详见 `search-file.md` §10.4）**：① 按真实路径档首次抽取 **703.8 ms** vs 预算 ≤ 40 ms（建议 O1 限流）；② `dd-ext-search.exe` **769,536 → 876,544 B（+104.5 KB）** vs 预算 ≤ 64 KB（宿主 `dd-run.exe` 仅 +3,072 B = 8,792,576 B）。
+
+---
+
+### 文件搜索：移除 `f ` 前缀直达（v3.7，2026-09-19）
+
+用户诉求：根视图输入 `f ` + 空格会**劫持字面查询**（想搜 `f report` 也被强制进文件搜索页）——v3.6 的 `Ctrl+F` 已提供更明确的直达入口，故整条移除。
+
+| 项目 | 状态 | 落点 |
+|---|---|---|
+| 前缀触发与全部配套代码删除 | ✅ | `dd-gui/src/app/mod.rs`：`FILE_SEARCH_PREFIX`、`file_search_drill_target()`、`PaletteApp::maybe_drill_file_search()`、`ui()` 每帧调用、字段 `file_drill` / `file_drill_armed`（含 `new()` 初始化）；`app/page.rs`：`poll_page` 落地回填分支 + 「离开来源页清标记」 |
+| `Ctrl+F` 查询带入不再剥离前缀 | ✅ | `app/mod.rs::file_search_source_query`（仅 Root + trim 非空）；`open_file_search_from_panel` 去掉借 `file_drill` 的去重接线（「已在文件搜索页」幂等改由 `page_id` 判定，行为不变） |
+| 测试同步 | ✅ | 删 `file_drill_prefix_still_works`；`ctrl_f_query_source_rules` 改锚定「`f ` 开头**原样**带入」；Ctrl+F 其余 5 个用例（A-CF-01…05）不变 |
+| 注释与文档同步 | ✅ | 注释：`refresh.rs`（去抖说明）、`page.rs`（标题来源 / 回填语义）、`navigation.rs`（标题来源）；文档：`search.md`、`search-file.md`（§1 / §5.5.2 / §5.6.1 / §6.1 / §6.4 / §8 v3.7 / §10.1）、`search-file-ctrl-f-icons-plan.md`（v1.2 修订）、`protocol.md` §8.5、`README.md` / `README.zh-CN.md`、`CHANGELOG.md`、`INDEX.md` |
+
+**实测（本机 windows-gnu）**：`cargo check --workspace --all-targets` exit 0 / `fmt --all -- --check` 无差异 / `clippy --workspace --all-targets` **0 告警** / `cargo test --workspace` **447 passed / 0 failed**（448 − 1：删前缀专属用例）；**release 构建 exit 0**（2026-09-19 复跑：`dd-run.exe` **8,790,528 B**，较 v3.6 批次后的 8,792,576 B **−2,048 B**；`dd-ext-search.exe` 876,544 B 不变；`--conformance --ext-id com.ddrun.calc` **9 步通过**）。
+
+**未改动（零行为变化）**：顶层入口项、兜底模板、`open_page` 统一回填、`poll_page` 的 v3.3 query 保留与过期补偿、`Ctrl+F` 的幂等 / 栈深恒 2 / Toast 语义、扩展侧与协议（完全零改动）。
+
+---
+
+### 文件搜索：用户文档解除 `es.exe` 前置表述（v3.8，2026-09-19，零代码改动）
+
+用户诉求：真机验收两轮完成后，把用户文档里「仍需安装 `es.exe`」的前置表述解除。
+
+| 项目 | 状态 | 落点 |
+|---|---|---|
+| 用户指南口径改写 | ✅ | `docs/search.md`（v1.3）：§1「前置条件」→「准备事项」，步骤 1 标**必需**（Everything）、步骤 2 标**可选（推荐）**（`es.exe` = 仅直连不可用时的回落通道），步骤 4 验证改可选；配置项注、故障排查两行、已知边界引导项、§7 升级说明、§8 FAQ 同步 |
+| 权威口径与登记 | ✅ | `search-file.md`（v3.8：§1 承诺口径定稿 + §8 新增 v3.8 行）、`INDEX.md`（v1.15：§5 行改「已解除」+ `search.md`/`search-file.md` 行数与版本重算）、`README.md` / `README.zh-CN.md` 文档表 |
+| 历史文档注记（保留原结论） | ✅ | 验收报告 §1、`doc-audit-2026-09-13.md`（§5 第 4 项与其后续动作）、`doc-code-diff-2026-09-13.md` §7 红线段 —— 均**就地追加「2026-09-19 已解除」**，不重写历史判定 |
+
+**红线边界（未越界承诺）**：A-33-08 仍为唯一红线（Win10 / Everything 1.5 / 提升权限 / 命名实例未覆盖）；文档以「直连不可用时回落」承接这些环境，**未承诺「任何环境都无需 `es.exe`」**。
+
+**验证**：零代码改动 → 三关无需复跑（`cargo test` 基线仍 **447 passed**）；`tools/docscan.py` 失效链接 (none)；10 份改动文档 bare LF = 0；`git diff --numstat` 增删对称（**无整文件重写**）。
+
+**dist 重打包（同批）**：原 `dist/extensions.d/dd-ext-search.exe` = **769,536 B** 是「Shell 真实图标」批次**之前**的旧构建（`dist/` mtime 停在 14:29），与当前源码不符 → 重跑 `cargo build --release -p dd-run-cli -p dd-ext-sample` + `bash tools/package.sh`（**rc=0**），并本地重建绿色包 zip（`package.sh` 只产 exe 与 `extensions.d/`，**不产 zip**）。实测：宿主 **8,790,528 B** / sidecar **876,544 B** / zip **4,428,378 B**（sha256 `9f74910a…`）。
+
+**分发级冒烟（全绿）**：`dist/dev/dd-run-cli.exe --conformance --ext-id com.ddrun.calc` **9 步通过（exit 0）**；`dist/dd-run-0.1.1.exe` Popen 后 5 s 事件循环存活、terminate 干净；sidecar 直驱 `tools/search_acceptance.py breakdown` 通道 **`ipc`**（ready 0.11 s），三档 kind 齐全 —— `hint` p50 0.169 ms / `empty` 12.46 ms / `results`（窄命中）27.16 ms、宽命中 14.71 ms，与 09-17 验收基线一致；`--cold` 图标三档沿用 §10.3 记录。
 
 ## 3. 验收映射总表
 
@@ -597,6 +651,10 @@
 | 2026-09-15 | 430 | +8：O4 日志（`Filters` 解析等） |
 | 2026-09-16 | 432 | +2：O7 计时插桩（`QueryTiming` 槽） |
 | 2026-09-17 | **433** | +1：文件搜索回落失败判定（`interpret_es_output`） |
+| 2026-09-19 | 435 | +2：模糊排序字段分层（`fuzzy` + `state` 各 1；CHANGELOG 同名条目） |
+| 2026-09-19 | 436 | +1：应用列表调试诊断工具过滤（`apps::is_junk_title`；CHANGELOG 同名条目） |
+| 2026-09-19 | **448** | +12：本批（Ctrl+F 直达 5 + Shell 真实图标 7，后者含 `shell_icon` 4 项） |
+| 2026-09-19 | 447 | −1：移除 `f ` 前缀直达（删其专属用例 `file_drill_prefix_still_works`；`ctrl_f_query_source_rules` 改锚定「前缀不剥离」） |
 
 **两条使用注意**：① `crates/dd-host/tests/roundtrip*.rs` 在 `dd-ext-sample.exe` **未构建时会打印 SKIP 并 return**（计入 passed），故凡涉及协议/扩展行为，先 `cargo build -p dd-ext-sample` 再跑；② 「三关全绿」与 CI 四关**均为 debug profile**，`#[cfg(debug_assertions)]` 类 release-only 编译错误检不到 —— 交付/发布前必须实跑 `cargo build --release`（见 §7 构建环境记档与 `CHANGELOG` 的 release 阻塞条目）。
 
@@ -708,5 +766,9 @@
 | 2026-09-12 | apps 垃圾项过滤；图标字体优化 | ✅ I1/I2/F1/F2 |
 | 2026-09-12 | 运行时内存优化（M1+M2+M3） | ✅ 重编 dist |
 | 2026-09-13 | v5.2 UI 优化 B1–B8 全落地 | ✅ `815e212..da0589c` |
+| 2026-09-15 | O2 / O1 / O3 / O8 / O4 五批落地；O7 首轮真机验收 | ✅ `6ee4931` + `c26035e` |
+| 2026-09-17 | 协议两项定稿（`-32002` / `PageInfo`）；回落静默失败修复 + 工具一致性；O7 第二轮补测 | ✅ `9936ead`（A-33-05/06 改判通过） |
+| 2026-09-19 | 模糊排序字段分层；应用列表调试工具过滤；文件搜索 `Ctrl+F` 直达 + Shell 真实图标（v3.6）；移除 `f ` 前缀直达（v3.7）；设计稿回同步 **v4.18** | ✅ 工作副本（447 passed） |
+| 2026-09-19 | 文件搜索用户文档**解除 `es.exe` 前置表述**（`search.md` v1.3 / `search-file.md` v3.8）；dist 按 v3.6/v3.7 重打包 | ✅ 工作副本（零代码改动） |
 
 > 构建环境记档：本机 windows-gnu 链接需补 `as.exe`（与 dlltool 同目录）与 `libshlwapi.a`（2026-09-03 修复）；跑测试前须 `export APPDATA`（否则 apps 图标抽取测试必失败，见 CHANGELOG）。

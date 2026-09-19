@@ -36,23 +36,40 @@ impl FuzzyMatcher {
         }
     }
 
-    /// 该项得分（各字段最高分；空白查询 → `Some(0)`；无一命中 → `None`）。
-    /// 匹配判定 = `score(...).is_some()`（任一字段子序列命中）。
+    /// 该项得分（**字段分层** × 层内 nucleo 最高分；空白查询 → `Some(0)`；
+    /// 无一命中 → `None`）。匹配判定 = `score(...).is_some()`。
+    ///
+    /// 返回值 = `(层 << 32) | nucleo 分` —— **层不同绝不互比**：
+    /// - **层 1（标题层）**：`title` 及其派生拼音索引 `pinyin`；
+    /// - **层 0（附属层）**：`subtitle` / `section` / `tags`。
     ///
     /// M6 批次 6.1（L4）：`item.pinyin`（全拼 + 首字母混合串）作为独立字段
-    /// 参与打分——输入 `jsq` / `jisuanqi` 均可命中「计算器」。
-    pub(crate) fn score(&mut self, item: &PanelItem) -> Option<u32> {
+    /// 参与打分——输入 `jsq` / `jisuanqi` 均可命中「计算器」；它属**标题层**
+    /// （是 title 的派生表示，命中即等价于命中标题）。
+    ///
+    /// 分层由来（2026-09-19，真机反馈「搜 `steam` 时 Steam 不在第一个」）：
+    /// 此前所有字段混在同一个池里取最高分，而 nucleo 对**前缀连续匹配不区分
+    /// haystack 长度** —— 实测 `Steam`（标题精确，140 分）与
+    /// `steam://rungameid/588650`（Steam 游戏副标题，140 分）**完全同分**，
+    /// `recompute_visible` 的稳定排序遂回落到扩展侧字母序，把标题精确匹配的
+    /// Steam 挤到第 5。分层后标题命中恒先于副标题命中，同层内仍按匹配质量排。
+    pub(crate) fn score(&mut self, item: &PanelItem) -> Option<u64> {
         if self.blank {
             return Some(0);
         }
-        let mut best = self.field_score(&item.title);
-        for hay in [&item.subtitle, &item.section, &item.pinyin] {
-            best = best.max(self.field_score(hay));
-        }
+        let mut primary = self.field_score(&item.title);
+        primary = primary.max(self.field_score(&item.pinyin));
+        let mut secondary = self.field_score(&item.subtitle);
+        secondary = secondary.max(self.field_score(&item.section));
         for tag in &item.tags {
-            best = best.max(self.field_score(tag));
+            secondary = secondary.max(self.field_score(tag));
         }
-        best
+        let (tier, score) = match (primary, secondary) {
+            (Some(s), _) => (1u64, s),
+            (None, Some(s)) => (0u64, s),
+            (None, None) => return None,
+        };
+        Some((tier << 32) | u64::from(score))
     }
 
     /// 单字段打分（空字段不参与——空串对非空 query 恒不命中）。
@@ -135,5 +152,37 @@ mod tests {
         assert_eq!(en.pinyin, "", "纯英文标题无拼音索引");
         let mut fm3 = FuzzyMatcher::new("jsq");
         assert!(fm3.score(&en).is_none(), "jsq 不命中英文项");
+    }
+
+    /// 2026-09-19（真机反馈「搜 `steam` 时 Steam 不在第一个」）：字段分层 ——
+    /// 标题命中（含拼音索引）**恒优先**于副标题/标签命中，即便二者 nucleo 分相同。
+    ///
+    /// 实测复现：`Pattern::parse("steam", Ignore, Smart)` 下
+    /// `Steam`（标题）与 `steam://rungameid/588650`（Steam 游戏副标题）**同为 140**。
+    #[test]
+    fn title_hit_outranks_subtitle_hit() {
+        let mut fm = FuzzyMatcher::new("steam");
+        let steam = item(
+            "Steam",
+            "G:\\Program Files (x86)\\Steam\\Steam.exe",
+            "应用",
+            &[],
+        );
+        let game = item("Dead Cells", "steam://rungameid/588650", "应用", &[]);
+        let a = fm.score(&steam).expect("Steam 应命中标题");
+        let b = fm.score(&game).expect("Dead Cells 应经副标题命中");
+        assert!(a > b, "标题命中 {a} 应 > 副标题命中 {b}");
+        // 同层（标题层）内仍可比：Steam Support Center 亦为标题命中，二者高位一致
+        let support = item(
+            "Steam Support Center",
+            "http://support.steampowered.com/",
+            "应用",
+            &[],
+        );
+        assert_eq!(
+            fm.score(&support).expect("应命中") >> 32,
+            a >> 32,
+            "两条标题命中应同属标题层"
+        );
     }
 }

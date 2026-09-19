@@ -158,27 +158,24 @@ pub(crate) fn settings_panel_size(
     }
 }
 
-/// 文件搜索便捷触发：根视图查询以此前缀开头即自动进入文件结果页（免去
-/// 「在文件中搜索」网关项的二次选择）。选 `f `（字母 f + 空格）以与常规搜索词区分。
-pub(crate) const FILE_SEARCH_PREFIX: &str = "f ";
 pub(crate) const FILE_SEARCH_EXT_ID: &str = "com.ddrun.filesearch";
 pub(crate) const FILE_SEARCH_PAGE_ID: &str = "files.results";
 
-/// 纯决策：根查询以 `FILE_SEARCH_PREFIX` 开头、尚未为此查询进页、且扩展可用 →
-/// 返回去除前缀后的搜索词；否则 `None`。抽到纯函数便于单测（无宿主状态）。
-pub(crate) fn file_search_drill_target(
-    root_query: &str,
-    drilled: Option<&str>,
-    present: bool,
-) -> Option<String> {
-    if !present {
+/// 纯决策：`Ctrl+F` 进页时**带入的查询**（`None` = 空查询进页）。
+///
+/// 抽成模块级纯函数便于单测（无宿主状态）。规则：
+/// - 来源不是 Root → `None`（设置页 / 其他嵌套页的 query 语义属于该页）；
+/// - Root 查询 trim 后为空 → `None`；非空则**原样**带入（无任何前缀语义）。
+pub(crate) fn file_search_source_query(at_root: bool, root_query: &str) -> Option<String> {
+    if !at_root {
         return None;
     }
-    let rest = root_query.strip_prefix(FILE_SEARCH_PREFIX)?;
-    if drilled == Some(root_query) {
-        return None;
+    let q = root_query.trim();
+    if q.is_empty() {
+        None
+    } else {
+        Some(q.to_string())
     }
-    Some(rest.trim_start().to_string())
 }
 
 pub struct PaletteApp {
@@ -278,14 +275,6 @@ pub struct PaletteApp {
     pub(crate) fallback_store: dd_gui::fallback::FallbackStore,
     /// 后台 `fallback_commands` 拉取结果接收端（`Some` = 有拉取在途）。
     pub(crate) fallback_rx: Option<Receiver<FallbackFetchOutcome>>,
-    /// 文件搜索「前缀自动进页」去重标记：记录已为此查询进页的根查询，
-    /// 避免每帧重复触发（返回根视图时清空）。
-    pub(crate) file_drill: Option<String>,
-    /// 文件搜索自动进页后，标记"首次 get_items 落地"待回填搜索框：
-    /// poll_page 结果落地时把 `f ` 之后的查询文本写回搜索框（否则被
-    /// `PanelState::new` 清空）。仅文件结果页、`file_drill` 命中时生效，
-    /// 落地即消耗，不影响页内二次输入的实时重拉（v3.3 另议）。
-    pub(crate) file_drill_armed: bool,
     /// path 图标纹理缓存：路径 → TextureHandle（每路径只读盘+解码一次，
     /// 避免列表每次重绘都重复 I/O 与解码——设计稿 04"按路径缓存 textureId"）。
     pub(crate) icon_cache: HashMap<String, (egui::TextureHandle, bool)>,
@@ -446,8 +435,6 @@ impl PaletteApp {
             crash_guards: HashMap::new(),
             fallback_store: dd_gui::fallback::FallbackStore::new(),
             fallback_rx: None,
-            file_drill: None,
-            file_drill_armed: false,
             icon_cache: HashMap::new(),
             icon_failed: HashSet::new(),
             settings,
@@ -496,34 +483,46 @@ impl PaletteApp {
         crate::text::t(self.lang_effective, key)
     }
 
-    /// 文件搜索"直达前缀"：根页输入以 `f ` 开头且扩展可用时，自动进页到
-    /// 文件结果页并回填剩余查询（搜索框回填由 open_page 统一处理），省去
-    /// "fallback 模板 → 选中 → 进页"的第二次 Enter。仅在栈顶为 Root 时触发；
-    /// 同一查询已进页（file_drill 命中）不再重复进页。
-    pub(crate) fn maybe_drill_file_search(&mut self) {
-        if !self.stack.at_root() {
+    /// 文件搜索「一键直达」（2026-09-19，`Ctrl+F`）：面板内**任意页**进入文件搜索页。
+    ///
+    /// 语义（方案 `docs/search-file-ctrl-f-icons-plan.md` §3.2 状态转移表）：
+    /// - 已在文件搜索页 → **幂等**：不重复进页，仅请求聚焦（输入与列表保持不变）；
+    /// - 其他位置 → 先 `go_home()` 收敛到 Root 再进页 → 栈深恒为 2，连按不累积；
+    /// - 查询带入：仅**来源为 Root** 且 trim 后非空时**原样**带入（见
+    ///   [`file_search_source_query`]）；设置页 / 其他嵌套页进**空查询**——那些页的
+    ///   query 语义属于该页，当作文件搜索词会误导；
+    /// - 扩展不可用（未加载 / 被禁用）→ Error Toast 明确反馈，**不**产生空页；
+    ///   连续崩溃熔断仍由 `dispatch_fetch_page` 既有判定承担（不重复实现）。
+    ///
+    /// 离开设置页的脏标记（`engines_dirty` / `exts_dirty` / `lang_dirty`）由 `ui()`
+    /// 既有 size-diff 收口点（`!want_settings` 分支）消费，本路径**无需新接线**。
+    pub(crate) fn open_file_search_from_panel(&mut self) {
+        if self.stack.current().page_id.as_deref() == Some(FILE_SEARCH_PAGE_ID) {
+            self.want_focus = true;
+            log::debug!("[dd-gui] Ctrl+F：已在文件搜索页 → 幂等（仅聚焦）");
             return;
         }
-        let q = self.stack.current().list.query().to_string();
-        if let Some(rest) =
-            file_search_drill_target(&q, self.file_drill.as_deref(), self.file_search_present())
-        {
-            self.file_drill = Some(q.clone());
-            // `f ` 前缀直达没有「被点击项」→ 用宿主本地化的扩展名作页标题
-            // （否则 placeholder 会显示原始 page_id `files.results`）。
-            let title = self.tr("ext.name.filesearch").to_string();
-            self.open_page(
-                FILE_SEARCH_EXT_ID,
-                FILE_SEARCH_PAGE_ID,
-                Some(rest),
-                None,
-                Some(title),
-            );
-            // 标记首次落地需回填搜索框（poll_page 消耗），避免结果回来后框被清空
-            self.file_drill_armed = true;
-        } else if !q.starts_with(FILE_SEARCH_PREFIX) {
-            self.file_drill = None;
+        if !self.file_search_present() {
+            log::warn!("[dd-gui] Ctrl+F：文件搜索扩展不可用（未加载或已禁用）");
+            let msg = self.tr("toast.filesearch_unavailable").to_string();
+            self.show_error_toast(msg);
+            return;
         }
+        let at_root = self.stack.at_root();
+        let root_query = self.stack.current().list.query().to_string();
+        let query = file_search_source_query(at_root, &root_query);
+        // 查询已在 `open_page` 内写入页内搜索框（落地时由 poll_page 的 v3.3
+        // 保留逻辑沿用），本路径无需额外的回填接线。
+        self.stack.go_home();
+        log::debug!("[dd-gui] Ctrl+F：进入文件搜索页（at_root={at_root} query={query:?}）");
+        let title = self.tr("ext.name.filesearch").to_string();
+        self.open_page(
+            FILE_SEARCH_EXT_ID,
+            FILE_SEARCH_PAGE_ID,
+            query,
+            None,
+            Some(title),
+        );
     }
 
     /// 文件搜索扩展是否已加载且未被禁用。
@@ -641,7 +640,6 @@ impl eframe::App for PaletteApp {
         self.poll_notifications();
         self.poll_host_requests(); // M4 P2：host/* 副作用（Toast/剪贴板/开 URL）
         self.poll_fallback(&ctx); // M4 宿主 fallback：兜底模板拉取结果
-        self.maybe_drill_file_search(); // 文件搜索 f 前缀自动进页
         self.tick_refresh();
 
         // Toast 到期清除；未到期则预约重绘
@@ -924,18 +922,139 @@ mod size_tests {
         );
     }
 
+    // ── Ctrl+F 一键直达（2026-09-19，方案 §3/§6.1 A-CF-01~07）─────────────
+
+    /// 注入一个「按下」键事件（headless：直接写 input 事件队列）。
+    fn press_key(ctx: &egui::Context, key: egui::Key, modifiers: egui::Modifiers) {
+        ctx.input_mut(|i| {
+            i.events.push(egui::Event::Key {
+                key,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers,
+            })
+        });
+    }
+
+    /// A-CF-01：Root 页 `Ctrl+F` → 进文件搜索页、栈深 2、Root 查询带入、
+    /// 页标题为宿主本地化文案（不得泄漏原始 `page_id`）。
     #[test]
-    fn file_drill_prefix_still_works() {
-        // `f ` 前缀：去前缀后整词作为搜索词；同查询去重；扩展缺失不进页。
+    fn ctrl_f_from_root_opens_file_search_page() {
+        let mut app = crate::test_support::make_app();
+        app.exts
+            .push(crate::test_support::dying_ext(super::FILE_SEARCH_EXT_ID));
+        app.stack.current_mut().list.set_query("报告".to_string());
+        let ctx = crate::test_support::ctx();
+        press_key(&ctx, egui::Key::F, egui::Modifiers::CTRL);
+        app.handle_keys(&ctx);
+
+        assert_eq!(app.stack.depth(), 2, "Ctrl+F 应推入一页（Root + 文件搜索）");
+        let page = app.stack.current();
+        assert_eq!(page.page_id.as_deref(), Some(super::FILE_SEARCH_PAGE_ID));
+        assert_eq!(page.list.query(), "报告", "Root 查询应带入页内搜索框");
+        assert!(!page.title.is_empty());
+        assert_ne!(
+            page.title,
+            super::FILE_SEARCH_PAGE_ID,
+            "页标题必须是本地化文案，不得是原始 page_id（placeholder 会泄漏 id）"
+        );
+    }
+
+    /// A-CF-02：已在文件搜索页再按 `Ctrl+F` → 栈深不变、已输入内容不变。
+    #[test]
+    fn ctrl_f_in_file_search_page_is_idempotent() {
+        let mut app = crate::test_support::make_app();
+        app.exts
+            .push(crate::test_support::dying_ext(super::FILE_SEARCH_EXT_ID));
+        app.stack.push(dd_gui::navigation::PageState::nested(
+            super::FILE_SEARCH_PAGE_ID,
+            "文件搜索",
+            super::FILE_SEARCH_EXT_ID,
+            Vec::new(),
+        ));
+        app.stack.current_mut().list.set_query("abc".to_string());
+        let ctx = crate::test_support::ctx();
+        press_key(&ctx, egui::Key::F, egui::Modifiers::CTRL);
+        app.handle_keys(&ctx);
+
+        assert_eq!(app.stack.depth(), 2, "幂等：不重复进页");
+        assert_eq!(app.stack.current().list.query(), "abc", "已输入内容保留");
+    }
+
+    /// A-CF-03：从其他嵌套页 `Ctrl+F` → 收敛到 Root 之上单页（栈深 2）、
+    /// 且**不带入**该页 query。
+    #[test]
+    fn ctrl_f_from_nested_page_converges_stack_and_drops_query() {
+        let mut app = crate::test_support::make_app();
+        app.exts
+            .push(crate::test_support::dying_ext(super::FILE_SEARCH_EXT_ID));
+        app.stack.push(dd_gui::navigation::PageState::nested(
+            "other.page",
+            "别页",
+            "com.ddrun.calc",
+            Vec::new(),
+        ));
+        app.stack.current_mut().list.set_query("789".to_string());
+        let ctx = crate::test_support::ctx();
+        press_key(&ctx, egui::Key::F, egui::Modifiers::CTRL);
+        app.handle_keys(&ctx);
+
+        assert_eq!(app.stack.depth(), 2, "其他页进入也收敛为 Root + 文件搜索");
         assert_eq!(
-            super::file_search_drill_target("f 测试", None, true),
-            Some("测试".to_string())
+            app.stack.current().page_id.as_deref(),
+            Some(super::FILE_SEARCH_PAGE_ID)
         );
         assert_eq!(
-            super::file_search_drill_target("f 测试", Some("f 测试"), true),
-            None,
-            "同查询已进页 → 去重"
+            app.stack.current().list.query(),
+            "",
+            "其他页的 query 语义属于该页，不得当作文件搜索词"
         );
-        assert_eq!(super::file_search_drill_target("f 测试", None, false), None);
+    }
+
+    /// A-CF-04：无修饰 `F` 不触发进页（保持既有键位语义）。
+    #[test]
+    fn plain_f_does_not_open_file_search() {
+        let mut app = crate::test_support::make_app();
+        app.exts
+            .push(crate::test_support::dying_ext(super::FILE_SEARCH_EXT_ID));
+        let ctx = crate::test_support::ctx();
+        press_key(&ctx, egui::Key::F, egui::Modifiers::NONE);
+        app.handle_keys(&ctx);
+        assert!(app.stack.at_root(), "无修饰 F 不得进页");
+    }
+
+    /// A-CF-05：扩展缺失（未加载）时 `Ctrl+F` → 不进页 + Error Toast。
+    #[test]
+    fn ctrl_f_without_extension_shows_toast_and_stays() {
+        let mut app = crate::test_support::make_app();
+        let ctx = crate::test_support::ctx();
+        press_key(&ctx, egui::Key::F, egui::Modifiers::CTRL);
+        app.handle_keys(&ctx);
+
+        assert!(app.stack.at_root(), "扩展不可用不得产生空页");
+        let toast = app.toast.as_ref().expect("应给出明确失败反馈");
+        assert!(
+            toast.message.contains("文件搜索") || toast.message.contains("File Search"),
+            "Toast 文案应指明文件搜索不可用：{}",
+            toast.message
+        );
+    }
+
+    /// 纯决策：仅 Root 带入；首尾空白 trim；**不做前缀剥离**（`f ` 已是普通搜索
+    /// 词）；空 / 仅空白 → 空查询进页。
+    #[test]
+    fn ctrl_f_query_source_rules() {
+        use super::file_search_source_query as q;
+        assert_eq!(q(true, "报告"), Some("报告".to_string()));
+        assert_eq!(
+            q(true, "f 测试"),
+            Some("f 测试".to_string()),
+            "前缀语义已移除：`f ` 开头也原样带入"
+        );
+        assert_eq!(q(true, " 报告 "), Some("报告".to_string()));
+        assert_eq!(q(false, "报告"), None, "非 Root 不带入");
+        assert_eq!(q(true, ""), None);
+        assert_eq!(q(true, "   "), None);
     }
 }

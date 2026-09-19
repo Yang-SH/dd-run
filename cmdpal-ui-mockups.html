@@ -3,7 +3,7 @@
 <head data-page-node-id="s3qopa5FNyLjHL5eCuYZs0">
 <meta charset="UTF-8" data-page-node-id="iCtBYFbeT3CyD5jPQ5rxbB">
 <meta name="viewport" content="width=device-width, initial-scale=1.0" data-page-node-id="2ZgnDE6QB4A9RQBpLJBYoZ">
-<title>dd-run CmdPal UI 设计稿 v4.13 — Fluent 2 / Fluent UI 9 token 驱动（亮暗双主题）</title>
+<title>dd-run CmdPal UI 设计稿 v4.18 — Fluent 2 / Fluent UI 9 token 驱动（亮暗双主题）</title>
 <style>
   /* ============================================================
      主题 token（v4：值全部对齐 Fluent 2 alias token，灰阶 grey[N] = N% 亮度）
@@ -682,7 +682,7 @@
     <button data-mode="light" data-page-node-id="I0F3kdp2bjXztvBFXivHhW">亮色</button>
     <button data-mode="dark" data-page-node-id="QcDEiiz92pB71IV93qkfmK">暗色</button>
   </div>
-  <p class="eyebrow" data-page-node-id="fpLkL7zs0ObqBBmOVMTlKL">dd-run · CmdPal UI Mockups v4.13</p>
+  <p class="eyebrow" data-page-node-id="fpLkL7zs0ObqBBmOVMTlKL">dd-run · CmdPal UI Mockups v4.18</p>
   <h1 data-page-node-id="9L8F9mN3UyuFLT5dTNiY9z">Fluent 2 设计体系 <em data-page-node-id="UQT9uCqkC6dyICtq0CWQvR">·</em> 全界面详设</h1>
   <p class="sub" data-page-node-id="MX3op44ckD1aHMFNDT6VFJ">
     v4 相对 v3 的实质变化：<b data-page-node-id="0sWPRUFNovWfzUeciNdVZT">从「ueli 像素级复刻 + Fluent 命名」转为「Fluent 2 token 驱动」</b>——
@@ -731,6 +731,7 @@
     <b>v4.12（2026-09-06，面板尺寸自适应与记忆）：</b>① <b>基准尺寸调整</b>——面板 560×460 → <b>650×440</b>（宽度初定 650、高度初定 420，真机反馈同日用户要求高度 +20 → 440）、设置页 640×640 → <b>650×640</b>（宽度与根页基准对齐；用户决策 2026-09-06：与包装项目尺寸一致性）；② <b>推翻 D36 第④条「尺寸不落盘」半条</b>（D36 其余语义保留）——手动拉伸尺寸落盘记忆（跨重启保留），每次唤起按光标所在显示器工作区自适应 clamp（小屏收缩、绝不超出工作区）；③ 设置页 = max(650×640, 根页有效尺寸) 逐轴取大，避免进设置页反而变小；④ 组件层维持 egui 弹性布局，<b>不新增 Fluent 断点分档</b>，本批仅验证 min~max 全尺寸区间不破版。决策 D37，验收 G1–G5。
 
     <b>v4.13（2026-09-06，多语言支持 i18n，设计稿占位）：</b>动机（用户需求）：界面与内置扩展文案当前全部硬编码简体中文，需支持多语种。grill 决策（2026-09-06 四分支收敛）：① <b>语言范围 = 简体中文 + English</b>（架构按任意扩表设计，加语言只需加列）；② <b>范围 = GUI + 5 内置扩展全量</b>；③ <b>默认 = 跟随系统</b> UI 语言；④ <b>设计稿先行</b>（本批）。要点：设置页「常规」新增「语言」卡（ComboBox 三选：跟随系统/简体中文/English，<b>切换即时生效</b>并持久化）；文案收口 <code>text.rs</code> 为 i18n 中枢（静态表，编译期完整性单测），<b>不引入 fluent/gettext 重依赖</b>（文案量 ~150 条、中英无复数规则）；内置扩展经 spawn <b>环境变量 <code>DDRUN_LANG</code></b> 取语言（非协议字段，协议 v1.0 冻结零新增）；托盘菜单为 Win32 原生，切换后<b>重建</b>。决策 D38，验收 H1–H5。
+    <b>v4.18（2026-09-19，文件搜索直达方式 + 真实文件图标，已实施）：</b>动机（用户诉求）：文件搜索改由「启动面板后 <code>Ctrl+F</code>」触发，且查询结果要显示真实文件图标。要点：① <b>直达方式</b>——面板内 <code>Ctrl+F</code> 一键进入文件搜索页（任意页；已在结果页时仅聚焦、输入保留；栈深恒 2；仅 Root 查询带入；扩展未加载 / 被禁用 → Error Toast），并<b>移除</b>「根页输入 <code>f </code> + 空格自动进页」的前缀直达（该前缀会<b>劫持字面查询</b>，<code>f </code> 恢复为普通搜索词），进入方式收敛为<b>三条</b>；② <b>键位总表</b>——新增 6.5 集中登记面板内全部键位（含不冲突取证：<code>Ctrl+F</code> 引入前全仓无绑定）；③ <b>真实图标</b>——文件结果行改显示 <b>Windows Shell 真实图标</b>（32×32 → PNG 落盘缓存 → 协议既有 <code>IconKind::Path</code> 回传，<b>协议零改动</b>），取图失败回落 12 类类别 glyph；④ <b>文案</b>——根页搜索框 placeholder 补「（Ctrl+F 搜文件）」。决策 D39–D41，验收 I1–I4。行为型批次 v4.14–v4.17a 无视觉规格变更、未入稿（见 00.5）。
   </p>
 </header>
 
@@ -818,6 +819,9 @@
       <tr><td>D36</td><td>无边框窗口 chrome（v4.10，v4.11 二次修正）</td><td><code>with_decorations(false) + with_resizable(false)</code> 导致面板/设置页<b>不可拖动、不可缩放</b>。修复：① <b>全窗拖拽</b>——<b>不注册任何占屏交互 widget</b>（egui 0.36 全屏 <code>Sense::drag()</code> widget 会在指针移动后变 <code>dragged</code> 致 <code>is_decidedly_dragging()</code> 为真、释放时抑制前台控件 click，表现为「能拖窗但其他全点不动」）；改为<b>按帧手动检测</b>：主键按下落点不在缩放热区且不在上一帧 <code>interactive_rects_last_pass()</code> 任一 click/drag 控件矩形内时记候选起点，移动超 4px 发 <code>ViewportCommand::StartDrag</code>（<code>app.drag_candidate: Option&lt;Pos2&gt;</code> + <code>DRAG_THRESHOLD</code>）；② <b>8 方向缩放</b>——<code>with_resizable(true)</code> + 纯函数 hit-test（4 边 6px + 4 角 12px 八分区）hover 换光标（↔/↕/⤡/⤢）、按下发 <code>ViewportCommand::BeginResize(dir)</code>（egui 0.36 已核支持，winit Windows 无边框可用）；③ <b>守卫</b>——原生模态循环标志（BeginResize 后至 <code>primary_down()==false</code> 才清除）防重复触发，循环期间拖拽一并禁用；④ <b>尺寸语义（grill 决策）</b>——手动缩放仅本显示周期有效，<code>show()</code> 唤起重置栈顶页默认尺寸并仍居中光标屏；最小 460×400（<code>with_min_inner_size</code>）；⑤ 不做双击最大化。代码落点 <code>ui/chrome.rs</code>（新）/ <code>main.rs</code> / <code>app/lifecycle.rs</code> / <code>app/mod.rs</code>。<b>v4.12 D37 修订：第④条「尺寸不落盘」已推翻（拉伸尺寸落盘记忆），其余语义保留。</b></td></tr>
       <tr><td>D37</td><td>面板尺寸自适应与记忆（v4.12）</td><td><b>基准尺寸调整</b>：面板 560×460 → <b>650×440</b>（高度初定 420，真机反馈 2026-09-06 用户要求 +20 → 440）、设置页 640×640 → <b>650×640</b>（宽度与根页基准对齐，高度维持 D28 论证的 640；用户决策 2026-09-06：与包装项目尺寸一致性）。<b>行为规则</b>（v4.12 起）：① <b>自适应</b>——每次唤起按光标所在显示器工作区（<code>rcWork</code>，物理像素 ÷ <code>pixels_per_point</code> 换算逻辑点）计算有效尺寸：工作区充裕（≥ 有效值 + 边距）时用基准/记忆值；不足时等比收缩，clamp 到 <code>[min 460×400, 工作区 − 16]</code>（逻辑点，上下左右各留 8）；② <b>记忆</b>——手动拉伸结果落盘 settings（新字段 <code>panel_size: Option&lt;(u32, u32)&gt;</code>，None = 从未拉伸用基准），跨重启保留；落盘时机 = 隐藏/退出路径 + <b>可见期间偏离持续 ≥500ms 即落盘</b>（拖拽缩放期间原生模态循环无 egui 帧，松手后才开始计时——天然去抖；强杀进程最多丢最后 500ms 的调整）；③ <b>优先级</b>——记忆值存在 → clamp 后使用；否则 → 自适应基准值；④ <b>设置页联动</b>——设置页有效尺寸 = <code>max(650×640, 根页有效尺寸)</code> 逐轴取大后再按 ① clamp（根页拉伸超过 650×640 时设置页不缩小）；⑤ <b>组件层</b>——维持 egui 弹性布局，<b>不新增 Fluent 断点分档</b>（留后续批次），本批仅验收 min~max 全区间不破版（G5）。DPI 说明：egui 逻辑点随系统缩放自动放大，物理尺寸主要由 DPI 决定；自适应实际生效场景 = 工作区不足的小屏与上限约束（与 grill A1「居中不要求像素级」同口径，多 DPI 混插允许几像素偏差）。代码落点（已实施 2026-09-06）：<code>settings.rs</code> / <code>platform.rs</code>（rcWork 复用）/ <code>app/lifecycle.rs</code>（show/hide/persist_panel_size）/ <code>app/mod.rs</code>（settings_sized diff 收口动态计算 + 去抖落盘）；协议 v1.0 冻结<b>零字段新增</b>（纯 GUI 层）。</td></tr>
       <tr><td>D38</td><td>多语言支持 i18n（v4.13）</td><td>① <b>语言模型</b>——<code>enum Lang { FollowSystem, ZhCn, EnUs }</code>，settings 新字段 <code>lang</code>（默认 FollowSystem，roundtrip 持久化 <code>config.json</code>）；FollowSystem 经 <code>GetUserDefaultUILanguage</code> 探测（zh 系 → ZhCn，其余 → EnUs）。② <b>文案组织</b>——<code>dd-gui/src/text.rs</code> 扩展为 i18n 中枢：每条用户可见文案一个 key，静态 <code>const &str</code> 表 zh/en 两列，调用点 <code>t(key, lang)</code>；<b>不引入 fluent/gettext 等重依赖</b>（文案量 ~150 条、中英无复数规则、编译期完整性可单测）。③ <b>覆盖范围</b>——GUI 全部用户可见文案（搜索占位/空态/加载态/页脚/右键菜单/Toast/Dialog/设置页/托盘菜单）+ 5 内置扩展（subtitle/section/确认文案/Toast）；应用名、文件名等<b>内容型文本不翻译</b>（属数据非界面文案）；第三方扩展文案由其自行负责。④ <b>生效方式</b>——egui immediate mode 全量重绘，设置页切换<b>即时生效</b>；托盘为 Win32 原生菜单，切换后<b>重建</b>（<code>tray.rs</code>）。⑤ <b>扩展传递</b>——dd-host spawn 扩展进程时注入环境变量 <code>DDRUN_LANG=zh-CN|en-US</code>，扩展读环境变量选表；环境变量<b>非协议字段</b>，协议 v1.0 冻结不变。⑥ <b>字体</b>——既有 CJK 字体栈（msyh→seguisym→segoeui）两语言通吃，零改动。代码落点：<code>settings.rs</code> / <code>text.rs</code>（i18n 表）/ <code>ui/settings_view.rs</code>（语言卡）/ <code>tray.rs</code>（重建）/ dd-host spawn / dd-ext 5 bin。</td></tr>
+      <tr><td>D39</td><td>文件搜索直达方式（v4.18）</td><td>面板内 <b><code>Ctrl+F</code> 一键直达</b>文件搜索页：<b>任意页生效</b>（已在结果页时仅聚焦、输入与列表不变）；其他位置先回 Root 再进页（<b>栈深恒 2</b>）；仅 Root 的查询带入（trim 后<b>原样</b>带入）；扩展未加载 / 被禁用 → Error Toast，不产生空页。<b>同时移除</b>「根页输入 <code>f </code> + 空格自动进页」的前缀直达——该前缀会<b>劫持字面查询</b>（想搜 <code>f report</code> 也被强制进页），<code>f </code> 自此是普通搜索词。进入方式收敛为<b>三条</b>：顶层入口项 / 兜底模板 / <code>Ctrl+F</code>。</td></tr>
+      <tr><td>D40</td><td>面板键位总表（v4.18）</td><td>面板内键位<b>集中登记</b>（见 6.5）：<code>↑</code> <code>↓</code> 与 <code>Tab</code>/<code>Shift+Tab</code> 移动、<code>Enter</code> 执行、<code>Esc</code> 返回（Root 隐藏）、<code>Ctrl+,</code> 设置、<code>Shift+F10</code> 选中行右键菜单、<b><code>Ctrl+F</code> 文件搜索直达</b>。确认对话框 / 右键菜单活跃时按键被先行吞掉（<b>不穿透</b>）；设置页「热键捕获」模式优先拦截全部按键（其间的 <code>Ctrl+F</code> 仅作候选键、不触发直达）。</td></tr>
+      <tr><td>D41</td><td>文件结果行图标（v4.18）</td><td>文件搜索结果的列表行图标改用 <b>Windows Shell 真实图标</b>：按缓存键取 <b>32×32</b> 图标 → PNG 落盘缓存 → 经协议既有 <code>IconKind::Path</code> 回传宿主（<b>协议零改动</b>），渲染侧复用 04 章 path 链路。缓存键分级：目录 <code>dir</code>；<code>.exe</code>/<code>.lnk</code>/<code>.msi</code>/<code>.url</code> 按真实路径（每个程序自身图标）；其余按小写扩展名。取图失败回落既有 <b>12 类类别 glyph</b>（零退化）；图标格 24×24 与行首对齐不变（04 章 / 01.1）。</td></tr>
     </table>
 
     <h3 data-page-node-id="qIjrLO1eIcZw1mWFYlpkAw">00.3 有意偏离清单（P2：明确不改，并记录理由）</h3>
@@ -852,7 +856,20 @@
       v4.7 增补（窗口材质）：<code>learn.microsoft.com · DWMWA_SYSTEMBACKDROP_TYPE / DWMSBT</code>（Win11 22H2+ 系统背景材质：Mica / Acrylic / Mica Alt / None 单值属性，22621 起可用）、
       <code>DWMWA_USE_IMMERSIVE_DARK_MODE</code>（材质/标题栏明暗染色开关）；实现现状核验：eframe 0.36 glow 透明链路（<code>ViewportBuilder::with_transparent</code> → glow <code>with_transparency</code>，
       <code>App::clear_color</code> 可覆写、默认即半透明）、<code>eframe::Frame: HasWindowHandle</code>（Win32 HWND 获取）；开关行图标码位（E771）实施时以真机字形为准。
+      v4.18 增补（文件搜索直达与真实图标）：<code>Ctrl+F</code> 触发依据实现现状（<code>crates/dd-gui/src/app/keys.rs</code> 的 <code>consume_key(CTRL, F)</code>、<code>app/mod.rs::open_file_search_from_panel</code>），并已取证该组合键<b>此前全仓无绑定</b>（egui 0.36 单行输入框亦无 Find 绑定）；
+      真实图标依据 <code>learn.microsoft.com · SHGetFileInfoW</code>（<code>SHGFI_ICON | SHGFI_LARGEICON</code> = 32×32 系统关联图标；对 <code>.exe</code>/<code>.lnk</code> 返回该程序自身图标、与资源管理器同源，快捷方式的目标解析由 Shell 内部完成）；实现落点 <code>crates/dd-ext/src/shell_icon.rs</code>（HICON/HBITMAP → PNG 共享管线：掩码 alpha、PNG 魔数自愈的落盘缓存）与 <code>bin/search.rs</code>（缓存键分级 / 进程内缓存 / 失败回落）。
     </p>
+
+    <h3>00.5 本稿覆盖范围与未入稿批次（v4.18）</h3>
+    <p class="s-desc">
+      <b>与实现的对账口径</b>：本稿是<b>视觉 / 交互规范 + HTML 交互演示</b>，批次号与实现批次同号；行为型修正若<b>不含视觉规格变更</b>不复制进本稿，留在实现文档。
+    </p>
+    <table>
+      <tr><th>批次</th><th>是否入稿</th><th>说明</th></tr>
+      <tr><td>≤ v4.13（D1–D38）</td><td><b>已入稿</b></td><td>各章规格表与 00.2 决策行即其规范正文</td></tr>
+      <tr><td>v4.14 – v4.17a</td><td><b>未入稿（行为型）</b></td><td>面板程序性尺寸变化后的重新居中、拖拽 / 缩放模态循环与可见性自愈、指针闲置光标隐藏等<b>真机修复</b>——无视觉规格变更；正文见 <code>docs/implementation.md</code> §2 与代码注释</td></tr>
+      <tr><td><b>v4.18</b></td><td><b>本批入稿</b></td><td>文件搜索：<code>Ctrl+F</code> 直达（<b>D39</b>）+ 面板键位总表（<b>D40</b>，§6.5）+ Shell 真实文件图标（<b>D41</b>，§04 增补）+ 根页 placeholder 文案；<code>f </code> 前缀退出直达入口。验收项见 §12 <b>I 组</b></td></tr>
+    </table>
   </section>
 
   <!-- ================= 01 主面板 ================= -->
@@ -880,7 +897,7 @@
         <div class="toprow" data-page-node-id="ZrkZb9aLvJRuEdOlD9ddag">
           <div class="searchbar focus" data-page-node-id="AFry4Zfq3yFfz4FVIsd4ak">
             <span class="glyph" data-page-node-id="TzXbVCN7EzRShQJFzrqDo0">&#xE721;</span>
-            <input value="" placeholder="搜索命令…" data-page-node-id="KJGcczfAsX6sQ6nomWuGUp">
+            <input value="" placeholder="搜索命令…（Ctrl+F 搜文件）" data-page-node-id="KJGcczfAsX6sQ6nomWuGUp">
           </div>
         </div>
         <div class="results" data-page-node-id="ixfmOhUYwnoauFwdcUn2Sr">
@@ -987,7 +1004,7 @@
         <div class="toprow" data-page-node-id="OZg6GK5IXf8DPY76szRaj9">
           <div class="searchbar focus" data-page-node-id="eagC3gnfioEoJBCJh4z2FF">
             <span class="glyph" data-page-node-id="T8fEPIr2Ngyrz9PWbl3w87">&#xE721;</span>
-            <input value="" placeholder="搜索命令…" data-page-node-id="L2ycArRFc3pTeJBH6eTLDy">
+            <input value="" placeholder="搜索命令…（Ctrl+F 搜文件）" data-page-node-id="L2ycArRFc3pTeJBH6eTLDy">
           </div>
         </div>
         <div class="results" data-page-node-id="DqTFUnjwO73LZChN10PP7g">
@@ -1090,7 +1107,7 @@
         <div class="toprow" data-page-node-id="PaTM7zk2bcEOmB2oemHfdT">
           <div class="searchbar focus" data-page-node-id="COQ9GLfAlJQy0GjHpEtOGB">
             <span class="glyph" data-page-node-id="F1YjITGZK2G7U9yVSQoqfo">&#xE721;</span>
-            <input value="xyzzy" placeholder="搜索命令…" data-page-node-id="qg0sR01kXYahLrSAGySEBi">
+            <input value="xyzzy" placeholder="搜索命令…（Ctrl+F 搜文件）" data-page-node-id="qg0sR01kXYahLrSAGySEBi">
           </div>
         </div>
         <div class="results" data-page-node-id="JBJeI1wutA5cOLrE36iJkV">
@@ -1120,7 +1137,7 @@
         <div class="toprow" data-page-node-id="s7iawGGEHOeADEKnVxEZKJ">
           <div class="searchbar focus" data-page-node-id="vQ112ScDJSKwxUYVqqQrHN">
             <span class="glyph" data-page-node-id="AcZF304QNRChjsQu1JSehC">&#xE721;</span>
-            <input value="xyzzy" placeholder="搜索命令…" data-page-node-id="XuNamIVZCvFVXClbYEeZ4h">
+            <input value="xyzzy" placeholder="搜索命令…（Ctrl+F 搜文件）" data-page-node-id="XuNamIVZCvFVXClbYEeZ4h">
           </div>
         </div>
         <div class="empty" data-page-node-id="IEE7GIqrBOCw3CxlHHwMbd">
@@ -1214,6 +1231,11 @@
         <td data-page-node-id="T1xpK7qyPPbOMe1rg3yjiB">—</td>
       </tr>
     </table>
+    <div class="note">
+      <b>v4.18 增补（文件搜索真实图标，D41）：</b>文件结果行不再只有类别 glyph，而是优先显示 <b>Windows Shell 真实图标</b>——扩展侧按缓存键取 <b>32×32</b> 图标并落盘为 PNG（用户 APPDATA 目录下 <code>\dd-run\cache\file-icons\</code>），经协议既有 <code>IconKind::Path</code> 回传，渲染侧复用上表的 <b>path</b> 链路（解码 → 按路径纹理缓存 → 24px 图标格）。
+      缓存键分级：目录 <code>dir</code>；<code>.exe</code>/<code>.lnk</code>/<code>.msi</code>/<code>.url</code> 按真实路径；其余按小写扩展名。取图失败 → 回落 12 类类别 glyph（与下方「无图标项」同为对齐兜底）。
+      <b>尺寸档差异</b>：应用列表 <b>48px</b>（<code>IShellItemImageFactory</code>，与资源管理器大图标同级）/ 文件结果 <b>32px</b>（<code>SHGetFileInfoW</code> 大图标档）——两者都经宿主 24px 图标格缩放显示，几何与 01.1 一致。
+    </div>
     <div class="note" data-page-node-id="HfrN53h7uHJZAiN0EVi4f2">
       <b data-page-node-id="lLwuG28Dv2jG7ksB2J86QM">数据链路：</b><code data-page-node-id="Ba3OnK4enB1m3uC3J9jcD6">CommandItem.icon</code>（协议已有）→ <code data-page-node-id="oGyIzdbwIRdAjjumtwHqZg">PanelItem.icon</code>（新增字段）→
       聚合器 <code data-page-node-id="5vCQ36r96oqJ93ULUmuJEa">flatten</code> 透传 → 渲染层统一 <code data-page-node-id="6cMyV7gxS9I6GeShH1D7qF">IconView</code> 组件（20px 列）。三种来源都经同一缓存键（glyph 码位 / path 字符串）。
@@ -1364,6 +1386,26 @@
 
     <div class="note" data-page-node-id="OwtmYjyHfYi6yrkqqPzk9e">
       <b data-page-node-id="4Qk50rTEyuu2j388GQ38eN">实施顺序建议：</b>先 6.2 类型标签（纯渲染层、风险最低）→ 再 6.1 设置按钮（同窗口 Settings 子视图，复用 PageStack/egui::Window，无独立窗口）→ 最后 6.3 上下文页脚（涉及选中项状态与动作推导 + 异常状态点）。每批独立跑 fmt/clippy/test + 真机截图。
+    </div>
+
+    <h3>6.5 面板键位总表（v4.18，D40）</h3>
+    <p class="s-desc" style="margin-bottom:8px">
+      <b>集中登记</b>面板内全部键位，避免散落在各章规格中造成遗漏或冲突；本表 = 实现口径（<code>crates/dd-gui/src/app/keys.rs</code>）。
+    </p>
+    <table>
+      <tr><th>键位</th><th>作用</th><th>生效范围 / 例外</th></tr>
+      <tr><td><b class="keycap">Ctrl+F</b></td><td><b>文件搜索直达</b>（D39）</td><td>面板内任意页；已在结果页时仅聚焦（输入保留）；设置页「热键捕获」模式中仅作候选键</td></tr>
+      <tr><td><b class="keycap">↑</b> <b class="keycap">↓</b></td><td>列表移动</td><td>鼠标静止时不抢键盘选中（既有交互约定）</td></tr>
+      <tr><td><b class="keycap">Tab</b> / <b class="keycap">Shift+Tab</b></td><td>列表移动（正向 / 反向）</td><td>Tab 不用于焦点遍历——保持列表导航语义</td></tr>
+      <tr><td><b class="keycap">Enter</b></td><td>执行选中项（默认命令）</td><td>确认对话框活跃时 = 确认</td></tr>
+      <tr><td><b class="keycap">Esc</b></td><td>返回上一级；Root = 隐藏面板</td><td>确认对话框 = 取消；右键菜单 = 关闭菜单并回到列表</td></tr>
+      <tr><td><b class="keycap">Ctrl+,</b></td><td>打开设置页</td><td>已在设置页时幂等；确认对话框 / 右键菜单活跃时不穿透</td></tr>
+      <tr><td><b class="keycap">Shift+F10</b></td><td>对选中行打开右键菜单</td><td>Windows 菜单键的等价惯例（egui 0.36 无法识别 Menu 键，见 10B.1）</td></tr>
+      <tr><td><b>任意组合键</b></td><td>设置页「更改热键」捕获模式</td><td>捕获期间拦截全部按键；含 <code>Ctrl</code>/<code>Alt</code> 的组合生效，<code>Esc</code> 取消</td></tr>
+      <tr><td><b class="keycap">Win+Alt+Space</b></td><td>全局唤起 / 隐藏（可自定义）</td><td><b>系统级</b>热键，不在面板内分发；默认值见 8.1 常规栏</td></tr>
+    </table>
+    <div class="note">
+      <b>不冲突取证（v4.18）：</b><code>Ctrl+F</code> 在引入前<b>全仓无绑定</b>（面板内既有键位仅上表前七行）；egui 0.36 的单行输入框没有 Find 绑定，故不与输入框内建键冲突——实现侧在事件层用 <code>consume_key</code> 先行移除，与 <code>Ctrl+,</code> 同机制。
     </div>
   </section>
 
@@ -1836,7 +1878,7 @@
         <div class="toprow">
           <div class="searchbar focus">
             <span class="glyph">&#xE721;</span>
-            <input value="" placeholder="搜索命令…">
+            <input value="" placeholder="搜索命令…（Ctrl+F 搜文件）">
           </div>
         </div>
         <div class="results" id="ctxDemoResults">
@@ -2012,7 +2054,7 @@
             <div class="toprow">
               <div class="searchbar focus">
                 <span class="glyph">&#xE721;</span>
-                <input value="" placeholder="搜索命令…">
+                <input value="" placeholder="搜索命令…（Ctrl+F 搜文件）">
               </div>
             </div>
             <div class="results">
@@ -2343,7 +2385,7 @@
   <section class="screen" data-page-node-id="L6iEhCagQTB9C9S6J4ACzC">
     <div class="s-head" data-page-node-id="wcnTV9vWl1qcsB6fExaLir">
       <span class="s-num" data-page-node-id="MDGUYBUj0ASdSN7Sz81Lwv">12</span>
-      <h2 data-page-node-id="MEsJHQAbs6nkiMATdLJcIZ">全界面验收核对表（v4.7）</h2>
+      <h2 data-page-node-id="MEsJHQAbs6nkiMATdLJcIZ">全界面验收核对表（v4.7；v4.18 增补 I 组）</h2>
       <span class="chip" data-page-node-id="oexn91omsB8ODgbbT1O4At">本期强制仅 D 组</span>
     </div>
     <p class="s-desc" data-page-node-id="mFFFhCHq07brlk9Rs1or3g">
@@ -2390,14 +2432,19 @@
       <tr><td>H3</td><td>扩展文案覆盖</td><td>切换后 5 内置扩展结果的 subtitle/section/确认文案/Toast 均随语言（<code>DDRUN_LANG</code> 注入验证）；应用名、文件名等内容型文本不翻译（属预期，不计为缺陷）。</td></tr>
       <tr><td>H4</td><td>跟随系统</td><td>系统 UI 语言为中文 → 首启即简体中文；英文系统 → 首启即英文；用户手动选择后覆盖系统值（<code>GetUserDefaultUILanguage</code> 探测 + FollowSystem 默认）。</td></tr>
       <tr><td>H5</td><td>完整性与回归</td><td>文案完整性单测（每个 key 两语言非空）通过；<code>cargo fmt/clippy/test --workspace</code> 全绿（258 基线 + 新增测试）；切换语言不引起窗口尺寸/布局跳动。</td></tr>
+      <tr><td>I1</td><td rowspan="4"><b>文件搜索直达与图标</b><br>（v4.18，D39/D41）</td><td><code>Ctrl+F</code> 直达</td><td>面板内任意页按 <code>Ctrl+F</code> → 进入文件搜索页：已在结果页时<b>仅聚焦</b>（输入与列表不变）；其他位置先回 Root 再进页（<b>栈深恒 2</b>）；仅 Root 查询带入；扩展未加载 / 被禁用 → <b>Error Toast</b> 且不产生空页。</td></tr>
+      <tr><td>I2</td><td>根页 placeholder</td><td>Root 搜索框提示为「<b>搜索命令…（Ctrl+F 搜文件）</b>」（text-3 色、亮暗双主题可读）；嵌套页仍为「在「{页标题}」中筛选…」，D2 的页标题进 placeholder 语义不变。</td></tr>
+      <tr><td>I3</td><td>文件结果行图标</td><td>文件行显示 <b>Shell 真实图标</b>（<code>IconKind::Path</code> → 本地 PNG）；取图失败回落类别 glyph；图标格 24×24、行首对齐与 01.1 一致（无跳列、无空列）。</td></tr>
+      <tr><td>I4</td><td><code>f </code> 前缀退出直达</td><td>根页输入 <code>f report</code> 走<b>普通搜索</b>（不再强制进文件搜索页）；面板内直达入口仅 <code>Ctrl+F</code> 一条（D39）。</td></tr>
       <tr data-page-node-id="k4NycA7gCrFp8nlLXe24VB"><td data-page-node-id="UF4YEjmAbmfrY0ACtOo7Qz">D1</td><td rowspan="4" data-page-node-id="TjcYgNaCwAnoT24imYbL7e"><b data-page-node-id="kjIeRaPFsE0vyz3lNQFyzo">文档一致性</b><br data-page-node-id="1rGxBjM1QrQ4VSYEikFbjT">（本期强制）</td><td data-page-node-id="S2N1OoL1B2ZfcDyVNCZ7CG">token 全覆盖</td><td data-page-node-id="VkaxPBpRGpxTf6EINA8Tui">产品 UI 区域（01–10C 示例面板）全部色值经 CSS 变量引用；旧值清零（46/44 行高·35 页脚·半透明白行态·#4d4d4d 等无残留）。</td></tr>
       <tr data-page-node-id="fC7vsGz12xFzTTe0zIHyu5"><td data-page-node-id="h5Il7uQ4aW1xtUM6SgyNFe">D2</td><td data-page-node-id="e7ronPn5T2nz0dHMX9yyzu">映射表完整</td><td data-page-node-id="W0Y1p5dlHLFMA8AXLrGsh1">11 表覆盖全部界面区域；每个「占位」条目在对应章节规格表中可索引到。</td></tr>
       <tr data-page-node-id="goCNUGdYhTVQUJ6NQEbbVm"><td data-page-node-id="cVudQr1AOKDAYj36B2jDLY">D3</td><td data-page-node-id="JiF5d4gG3FPJUWHXa0AmQm">双主题渲染</td><td data-page-node-id="6hJCakRDrc1526o9Lh0u58">亮/暗两主题下 01–10C 各截图一张，对比度与交互态符合本稿（重点核对：暗色描边 #666666、暗色行态实色、filled-darker 搜索框）。</td></tr>
-      <tr data-page-node-id="RqCuB3cKJzvkCtyYRwa2dS"><td data-page-node-id="ASBaO1UXOE8UdLtKIH2rdi">D4</td><td data-page-node-id="LA6u2xN3myD37vwZFMeirl">与 00 决策一致</td><td data-page-node-id="dlx41WyjhFnbiVOXqAnRyA">逐章对照 00.2 决策清单 D1–D38（含 v4.4 右键菜单决策 D18–D21、v4.5 托盘决策 D22–D26、v4.6 设置页决策 D27–D29、v4.7 窗口材质决策 D30–D32、v4.12 面板尺寸决策 D37、v4.13 多语言决策 D38）检查：无章节引用已废弃方案（独立 44px 标题栏 / 描述徽标 / ueli auto 搜索框 / 半透明白行态 / 设置页单列布局与 560×640、640×640 旧尺寸 / 「尺寸不落盘」旧语义等）。</td></tr>
+      <tr data-page-node-id="RqCuB3cKJzvkCtyYRwa2dS"><td data-page-node-id="ASBaO1UXOE8UdLtKIH2rdi">D4</td><td data-page-node-id="LA6u2xN3myD37vwZFMeirl">与 00 决策一致</td><td data-page-node-id="dlx41WyjhFnbiVOXqAnRyA">逐章对照 00.2 决策清单 D1–D41（含 v4.4 右键菜单决策 D18–D21、v4.5 托盘决策 D22–D26、v4.6 设置页决策 D27–D29、v4.7 窗口材质决策 D30–D32、v4.12 面板尺寸决策 D37、v4.13 多语言决策 D38、v4.18 文件搜索直达与图标决策 D39–D41）检查：无章节引用已废弃方案（独立 44px 标题栏 / 描述徽标 / ueli auto 搜索框 / 半透明白行态 / 设置页单列布局与 560×640、640×640 旧尺寸 / 「尺寸不落盘」旧语义等）。</td></tr>
     </table>
     <div class="note" data-page-node-id="F5mG5JIbDYfS2wtp6HIA28">
       <b data-page-node-id="BGVxIQsF02i2uDf9LkKHTD">与 6.4（C1–C13）的关系：</b>6.4 验收「设置按钮 / 类型标签 / 上下文页脚」三项既有优化；
       本表验收 07–10 四个新界面。两组核对表互不覆盖，实施时分别打勾。
+      <b>v4.18 增补：</b>本表新增 <b>I 组</b>——文件搜索直达（<code>Ctrl+F</code>）与真实文件图标为<b>跨界面项</b>（落在 01 Root 的 placeholder / 07 嵌套页的列表行），故单列一组，不与 A–H 各组重叠。
     </div>
   </section>
 

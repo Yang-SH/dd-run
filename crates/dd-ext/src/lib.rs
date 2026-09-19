@@ -48,6 +48,11 @@ pub mod i18n;
 /// 拿到规格做 in-process 调用。
 pub mod builtins;
 
+/// 共享图标管线（2026-09-19）：Windows Shell 图标 → PNG → 落盘缓存。
+/// 使用者：`builtins::apps`（应用图标 48px）与 `bin/search`（文件类型图标 32px）。
+/// 上移原因见模块文档（同一管线含 4 处真机坑，双份实现易漂移）。
+pub mod shell_icon;
+
 /// §5.3：扩展回"不高于宿主所发版本"的版本；v1.0 阶段恒为 `"1.0"`。
 pub const PROTOCOL_VERSION: &str = "1.0";
 

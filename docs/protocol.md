@@ -587,7 +587,7 @@ discovered → spawned → initializing → ready ⇄ busy ─┤
 
 页元信息（设计文档 §4.5）。
 
-> ⚠️ **v1.0 定稿（2026-09-17）**：`PageInfo` 类型已在 `dd-protocol` 定义，但**运行时不传递，且定为不传递**——`GetItemsResult`（§6.3）只含 `items` / `has_more_items` / `is_loading`，**不携带页元信息**。宿主渲染页标题取自**被点击项标题**（`f ` 前缀直达等无来源的命令点击则回退本地化文案），**不依赖 `get_items` 回传 `PageInfo`**；故该类型在 v1.0 属**预留定义**（为将来「由扩展自定义页标题」留位）。若启用，按 §13 递增 `MINOR`，并同步本注记与 §6.3。
+> ⚠️ **v1.0 定稿（2026-09-17）**：`PageInfo` 类型已在 `dd-protocol` 定义，但**运行时不传递，且定为不传递**——`GetItemsResult`（§6.3）只含 `items` / `has_more_items` / `is_loading`，**不携带页元信息**。宿主渲染页标题取自**被点击项标题**（`Ctrl+F` 直达等无来源的命令点击则回退本地化文案），**不依赖 `get_items` 回传 `PageInfo`**；故该类型在 v1.0 属**预留定义**（为将来「由扩展自定义页标题」留位）。若启用，按 §13 递增 `MINOR`，并同步本注记与 §6.3。
 
 ```json
 {"type":"list","page_id":"calc.history","title":"History","placeholder_text":"Search history","is_loading":false,"show_details":true,"has_more_items":false,"grid":{"columns":4}}

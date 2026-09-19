@@ -307,9 +307,11 @@ def summarize(values: list[float]) -> dict:
 
 
 # 扩展内自报的分段计时日志（search.rs `get_items 计时:`，每次 get_items 一行）
+# `icon=` 段为 2026-09-19 新增（结果项构造/真实图标取用耗时）；写成**可选组**，
+# 使旧日志（无该段）仍可解析——否则历史证据文件会整批判定失败。
 TIMING_RE = re.compile(
     r"get_items 计时: kind=(\S+) total=([\d.]+)ms probe=([\d.]+)ms "
-    r"channel=(\S+) query=([\d.]+)ms score=([\d.]+)ms items=(\d+)"
+    r"channel=(\S+) query=([\d.]+)ms score=([\d.]+)ms(?: icon=([\d.]+)ms)? items=(\d+)"
 )
 
 
@@ -334,7 +336,9 @@ def parse_timing(snapshot: list[dict]) -> list[dict]:
                 "channel": m.group(4),
                 "query_ms": float(m.group(5)),
                 "score_ms": float(m.group(6)),
-                "items": int(m.group(7)),
+                # icon_ms 缺省 None = 该行来自 2026-09-19 之前的日志
+                "icon_ms": float(m.group(7)) if m.group(7) is not None else None,
+                "items": int(m.group(8)),
             }
         )
     return out

@@ -68,6 +68,7 @@ pub fn spec() -> ExtensionSpec {
 #[cfg(windows)]
 mod sys {
     use super::*;
+    use crate::shell_icon;
     use std::collections::HashSet;
     use std::os::windows::ffi::{OsStrExt, OsStringExt};
     use std::path::{Path, PathBuf};
@@ -75,7 +76,9 @@ mod sys {
 
     use windows_sys::core::{GUID, HRESULT};
     use windows_sys::Win32::Foundation::SIZE;
-    use windows_sys::Win32::Graphics::Gdi::{DeleteDC, DeleteObject, HBITMAP};
+    // DeleteDC / GDI 位图读取已上移 `crate::shell_icon`（2026-09-19）；此处仅留
+    // 工厂链路自用的句柄释放。
+    use windows_sys::Win32::Graphics::Gdi::{DeleteObject, HBITMAP};
     use windows_sys::Win32::System::Com::{
         CoCreateInstance, CoInitializeEx, CoTaskMemFree, CLSCTX_INPROC_SERVER,
         COINIT_APARTMENTTHREADED,
@@ -864,10 +867,30 @@ mod sys {
         "崩溃",
     ];
 
-    /// 快捷方式标题是否命中黑名单关键词。
+    /// 开发工具 / SDK / 诊断类排除表（2026-09-19 真机反馈）：Windows SDK、驱动包
+    /// 与 VS 安装器会把调试/诊断工具以 `.lnk` 形式塞进开始菜单（Application
+    /// Verifier、Windows App Cert Kit、Developer PowerShell…），普通用户不会启动
+    /// 它们，出现在「应用」列表里只会稀释检索质量。
+    ///
+    /// 与 `JUNK_TITLE_KEYWORDS` 走**同一处置路径**（都由 `is_junk_title` 判定），
+    /// 单列是为了让「垃圾名」与「开发者工具」两类规则各有出处、便于日后增删。
+    /// 全部采用**精确短语**而非 `sdk`/`debug` 这类宽词——真机 122 条样本实测
+    /// 命中 8 条、误杀 0 条（`Visual Studio 2022` / `Visual Studio Code` /
+    /// `Visual Studio Installer` / `PowerShell 7 (x64)` 均保留）。
+    const DEV_TOOL_TITLE_KEYWORDS: &[&str] = &[
+        "application verifier",
+        "app cert kit",
+        "debuggable package manager",
+        "developer powershell",
+        "bug report",
+        "software development kit",
+    ];
+
+    /// 快捷方式标题是否命中黑名单关键词（垃圾名 + 开发工具两类）。
     fn is_junk_title(title: &str) -> bool {
         let title = title.to_lowercase();
         JUNK_TITLE_KEYWORDS.iter().any(|k| title.contains(k))
+            || DEV_TOOL_TITLE_KEYWORDS.iter().any(|k| title.contains(k))
     }
 
     /// AppsFolder 层的标题过滤（设计稿 §3.B 补则）：真 UWP（packaged，parsing
@@ -906,43 +929,16 @@ mod sys {
 
     // ────────────────────────────────────────────────────────────────
     // 图标抽取（48px，落盘 PNG 缓存；alpha 正确生成）
+    //
+    // **2026-09-19**：通用管线（HICON/HBITMAP → PNG、掩码 alpha、缓存三函数）
+    // 已上移 `crate::shell_icon`，本模块只保留「应用图标特有」的部分——
+    // `IShellItemImageFactory`（.lnk 解析到目标应用 + 48px 档）与 COM vtable。
+    // 缓存子目录仍为 `apps-icons`（前缀 `apps`，与文件搜索的 `file-icons` 并列）。
     // ────────────────────────────────────────────────────────────────
 
-    /// 图标缓存基目录：`%APPDATA%\dd-run\cache\apps-icons\`（与 `dd-host::manifest::cache_dir()` 同源）。
-    fn icon_cache_dir() -> Option<PathBuf> {
-        std::env::var_os("APPDATA").map(|p| {
-            std::path::PathBuf::from(p)
-                .join("dd-run")
-                .join("cache")
-                .join("apps-icons")
-        })
-    }
-
-    /// 稳定哈希缓存键（.lnk 绝对路径 / `appsfolder:<parsing>`）→ 16-hex 文件名。
-    fn icon_cache_key(key: &str) -> String {
-        use std::collections::hash_map::DefaultHasher;
-        use std::hash::{Hash, Hasher};
-        let mut h = DefaultHasher::new();
-        key.hash(&mut h);
-        format!("{:016x}", h.finish())
-    }
-
-    /// 若 cache 已有该 key 的 PNG（且**内容合法**），返回该路径（不重抽）。
-    ///
-    /// 自愈：若落盘文件不是合法 PNG（魔数缺失，如上次写入因 IO/中断失败），
-    /// 返回 None，让上层重抽覆盖。
-    fn cached_icon_path(dir: &Path, key: &str, size: u32) -> Option<PathBuf> {
-        let p = dir.join(format!("apps-{}-{}.png", icon_cache_key(key), size));
-        if !p.is_file() {
-            return None;
-        }
-        if let Ok(head) = std::fs::read(&p) {
-            if head.len() >= 8 && head[..8] == [0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A] {
-                return Some(p);
-            }
-        }
-        None
-    }
+    /// 应用图标缓存子目录名与文件名前缀。
+    const ICON_CACHE_SUB: &str = "apps-icons";
+    const ICON_CACHE_PREFIX: &str = "apps";
 
     /// 抽 .lnk / .exe 的真实应用图标，写为 PNG 到 cache 目录，返回 PNG 路径。
     ///
@@ -950,8 +946,8 @@ mod sys {
     /// （.lnk 自动解析到目标应用图标，48px）；失败回退 `SHGetFileInfoW` 32px 老链路。
     unsafe fn file_icon_png(path: &Path) -> Option<PathBuf> {
         let key = path.to_string_lossy();
-        let out_dir = icon_cache_dir()?;
-        if let Some(p) = cached_icon_path(&out_dir, &key, ICON_SIZE) {
+        let out_dir = shell_icon::cache_dir(ICON_CACHE_SUB)?;
+        if let Some(p) = shell_icon::cached_png(&out_dir, ICON_CACHE_PREFIX, &key, ICON_SIZE) {
             return Some(p);
         }
         std::fs::create_dir_all(&out_dir).ok()?;
@@ -976,12 +972,8 @@ mod sys {
             None
         };
         // 回退：SHGetFileInfoW 32px（系统缓存图标，老链路保底）
-        let png = png.or_else(|| shfileinfo_png(path))?;
-        let out_path = out_dir.join(format!("apps-{}-{}.png", icon_cache_key(&key), ICON_SIZE));
-        if !out_path.exists() {
-            std::fs::write(&out_path, &png).ok()?;
-        }
-        Some(out_path)
+        let png = png.or_else(|| shell_icon::shfileinfo_png(path))?;
+        shell_icon::store_png(&out_dir, ICON_CACHE_PREFIX, &key, ICON_SIZE, &png)
     }
 
     /// 从活动 IShellItem（QI `IShellItemImageFactory`）抽 48px 图标 PNG。
@@ -989,8 +981,8 @@ mod sys {
         item: *mut core::ffi::c_void,
         cache_key: &str,
     ) -> Option<PathBuf> {
-        let out_dir = icon_cache_dir()?;
-        if let Some(p) = cached_icon_path(&out_dir, cache_key, ICON_SIZE) {
+        let out_dir = shell_icon::cache_dir(ICON_CACHE_SUB)?;
+        if let Some(p) = shell_icon::cached_png(&out_dir, ICON_CACHE_PREFIX, cache_key, ICON_SIZE) {
             return Some(p);
         }
         std::fs::create_dir_all(&out_dir).ok()?;
@@ -998,15 +990,7 @@ mod sys {
         let png = factory_get_image_png(factory);
         com_release(factory);
         let png = png?;
-        let out_path = out_dir.join(format!(
-            "apps-{}-{}.png",
-            icon_cache_key(cache_key),
-            ICON_SIZE
-        ));
-        if !out_path.exists() {
-            std::fs::write(&out_path, &png).ok()?;
-        }
-        Some(out_path)
+        shell_icon::store_png(&out_dir, ICON_CACHE_PREFIX, cache_key, ICON_SIZE, &png)
     }
 
     /// `IShellItemImageFactory::GetImage(48, ICONONLY|BIGGERSIZEOK)` → PNG bytes。
@@ -1031,11 +1015,11 @@ mod sys {
         if hr != 0 || hb.is_null() {
             return None;
         }
-        if let Some(png) = hicon_to_png(hb) {
+        if let Some(png) = shell_icon::hicon_to_png(hb) {
             DestroyIcon(hb);
             return Some(png);
         }
-        if let Some(png) = bitmap_to_png(hb) {
+        if let Some(png) = shell_icon::bitmap_to_png(hb) {
             DeleteObject(hb);
             return Some(png);
         }
@@ -1043,285 +1027,6 @@ mod sys {
         None
     }
 
-    /// 32bpp GDI HBITMAP → PNG bytes（直接 GetDIBits；alpha 保留，全零回退不透明）。
-    unsafe fn bitmap_to_png(hbm: HBITMAP) -> Option<Vec<u8>> {
-        use image::ImageEncoder;
-        use windows_sys::Win32::Graphics::Gdi::{
-            CreateCompatibleDC, GetDIBits, BITMAPINFO, BITMAPINFOHEADER, DIB_RGB_COLORS,
-        };
-
-        let hdc = CreateCompatibleDC(std::ptr::null_mut());
-        if hdc.is_null() {
-            return None;
-        }
-        let mut bmi: BITMAPINFO = std::mem::zeroed();
-        bmi.bmiHeader.biSize = std::mem::size_of::<BITMAPINFOHEADER>() as u32;
-        let ok = GetDIBits(
-            hdc,
-            hbm,
-            0,
-            0,
-            std::ptr::null_mut(),
-            &mut bmi,
-            DIB_RGB_COLORS,
-        );
-        let w = bmi.bmiHeader.biWidth;
-        let h = bmi.bmiHeader.biHeight.unsigned_abs() as i32;
-        if ok == 0 || w <= 0 || h <= 0 || w > 512 || h > 512 {
-            DeleteDC(hdc);
-            return None;
-        }
-        let stride = w as usize * 4;
-        let mut buf: Vec<u8> = vec![0; stride * h as usize];
-        bmi.bmiHeader.biHeight = -h; // top-down
-        bmi.bmiHeader.biBitCount = 32;
-        bmi.bmiHeader.biCompression = 0; // BI_RGB
-        let n = GetDIBits(
-            hdc,
-            hbm,
-            0,
-            h as u32,
-            buf.as_mut_ptr() as *mut _,
-            &mut bmi,
-            DIB_RGB_COLORS,
-        );
-        DeleteDC(hdc);
-        if n == 0 {
-            return None;
-        }
-        for px in buf.as_chunks_mut::<4>().0 {
-            px.swap(0, 2); // B↔R
-        }
-        let has_alpha = buf.as_chunks::<4>().0.iter().any(|p| p[3] != 0);
-        if !has_alpha {
-            for px in buf.as_chunks_mut::<4>().0 {
-                px[3] = 0xff;
-            }
-        }
-        let img = image::RgbaImage::from_raw(w as u32, h as u32, buf)?;
-        let mut out = Vec::with_capacity(16 * 1024);
-        let encoder = image::codecs::png::PngEncoder::new(&mut out);
-        encoder
-            .write_image(
-                img.as_raw(),
-                w as u32,
-                h as u32,
-                image::ExtendedColorType::Rgba8,
-            )
-            .ok()?;
-        Some(out)
-    }
-
-    /// 回退链路：`SHGetFileInfoW` 取 32×32 HICON → PNG bytes（不落盘，调用方负责）。
-    unsafe fn shfileinfo_png(path: &Path) -> Option<Vec<u8>> {
-        use windows_sys::Win32::UI::Shell::{
-            SHGetFileInfoW, SHFILEINFOW, SHGFI_ICON, SHGFI_LARGEICON,
-        };
-
-        let path_wide: Vec<u16> = path
-            .as_os_str()
-            .encode_wide()
-            .chain(std::iter::once(0))
-            .collect();
-        let mut fi: SHFILEINFOW = std::mem::zeroed();
-        let hr = SHGetFileInfoW(
-            path_wide.as_ptr(),
-            0,
-            &mut fi,
-            std::mem::size_of::<SHFILEINFOW>() as u32,
-            SHGFI_ICON | SHGFI_LARGEICON,
-        );
-        if hr == 0 || fi.hIcon.is_null() {
-            return None;
-        }
-        let png = hicon_to_png(fi.hIcon);
-        DestroyIcon(fi.hIcon);
-        png
-    }
-
-    /// HICON → PNG bytes。实际尺寸由位图决定（GetImage BIGGERSIZEOK 可能给出
-    /// 大于请求的图）。失败 None（**不** DestroyIcon：调用方负责）。
-    ///
-    /// alpha 生成策略（修复旧实现"强制 alpha=255"导致的黑角/锯齿）：
-    /// - 色位图含真实 per-pixel alpha → 原样保留；
-    /// - alpha 全 0（掩码型图标）→ 读 `hbmMask` 上半部 AND 掩码生成 alpha
-    ///   （掩码位 1 = 透明）；掩码读取失败 → 整图 alpha=255 兜底。
-    unsafe fn hicon_to_png(hicon: *mut core::ffi::c_void) -> Option<Vec<u8>> {
-        use image::ImageEncoder;
-        use windows_sys::Win32::Graphics::Gdi::{
-            CreateCompatibleDC, GetDIBits, BITMAPINFO, BITMAPINFOHEADER, DIB_RGB_COLORS,
-        };
-        use windows_sys::Win32::UI::WindowsAndMessaging::{GetIconInfo, ICONINFO};
-
-        let mut ii: ICONINFO = std::mem::zeroed();
-        if GetIconInfo(hicon, &mut ii) == 0 {
-            return None;
-        }
-        let hbm_color = ii.hbmColor;
-        let hbm_mask = ii.hbmMask;
-        if hbm_color.is_null() {
-            if !hbm_mask.is_null() {
-                DeleteObject(hbm_mask);
-            }
-            return None;
-        }
-
-        let hdc = CreateCompatibleDC(std::ptr::null_mut());
-        if hdc.is_null() {
-            DeleteObject(hbm_color);
-            if !hbm_mask.is_null() {
-                DeleteObject(hbm_mask);
-            }
-            return None;
-        }
-
-        // ① 查询色位图实际尺寸（lpvBits=NULL 的 GetDIBits 会回填 bmiHeader）
-        let mut bmi: BITMAPINFO = std::mem::zeroed();
-        bmi.bmiHeader.biSize = std::mem::size_of::<BITMAPINFOHEADER>() as u32;
-        let ok = GetDIBits(
-            hdc,
-            hbm_color,
-            0,
-            0,
-            std::ptr::null_mut(),
-            &mut bmi,
-            DIB_RGB_COLORS,
-        );
-        let w = bmi.bmiHeader.biWidth;
-        let h = bmi.bmiHeader.biHeight.unsigned_abs() as i32;
-        if ok == 0 || w <= 0 || h <= 0 || w > 512 || h > 512 {
-            DeleteObject(hbm_color);
-            if !hbm_mask.is_null() {
-                DeleteObject(hbm_mask);
-            }
-            DeleteDC(hdc);
-            return None;
-        }
-
-        // ② 32bpp top-down 读色位图
-        let stride = w as usize * 4;
-        let mut buf: Vec<u8> = vec![0; stride * h as usize];
-        bmi.bmiHeader.biHeight = -h; // 负高 = top-down
-        bmi.bmiHeader.biBitCount = 32;
-        bmi.bmiHeader.biCompression = 0; // BI_RGB
-        let n = GetDIBits(
-            hdc,
-            hbm_color,
-            0,
-            h as u32,
-            buf.as_mut_ptr() as *mut _,
-            &mut bmi,
-            DIB_RGB_COLORS,
-        );
-
-        // ③ 掩码型图标：读 AND 掩码上半部（1bpp，行 DWORD 对齐；位 1 = 透明）。
-        //    必须在 DeleteObject(hbm_mask) 之前读。
-        let mask = if !hbm_mask.is_null() {
-            read_mask_bits(hdc, hbm_mask, w as usize, h as usize)
-        } else {
-            None
-        };
-
-        DeleteObject(hbm_color);
-        if !hbm_mask.is_null() {
-            DeleteObject(hbm_mask);
-        }
-        DeleteDC(hdc);
-        if n == 0 {
-            return None;
-        }
-
-        // BGRA → RGBA
-        for px in buf.as_chunks_mut::<4>().0 {
-            px.swap(0, 2); // B↔R
-        }
-        // alpha：有真实 per-pixel alpha 就保留；全 0 → 掩码生成 / 兜底不透明
-        let has_alpha = buf.as_chunks::<4>().0.iter().any(|p| p[3] != 0);
-        if !has_alpha {
-            match mask {
-                Some((mask_bits, mask_stride)) => {
-                    for (y, row) in buf.chunks_exact_mut(stride).enumerate() {
-                        for (x, px) in row.as_chunks_mut::<4>().0.iter_mut().enumerate() {
-                            let byte = mask_bits[y * mask_stride + x / 8];
-                            // AND 掩码位 0 = 不透明
-                            let opaque = (byte >> (7 - (x % 8))) & 1 == 0;
-                            px[3] = if opaque { 0xff } else { 0 };
-                        }
-                    }
-                }
-                None => {
-                    for px in buf.as_chunks_mut::<4>().0 {
-                        px[3] = 0xff;
-                    }
-                }
-            }
-        }
-
-        let img = image::RgbaImage::from_raw(w as u32, h as u32, buf)?;
-        let mut out = Vec::with_capacity(16 * 1024);
-        let encoder = image::codecs::png::PngEncoder::new(&mut out);
-        encoder
-            .write_image(
-                img.as_raw(),
-                w as u32,
-                h as u32,
-                image::ExtendedColorType::Rgba8,
-            )
-            .ok()?;
-        Some(out)
-    }
-
-    /// 读 AND 掩码（1bpp）上半部 `h` 行，返回 (bits, stride)。失败 None。
-    ///
-    /// ICONINFO 的 hbmMask 高度为色位图高度 ×2（上 AND 下 XOR）；图标 alpha 全 0
-    /// 时只需 AND 掩码。行按 DWORD 对齐（GetDIBits 规则）。
-    unsafe fn read_mask_bits(
-        hdc: windows_sys::Win32::Graphics::Gdi::HDC,
-        hbm_mask: HBITMAP,
-        w: usize,
-        h: usize,
-    ) -> Option<(Vec<u8>, usize)> {
-        use windows_sys::Win32::Graphics::Gdi::{
-            GetDIBits, BITMAPINFO, BITMAPINFOHEADER, DIB_RGB_COLORS,
-        };
-
-        let mut bmi: BITMAPINFO = std::mem::zeroed();
-        bmi.bmiHeader.biSize = std::mem::size_of::<BITMAPINFOHEADER>() as u32;
-        let ok = GetDIBits(
-            hdc,
-            hbm_mask,
-            0,
-            0,
-            std::ptr::null_mut(),
-            &mut bmi,
-            DIB_RGB_COLORS,
-        );
-        let mw = bmi.bmiHeader.biWidth as usize;
-        let mh = bmi.bmiHeader.biHeight.unsigned_abs() as usize;
-        if ok == 0 || mw < w || mh < h || mw > 512 {
-            return None;
-        }
-        let stride = mw.div_ceil(32) * 4; // 掩码行宽：每 32 像素一 DWORD
-        let mut buf: Vec<u8> = vec![0; stride * h]; // 只取上半部（AND 掩码）
-        bmi.bmiHeader.biBitCount = 1;
-        bmi.bmiHeader.biCompression = 0;
-        let n = GetDIBits(
-            hdc,
-            hbm_mask,
-            0,
-            h as u32,
-            buf.as_mut_ptr() as *mut _,
-            &mut bmi,
-            DIB_RGB_COLORS,
-        );
-        if n == 0 {
-            None
-        } else {
-            Some((buf, stride))
-        }
-    }
-
-    /// 图标统一出口：PNG 路径 → `IconKind::Path`；失败 → 占位 glyph `U+E7C4`。
     fn icon_or_glyph(png: Option<PathBuf>) -> Icon {
         match png.and_then(|p| p.to_str().map(|s| s.to_string())) {
             Some(value) => Icon {
@@ -1652,6 +1357,36 @@ mod sys {
                 assert!(is_junk_title(t), "标题应命中黑名单：{t}");
             }
             for t in ["7-Zip", "微信", "Notepad", "计算器", "Dead Cells", "Steam"] {
+                assert!(!is_junk_title(t), "不应误杀正常应用：{t}");
+            }
+        }
+
+        /// 开发工具 / SDK / 诊断类剔除（2026-09-19 真机反馈：`Application
+        /// Verifier` 等由 Windows SDK / 驱动包装进开始菜单，普通用户不会启动）。
+        #[test]
+        fn dev_tool_titles_are_filtered() {
+            // 真机实测命中的 8 条（来源：System32 / SysWOW64 / Windows Kits）
+            for t in [
+                "Application Verifier (WOW)",
+                "Application Verifier (X64)",
+                "Windows App Cert Kit",
+                "Debuggable Package Manager (1)",
+                "Developer PowerShell for VS 2022",
+                "Developer PowerShell for VS 2022 (1)",
+                "AMD Bug Report Tool",
+                "Windows Software Development Kit",
+            ] {
+                assert!(is_junk_title(t), "应剔除开发者工具：{t}");
+            }
+            // 零误杀：同期列表里的合法应用必须保留（含名字相近的 VS 全家桶）
+            for t in [
+                "Visual Studio 2022",
+                "Visual Studio Code",
+                "Visual Studio Installer",
+                "PowerShell 7 (x64)",
+                "Windows 工具",
+                "Git Bash",
+            ] {
                 assert!(!is_junk_title(t), "不应误杀正常应用：{t}");
             }
         }

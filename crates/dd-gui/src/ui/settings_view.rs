@@ -1022,7 +1022,7 @@ impl PaletteApp {
     /// 功能态开关），排版同「窗口材质」卡的开关行。关闭后「应用」类项不进
     /// 首屏与搜索结果。变更经 apply_search_apps 即时生效 + 落盘。
     /// （「优先搜索文件」开关同日加入、同日撤销：自动进页劫持常规搜索，
-    /// 用户反馈后移除——`f ` 前缀直达保留。）
+    /// 用户反馈后移除——当时保留 `f ` 前缀直达；该前缀亦已于 2026-09-19 移除，现由 `Ctrl+F` 一键直达承担。）
     fn draw_search_behavior_card(&mut self, ui: &mut egui::Ui, p: &theme::Palette) {
         // 开关状态在闭包外读取、闭包内只收集点击结果（避免闭包内 &mut self 冲突）。
         let apps_on = self.settings.search_apps;

@@ -15,8 +15,10 @@
 //!   目录（扩展进程直接 `explorer /select`）/ `files.copy.{pid}` 复制路径
 //!   （`ShowToast` + `host/set_clipboard`）。
 //!
-//! 图标（v0.1.1）：文件结果**按扩展名显示类别图标**（12 类 Segoe glyph，见
-//! `entry_glyph`），引导/入口项统一搜索图标；协议 `Icon::Glyph` 零改动。
+//! 图标（2026-09-19）：文件结果**优先显示 Windows Shell 真实图标**——`dd_ext::shell_icon`
+//! 抽 32×32 → PNG 落盘缓存（`%APPDATA%\dd-run\cache\file-icons\`），经协议**零改动**的
+//! `Icon::Path` 回传宿主；抽取失败回落**按扩展名的 12 类 Segoe glyph**（`entry_glyph`，
+//! 零退化）。缓存键分级见 [`icon_cache_key_for`]。引导/入口项统一搜索图标。
 //!
 //! 速度打磨（扩展侧，零宿主改动即可生效）：
 //! 1. **探测缓存**：`available()` 探测结果按 TTL 缓存（默认 3s），避免每次按键
@@ -32,7 +34,7 @@
 //! **未新增任何协议方法**，完全复用 provider 模型。
 
 use chrono::{DateTime, Local, Utc};
-use dd_ext::{i18n::tr, run, Effect, ExtensionSpec};
+use dd_ext::{i18n::tr, run, shell_icon, Effect, ExtensionSpec};
 use dd_protocol::messages::{GetItemsParams, GetItemsResult, InvokeParams};
 use dd_protocol::methods::{
     METHOD_HOST_OPEN_URL, METHOD_HOST_SET_CLIPBOARD, METHOD_HOST_SHOW_STATUS,
@@ -42,7 +44,7 @@ use fuzzy_matcher::skim::SkimMatcherV2;
 use fuzzy_matcher::FuzzyMatcher;
 use std::collections::HashMap;
 use std::io::Read;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{LazyLock, Mutex};
 use std::time::{Duration, Instant};
@@ -590,7 +592,11 @@ struct QueryTiming {
     channel: &'static str,
     /// 通道内耗时（IPC 或回落 `es.exe`）；不含探活（探活在 `get_file_items` 内单独计时）。
     query_ms: f64,
+    /// 评分与排序耗时（**不含**结果项构造；构造期自 2026-09-19 起记入 `icon_ms`）。
     score_ms: f64,
+    /// 结果项构造耗时（2026-09-19 新增）：主要是**真实图标**取用（进程内缓存命中
+    /// ~0；未命中 → 落盘缓存查表；再未命中 → Shell 抽取 + PNG 编码 + 写盘）。
+    icon_ms: f64,
     items: usize,
 }
 
@@ -600,6 +606,7 @@ impl QueryTiming {
         channel: "",
         query_ms: 0.0,
         score_ms: 0.0,
+        icon_ms: 0.0,
         items: 0,
     };
 }
@@ -728,9 +735,11 @@ fn human_size(bytes: u64) -> String {
 
 // ─── CommandItem 构造 ──────────────────────────────────────────────
 
-// ─── 文件类型图标（Segoe Fluent Icons / MDL2，按扩展名分类）────────────
+// ─── 文件类型图标（**回落档**：Segoe Fluent Icons / MDL2，按扩展名分类）──
 //
-// 文件结果按扩展名显示类别图标（12 类，未收录回落 Page 兜底）。宿主
+// 2026-09-19 起，文件结果的**默认档**是 Windows Shell 真实图标（见上方
+// `entry_icon` / `lookup_icon_png`，落 `IconKind::Path`）；本节的 12 类类别
+// 图标降为**抽取失败时的回落档**（12 类，未收录回落 Page 兜底）。宿主
 // `setup_cjk_fonts` 已把图标字体装入字形回退链（Win11 SegoeIcons.ttf →
 // Win10 segmdl2.ttf），协议 `Icon::Glyph` 透传零改动。
 //
@@ -822,13 +831,83 @@ fn category_glyph(c: FileCategory) -> &'static str {
     }
 }
 
-/// 文件结果项图标：目录恒为 Folder，文件按扩展名分类。
+/// 文件结果项图标（**回落档**）：目录恒为 Folder，文件按扩展名分类。
+///
+/// 自 2026-09-19 起为「真实 Shell 图标不可得时」的回落路径，见 [`entry_icon`]。
 fn entry_glyph(entry: &FileEntry) -> &'static str {
     if entry.is_dir {
         GLYPH_FOLDER
     } else {
         category_glyph(file_category(&entry.name))
     }
+}
+
+// ─── 真实文件图标（Shell 图标 → PNG 落盘缓存；2026-09-19）─────────────────
+
+/// 图标缓存键（纯函数，单测锚点）——决定「哪些文件共用一张图」：
+/// - 目录 → `dir`（系统文件夹图标，不按路径区分）；
+/// - 自带图标的容器类型（`.exe`/`.lnk`/`.msi`/`.url`）→ **真实路径**（每个程序显示
+///   自己的图标，与资源管理器一致）；
+/// - 其余 → `ext:<小写扩展名>`（同类型共图，一次抽取全程复用）；
+/// - 无扩展名 → `noext`。
+fn icon_cache_key_for(path: &str, is_dir: bool) -> String {
+    if is_dir {
+        return "dir".to_string();
+    }
+    let name = path.rsplit(['\\', '/']).next().unwrap_or(path);
+    let ext = match name.rsplit_once('.') {
+        // 前导点（`.gitignore`）不算扩展名
+        Some((stem, ext)) if !stem.is_empty() && !ext.is_empty() => ext.to_ascii_lowercase(),
+        _ => return "noext".to_string(),
+    };
+    const SELF_ICON_EXTS: &[&str] = &["exe", "lnk", "msi", "url"];
+    if SELF_ICON_EXTS.contains(&ext.as_str()) {
+        format!("path:{}", path.to_ascii_lowercase())
+    } else {
+        format!("ext:{ext}")
+    }
+}
+
+/// 进程内图标缓存：键 → 落盘 PNG 路径（`None` = 本会话已判定不可得，负缓存）。
+///
+/// 必要性：单次查询 30 条里常有十几条同键（同扩展名），无此缓存会逐条查磁盘；
+/// 扩展进程常驻，缓存随进程生命周期存活（隐藏/重启宿主不影响其正确性）。
+static ICON_CACHE: LazyLock<Mutex<HashMap<String, Option<PathBuf>>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
+
+/// 取该条目图标的 PNG 路径：进程内缓存 → 落盘缓存 → Shell 抽取（[`dd_ext::shell_icon`]）。
+/// 任一步失败 → `None`（调用方回落类别 glyph）。
+fn lookup_icon_png(entry: &FileEntry) -> Option<PathBuf> {
+    let path = entry.full_path();
+    let key = icon_cache_key_for(&path, entry.is_dir);
+    if let Some(cached) = ICON_CACHE.lock().ok().and_then(|m| m.get(&key).cloned()) {
+        return cached;
+    }
+    let png = shell_icon::file_type_icon_png(&key, Path::new(&path), shell_icon::FILE_ICON_SIZE);
+    if let Ok(mut m) = ICON_CACHE.lock() {
+        m.insert(key, png.clone());
+    }
+    png
+}
+
+/// 图标统一出口（纯函数，单测锚点）：有 PNG 路径 → `IconKind::Path`；
+/// 否则回落类别 glyph `entry_glyph`（零退化）。
+fn icon_from_png(png: Option<PathBuf>, entry: &FileEntry) -> Icon {
+    match png.and_then(|p| p.to_str().map(|s| s.to_string())) {
+        Some(value) => Icon {
+            kind: IconKind::Path,
+            value,
+        },
+        None => Icon {
+            kind: IconKind::Glyph,
+            value: entry_glyph(entry).to_string(),
+        },
+    }
+}
+
+/// 文件结果项图标：**真实 Shell 图标优先**，失败回落类别 glyph。
+fn entry_icon(entry: &FileEntry) -> Icon {
+    icon_from_png(lookup_icon_png(entry), entry)
 }
 
 fn to_command_item(entry: &FileEntry) -> CommandItem {
@@ -856,10 +935,8 @@ fn to_command_item(entry: &FileEntry) -> CommandItem {
         id: format!("files.open.{pid}"),
         title: entry.name.clone(),
         subtitle: Some(path.clone()),
-        icon: Some(Icon {
-            kind: IconKind::Glyph,
-            value: entry_glyph(entry).to_string(),
-        }),
+        // 真实 Shell 图标（`Icon::Path`）优先，失败回落类别 glyph（`entry_icon`）
+        icon: Some(entry_icon(entry)),
         section: Some(tr("文件", "Files").to_string()),
         tags: Some(vec!["files".to_string()]),
         details: Some(Details {
@@ -1042,13 +1119,14 @@ fn get_file_items(params: &GetItemsParams) -> GetItemsResult {
     let t = take_timing();
     // O7 A-33-05 定因：每次 `get_items` 输出一行分段计时（debug；默认级别即可见）。
     log::debug!(
-        "[dd-ext-filesearch] get_items 计时: kind={} total={:.2}ms probe={:.2}ms channel={} query={:.2}ms score={:.2}ms items={}",
+        "[dd-ext-filesearch] get_items 计时: kind={} total={:.2}ms probe={:.2}ms channel={} query={:.2}ms score={:.2}ms icon={:.2}ms items={}",
         t.kind,
         elapsed_ms(t_start),
         probe_ms,
         if t.channel.is_empty() { "none" } else { t.channel },
         t.query_ms,
         t.score_ms,
+        t.icon_ms,
         t.items
     );
     result
@@ -1064,6 +1142,7 @@ fn get_file_items_with(params: &GetItemsParams, available: bool) -> GetItemsResu
             t.channel = "none";
             t.query_ms = 0.0;
             t.score_ms = 0.0;
+            t.icon_ms = 0.0;
             t.items = items.len();
         });
         return GetItemsResult {
@@ -1079,6 +1158,7 @@ fn get_file_items_with(params: &GetItemsParams, available: bool) -> GetItemsResu
             t.channel = "none";
             t.query_ms = 0.0;
             t.score_ms = 0.0;
+            t.icon_ms = 0.0;
             t.items = items.len();
         });
         return GetItemsResult {
@@ -1098,15 +1178,20 @@ fn get_file_items_with(params: &GetItemsParams, available: bool) -> GetItemsResu
                 .map(|e| (score(&e, query, &matcher, recency_floor), e))
                 .collect();
             scored.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
+            let score_ms = elapsed_ms(t_score);
+            // 结果项构造（含真实图标取用）单独计时：icon_ms 的引入把「评分」与
+            // 「构造/取图」拆开，便于判断图标缓存是否真的生效（2026-09-19）。
+            let t_icon = Instant::now();
             let items: Vec<CommandItem> = scored
                 .into_iter()
                 .take(RESULT_LIMIT)
                 .map(|(_, e)| to_command_item(&e))
                 .collect();
-            let score_ms = elapsed_ms(t_score);
+            let icon_ms = elapsed_ms(t_icon);
             patch_timing(|t| {
                 t.kind = "results";
                 t.score_ms = score_ms;
+                t.icon_ms = icon_ms;
                 t.items = items.len();
             });
             GetItemsResult {
@@ -1120,6 +1205,7 @@ fn get_file_items_with(params: &GetItemsParams, available: bool) -> GetItemsResu
             patch_timing(|t| {
                 t.kind = "error";
                 t.score_ms = 0.0;
+                t.icon_ms = 0.0;
                 t.items = items.len();
             });
             GetItemsResult {
@@ -1312,6 +1398,23 @@ mod tests {
     use super::*;
     use dd_protocol::model::Sender;
 
+    /// 共享 [`PATH_INDEX`] 的用例串行锁（2026-09-19 修）。
+    ///
+    /// `path_index_evicts_beyond_capacity` 会注册 `PATH_INDEX_CAP + 20` 条路径，而
+    /// 淘汰按 **id 阈值**执行 → 它会把**并行用例刚刚注册的 pid 一并清掉**
+    /// （症状：`invoke_copy…` 断言「恰好一条剪贴板副作用」得到 0 条）。
+    /// 该竞态此前偶发；本批给 `to_command_item` 接入真实图标取用后，用例窗口被拉长
+    /// → 每次并行运行必现（实测 5/5 失败、`--skip` 该用例 3/3 通过、单线程 48/48 通过）。
+    /// 修法：凡**读回**索引内容的用例统一持锁（仅测试代码，生产逻辑零改动）。
+    static PATH_INDEX_TEST_LOCK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
+
+    /// 取串行锁（中毒视为已释放：单测失败不应连锁拖垮后续用例）。
+    fn path_index_guard() -> std::sync::MutexGuard<'static, ()> {
+        PATH_INDEX_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+    }
+
     #[test]
     fn filetime_to_unix_converts_and_guards() {
         // 1970-01-01 的 FILETIME 基准 → 0；每 10^7 为 1 秒
@@ -1442,6 +1545,7 @@ mod tests {
 
     #[test]
     fn path_index_roundtrip() {
+        let _guard = path_index_guard(); // 与驱逐用例串行（见锁文档）
         let p = register_path("C:\\a\\b.txt");
         assert_eq!(lookup_path(p), Some("C:\\a\\b.txt".to_string()));
         assert_eq!(lookup_path(999_999_999), None);
@@ -1649,6 +1753,7 @@ mod tests {
     // ─── T-15 invoke 分发 ────────────────────────────────────────
     #[test]
     fn handle_invoke_opens_file_via_host_request() {
+        let _guard = path_index_guard(); // 与驱逐用例串行（见锁文档）
         let pid = register_path("C:\\proj\\src\\main.rs");
         let (result, effects) = handle_invoke(&InvokeParams {
             id: format!("files.open.{pid}"),
@@ -1715,6 +1820,7 @@ mod tests {
 
     #[test]
     fn handle_invoke_open_unc_path_builds_authority_url() {
+        let _guard = path_index_guard(); // 与驱逐用例串行（见锁文档）
         let pid = register_path("\\\\nas\\public\\报告.pdf");
         let (_, effects) = handle_invoke(&InvokeParams {
             id: format!("files.open.{pid}"),
@@ -1785,7 +1891,8 @@ mod tests {
 
     #[test]
     fn to_command_item_builds_three_actions_sharing_pid() {
-        // P1.1：三个动作共享同一路径 pid；「注册后立即 lookup」恒安全
+        let _guard = path_index_guard(); // 与驱逐用例串行（见锁文档）
+                                         // P1.1：三个动作共享同一路径 pid；「注册后立即 lookup」恒安全
         let item = to_command_item(&sample_entry());
         let pid = item
             .id
@@ -1819,6 +1926,7 @@ mod tests {
 
     #[test]
     fn resolve_path_action_validates_pid_and_context() {
+        let _guard = path_index_guard(); // 与驱逐用例串行（见锁文档）
         let item = to_command_item(&sample_entry());
         let pid = item.id["files.open.".len()..].to_string();
         use dd_protocol::messages::InvokeContext;
@@ -1862,6 +1970,7 @@ mod tests {
 
     #[test]
     fn invoke_copy_returns_toast_and_clipboard_effect_in_order() {
+        let _guard = path_index_guard(); // 与驱逐用例串行（见锁文档）
         let item = to_command_item(&sample_entry());
         let pid = item.id["files.open.".len()..].to_string();
         let (result, effects) = handle_invoke(&InvokeParams {
@@ -1889,7 +1998,8 @@ mod tests {
 
     #[test]
     fn invoke_reveal_rejects_stale_pid_and_invalid_path_without_effects() {
-        // 失效 pid（未注册）：明确 Toast、零副作用（§9.2 P1.3）
+        let _guard = path_index_guard(); // 与驱逐用例串行（见锁文档）
+                                         // 失效 pid（未注册）：明确 Toast、零副作用（§9.2 P1.3）
         let (result, effects) = handle_invoke(&InvokeParams {
             id: "files.reveal.424242".into(),
             sender: Sender::ContextMenu,
@@ -1980,6 +2090,9 @@ mod tests {
     // ─── T-13 索引容量上限（长跑内存泄漏防线）─────────────────────
     #[test]
     fn path_index_evicts_beyond_capacity() {
+        // 本用例会**清空其他用例的 pid**（按 id 阈值淘汰）→ 必须与读回索引的
+        // 用例串行（见 PATH_INDEX_TEST_LOCK 文档）。
+        let _guard = path_index_guard();
         let oldest = register_path("C:\\oldest");
         let mut newest = oldest;
         for i in 0..(PATH_INDEX_CAP + 20) {
@@ -2189,23 +2302,63 @@ mod tests {
         );
     }
 
+    /// 图标统一出口的**回落档**（纯函数，不触发 Shell 抽取）：
+    /// 无 PNG 路径 → 类别 glyph；有路径 → `IconKind::Path`。
     #[test]
-    fn to_command_item_icon_follows_file_type() {
+    fn icon_from_png_falls_back_to_category_glyph() {
         let mut e = sample_entry(); // 报告 2026.txt → 文档
-        assert_eq!(
-            to_command_item(&e).icon.as_ref().map(|i| i.value.as_str()),
-            Some(GLYPH_DOCUMENT)
-        );
+        let glyph_of = |entry: &FileEntry| icon_from_png(None, entry).value;
+        let kind_of = |entry: &FileEntry| icon_from_png(None, entry).kind;
+        assert_eq!(glyph_of(&e), GLYPH_DOCUMENT);
+        assert_eq!(kind_of(&e), IconKind::Glyph, "回落档必须仍是 glyph");
         e.name = "photo.jpg".into();
-        assert_eq!(
-            to_command_item(&e).icon.as_ref().map(|i| i.value.as_str()),
-            Some(GLYPH_IMAGE)
-        );
+        assert_eq!(glyph_of(&e), GLYPH_IMAGE);
         e.is_dir = true;
+        assert_eq!(glyph_of(&e), GLYPH_FOLDER, "目录恒为文件夹图标");
+    }
+
+    /// 有真实图标 PNG 路径 → `IconKind::Path` 且值 = 该路径（宿主据此读盘解码）。
+    #[test]
+    fn icon_from_png_prefers_real_icon_path() {
+        let e = sample_entry();
+        let png =
+            PathBuf::from(r"C:\Users\x\AppData\Roaming\dd-run\cache\file-icons\file-1-32.png");
+        let icon = icon_from_png(Some(png.clone()), &e);
+        assert_eq!(icon.kind, IconKind::Path);
+        assert_eq!(icon.value, png.to_string_lossy());
+    }
+
+    /// 缓存键分级（纯函数）：目录共图 / 普通类型按扩展名共图 /
+    /// 自带图标的容器类型按真实路径分图 / 无扩展名与点文件归 `noext`。
+    #[test]
+    fn icon_cache_key_groups_by_file_type() {
+        assert_eq!(icon_cache_key_for(r"C:\Windows", true), "dir");
+        assert_eq!(icon_cache_key_for(r"C:\a\b.txt", false), "ext:txt");
         assert_eq!(
-            to_command_item(&e).icon.as_ref().map(|i| i.value.as_str()),
-            Some(GLYPH_FOLDER),
-            "目录恒为文件夹图标"
+            icon_cache_key_for(r"C:\a\B.TXT", false),
+            "ext:txt",
+            "扩展名大小写不敏感"
+        );
+        assert_eq!(
+            icon_cache_key_for(r"C:\Tool\app.exe", false),
+            r"path:c:\tool\app.exe",
+            "可执行文件按真实路径取自身图标"
+        );
+        assert_eq!(
+            icon_cache_key_for(r"C:\Users\x\Desktop\Steam.lnk", false),
+            r"path:c:\users\x\desktop\steam.lnk",
+            "快捷方式按真实路径（解析到目标应用图标）"
+        );
+        assert_ne!(
+            icon_cache_key_for(r"C:\Tool\a.exe", false),
+            icon_cache_key_for(r"C:\Tool\b.exe", false),
+            "不同 exe 不共图"
+        );
+        assert_eq!(icon_cache_key_for(r"C:\a\README", false), "noext");
+        assert_eq!(
+            icon_cache_key_for(r"C:\a\.gitignore", false),
+            "noext",
+            "前导点不算扩展名"
         );
     }
 

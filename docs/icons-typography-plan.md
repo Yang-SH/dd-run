@@ -1,6 +1,6 @@
 # 图标与字体展示优化（参考 DeskBox）
 
-> **状态**：已落地（I3 未做；F3 同日追加落地）｜ **版本**：v1.1 ｜ **最后更新**：2026-09-13
+> **状态**：已落地（I3 未做；F3 同日追加落地；G1 于 2026-09-19 追加并落地）｜ **版本**：v1.2 ｜ **最后更新**：2026-09-19
 > **关联**：[implementation.md](./implementation.md)
 
 ---
@@ -16,6 +16,7 @@
 | F2 — 列表密度三档 | ✅ | `theme.rs` / `settings.rs` / `app/mod.rs` / `ui/*` | i18n key 为 `set.density.*`（非 `settings.density.*`） |
 | F3 — 拉丁主字纠偏（Segoe UI 置顶，2026-09-13 追加） | ✅ | `crates/dd-gui/src/platform.rs` | 族序显式重排，仅拉丁一处变化，其余路由逐一不变（见 §5.4） |
 | 真机复验（占位层级 / 密度三档截图） | ⚠️ | — | 待做 |
+| G1 — 文件结果改用 Shell 真实图标（2026-09-19 追加，当日落地） | ✅ | `crates/dd-ext/src/shell_icon.rs`（新增）/ `crates/dd-ext/src/bin/search.rs` | 真实图标为默认档、既有 12 类 glyph 降为回落档；渲染侧零改动，详见 §4.5 |
 
 > 参照对象：[Tianyu199509/DeskBox](https://github.com/Tianyu199509/DeskBox)（WinUI 3 桌面整理工具，GPL-3.0）。借鉴其三个核心做法——**所有条目都有真实图标可显示、图标/文字大小可调、文字与行高联动**；技术栈不同（我们 = egui/Fluent token），只借鉴设计决策，不搬实现。
 > 原则：可实现、无错漏、无冲突、不复杂、符合需要——默认档所有数值 = 当前现值，落地后默认观感与上一版本逐像素一致。
@@ -87,6 +88,22 @@
 | url favicon 经 Shell/网络解析 | M5 已有明确决策"不做网络下载"，不翻案 |
 
 ---
+
+### 4.5 G1 — 文件结果改用 Shell 真实图标（2026-09-19 追加，当日落地）
+
+**动机**：文件搜索此前只按扩展名给 12 类 Segoe glyph 类别图标，与资源管理器的观感差距明显（`.pdf`/`.zip`/`.png` 各异的应用关联图标全部被压成同一张纸）。
+
+**做法（与 I1–I3 的关系：真实图标优先，glyph 降为回落档）**：
+
+| 档位 | 适用 | 落点 |
+|---|---|---|
+| ① Shell 真实图标（32×32 → PNG 落盘缓存 → `IconKind::Path`） | 文件搜索结果的**默认**档 | `dd-ext/src/shell_icon.rs`（新增共享管线）、`bin/search.rs`（键分级 + 进程内缓存） |
+| ② glyph 类别图标（12 类，本稿 I1/I2 的既有档） | ① 抽取失败 / 非 Windows / hint·guide·error 项 | `bin/search.rs::entry_glyph` |
+| ③ 应用图标 48px（`IShellItemImageFactory` 优先） | 首屏「应用」列表（不变） | `builtins/apps.rs` 复用 `shell_icon` 的位图→PNG 段 |
+
+**渲染侧零改动**：宿主 `ui/icons.rs` 的 path 图标链路（读盘 → PNG/ICO 解码 → 纹理缓存 → 暗色本体检测 → 24px 图标格）原样复用；I1 的 `IconKind::Url` 空列策略不变（本次不涉及 url 图标下载）。
+
+**验收与两处未达标**（按真实路径档首抽 703.8 ms、sidecar 体积 +104.5 KB）见 [`search-file.md`](./search-file.md) §10.3–§10.4；I3（回退链路 32px → 48px）仍旧未做，与本档不冲突（本档按扩展名共图，每类只抽一次）。
 
 ## 5. 字体展示详设（F1–F2）
 

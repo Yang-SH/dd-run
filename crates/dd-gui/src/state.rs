@@ -377,7 +377,9 @@ impl PanelState {
             return;
         }
         let mut fm = crate::fuzzy::FuzzyMatcher::new(&self.query);
-        let mut scored: Vec<(usize, u32)> = self
+        // 分数为「层级 << 32 | nucleo 分」的打包值（字段分层见 `fuzzy::FuzzyMatcher::score`）：
+        // 标题命中恒先于副标题/标签命中，层内再按匹配质量排。
+        let mut scored: Vec<(usize, u64)> = self
             .items
             .iter()
             .enumerate()
@@ -602,6 +604,30 @@ mod tests {
         s.set_query("open"); // 两项同为前缀命中 → 同分
         let titles: Vec<&str> = s.filtered().map(|(_, it)| it.title.as_str()).collect();
         assert_eq!(titles, vec!["Open A", "Open B"], "同分应保持原始顺序");
+    }
+
+    /// 2026-09-19（真机反馈「搜 `steam` 时 Steam 不在第一个」）：标题命中恒优先于
+    /// 副标题命中——即便原序把副标题命中项排在前面。Steam 游戏的副标题是
+    /// `steam://rungameid/<appid>`，与标题命中在 nucleo 下**同为 140 分**，
+    /// 分层前会被稳定排序回落到字母序、把 `Steam` 挤到第 5。
+    #[test]
+    fn query_ranks_title_hit_above_subtitle_hit() {
+        let mut game = PanelItem::new("Dead Cells"); // 原序 0（字母序也在前）
+        game.subtitle = "steam://rungameid/588650".into();
+        let steam = PanelItem::new("Steam"); // 原序 1
+        let mut s = PanelState::new(vec![game, steam]);
+        s.set_query("steam");
+        let titles: Vec<&str> = s.filtered().map(|(_, it)| it.title.as_str()).collect();
+        assert_eq!(
+            titles,
+            vec!["Steam", "Dead Cells"],
+            "标题命中应排在副标题命中之前"
+        );
+        assert_eq!(
+            s.selected_item().map(|i| i.title.as_str()),
+            Some("Steam"),
+            "选中应落在标题命中项上"
+        );
     }
 
     /// M4 P5（切片 2）：重排后 ↑↓ 导航仍按**可见列表位置**工作（环绕/confirm）。

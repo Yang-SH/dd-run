@@ -34,6 +34,12 @@ impl PaletteApp {
         // ——Tab 保持列表导航语义不变，见 implementation.md 批次 4.0 决策）。
         // 在确认对话框分支之后处理：对话框活跃时该键被吞掉不穿透。
         let ctrl_comma = ctx.input_mut(|i| i.consume_key(egui::Modifiers::CTRL, egui::Key::Comma));
+        // v0.1.4（2026-09-19）：`Ctrl+F` 一键进入文件搜索页（方案
+        // `docs/search-file-ctrl-f-icons-plan.md` §3）。键位冲突已取证：`Ctrl+F`
+        // 此前全仓（含 egui 0.36 输入框内建绑定）无占用——面板内键位仅
+        // Esc / ↑↓ / Tab / Shift+Tab / Enter / `Ctrl+,` / Shift+F10（§2.2）。
+        // 与 `Ctrl+,` 同层：确认对话框 / 右键菜单分支已先行 return，按键不穿透。
+        let ctrl_f = ctx.input_mut(|i| i.consume_key(egui::Modifiers::CTRL, egui::Key::F));
         // v4.4（D19）：Shift+F10 对选中行打开右键菜单（egui 0.36 键表无 Menu
         // 键，Shift+F10 为 Windows 菜单键的等价惯例——偏离记档：Menu 键不可达）。
         let shift_f10 = ctx.input_mut(|i| i.consume_key(egui::Modifiers::SHIFT, egui::Key::F10));
@@ -100,6 +106,9 @@ impl PaletteApp {
         }
         if ctrl_comma {
             self.open_settings();
+        }
+        if ctrl_f {
+            self.open_file_search_from_panel();
         }
     }
 

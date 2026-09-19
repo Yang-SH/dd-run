@@ -9,7 +9,7 @@ pub(crate) const REFRESH_WINDOW: Duration = Duration::from_millis(100);
 
 /// 嵌套页「页内二次输入」的去抖窗口（v3.3 边打边搜）：停止输入该时长后
 /// 才按最新 query 重拉 `get_items`——避免每个按键都启动扩展搜索（Everything
-/// 单次 <50ms 但 IPC 仍有开销；`f ` 前缀自动进页不受影响，仍即时拉取）。
+/// 单次 <50ms 但 IPC 仍有开销；`Ctrl+F` 直达进页的首拉不经此去抖，仍即时）。
 pub(crate) const PAGE_QUERY_DEBOUNCE: Duration = Duration::from_millis(200);
 
 /// `items_changed` 的合并刷新调度。

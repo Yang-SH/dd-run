@@ -26,7 +26,7 @@
 ## 特性一览
 
 - **键盘优先**：核心路径（唤起 → 搜索 → 选择 → 执行 → 返回 → 关闭）100% 可纯键盘完成。
-- **5 个内置扩展 + 文件搜索 sidecar**：应用、计算器、系统、网页搜索、Shell 进程内化运行；文件搜索（基于 Everything，仅 Windows；根视图输入 `f ` 前缀直达）以独立 sidecar 进程提供。
+- **5 个内置扩展 + 文件搜索 sidecar**：应用、计算器、系统、网页搜索、Shell 进程内化运行；文件搜索（基于 Everything，仅 Windows；面板内 `Ctrl+F` 直达）以独立 sidecar 进程提供。
 - **拼音匹配**：中文名按全拼与首字母模糊命中（如 `jsq` → 计算器）。
 - **设置页**（`Ctrl+,` 打开）：外观（亮暗主题、Mica/Acrylic 材质）、常规（开机自启、自定义全局热键——默认 `Win+Alt+Space`）、搜索引擎管理（预设 + 自定义 `{q}` 模板引擎）、扩展管理（按扩展启停）。
 - **多语言**：面板 UI 跟随系统显示语言。
@@ -74,13 +74,13 @@
 | 文档 | 内容 | 读者 |
 |---|---|---|
 | [`cmdpal-platform-agnostic-design.md`](./cmdpal-platform-agnostic-design.md) | **设计参考（上游来源）**：CmdPal 的 UI 模型、扩展契约、宿主模型、内置扩展清单、Rust 参照实现、验收标准 A1–A12 | 想理解"为什么这样设计" |
-| [`cmdpal-ui-mockups.html`](./cmdpal-ui-mockups.html) | **交互设计稿**（v4.13）：亮暗双主题组件库——根视图 / 搜索 / 列表与详情页 / 设置卡片 / 上下文菜单 / Dialog / Toast / Loading 骨架，可键盘走查。后续批次（v4.14–v4.17a）记录于 [`docs/implementation.md`](./docs/implementation.md) §7，尚未回同步到本 HTML | 想看界面长什么样 |
+| [`cmdpal-ui-mockups.html`](./cmdpal-ui-mockups.html) | **交互设计稿**（v4.18）：亮暗双主题组件库——根视图 / 搜索 / 列表与详情页 / 设置卡片 / 上下文菜单 / Dialog / Toast / Loading 骨架，可键盘走查；v4.18 回同步**文件搜索 `Ctrl+F` 直达 / 面板键位总表（§6.5）/ Shell 真实图标 / placeholder 文案**（决策 D39–D41、验收 I 组）。行为型批次 v4.14–v4.17a **未入稿**（无视觉规格变更，见 `docs/implementation.md` §7） | 想看界面长什么样 |
 | [`docs/implementation.md`](./docs/implementation.md) | **实施方案**：里程碑 M0–M9、ADR 决策记录、A1–A12 验收映射、当前进度与遗留项台账 | 要动手写代码 |
 | [`docs/protocol.md`](./docs/protocol.md) | **dd-run Extension Protocol v1.0**：NDJSON 成帧、JSON-RPC 信封、方法、错误码、生命周期状态机、超时与崩溃恢复 | 写宿主或写扩展 |
 | [`docs/manifest-schema.md`](./docs/manifest-schema.md) | **扩展清单 schema**：字段表、三平台配置目录、最小可拷贝示例 | 写扩展 |
 | [`docs/extensions.md`](./docs/extensions.md) | **写一个扩展**：10 分钟上手、三条铁律、三个 Windows 陷阱、`host/*` 反向请求、自检（`dd-run-cli --conformance`）、调试手册 | 写扩展 —— **从这里开始** |
-| [`docs/search-file.md`](./docs/search-file.md) | **文件搜索扩展方案**（v3.3）：Everything 优先 Provider、`f ` 前缀直达、速度打磨 | 写扩展 |
-| [`docs/search.md`](./docs/search.md) | **文件搜索用户指南**（v0.1.0+）：Everything/es.exe 配置、语法速查、故障排查 | 最终用户 |
+| [`docs/search-file.md`](./docs/search-file.md) | **文件搜索扩展方案**（v3.7）：双通道传输（IPC 主 + `es.exe` 回落）、`Ctrl+F` 一键直达、Shell 真实图标、真机验收与阈值记录（含两项未达标） | 写扩展 |
+| [`docs/search.md`](./docs/search.md) | **文件搜索用户指南**（v0.1.0+）：Everything 配置（`es.exe` 为可选回落）、语法速查、故障排查 | 最终用户 |
 
 **阅读顺序建议**：设计文档 §1–§7（理解模型）→ [`docs/implementation.md`](./docs/implementation.md)（知道先做什么）→ [`docs/protocol.md`](./docs/protocol.md) + [`docs/manifest-schema.md`](./docs/manifest-schema.md)（照着实现）。
 
@@ -108,7 +108,7 @@
 
 - **M0–M4 已全部关闭**：协议冻结 → 最小面板 → 命令执行与状态机 → 缓存懒加载 → 5 内置扩展与健壮性（commit `757f3b4`）。
 - **M5 已完成**：ueli 风格 UI 重构，批次 1–4.2 + 六轮真机反馈修复（commit `5cf32b7`）+ 设计稿 C 组占位（Loading 骨架 / Dialog 遮罩 / Toast 意图色）。
-- **M6 已完成**（2026-09-08 M6 集中回归 A–F 真机验收全部通过）：设置页（外观 / 常规 / 搜索 / 扩展）、Mica/Acrylic 窗口材质、托盘图标、拖动与缩放、自定义全局热键、开机自启、拼音搜索、多语言、冷启动 CJK 字体后台加载、文件搜索扩展（`f ` 直达）（commits `a007656`…`2e5b3da`；设计稿批次 v4.17/v4.17a——设计稿 HTML 文件本身停在 v4.13）。
+- **M6 已完成**（2026-09-08 M6 集中回归 A–F 真机验收全部通过）：设置页（外观 / 常规 / 搜索 / 扩展）、Mica/Acrylic 窗口材质、托盘图标、拖动与缩放、自定义全局热键、开机自启、拼音搜索、多语言、冷启动 CJK 字体后台加载、文件搜索扩展（现为 `Ctrl+F` 直达）（commits `a007656`…`2e5b3da`；设计稿批次 v4.17/v4.17a——设计稿 HTML 文件本身停在 v4.13）。
 - **M7 已关闭**（发布工程，2026-09-10）：GitHub Actions CI（windows-gnu 上 build / test / clippy `-D warnings` / fmt 四关绿灯）、`assets/app.ico` 增 256px 档。分发定案：**仅免安装单文件绿色版**（曾探索 Inno Setup 安装器后按决策放弃，不留安装器代码）；文件搜索扩展以 sidecar 形态随 `dist/extensions.d/` 携带，宿主会扫描**可执行文件同目录的** `extensions.d/`，绿色 zip **解压即用**。tag → GitHub Release 演练已完成（**v0.1.1** 已于 2026-09-10 发布）。
 - **M8 已关闭**（扩展生态验证，2026-09-10）：非 Rust（Python）扩展走通协议全链路（`--conformance` 10 项全 ✓）；扩展开发指南 + 一致性自检随指南发布。
 - **M9 已关闭**（内置扩展进程内化，2026-09-11）：5 个内置扩展改为**宿主进程内**调用（不再 spawn / 内嵌扩展 exe）——单文件分发；第三方 / sidecar 扩展保留进程隔离。协议 v1.0 零改动。

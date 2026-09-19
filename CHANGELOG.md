@@ -4,6 +4,43 @@
 
 ## [Unreleased]
 
+### 文档（文件搜索用户指南解除 `es.exe` 前置表述，2026-09-19）
+
+- **口径变更（零代码改动）**：`docs/search.md` 由「`es.exe` 仍受支持 / 仍建议安装 / 已发布版本仍依赖」改为 —— **唯一必需依赖是 Everything 在运行**；`es.exe` 降为**可选回落通道**（只在 IPC 直连不可用时出场，未安装则给可读提示、不静默失败）。改动面：§1 标题「前置条件」→「准备事项」、步骤 1 标「必需」/步骤 2 标「可选（推荐）」、步骤 4 验证改可选、配置项注、故障排查两行、已知边界引导项、§7 升级说明、§8 FAQ（原「还需要安装 `es.exe` 吗？**需要（建议）**」→「**不必须（可选，推荐）**」）。
+- **决策依据**：真机验收两轮完成（A-33-05 / A-33-06 / A-33-07 / A-33-10 **通过**，回落静默失败缺陷已修）→ 原「待决策项」（`search-file.md` §1 / `INDEX.md` §5）**定稿解除**；**A-33-08 仍为唯一红线**（Win10 / Everything 1.5 / 提升 / 命名实例未覆盖），故文档以「直连不可用时回落」表述承接，**不作全覆盖承诺**。
+- **同步回写**：`README.md` / `README.zh-CN.md` 文档表、`search-file.md`（v3.8：§1 口径 + §8 版本演进行）、`INDEX.md`（v1.15：§5 行 + 两处行数重算）、验收报告 §1 与 `doc-audit` / `doc-code-diff` 的红线注记（**就地追加「已解除」注、历史结论保留**）、`implementation.md` §2 + §7。
+
+### 新增（文件搜索：面板内 `Ctrl+F` 直达 + 查询结果显示真实图标，2026-09-19）
+
+- **`Ctrl+F` 一键直达**：面板内**任意页**按 `Ctrl+F` 进入文件搜索页（此前须输入 `f ` 前缀、点顶层入口项或兜底模板）。已在文件搜索页时**幂等**（仅聚焦、输入保留）；其他位置先回 Root 再进页（**栈深恒为 2**）；仅 Root 的查询带入（trim 后非空、**原样**带入——前缀剥离逻辑已于同日随 `f ` 前缀直达一起移除，见下条变更），设置页 / 其他嵌套页进空查询；扩展未加载或被禁用 → Error Toast，不产生空页。键位取证：`Ctrl+F` 此前**全仓无绑定**（面板内仅 Esc / ↑↓ / Tab / Shift+Tab / Enter / `Ctrl+,` / Shift+F10）；确认对话框与右键菜单活跃时不穿透，热键捕获模式下仍可作为自定义全局热键候选。根页 placeholder 追加 `Ctrl+F 搜文件` 提示。
+- **文件结果图标 → Windows Shell 真实图标**：由「按扩展名的 12 类 Segoe glyph」改为 `dd_ext::shell_icon` 抽 32×32 Shell 图标 → PNG 落盘缓存（`%APPDATA%\dd-run\cache\file-icons\`），经协议**零改动**的 `IconKind::Path` 回传（复用宿主既有 path 图标链路）。缓存键分级：目录 → `dir`；`.exe`/`.lnk`/`.msi`/`.url` → 真实路径（每个程序自身图标）；其余 → `ext:<小写扩展名>`。抽取 / 编码 / 写盘任一失败 → 回落类别 glyph（零退化）；非 Windows 目标编译通过并恒走 glyph。
+- **图标管线去重**：`HICON/HBITMAP → PNG`（掩码 alpha、掩码行 DWORD 对齐、`GetDIBits` 负高 top-down）与缓存三函数自 `builtins/apps.rs` **上移**为新模块 `dd-ext/src/shell_icon.rs`，应用图标与文件图标共用一份实现；apps 行为不变（仅可见性与位置）。
+- **可观测性**：`get_items` 计时日志新增 `icon=` 段（结果项构造 / 取图耗时；`score_ms` 自本次起不含构造期）；`tools/search_acceptance.py` 的计时解析同步支持（`icon=` 为**可选**段，旧日志仍可解析）。
+- **测试竞态修复（既有缺陷，本批暴露）**：`search.rs::path_index_evicts_beyond_capacity` 按 **id 阈值**清空 `PATH_INDEX`，会连带清掉并行用例的 pid（`invoke_copy…` 因此拿到 0 条副作用）；此前偶发，接入真实图标后**并行必现**（实测 5/5 失败、跳过该用例 3/3 通过、单线程 48/48 通过）。修法：8 个读回索引的用例统一持测试内串行锁（生产逻辑零改动）。
+- **验证**：`fmt` 无差异 / `clippy --workspace --all-targets` **0 告警** / `cargo test --workspace` **448 passed**（基线 436 + 本批 12）；`cargo build --release` **exit 0**；真机直驱 release sidecar（`--cold` 冷缓存口径）实测 `icon_ms`：缓存命中 **0.09–0.44 ms**（30 条）、按扩展名首抽 **冷启首档 40.29 ms（压线）/ 其余 9.3–10.8 ms**、**按真实路径首抽 191–704 ms（30 新键，随文件构成波动）**；`file-icons/` 39–88 文件 / 34–63 KB。
+- **验收工具（可复现）**：新增 `tools/icon_acceptance.py` —— A-IC-01/02a/02b/02c/04/06 **六项自动判定** + JSON 证据（`target/acceptance/icon-acceptance.json`）+ 退出码（0 全过 / 1 有 FAIL / 2 环境未就绪）。**`--cold` 是「首抽」判据的必要口径**：热缓存会把 `ext:exe` 从 703.8 ms 降到 98.7 ms，从而把未达标误读成达标。
+- **两处未达标（如实记档，处置待决策，详见 `docs/search-file.md` §10.4）**：① 按真实路径档首次抽取 **703.8 ms**（预算 ≤ 40 ms）；② `dd-ext-search.exe` **769,536 → 876,544 B（+104.5 KB，预算 ≤ 64 KB）**，宿主 `dd-run.exe` 仅 **+3,072 B**。
+
+### 变更（文件搜索：移除 `f ` 前缀直达，2026-09-19）
+
+- **移除**：根页输入 `f ` + 空格**自动进文件搜索页**的便捷触发整条删除 —— `FILE_SEARCH_PREFIX` 常量、纯函数 `file_search_drill_target()`、`PaletteApp::maybe_drill_file_search()` 及其在 `ui()` 的每帧调用、状态 `file_drill` / `file_drill_armed`、`poll_page` 的落地回填分支，全部清掉（**无死代码残留**）；`Ctrl+F` 的查询带入不再剥离前缀。**`f ` 自此是普通搜索词**（`f report` = 搜同时含 `f` 与 `report` 的项）。
+- **动机**：前缀会**劫持根视图的字面查询**（想搜字面 `f report` 也会被强制进页），而 v3.6 的 `Ctrl+F` 已提供更明确的一键直达 → 面板内直达入口收敛为一条，进入方式由四条变为**三条**（顶层入口项 / 兜底模板 / `Ctrl+F`）。
+- **未改动**：`open_page` 统一回填与 `poll_page` 的 v3.3 query 保留逻辑（`Ctrl+F` 带词进页不变）、「已在文件搜索页 → 幂等」判定、栈深恒 2、扩展不可用 Toast、顶层入口项、兜底模板、扩展侧与协议（零改动）；其余键位与页面栈语义不变。
+- **验证**：`fmt --all -- --check` 无差异 / `clippy --workspace --all-targets` **0 告警** / `cargo test --workspace` **447 passed / 0 failed**（基线 448 − 删除 1 个前缀专属用例 `file_drill_prefix_still_works`；`ctrl_f_query_source_rules` 改锚定「`f ` 开头原样带入」）。
+
+### 变更（应用列表：剔除 Windows SDK / 驱动包装的调试诊断工具，2026-09-19）
+
+- **现象**：默认「应用」列表里混入 `Application Verifier (WOW)` / `Application Verifier (X64)`、`Windows App Cert Kit`、`Debuggable Package Manager (1)`、`Developer PowerShell for VS 2022`（含 `(1)`）、`AMD Bug Report Tool`、`Windows Software Development Kit` —— 这些由 Windows SDK / 驱动包 / VS 安装器写进开始菜单，普通用户不会启动，出现在「应用」列表里只会稀释检索质量。
+- **修复**：新增 `DEV_TOOL_TITLE_KEYWORDS`（与 `JUNK_TITLE_KEYWORDS` 同走 `is_junk_title` 判定，两类规则各有出处、便于日后增删），全部采用**精确短语** —— `application verifier` / `app cert kit` / `debuggable package manager` / `developer powershell` / `bug report` / `software development kit`，避免 `sdk` / `debug` 这类宽词误杀。
+- **验证**：真机 **122** 条样本实测**命中 8 条、误杀 0 条**（`Visual Studio 2022` / `Visual Studio Code` / `Visual Studio Installer` / `PowerShell 7 (x64)` / `Windows 工具` / `Git Bash` 均保留）；新增单测 `dev_tool_titles_are_filtered`（8 条正例 + 6 条反例）；三关 `fmt` 无差异 / `clippy` 0 告警 / `cargo test --workspace` **436 passed**。
+
+### 修复（模糊排序字段分层：标题命中被副标题命中压过，2026-09-19）
+
+- **现象**：输入 `steam` 时，标题精确匹配的「Steam」排在第 5 位 —— `Dead Cells`、`Family Crush` 等 Steam 游戏都在它前面，看起来像「没有按匹配度排序」。
+- **根因**：`dd-gui::fuzzy::FuzzyMatcher::score` 把 `title` / `subtitle` / `section` / `pinyin` / `tags` **混在同一池里取最高分**，而 nucleo 对**前缀连续匹配不区分 haystack 长度** —— 实测 `Steam`（标题精确，`140` 分）与 `steam://rungameid/588650`（Steam 游戏副标题，`140` 分）**完全同分**。`recompute_visible` 按分降序**稳定排序**，同分遂回落到扩展侧字母序（`apps.rs` 按标题小写排序），把标题命中项挤到后面。**排序机制本身正常**，问题在「字段无权重」。
+- **修复**：**字段分层** —— `score()` 返回 `(层 << 32) | nucleo 分`：**层 1 = 标题层**（`title` 与其派生拼音索引 `pinyin`），**层 0 = 附属层**（`subtitle` / `section` / `tags`）。层不同绝不互比，层内仍按匹配质量排，同层同分继续由稳定排序保持原序。改后 `Steam` 与 `Steam Support Center`（均标题命中）恒排在所有 `steam://` 游戏之前，二者同分且字母序在前 → **`Steam` 落到第 1**。
+- **验证**：新增 2 个单测（`fuzzy::tests::title_hit_outranks_subtitle_hit`、`state::tests::query_ranks_title_hit_above_subtitle_hit`）锁定「标题命中恒先于副标题命中」；三关 `fmt` 无差异 / `clippy` 0 告警 / `cargo test --workspace` **435 passed**（基线 433 + 本批 2）。
+
 ### 修复（文件搜索回落通道静默失败：`es.exe` 失败被当成「无结果」，2026-09-17）
 
 - **现象**：IPC 不可用且 `es.exe` 也失败时，文件搜索页显示**空列表**（「无匹配结果」），**没有任何提示** —— 用户无从判断是「没搜到」还是「工具坏了」。
