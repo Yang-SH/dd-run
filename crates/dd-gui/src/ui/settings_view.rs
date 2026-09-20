@@ -270,8 +270,14 @@ impl PaletteApp {
                 self.draw_appearance_card(ui, &p);
                 self.draw_material_card(ui, &p, &ctx);
                 self.draw_density_card(ui, &p);
+                ui.add_space(8.0); // 卡片间距 8px（§08.1）
+                self.draw_reset_appearance_card(ui, &p);
             }
-            SettingsCategory::General => self.draw_general_cards(ui, &p),
+            SettingsCategory::General => {
+                self.draw_general_cards(ui, &p);
+                ui.add_space(8.0); // 卡片间距 8px（§08.1）
+                self.draw_keys_behavior_card(ui, &p);
+            }
             SettingsCategory::Search => {
                 self.draw_search_behavior_card(ui, &p);
                 ui.add_space(8.0); // 卡片间距 8px（§08.1）
@@ -389,6 +395,14 @@ impl PaletteApp {
         let mut opacity_tmp = self.settings.material_opacity;
         let mut opacity_changed = false;
         let mut opacity_released = false;
+        // T6（2026-09-20）：着色行状态（模式 pill + 自定义色 + 强度）
+        let colorization = self.settings.colorization;
+        let mut picked_colorization: Option<dd_gui::settings::ColorizationMode> = None;
+        let mut color_tmp = self.settings.custom_tint_color;
+        let mut color_changed = false;
+        let mut intensity_tmp = self.settings.custom_tint_intensity;
+        let mut intensity_changed = false;
+        let mut intensity_released = false;
         draw_settings_card_frame(ui, p, self.backdrop_active, |card| {
             // 卡头：图标 + 名称 + 描述（描述跟随当前材质，同 DeskBox 行描述语义）
             card.horizontal(|ui| {
@@ -414,18 +428,10 @@ impl PaletteApp {
                     );
                     ui.add(
                         egui::Label::new(
-                            egui::RichText::new(crate::text::t(
-                                lang,
-                                match material {
-                                    dd_gui::settings::Backdrop::None => "set.material.none.desc",
-                                    dd_gui::settings::Backdrop::Mica => "set.material.mica.desc",
-                                    dd_gui::settings::Backdrop::Acrylic => {
-                                        "set.material.acrylic.desc"
-                                    }
-                                },
-                            ))
-                            .size(12.0)
-                            .color(p.text3),
+                            // M1：描述键由注册表派生（`Backdrop::desc_key`）
+                            egui::RichText::new(crate::text::t(lang, material.desc_key()))
+                                .size(12.0)
+                                .color(p.text3),
                         )
                         .wrap(),
                     );
@@ -445,26 +451,22 @@ impl PaletteApp {
                     .color(p.text3),
             );
             card.add_space(6.0);
+            // M1（2026-09-20）：pill 列表与文案键由注册表派生（`Backdrop::ALL`
+            // + `name_key()`），宽度按档数均分——加档无需改本处。
             let gap = 8.0;
             card.horizontal(|ui| {
                 ui.spacing_mut().item_spacing.x = 0.0;
                 let avail = ui.available_width();
-                let pill_w = (avail - 2.0 * gap) / 3.0;
-                for (i, (backdrop, key)) in [
-                    (dd_gui::settings::Backdrop::None, "set.material.none"),
-                    (dd_gui::settings::Backdrop::Mica, "set.material.mica"),
-                    (dd_gui::settings::Backdrop::Acrylic, "set.material.acrylic"),
-                ]
-                .into_iter()
-                .enumerate()
-                {
+                let n = dd_gui::settings::Backdrop::ALL.len() as f32;
+                let pill_w = (avail - (n - 1.0) * gap) / n;
+                for (i, backdrop) in dd_gui::settings::Backdrop::ALL.into_iter().enumerate() {
                     if i > 0 {
                         ui.add_space(gap);
                     }
                     if draw_density_pill(
                         ui,
                         pill_w,
-                        crate::text::t(lang, key),
+                        crate::text::t(lang, backdrop.name_key()),
                         material == backdrop,
                         p,
                         dark,
@@ -474,7 +476,93 @@ impl PaletteApp {
                     }
                 }
             });
-            // ── 行 2：不透明度滑杆（P2；材质关/未生效 → 置灰）──
+            // ── 行 2：着色（T6；三选 pill + 自定义档条件显隐颜色/强度）──
+            // 只在材质生效时有视觉意义 → 材质未生效整行置灰（dim）。
+            card.add_space(8.0);
+            card.label(
+                egui::RichText::new(crate::text::t(lang, "set.color.name"))
+                    .size(14.0)
+                    .color(p.text),
+            );
+            card.add_space(2.0);
+            card.label(
+                egui::RichText::new(crate::text::t(lang, "set.color.desc"))
+                    .size(12.0)
+                    .color(p.text3),
+            );
+            card.add_space(6.0);
+            card.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = 0.0;
+                let avail = ui.available_width();
+                let n = dd_gui::settings::ColorizationMode::ALL.len() as f32;
+                let pill_w = (avail - (n - 1.0) * gap) / n;
+                for (i, mode) in dd_gui::settings::ColorizationMode::ALL
+                    .into_iter()
+                    .enumerate()
+                {
+                    if i > 0 {
+                        ui.add_space(gap);
+                    }
+                    if draw_density_pill(
+                        ui,
+                        pill_w,
+                        crate::text::t(lang, mode.name_key()),
+                        colorization == mode,
+                        p,
+                        dark,
+                        !material_active,
+                    ) {
+                        picked_colorization = Some(mode);
+                    }
+                }
+            });
+            if colorization == dd_gui::settings::ColorizationMode::Custom {
+                // 自定义档：色块 + 强度滑杆（材质未生效同样置灰）
+                card.add_space(6.0);
+                card.horizontal(|ui| {
+                    ui.label(
+                        egui::RichText::new(crate::text::t(lang, "set.color.custom_color"))
+                            .size(12.0)
+                            .color(p.text3),
+                    );
+                    ui.add_space(8.0);
+                    ui.add_enabled_ui(material_active, |ui| {
+                        if ui.color_edit_button_srgb(&mut color_tmp).changed() {
+                            color_changed = true;
+                        }
+                    });
+                });
+                card.add_space(6.0);
+                card.horizontal(|ui| {
+                    ui.label(
+                        egui::RichText::new(crate::text::t(lang, "set.color.intensity"))
+                            .size(12.0)
+                            .color(p.text3),
+                    );
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        ui.label(
+                            egui::RichText::new(format!("{}%", intensity_tmp))
+                                .size(12.0)
+                                .color(if material_active { p.text2 } else { p.text3 }),
+                        );
+                    });
+                });
+                card.add_space(6.0);
+                // 独立 id 作用域：`draw_opacity_slider` 内部按名取 id，
+                // 与上方材质不透明度滑杆同卡相邻，必须隔开避免 id 冲突。
+                let (changed, released) = card
+                    .push_id("tint_intensity", |ui| {
+                        draw_opacity_slider(ui, material_active, &mut intensity_tmp, p)
+                    })
+                    .inner;
+                if changed {
+                    intensity_changed = true;
+                }
+                if released {
+                    intensity_released = true;
+                }
+            }
+            // ── 行 3：不透明度滑杆（P2；材质关/未生效 → 置灰）──
             // v6（2026-09-13 设计风格对齐）：egui 默认 Slider（细灰轨 + 行内
             // 百分比后缀）与整套 Fluent 控件（pill/开关）脱节，改自绘规格：
             // 轨 4px 圆角 2（未选 `--border` / 已选 accent_stroke）+ 16px 白钮
@@ -608,6 +696,20 @@ impl PaletteApp {
             self.apply_material_opacity(ctx, opacity_tmp);
         }
         if opacity_released {
+            self.settings.save();
+        }
+        // T6（2026-09-20）：着色变更即时生效（强度松手落盘、自定义色在指针
+        // 松开时落盘——见 `apply_custom_tint_color`）
+        if let Some(m) = picked_colorization {
+            self.apply_colorization(ctx, m);
+        }
+        if color_changed {
+            self.apply_custom_tint_color(ctx, color_tmp);
+        }
+        if intensity_changed {
+            self.apply_custom_tint_intensity(ctx, intensity_tmp);
+        }
+        if intensity_released {
             self.settings.save();
         }
         if let Some(pref) = picked_corner {
@@ -1058,6 +1160,251 @@ impl PaletteApp {
         });
         if apps_toggled {
             self.apply_search_apps(ui.ctx(), !apps_on);
+        }
+    }
+
+    /// 常规栏：「按键行为」卡（B1/B2，2026-09-20）——两行同卡：
+    /// ① Esc 键行为（左侧标题描述 + 右侧 Fluent 下拉，排版同语言卡）；
+    /// ② 退格键返回（左侧标题描述 + 右侧功能开关，排版同搜索应用卡）。
+    /// 两者都是纯设置项：变更即时生效（按键分支每次读设置）并落盘。
+    fn draw_keys_behavior_card(&mut self, ui: &mut egui::Ui, p: &theme::Palette) {
+        let lang = self.lang_effective;
+        let esc_pref = self.settings.esc_behavior;
+        let backspace_on = self.settings.backspace_go_back;
+        let click_on = self.settings.single_click_activation; // T7
+        let anim_on = self.settings.ui_animations; // T8
+        let mut esc_picked: Option<dd_gui::settings::EscBehavior> = None;
+        let mut backspace_toggled = false;
+        let mut click_toggled = false; // T7
+        let mut anim_toggled = false; // T8
+        let combo_w: f32 = 200.0;
+        let labels: Vec<&str> = dd_gui::settings::EscBehavior::ALL
+            .iter()
+            .map(|b| crate::text::t(lang, b.name_key()))
+            .collect();
+        let selected_idx = dd_gui::settings::EscBehavior::ALL
+            .iter()
+            .position(|b| *b == esc_pref)
+            .unwrap_or(0);
+        draw_settings_card_frame(ui, p, self.backdrop_active, |card| {
+            // ── 卡头：图标 + 名称 + 描述 ──
+            card.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = 0.0;
+                let (icon_rect, _) =
+                    ui.allocate_exact_size(egui::vec2(16.0, 16.0), egui::Sense::hover());
+                ui.painter().text(
+                    icon_rect.center() + egui::vec2(0.0, 1.0), // +1px 光学下移（Fluent glyph 重心偏上）
+                    egui::Align2::CENTER_CENTER,
+                    '\u{E765}', // KeyboardClassic
+                    egui::FontId::proportional(16.0),
+                    p.text2,
+                );
+                ui.add_space(12.0);
+                ui.vertical(|ui| {
+                    ui.set_min_height(36.0);
+                    ui.label(
+                        dd_gui::theme::semibold_title(crate::text::t(lang, "set.keys.name"), 14.0)
+                            .color(p.text),
+                    );
+                    ui.add(
+                        egui::Label::new(
+                            egui::RichText::new(crate::text::t(lang, "set.keys.desc"))
+                                .size(12.0)
+                                .color(p.text3),
+                        )
+                        .wrap(),
+                    );
+                });
+            });
+            // ── 行 1：Esc 键行为（左描述 + 右下拉）──
+            card.add_space(8.0);
+            let left_w = (card.available_width() - combo_w - 16.0).max(160.0);
+            card.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = 0.0;
+                ui.allocate_ui(egui::vec2(left_w, 36.0), |ui| {
+                    ui.vertical(|ui| {
+                        ui.label(
+                            egui::RichText::new(crate::text::t(lang, "set.esc.name"))
+                                .size(14.0)
+                                .color(p.text),
+                        );
+                        ui.add(
+                            egui::Label::new(
+                                egui::RichText::new(crate::text::t(lang, "set.esc.desc"))
+                                    .size(12.0)
+                                    .color(p.text3),
+                            )
+                            .wrap(),
+                        );
+                    });
+                });
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if let Some(idx) =
+                        draw_fluent_dropdown(ui, selected_idx, &labels, combo_w, p, true)
+                    {
+                        esc_picked = dd_gui::settings::EscBehavior::ALL.get(idx).copied();
+                    }
+                });
+            });
+            // ── 行 2：退格键返回（左描述 + 右开关）──
+            card.add_space(8.0);
+            let left_w2 = (card.available_width() - 16.0).max(160.0);
+            card.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = 0.0;
+                ui.allocate_ui(egui::vec2(left_w2, 36.0), |ui| {
+                    ui.vertical(|ui| {
+                        ui.label(
+                            egui::RichText::new(crate::text::t(lang, "set.backspace.name"))
+                                .size(14.0)
+                                .color(p.text),
+                        );
+                        ui.add(
+                            egui::Label::new(
+                                egui::RichText::new(crate::text::t(lang, "set.backspace.desc"))
+                                    .size(12.0)
+                                    .color(p.text3),
+                            )
+                            .wrap(),
+                        );
+                    });
+                });
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    backspace_toggled = draw_switch_fn(ui, backspace_on, p);
+                });
+            });
+            // ── 行 3：单击激活（T7；左描述 + 右开关）──
+            card.add_space(8.0);
+            let left_w3 = (card.available_width() - 16.0).max(160.0);
+            card.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = 0.0;
+                ui.allocate_ui(egui::vec2(left_w3, 36.0), |ui| {
+                    ui.vertical(|ui| {
+                        ui.label(
+                            egui::RichText::new(crate::text::t(lang, "set.click.name"))
+                                .size(14.0)
+                                .color(p.text),
+                        );
+                        ui.add(
+                            egui::Label::new(
+                                egui::RichText::new(crate::text::t(lang, "set.click.desc"))
+                                    .size(12.0)
+                                    .color(p.text3),
+                            )
+                            .wrap(),
+                        );
+                    });
+                });
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    click_toggled = draw_switch_fn(ui, click_on, p);
+                });
+            });
+            // ── 行 4：界面动效（T8；左描述 + 右开关）──
+            card.add_space(8.0);
+            let left_w4 = (card.available_width() - 16.0).max(160.0);
+            card.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = 0.0;
+                ui.allocate_ui(egui::vec2(left_w4, 36.0), |ui| {
+                    ui.vertical(|ui| {
+                        ui.label(
+                            egui::RichText::new(crate::text::t(lang, "set.anim.name"))
+                                .size(14.0)
+                                .color(p.text),
+                        );
+                        ui.add(
+                            egui::Label::new(
+                                egui::RichText::new(crate::text::t(lang, "set.anim.desc"))
+                                    .size(12.0)
+                                    .color(p.text3),
+                            )
+                            .wrap(),
+                        );
+                    });
+                });
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    anim_toggled = draw_switch_fn(ui, anim_on, p);
+                });
+            });
+        });
+        if let Some(b) = esc_picked {
+            self.apply_esc_behavior(b);
+        }
+        if backspace_toggled {
+            self.apply_backspace_go_back(!backspace_on);
+        }
+        if click_toggled {
+            self.apply_single_click_activation(!click_on);
+        }
+        if anim_toggled {
+            self.apply_ui_animations(!anim_on);
+        }
+    }
+
+    /// 外观栏：「恢复默认外观」卡（T5，2026-09-20）——两步确认（点击 → 按钮变
+    /// 「确认重置」，5s 未再点自动撤销），避免误触一次性重置外观。
+    ///
+    /// 刻意**不复用** `ConfirmDialog`：该组件语义绑定「扩展 invoke 的二次确认」
+    /// （携带 ext_id + pending 参数），几何与生命周期也不同；此处为宿主本地操作。
+    fn draw_reset_appearance_card(&mut self, ui: &mut egui::Ui, p: &theme::Palette) {
+        use std::time::{Duration, Instant};
+        const ARM_WINDOW: Duration = Duration::from_secs(5);
+        let lang = self.lang_effective;
+        let armed = self
+            .appearance_reset_armed
+            .map(|t| t.elapsed() < ARM_WINDOW)
+            .unwrap_or(false);
+        if self.appearance_reset_armed.is_some() && !armed {
+            self.appearance_reset_armed = None; // 超时自动撤销（按钮回「恢复默认」）
+        }
+        let btn_label = crate::text::t(
+            lang,
+            if armed {
+                "set.reset.armed"
+            } else {
+                "set.reset.action"
+            },
+        );
+        let mut clicked = false;
+        draw_settings_card_frame(ui, p, self.backdrop_active, |card| {
+            card.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = 0.0;
+                let (icon_rect, _) =
+                    ui.allocate_exact_size(egui::vec2(16.0, 16.0), egui::Sense::hover());
+                ui.painter().text(
+                    icon_rect.center() + egui::vec2(0.0, 1.0),
+                    egui::Align2::CENTER_CENTER,
+                    '\u{E777}', // Refresh
+                    egui::FontId::proportional(16.0),
+                    p.text2,
+                );
+                ui.add_space(12.0);
+                ui.vertical(|ui| {
+                    ui.set_min_height(36.0);
+                    ui.label(
+                        dd_gui::theme::semibold_title(crate::text::t(lang, "set.reset.name"), 14.0)
+                            .color(p.text),
+                    );
+                    ui.add(
+                        egui::Label::new(
+                            egui::RichText::new(crate::text::t(lang, "set.reset.desc"))
+                                .size(12.0)
+                                .color(p.text3),
+                        )
+                        .wrap(),
+                    );
+                });
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    clicked = fluent_button(ui, btn_label, p);
+                });
+            });
+        });
+        if clicked {
+            if armed {
+                self.appearance_reset_armed = None;
+                self.apply_reset_appearance(ui.ctx());
+            } else {
+                self.appearance_reset_armed = Some(Instant::now());
+                ui.ctx().request_repaint_after(ARM_WINDOW); // 超时后重绘 → 按钮复原
+            }
         }
     }
 

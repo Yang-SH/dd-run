@@ -263,6 +263,9 @@ pub struct PaletteApp {
     pub(crate) e2e_dispatch_at: Option<Instant>,
     /// E2E：已落地、待本帧绘制完成即结算的样本（`e2e_report` 帧尾消费）。
     pub(crate) e2e_pending: Option<E2eSample>,
+    /// T5（2026-09-20）：「恢复默认外观」两步确认的武装时刻——`Some` 且 5s 内
+    /// 显示「确认重置」，超时自动撤销（避免误触一次性重置外观）。
+    pub(crate) appearance_reset_armed: Option<Instant>,
     /// 鼠标上一帧悬停的行索引。仅当本帧悬停行与它**不同**时才接管选中，
     /// 静止不动的鼠标不再每帧抢占键盘（Tab/↓）选中——修复鼠标/键盘选择互相干扰。
     pub(crate) last_hovered_index: Option<usize>,
@@ -440,6 +443,7 @@ impl PaletteApp {
             e2e_input_at: None,
             e2e_dispatch_at: None,
             e2e_pending: None,
+            appearance_reset_armed: None,
             last_hovered_index: None,
             last_pointer_pos: None,
             scroll_follow: true, // 键盘是主输入：初始允许滚动跟随

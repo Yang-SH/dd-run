@@ -97,7 +97,12 @@ fn main() -> eframe::Result {
             dd_gui::tray::set_tray_lang(resolved_lang);
             // v4.7 D31：启动先按不透明注册（HWND 未捕获、材质成败未知）；
             // 首个 ui 帧捕获 HWND 后由 refresh_backdrop 按结果切换浓淡层（M1）。
-            theme::apply(&cc.egui_ctx, theme::theme_preference(settings.theme), None);
+            theme::apply(
+                &cc.egui_ctx,
+                theme::theme_preference(settings.theme),
+                None,
+                theme::Colorization::from_settings(&settings),
+            );
             // 初始隐藏双保险：`with_visible(false)` 之外显式发 `Visible(false)`，
             // 规避 eframe/egui 0.36 在 Windows 上 `with_visible` 偶发不生效的情况。
             cc.egui_ctx

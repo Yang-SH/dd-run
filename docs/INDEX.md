@@ -1,6 +1,6 @@
 # dd-run 文档索引
 
-> **状态**：生效中 ｜ **版本**：v1.19 ｜ **最后更新**：2026-09-19
+> **状态**：生效中 ｜ **版本**：v1.21 ｜ **最后更新**：2026-09-20
 > **用途**：全部文档的**唯一导航入口**——按模块分组、标注状态与读者，并定义文档格式规约。
 
 ---
@@ -31,7 +31,7 @@ flowchart TD
     MANIFEST --> EXT["extensions.md<br/>扩展开发指南"]
     PROTO --> EXT
 
-    PLAN["专题方案<br/>search-file / refactor / apps / memory / icons / optimization"] --> IMPL
+    PLAN["专题方案<br/>search-file / refactor / apps / memory / icons / optimization / settings"] --> IMPL
     REVIEW["search-file-plan-review.md<br/>方案核对报告（历史）"] --> PLAN
     USERDOC["search.md<br/>用户文档"] --> PLAN
     ARCHIVE["search-file-update.md<br/>历史蓝本（归档）"] --> PLAN
@@ -55,7 +55,7 @@ flowchart TD
 | 文档 | 状态 | 版本 | 行数 | 读者 | 职责 |
 |---|---|---|---|---|---|
 | [`../cmdpal-platform-agnostic-design.md`](../cmdpal-platform-agnostic-design.md) | 生效中 | v1.0 | 547 | 设计者与维护者 | 平台无关抽象模型、页面/扩展/宿主模型、上下游对照、**验收项 A1–A12 的定义源** |
-| [`implementation.md`](./implementation.md) | 生效中 | v0.1.1 | 831 | 维护者 | 实施主线：里程碑状态总表、目标与范围、ADR-1~4、验收映射（含 §3.1 测试基线台账）、遗留台账、实施沿革 |
+| [`implementation.md`](./implementation.md) | 生效中 | v0.1.1 | 853 | 维护者 | 实施主线：里程碑状态总表、目标与范围、ADR-1~4、验收映射（含 §3.1 测试基线台账）、遗留台账、实施沿革 |
 
 ### C. 开发指南与用户文档
 
@@ -76,6 +76,7 @@ flowchart TD
 | [`memory-optimization-plan.md`](./memory-optimization-plan.md) | 已落地 | 128 | 运行时内存占用优化 M1–M4 与实测数据 |
 | [`icons-typography-plan.md`](./icons-typography-plan.md) | 已落地（I3 未做；G1 已落地） | 191 | 图标与字体展示优化：列表密度三档、占位 glyph、token 化；**G1 = 文件结果改用 Shell 真实图标（§4.5）** |
 | [`optimization-plan.md`](./optimization-plan.md) | 规划中（Phase 1 关闭 · Phase 2 首轮完成） | 308 | **项目可优化方案总览（增量）**：体积/协议健壮性/方法名常量/可观测性/依赖治理/跨平台，含已证伪项与落地记录 |
+| [`settings-personalization-plan.md`](./settings-personalization-plan.md) | **B1–B4 已落地**（T1–T8 ✅；T9/T10 未做；v1.1） | 276 | **设置/个性化/材料样式优化方案（参照 PowerToys CmdPal）**：材料配置注册表化 + Mica Alt 档 + 着色模式三模式 + Esc/退格/单击/动效行为项 + 重置外观；含 CmdPal 取证、差距分析、T1–T10 任务清单与批次划分（未改代码） |
 | [`search-file-ctrl-f-icons-plan.md`](./search-file-ctrl-f-icons-plan.md) | 已落地（**E1 / E2 均已处置达标**；v1.3 增补 A-IC-08/09/10，v1.4 E2 关账） | 290 | **文件搜索开启方式与图标方案**：`Ctrl+F` 直达（决策 D1-x）与 Shell 真实文件图标（决策 D2-x）的决策留痕；§11 = 落地记录与 A-CF/A-IC 实测（首抽 703.8 ms **已由分层异步修复为 0.32 ms**；sidecar 体积已由 E2 处置达标 → `search-file.md` §10.6） |
 
 ### E. 核查与评审报告
@@ -94,14 +95,14 @@ flowchart TD
 
 | 文档 | 行数 | 里程碑 | 关闭 |
 |---|---|---|---|
-| [`m0-record.md`](./m0-record.md) | 145 | M0 地基与协议冻结 | 2026-09-01 |
-| [`m0-verification-report.md`](./m0-verification-report.md) | 110 | M0 验证报告 | 2026-09-01 |
-| [`m1-record.md`](./m1-record.md) | 169 | M1 最小可用面板 | 2026-09-02 |
-| [`m2-record.md`](./m2-record.md) | 292 | M2 命令执行与结果状态机 | 2026-09-02 |
-| [`m2-verification-report.md`](./m2-verification-report.md) | 96 | M2 验证报告 | 2026-09-02 |
-| [`m3-record.md`](./m3-record.md) | 154 | M3 缓存与懒加载 | 2026-09-02 |
-| [`m4-record.md`](./m4-record.md) | 339 | M4 内置扩展与健壮性 | 2026-09-04 |
-| [`m9-inprocess-builtins.md`](./m9-inprocess-builtins.md) | 146 | M9 内置扩展进程内化 | 2026-09-11 |
+| [`m0-record.md`](./m0-record.md) | 144 | M0 地基与协议冻结 | 2026-09-01 |
+| [`m0-verification-report.md`](./m0-verification-report.md) | 109 | M0 验证报告 | 2026-09-01 |
+| [`m1-record.md`](./m1-record.md) | 168 | M1 最小可用面板 | 2026-09-02 |
+| [`m2-record.md`](./m2-record.md) | 291 | M2 命令执行与结果状态机 | 2026-09-02 |
+| [`m2-verification-report.md`](./m2-verification-report.md) | 95 | M2 验证报告 | 2026-09-02 |
+| [`m3-record.md`](./m3-record.md) | 153 | M3 缓存与懒加载 | 2026-09-02 |
+| [`m4-record.md`](./m4-record.md) | 338 | M4 内置扩展与健壮性 | 2026-09-04 |
+| [`m9-inprocess-builtins.md`](./m9-inprocess-builtins.md) | 145 | M9 内置扩展进程内化 | 2026-09-11 |
 
 > M5–M8 的结论直接记于 [`implementation.md`](./implementation.md) §2，未单独建记录文件。
 
@@ -117,7 +118,7 @@ flowchart TD
 |---|---|---|---|
 | [`../README.md`](../README.md) | 生效中 | 115 | 英文 README |
 | [`../README.zh-CN.md`](../README.zh-CN.md) | 生效中 | 115 | 中文 README（与英文版逐节对应） |
-| [`../CHANGELOG.md`](../CHANGELOG.md) | 生效中 | 302 | 版本变更日志（`[0.1.0]`/`[0.1.1]` 条目均带日期；`[Unreleased]` 含 2026-09-19 九批变更——**移除 `f ` 前缀直达** / `Ctrl+F` 直达 + Shell 真实图标 / 模糊排序字段分层 / 应用列表调试工具过滤 / **解除 `es.exe` 前置表述** / **零依赖 PNG 编码器（E2）** / **E2E 首屏计时插桩**等） |
+| [`../CHANGELOG.md`](../CHANGELOG.md) | 生效中 | 312 | 版本变更日志（`[0.1.0]`/`[0.1.1]` 条目均带日期；`[Unreleased]` 含 2026-09-19/20 十批变更——**移除 `f ` 前缀直达** / `Ctrl+F` 直达 + Shell 真实图标 / 模糊排序字段分层 / 应用列表调试工具过滤 / **解除 `es.exe` 前置表述** / **零依赖 PNG 编码器（E2）** / **E2E 首屏计时插桩** / **设置·个性化·材料（CmdPal 参照，B1–B4）**等） |
 
 > 设计稿与交互演示（HTML）不在本索引收录范围内：`cmdpal-ui-mockups.html`、`cmdpal-ui-optimization-v5.html`、`cmdpal-window-material-effects.html`（窗口材质与边框方案效果页）。设计稿的**版本权威**在文件自身标题，最新决策见 [`implementation.md`](./implementation.md) §2 对应批次。
 

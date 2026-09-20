@@ -353,12 +353,58 @@ pub const TINT_CAP_ACRYLIC: f32 = 1.0;
 /// 材质激活时面板底的浓淡层 alpha **上限**（P2 v2 直控式，2026-09-13）；
 /// `None` = 材质未生效（回退不透明面板底）。v5 起上限按材质定档、两主题一致
 /// （`dark` 参数保留以稳定调用点签名、不参与换算——以 `_dark` 标注）。
-pub fn panel_tint_cap(_dark: bool, backdrop: crate::settings::Backdrop) -> Option<f32> {
+pub fn panel_tint_cap(dark: bool, backdrop: crate::settings::Backdrop) -> Option<f32> {
+    let _ = dark; // v5 起上限按材质定档、两主题一致（签名保留以稳定调用点）
+    backdrop_config(backdrop).tint_cap
+}
+
+/// 材质档的**能力与参数注册表**（M1，2026-09-20；参照 PowerToys CmdPal
+/// `BackdropStyles`/`BackdropStyleConfig`）：新增档位只需在
+/// `settings::Backdrop` 三件套加值 + [`backdrop_config`] 加一行——设置页
+/// pill/描述、浓淡层 cap、平台 DWM 映射（`platform::SystemBackdrop::from`）
+/// 全部由注册表派生，不再各处 `match`（消除加档漂移）。
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct BackdropStyleConfig {
+    /// 浓淡层 alpha 上限；`None` = 该档不画浓淡层（不透明面板）。
+    pub tint_cap: Option<f32>,
+    /// 是否可调浓淡（dd-run 语义 = 浓淡强度而非窗口透明度，当前四档均为
+    /// true；保留位，便于未来引入不可调档时置灰滑杆，对齐 CmdPal
+    /// `SupportsOpacity`）。
+    pub supports_opacity: bool,
+    /// 结果行填充分档（材质适配）：见 [`RowFillProfile`]。
+    pub row_fill: RowFillProfile,
+}
+
+/// 结果行 hover/selected 的材质适配档（P2 v5 真机反馈；M1 起由注册表派生）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RowFillProfile {
+    /// 云母系：**加权**——云母面板近白/近黑，行反馈需更重才可辨。
+    Weighted,
+    /// 亚克力：**减重**——动态模糊上过重会形成突兀亮块。
+    Light,
+}
+
+/// 材质档 → 能力与参数（单一来源；`Backdrop::ALL` 每一档都必须有分支）。
+pub fn backdrop_config(backdrop: crate::settings::Backdrop) -> BackdropStyleConfig {
     use crate::settings::Backdrop;
     match backdrop {
-        Backdrop::None => None,
-        Backdrop::Mica => Some(TINT_CAP_MICA),
-        Backdrop::Acrylic => Some(TINT_CAP_ACRYLIC),
+        Backdrop::None => BackdropStyleConfig {
+            tint_cap: None,
+            supports_opacity: false,
+            // 无材质不走行填充分档（`row_fills` 提前返回实色）；占位值不可达。
+            row_fill: RowFillProfile::Light,
+        },
+        // 云母 / 云母 Alt：同 cap（拉满仍保留 25% 采色语义）+ 同「加权」行填充
+        Backdrop::Mica | Backdrop::MicaAlt => BackdropStyleConfig {
+            tint_cap: Some(TINT_CAP_MICA),
+            supports_opacity: true,
+            row_fill: RowFillProfile::Weighted,
+        },
+        Backdrop::Acrylic => BackdropStyleConfig {
+            tint_cap: Some(TINT_CAP_ACRYLIC),
+            supports_opacity: true,
+            row_fill: RowFillProfile::Light,
+        },
     }
 }
 
@@ -409,26 +455,23 @@ pub fn row_fills(
             selected: p.row_selected,
         };
     }
-    match (dark, backdrop) {
-        (true, Backdrop::Mica) => RowFills {
+    // M1：分档取自材质注册表（云母系加权 / 亚克力减重）——加档无需改本处。
+    match (dark, backdrop_config(backdrop).row_fill) {
+        (true, RowFillProfile::Weighted) => RowFills {
             hover: Color32::from_rgba_unmultiplied(255, 255, 255, 20),
             selected: Color32::from_rgba_unmultiplied(255, 255, 255, 26),
         },
-        (true, Backdrop::Acrylic) => RowFills {
+        (true, RowFillProfile::Light) => RowFills {
             hover: Color32::from_rgba_unmultiplied(255, 255, 255, 10),
             selected: Color32::from_rgba_unmultiplied(255, 255, 255, 15),
         },
-        (false, Backdrop::Mica) => RowFills {
+        (false, RowFillProfile::Weighted) => RowFills {
             hover: Color32::from_rgba_unmultiplied(0, 0, 0, 18),
             selected: Color32::from_rgba_unmultiplied(0, 0, 0, 26),
         },
-        (false, Backdrop::Acrylic) => RowFills {
+        (false, RowFillProfile::Light) => RowFills {
             hover: Color32::from_rgba_unmultiplied(0, 0, 0, 9),
             selected: Color32::from_rgba_unmultiplied(0, 0, 0, 15),
-        },
-        (_, Backdrop::None) => RowFills {
-            hover: p.row_hover,
-            selected: p.row_selected,
         },
     }
 }
@@ -464,18 +507,85 @@ pub fn card_fill(dark: bool, glass_card: bool) -> Color32 {
 /// 取不到系统强调色（非 Windows / DwmGetColorizationColor 失败）→ 纯面板色
 /// （中性回退，与既往一致）。每次 visuals 重建时取色（调用点均为事件驱动，
 /// DwmGetColorizationColor 为轻量 API，滑杆拖动期双调用/帧可忽略）。
-pub fn tint_color(dark: bool) -> Color32 {
-    let p = Palette::of(dark);
-    let Some(accent) = crate::platform::system_accent_color() else {
-        return p.panel;
-    };
-    let mix = if dark { 0.08_f32 } else { 0.30_f32 };
+/// 着色配置（T6，2026-09-20）：从 `Settings` 投影出的三要素——模式 + 自定义色
+/// + 强度。theme 侧不直接依赖全量 `Settings`（渲染层只关心这三个值），用
+/// [`Colorization::from_settings`] 单点投影。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Colorization {
+    pub mode: crate::settings::ColorizationMode,
+    pub custom: [u8; 3],
+    pub intensity: u8,
+}
+
+impl Default for Colorization {
+    fn default() -> Self {
+        Self {
+            mode: crate::settings::ColorizationMode::default(),
+            custom: crate::settings::CUSTOM_TINT_DEFAULT,
+            intensity: 100,
+        }
+    }
+}
+
+impl Colorization {
+    /// 设置 → 着色配置（唯一投影点）。
+    pub fn from_settings(s: &crate::settings::Settings) -> Self {
+        Self {
+            mode: s.colorization,
+            custom: s.custom_tint_color,
+            intensity: s.custom_tint_intensity,
+        }
+    }
+}
+
+/// 浓淡混合比（纯函数，单测锚点）：暗 0.08 / 亮 0.30 为既有真机调定档
+/// （见 [`tint_color`] 文档）。强度**只作用于自定义档**（系统强调色档保持
+/// 既有固定比例，保证默认档与改造前逐像素一致）。
+fn tint_mix(dark: bool, cz: Colorization) -> f32 {
+    let base = if dark { 0.08_f32 } else { 0.30_f32 };
+    match cz.mode {
+        crate::settings::ColorizationMode::Custom => {
+            base * f32::from(cz.intensity.min(100)) / 100.0
+        }
+        _ => base,
+    }
+}
+
+/// 面板色 × 着色色按 `mix` 线性混合（纯函数，单测锚点）。
+fn mix_panel(panel: Color32, tint: Color32, mix: f32) -> Color32 {
     let lerp = |a: u8, b: u8| (f32::from(a) + (f32::from(b) - f32::from(a)) * mix).round() as u8;
     Color32::from_rgb(
-        lerp(p.panel.r(), accent.r()),
-        lerp(p.panel.g(), accent.g()),
-        lerp(p.panel.b(), accent.b()),
+        lerp(panel.r(), tint.r()),
+        lerp(panel.g(), tint.g()),
+        lerp(panel.b(), tint.b()),
     )
+}
+
+/// 浓淡层基色（P2 v3 + v4，2026-09-13 显示对齐；T6 2026-09-20 扩展着色模式）：
+/// **面板色 × 着色色混合**——既有口径 = 系统强调色（参考 DeskBox
+/// `BuildContentTintColor`：暗基底 + 8% 强调色、亮基底 + 30%）。真机对比反馈：
+/// 纯中性白浓淡把 DWM 云母「洗白」成无材质感的白平面——tint 带上色相后，浓淡层
+/// 在任何 alpha 下都有材质色相。
+///
+/// 三档（T6）：
+/// - `SystemAccent`（默认）= 既有行为；
+/// - `None` = 纯面板色（不掺色）；
+/// - `Custom` = 用户色 + 强度（强度按该主题档比例缩放，0 = 面板色）。
+///
+/// 取不到系统强调色（非 Windows / `DwmGetColorizationColor` 失败）→ 纯面板色
+/// （中性回退，与既往一致）。每次 visuals 重建时取色（调用点均为事件驱动）。
+pub fn tint_color(dark: bool, cz: Colorization) -> Color32 {
+    use crate::settings::ColorizationMode;
+    let p = Palette::of(dark);
+    let tint = match cz.mode {
+        ColorizationMode::None => return p.panel,
+        ColorizationMode::SystemAccent => match crate::platform::system_accent_color() {
+            Some(a) => a,
+            None => return p.panel,
+        },
+        ColorizationMode::Custom => Color32::from_rgb(cz.custom[0], cz.custom[1], cz.custom[2]),
+    };
+    mix_panel(p.panel, tint, tint_mix(dark, cz))
 }
 
 /// 05 表 → egui `Visuals`：以 egui 默认视觉为基底，覆盖 token 可映射字段。
@@ -487,7 +597,7 @@ pub fn tint_color(dark: bool) -> Color32 {
 /// DWM 系统材质从底下透出），同时保证面板轮廓与内容对比度。`None` = 材质未
 /// 生效（回退实色面板底）。只调 `panel_fill`，行/卡片/页脚等表面保持不透明
 /// 层级（行 hover 的 `row_hover_glass` 同构先例）。
-pub fn visuals(dark: bool, panel_tint: Option<f32>) -> Visuals {
+pub fn visuals(dark: bool, panel_tint: Option<f32>, cz: Colorization) -> Visuals {
     let p = Palette::of(dark);
     let mut v = if dark {
         Visuals::dark()
@@ -500,7 +610,7 @@ pub fn visuals(dark: bool, panel_tint: Option<f32>) -> Visuals {
         // 只缩 alpha、不动 RGB（from_rgba_unmultiplied；不用 gamma_multiply——
         // 它会连带压暗 RGB，浓淡层的语义是「半透明面板色」而非「调暗面板色」）。
         Some(a) => {
-            let base = tint_color(dark);
+            let base = tint_color(dark, cz);
             Color32::from_rgba_unmultiplied(
                 base.r(),
                 base.g(),
@@ -547,9 +657,9 @@ pub fn visuals(dark: bool, panel_tint: Option<f32>) -> Visuals {
 /// 细条 4px 低透明，悬停展开到 8px 便于拖拽。字段口径按 egui 0.36.1
 /// `ScrollStyle`（style.rs:494）：把手颜色随 `foreground_color`（floating
 /// 默认高对比），不做任意取色。
-pub fn apply(ctx: &Context, pref: ThemePreference, panel_tint: Option<f32>) {
-    ctx.set_visuals_of(Theme::Dark, visuals(true, panel_tint));
-    ctx.set_visuals_of(Theme::Light, visuals(false, panel_tint));
+pub fn apply(ctx: &Context, pref: ThemePreference, panel_tint: Option<f32>, cz: Colorization) {
+    ctx.set_visuals_of(Theme::Dark, visuals(true, panel_tint, cz));
+    ctx.set_visuals_of(Theme::Light, visuals(false, panel_tint, cz));
     ctx.all_styles_mut(|style| {
         let scroll = &mut style.spacing.scroll;
         // egui floating 默认：bar_width 10 / floating_width 2 / dormant handle 0.0
@@ -567,9 +677,9 @@ pub fn apply(ctx: &Context, pref: ThemePreference, panel_tint: Option<f32>) {
 /// 仅切换面板底浓淡（v4.7 D31 + M1 2026-09-13：材质开/关、云母↔亚克力互切
 /// 与回退时调用），不动主题偏好。亮暗两套 Style 同步重注册（同 [`apply`]
 /// 的口径）。
-pub fn apply_panel_tint(ctx: &Context, panel_tint: Option<f32>) {
-    ctx.set_visuals_of(Theme::Dark, visuals(true, panel_tint));
-    ctx.set_visuals_of(Theme::Light, visuals(false, panel_tint));
+pub fn apply_panel_tint(ctx: &Context, panel_tint: Option<f32>, cz: Colorization) {
+    ctx.set_visuals_of(Theme::Dark, visuals(true, panel_tint, cz));
+    ctx.set_visuals_of(Theme::Light, visuals(false, panel_tint, cz));
 }
 
 /// [`settings::ThemePref`] → egui [`ThemePreference`]（设置页选择立即生效用）。
@@ -845,7 +955,7 @@ mod tests {
     #[test]
     fn visuals_reflect_palette_of_theme() {
         for dark in [true, false] {
-            let v = visuals(dark, None);
+            let v = visuals(dark, None, Colorization::default());
             let p = Palette::of(dark);
             assert_eq!(v.dark_mode, dark, "dark_mode 标志随主题");
             assert_eq!(v.panel_fill, p.panel, "panel_fill = --panel");
@@ -869,15 +979,15 @@ mod tests {
         use crate::settings::Backdrop;
         for dark in [true, false] {
             let p = Palette::of(dark);
-            let opaque = visuals(dark, None);
+            let opaque = visuals(dark, None, Colorization::default());
             assert_eq!(opaque.panel_fill, p.panel, "回退路径（无材质）= 实色面板底");
             for backdrop in [Backdrop::Mica, Backdrop::Acrylic] {
                 let a = panel_tint_cap(dark, backdrop).expect("材质档必有浓淡层");
-                let tinted = visuals(dark, Some(a));
+                let tinted = visuals(dark, Some(a), Colorization::default());
                 // P2 v3：浓淡基色 = tint_color（面板色 × 系统强调色混合，DeskBox
                 // 配方）；非 Windows/取色失败时 = p.panel（本断言经 tint_color
                 // 取期望值，两平台口径一致）。
-                let base = tint_color(dark);
+                let base = tint_color(dark, Colorization::default());
                 assert_eq!(
                     tinted.panel_fill,
                     Color32::from_rgba_unmultiplied(
@@ -1165,5 +1275,94 @@ mod tests {
         );
         assert_eq!(ListMetrics::of(ListDensity::Compact).icon_cell, 20.0);
         assert_eq!(ListMetrics::of(ListDensity::Relaxed).icon_cell, 28.0);
+    }
+
+    /// T6（2026-09-20）：着色三档的纯函数口径（混合比 + 混合结果）。
+    #[test]
+    fn colorization_mix_and_tint_rules() {
+        use crate::settings::{ColorizationMode as M, CUSTOM_TINT_DEFAULT};
+        let cz = |mode: M, intensity: u8| Colorization {
+            mode,
+            custom: CUSTOM_TINT_DEFAULT,
+            intensity,
+        };
+        // 混合比：暗 0.08 / 亮 0.30；强度只作用于自定义档
+        assert!((tint_mix(true, cz(M::SystemAccent, 10)) - 0.08).abs() < 1e-6);
+        assert!((tint_mix(false, cz(M::SystemAccent, 100)) - 0.30).abs() < 1e-6);
+        assert!((tint_mix(true, cz(M::Custom, 50)) - 0.04).abs() < 1e-6);
+        assert!((tint_mix(false, cz(M::Custom, 100)) - 0.30).abs() < 1e-6);
+        assert_eq!(tint_mix(true, cz(M::Custom, 0)), 0.0, "强度 0 = 无混合");
+        assert!(
+            (tint_mix(true, cz(M::Custom, 200)) - 0.08).abs() < 1e-6,
+            "越界按 100"
+        );
+        // 混合结果：mix=0 恒等于面板色；同色混合不变；纯红混合后 R 升 / B 降
+        let p = Palette::of(true);
+        assert_eq!(mix_panel(p.panel, Color32::RED, 0.0), p.panel);
+        assert_eq!(mix_panel(p.panel, p.panel, 0.5), p.panel);
+        let red = mix_panel(p.panel, Color32::RED, 1.0);
+        assert_eq!(red, Color32::RED);
+        // 档位行为：None → 纯面板色；Custom 强度 0 → 纯面板色
+        assert_eq!(tint_color(true, cz(M::None, 100)), p.panel);
+        assert_eq!(tint_color(true, cz(M::Custom, 0)), p.panel);
+        // Custom 满强度 = 按 0.08 朝自定义色插值（可与纯函数对照）
+        let custom_full = cz(M::Custom, 100);
+        assert_eq!(
+            tint_color(false, custom_full),
+            mix_panel(
+                Palette::of(false).panel,
+                Color32::from_rgb(
+                    CUSTOM_TINT_DEFAULT[0],
+                    CUSTOM_TINT_DEFAULT[1],
+                    CUSTOM_TINT_DEFAULT[2]
+                ),
+                0.30
+            )
+        );
+    }
+
+    /// M1（2026-09-20）：材质注册表覆盖全部档位，且与浓淡层换算一致。
+    #[test]
+    fn backdrop_registry_covers_all_variants() {
+        use crate::settings::Backdrop;
+        for b in Backdrop::ALL {
+            let cfg = backdrop_config(b);
+            assert_eq!(
+                cfg.tint_cap,
+                panel_tint_cap(false, b),
+                "{}：panel_tint_cap 必须委托注册表",
+                b.label()
+            );
+            assert_eq!(
+                cfg.tint_cap.is_some(),
+                !matches!(b, Backdrop::None),
+                "{}：仅无材质无浓淡层",
+                b.label()
+            );
+        }
+        // 云母与云母 Alt 同档；亚克力上限更高（拉满即全实色）
+        assert_eq!(
+            backdrop_config(Backdrop::MicaAlt).tint_cap,
+            Some(TINT_CAP_MICA)
+        );
+        assert_eq!(
+            backdrop_config(Backdrop::Acrylic).tint_cap,
+            Some(TINT_CAP_ACRYLIC)
+        );
+        assert!(!backdrop_config(Backdrop::None).supports_opacity);
+        assert!(Backdrop::ALL.len() == 4, "四档：无/云母/云母 Alt/亚克力");
+        // 云母 Alt 与云母同档（cap + 行填充档一致）
+        assert_eq!(
+            backdrop_config(Backdrop::MicaAlt).row_fill,
+            backdrop_config(Backdrop::Mica).row_fill
+        );
+        assert_eq!(
+            backdrop_config(Backdrop::MicaAlt).row_fill,
+            RowFillProfile::Weighted
+        );
+        assert_eq!(
+            backdrop_config(Backdrop::Acrylic).row_fill,
+            RowFillProfile::Light
+        );
     }
 }

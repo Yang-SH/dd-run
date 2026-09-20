@@ -670,6 +670,26 @@
 
 **验证**：`cargo test --workspace` **465 passed**（462 + 3）/ `fmt` 无差异 / `clippy` 0 告警 / release 构建 exit 0。
 
+### 设置 / 个性化 / 材料样式（B1–B4，2026-09-20，参照 PowerToys CmdPal）
+
+方案（设计稿先行）见 [`settings-personalization-plan.md`](./settings-personalization-plan.md) v1.1；四批一次落地，新设置全部**默认值 = 现有行为**（旧 `config.json` 零迁移）。
+
+| 批次 | 任务 | 落点 |
+|---|---|---|
+| B1 | T1 材料注册表化 | `settings.rs`（`Backdrop::ALL` + `name_key/desc_key`）、`theme.rs`（`BackdropStyleConfig`/`backdrop_config`：tint_cap/支持位/行填充分档）、`platform.rs`（`From<Backdrop> for SystemBackdrop` 唯一映射）、`keys.rs`/`settings_view.rs` 改由注册表派生 |
+| B1 | T2 Mica Alt | `platform.rs`（`DWMSBT_TABBEDWINDOW`）、`settings.rs`（第 4 档 + `mica_alt` 标识）、材质 pill 四选（宽度按档数均分） |
+| B1 | M4 滑杆口径 | `text.rs`：不透明度描述澄清为「材质色层的浓淡强度（非窗口透明度）」 |
+| B2 | T3 Esc 行为 | `settings.rs`（`EscBehavior`/`EscAction` + `decide` 纯函数）、`keys.rs`（按键分支按决策执行、`clear_current_query`）、设置页「按键与交互」卡 |
+| B2 | T4 退格键返回 | `settings.rs`（`backspace_go_back`，默认关）、`keys.rs`（嵌套页 + 空框 → 返回） |
+| B2 | T5 恢复默认外观 | `keys.rs::apply_reset_appearance`（复用既有 `apply_*`，默认值唯一来源 `Settings::default()`）、`app/mod.rs`（两步确认武装字段）、外观栏底部卡片（5s 超时自动撤销） |
+| B3 | T6 着色模式 | `settings.rs`（`ColorizationMode` + `custom_tint_color`/`custom_tint_intensity`）、`theme.rs`（`Colorization` 投影 + `tint_mix`/`mix_panel` 纯函数 + `tint_color(dark, cz)`）、`keys.rs`（三个 apply + `repaint_panel_tint` 统一出口）、材质卡「着色」行（自定义档显隐颜色/强度） |
+| B4 | T7 单击激活 | `settings.rs`（`single_click_activation`，默认 **true** = 既有行为）、`panel.rs`（关档：单击选中 / 双击执行）、按键交互卡开关行 |
+| B4 | T8 界面动效 | `settings.rs`（`ui_animations`，默认 true）、`panel.rs::draw_searchbar`（关档直出终态，不再驱动过渡重绘）、同一卡开关行 |
+
+**验证**：`cargo test --workspace` **470 passed**（465 基线 + 5 新增：注册表覆盖 / 云母 Alt 往返 / Esc 决策矩阵 / 着色三档与混合比 / 单击与动效默认往返）/ `fmt` 无差异 / `clippy` 0 告警 / `release` exit 0；`tools/docscan.py` 失效链接 (none)。
+
+**未做**（方案 §4 / §5 T9–T10）：背景图通道（P2 项，一期互斥语义未实施）、ShowAppDetails 详情窗、全屏忽略热键、强调色实时监听、紧凑模式/Dock —— 均需另行立项。
+
 ## 3. 验收映射总表
 
 | 验收项 | 内容 | 里程碑 |
@@ -708,6 +728,7 @@
 | 2026-09-19 | **452** | +5：**E1 图标分层异步**（`path_keys_are_deferred_to_background` / `icon_budget_expires` / `icon_job_dedup_keeps_single_inflight` / `notify_without_hook_is_noop` / `installed_notifier_receives_page_id_from_other_thread`） |
 | 2026-09-19 | **462** | +10：**E2 零依赖 PNG 编码器**（`png.rs`：往返 6 项[平坦/渐变/圆图标/噪声/1×1/1×300] + 结构走查 + 入参拒绝 + 长度/距离码表边界 + Adler/CRC 已知向量；`image` 转 dev-dependency 作解码 oracle） |
 | 2026-09-19 | **465** | +3：**E2E 首屏计时**（`app/e2e.rs`：三段分解 + 饱和不 panic + 系统发起等待为 0） |
+| 2026-09-20 | **470** | +5：**设置/个性化/材料 B1–B4**（`theme::backdrop_registry_covers_all_variants` / `settings::backdrop_default_is_mica_and_roundtrips`（含云母 Alt）/ `settings::esc_behavior_and_backspace_defaults_roundtrip_and_decide`（决策矩阵）/ `settings::colorization_defaults_roundtrip_and_sanitize` / `theme::colorization_mix_and_tint_rules` / `settings::click_and_animation_defaults_roundtrip`） |
 
 **两条使用注意**：① `crates/dd-host/tests/roundtrip*.rs` 在 `dd-ext-sample.exe` **未构建时会打印 SKIP 并 return**（计入 passed），故凡涉及协议/扩展行为，先 `cargo build -p dd-ext-sample` 再跑；② 「三关全绿」与 CI 四关**均为 debug profile**，`#[cfg(debug_assertions)]` 类 release-only 编译错误检不到 —— 交付/发布前必须实跑 `cargo build --release`（见 §7 构建环境记档与 `CHANGELOG` 的 release 阻塞条目）。
 
@@ -825,6 +846,7 @@
 | 2026-09-19 | 文件搜索用户文档**解除 `es.exe` 前置表述**（`search.md` v1.3 / `search-file.md` v3.8）；dist 按 v3.6/v3.7 重打包 | ✅ 工作副本（零代码改动） |
 | 2026-09-19 | **E1 修复**：图标按真实路径档首抽 191–704 ms → 分层异步（同步 0.32 ms）+ 后台补齐 + 自动刷新；E2 探针实测可省 −96,768 B | ✅ 工作副本（452 passed） |
 | 2026-09-19 | **E2 落地**：零依赖 PNG 编码器（`image` 转 dev-dependency），sidecar 912,384 → 831,488 B、A-IC-06 转 PASS；apps/file 图标 PNG 过第三方校验 | ✅ 工作副本（462 passed） |
+| 2026-09-20 | **设置/个性化/材料 B1–B4 落地**（参照 PowerToys CmdPal）：材料注册表化 + 云母 Alt + 着色三档 + Esc/退格/单击/动效行为项 + 恢复默认外观 | ✅ 工作副本（470 passed；真机走查待做） |
 | 2026-09-19 | **E2E 首屏计时插桩**：宿主侧 input→paint 三段分解（`app/e2e.rs` + `tools/gui_e2e_parse.py`），A-33-05 感知指标待真机采样 | ✅ 工作副本（465 passed） |
 | 2026-09-19 | **dist 重打包**（E2 + E2E 插桩同源）+ 分发级冒烟：conformance 内置 9 步 / 示例 9 步（step 4 按 `has_fallback` 跳过）/ GUI 5s 存活 / sidecar 通道 `ipc` / zip 成员校验 | ✅ `dd-run-0.1.1.exe` 8,780,800 B · sidecar 831,488 B |
 

@@ -145,7 +145,13 @@ impl PaletteApp {
                         .max_rect(search_rect)
                         .layout(egui::Layout::left_to_right(egui::Align::Center)),
                 );
-                let resp = draw_searchbar(search_ui, &mut query, &placeholder, page_busy);
+                let resp = draw_searchbar(
+                    search_ui,
+                    &mut query,
+                    &placeholder,
+                    page_busy,
+                    self.settings.ui_animations,
+                );
                 let query_changed = query != prev_query; // v3.3：渲染后变化检测（set_query 会 move query）
                 {
                     let page = self.stack.current_mut();
@@ -442,6 +448,9 @@ impl PaletteApp {
 
         let mut hovered: Option<usize> = None;
         let mut clicked: Option<usize> = None;
+        // T7（2026-09-20）：单击激活关闭时，单击只选中（不激活）——收集后单独回写。
+        let mut select_only: Option<usize> = None;
+        let single_click = self.settings.single_click_activation;
         // v4.4（D19）：右键行 → 打开菜单（锚点 = 右键点）；选中行矩形仅在
         // 键盘触发（Shift+F10）时用于锚定行底边左缘（D20）。
         let mut right_clicked: Option<(usize, egui::Pos2)> = None;
@@ -503,6 +512,15 @@ impl PaletteApp {
                                 hovered = Some(*idx);
                             }
                             if resp.clicked() {
+                                // T7（2026-09-20）：单击激活开关——开（默认）= 单击即
+                                // 执行（既有行为）；关 = 单击仅选中、双击才执行。
+                                if single_click {
+                                    clicked = Some(*idx);
+                                } else {
+                                    select_only = Some(*idx);
+                                }
+                            }
+                            if !single_click && resp.double_clicked() {
                                 clicked = Some(*idx);
                             }
                             if resp.secondary_clicked() {
@@ -530,6 +548,13 @@ impl PaletteApp {
             (Some(_), None) => false,
         };
         let last_hovered = self.last_hovered_index;
+        if let Some(idx) = select_only {
+            // T7：单击仅选中（不执行）；hover 基准同步，避免下一帧被鼠标抢回
+            self.stack.current_mut().list.set_selected(idx);
+            self.last_hovered_index = Some(idx);
+            self.scroll_follow = false;
+            ui.ctx().request_repaint();
+        }
         if let Some(idx) = clicked {
             self.stack.current_mut().list.set_selected(idx);
             self.confirm_selected();
@@ -588,6 +613,7 @@ pub(crate) fn draw_searchbar(
     query: &mut String,
     placeholder: &str,
     busy: bool,
+    animations: bool,
 ) -> egui::Response {
     let p = theme::Palette::of(ui.visuals().dark_mode);
 
@@ -689,11 +715,18 @@ pub(crate) fn draw_searchbar(
     // 6) 聚焦指示（filled-darker）：底部 2px accent_stroke 下划线；
     //    B4：宽度 0→1 以 0.12s 过渡（`animate_value_with_time`，egui 按需
     //    重绘只在过渡期生效，空闲无额外帧）。未聚焦且过渡结束后不画。
-    let underline_t = ui.ctx().animate_value_with_time(
-        egui::Id::new("dd-searchbar-focus-underline"),
-        if resp.has_focus() { 1.0 } else { 0.0 },
-        0.12,
-    );
+    // T8（2026-09-20）：界面动效开关——关闭时直出终态（不驱动过渡与
+    // 过渡期重绘）。重新打开后动画从当前存储值续起（可接受）。
+    let underline_target = if resp.has_focus() { 1.0 } else { 0.0 };
+    let underline_t = if animations {
+        ui.ctx().animate_value_with_time(
+            egui::Id::new("dd-searchbar-focus-underline"),
+            underline_target,
+            0.12,
+        )
+    } else {
+        underline_target
+    };
     if underline_t > 0.001 {
         let bottom_bar = egui::Rect::from_min_max(
             egui::pos2(rect.left(), rect.bottom() - 2.0),

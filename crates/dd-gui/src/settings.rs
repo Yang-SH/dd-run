@@ -95,8 +95,9 @@ impl OpenView {
     }
 }
 
-/// 窗口材质（v4.7 D30：Win11 DWM 系统背景材质，单值属性——云母/亚克力互斥，
-/// 两开关状态由该值派生）。默认云母（含旧配置升级：字段缺失 → 云母）。
+/// 窗口材质（v4.7 D30：Win11 DWM 系统背景材质，单值属性；2026-09-20 M2 加
+/// 云母 Alt 档——参照 PowerToys CmdPal `BackdropStyle`）。默认云母（含旧配置
+/// 升级：字段缺失 → 云母）。档位清单见 [`Backdrop::ALL`]（设置页 pill 顺序）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Backdrop {
     /// 无材质（不透明面板）。
@@ -104,16 +105,49 @@ pub enum Backdrop {
     /// 云母（默认）。
     #[default]
     Mica,
+    /// 云母 Alt（`DWMSBT_TABBEDWINDOW`；云母变体，色更浓、对比更强，
+    /// Win11 22H2+；应用失败走既有回退链）。
+    MicaAlt,
     /// 亚克力。
     Acrylic,
 }
 
 impl Backdrop {
+    /// 全部档位（M1，2026-09-20）：设置页 pill 顺序 = 本数组顺序；
+    /// 新增档位只改此处 + `label/as_str/parse` 三件套 + i18n 两键。
+    pub const ALL: [Backdrop; 4] = [
+        Backdrop::None,
+        Backdrop::Mica,
+        Backdrop::MicaAlt,
+        Backdrop::Acrylic,
+    ];
+
+    /// 设置页 pill 文案 i18n 键（显示文案唯一来源；`label()` 仅供日志短标签）。
+    pub fn name_key(self) -> &'static str {
+        match self {
+            Backdrop::None => "set.material.none",
+            Backdrop::Mica => "set.material.mica",
+            Backdrop::MicaAlt => "set.material.mica_alt",
+            Backdrop::Acrylic => "set.material.acrylic",
+        }
+    }
+
+    /// 卡片描述 i18n 键（跟随当前材质的说明行）。
+    pub fn desc_key(self) -> &'static str {
+        match self {
+            Backdrop::None => "set.material.none.desc",
+            Backdrop::Mica => "set.material.mica.desc",
+            Backdrop::MicaAlt => "set.material.mica_alt.desc",
+            Backdrop::Acrylic => "set.material.acrylic.desc",
+        }
+    }
+
     /// 设置页显示标签。
     pub fn label(self) -> &'static str {
         match self {
             Backdrop::None => "无材质",
             Backdrop::Mica => "云母",
+            Backdrop::MicaAlt => "云母 Alt",
             Backdrop::Acrylic => "亚克力",
         }
     }
@@ -123,6 +157,7 @@ impl Backdrop {
         match self {
             Backdrop::None => "none",
             Backdrop::Mica => "mica",
+            Backdrop::MicaAlt => "mica_alt",
             Backdrop::Acrylic => "acrylic",
         }
     }
@@ -132,6 +167,7 @@ impl Backdrop {
         match s {
             "none" => Some(Backdrop::None),
             "mica" => Some(Backdrop::Mica),
+            "mica_alt" => Some(Backdrop::MicaAlt),
             "acrylic" => Some(Backdrop::Acrylic),
             _ => None,
         }
@@ -228,6 +264,167 @@ impl BorderMode {
     }
 }
 
+/// Esc 键行为（B1，2026-09-20；参照 PowerToys CmdPal `EscapeKeyBehavior`，
+/// 按 dd-run 语义收敛为三档）。默认 `GoBack` = **既有行为**（非 Root 返回上一级、
+/// Root 隐藏），旧配置零迁移。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum EscBehavior {
+    /// 返回上一级（Root 时隐藏）——既有行为，默认。
+    #[default]
+    GoBack,
+    /// 先清除搜索内容，然后返回（对齐 CmdPal 默认档）。
+    ClearThenGoBack,
+    /// 始终隐藏面板（不返回）。
+    AlwaysHide,
+}
+
+/// Esc 按键的**决策结果**（纯函数 [`EscBehavior::decide`] 的返回值，可单测；
+/// 由 `app::keys` 执行副作用）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EscAction {
+    /// 清空当前页搜索内容（不返回）。
+    ClearSearch,
+    /// 返回上一级（并聚焦回落后页面的搜索框）。
+    GoBack,
+    /// 隐藏面板。
+    Hide,
+}
+
+impl EscBehavior {
+    /// 全部档位（设置页下拉顺序 = 本数组顺序）。
+    pub const ALL: [EscBehavior; 3] = [
+        EscBehavior::GoBack,
+        EscBehavior::ClearThenGoBack,
+        EscBehavior::AlwaysHide,
+    ];
+
+    /// 下拉文案 i18n 键。
+    pub fn name_key(self) -> &'static str {
+        match self {
+            EscBehavior::GoBack => "set.esc.go_back",
+            EscBehavior::ClearThenGoBack => "set.esc.clear_then_back",
+            EscBehavior::AlwaysHide => "set.esc.always_hide",
+        }
+    }
+
+    /// 设置页显示标签（日志用短标签）。
+    pub fn label(self) -> &'static str {
+        match self {
+            EscBehavior::GoBack => "返回上一级",
+            EscBehavior::ClearThenGoBack => "先清搜索再返回",
+            EscBehavior::AlwaysHide => "始终隐藏",
+        }
+    }
+
+    /// JSON 序列化值（稳定标识，与显示标签解耦）。
+    pub fn as_str(self) -> &'static str {
+        match self {
+            EscBehavior::GoBack => "go_back",
+            EscBehavior::ClearThenGoBack => "clear_then_go_back",
+            EscBehavior::AlwaysHide => "always_hide",
+        }
+    }
+
+    /// JSON 值反解；未知值返回 `None`（调用方回落默认「返回上一级」）。
+    pub fn parse(s: &str) -> Option<Self> {
+        match s {
+            "go_back" => Some(EscBehavior::GoBack),
+            "clear_then_go_back" => Some(EscBehavior::ClearThenGoBack),
+            "always_hide" => Some(EscBehavior::AlwaysHide),
+            _ => None,
+        }
+    }
+
+    /// 纯决策：给定「是否 Root」与「搜索框是否为空」→ 该做什么。
+    ///
+    /// - `GoBack`：Root → 隐藏；否则返回上一级；
+    /// - `ClearThenGoBack`：搜索非空 → 清空；搜索为空 → 同 `GoBack`；
+    /// - `AlwaysHide`：恒隐藏（无论层级与查询）。
+    pub fn decide(self, is_root: bool, query_empty: bool) -> EscAction {
+        match self {
+            EscBehavior::AlwaysHide => EscAction::Hide,
+            EscBehavior::GoBack => {
+                if is_root {
+                    EscAction::Hide
+                } else {
+                    EscAction::GoBack
+                }
+            }
+            EscBehavior::ClearThenGoBack => {
+                if !query_empty {
+                    EscAction::ClearSearch
+                } else if is_root {
+                    EscAction::Hide
+                } else {
+                    EscAction::GoBack
+                }
+            }
+        }
+    }
+}
+
+/// 着色模式（T6，2026-09-20；参照 PowerToys CmdPal `ColorizationMode`，按 dd-run
+/// 语义收敛为三档）——决定**材质浓淡层基色**的来源。**刻意只影响浓淡层**：
+/// Fluent 主题 token（选中/链接等 accent）与边框强调色不受影响，避免主题系统级冲突。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ColorizationMode {
+    /// 系统强调色（默认 = 既有行为：面板色 × 系统强调色，暗 8% / 亮 30%）。
+    #[default]
+    SystemAccent,
+    /// 无着色（浓淡层 = 纯面板色）。
+    None,
+    /// 自定义色 + 强度（1–100；100 = 该主题档的满混合比）。
+    Custom,
+}
+
+/// 自定义浓淡色默认值（Windows 默认强调蓝；仅「切到自定义且未取色」时可见）。
+pub const CUSTOM_TINT_DEFAULT: [u8; 3] = [0, 120, 212];
+
+impl ColorizationMode {
+    /// 全部档位（设置页 pill 顺序 = 本数组顺序）。
+    pub const ALL: [ColorizationMode; 3] = [
+        ColorizationMode::SystemAccent,
+        ColorizationMode::None,
+        ColorizationMode::Custom,
+    ];
+
+    /// 设置页文案 i18n 键。
+    pub fn name_key(self) -> &'static str {
+        match self {
+            ColorizationMode::SystemAccent => "set.color.system_accent",
+            ColorizationMode::None => "set.color.none",
+            ColorizationMode::Custom => "set.color.custom",
+        }
+    }
+
+    /// 设置页显示标签（日志用短标签）。
+    pub fn label(self) -> &'static str {
+        match self {
+            ColorizationMode::SystemAccent => "系统强调色",
+            ColorizationMode::None => "无着色",
+            ColorizationMode::Custom => "自定义",
+        }
+    }
+
+    /// JSON 序列化值（稳定标识，与显示标签解耦）。
+    pub fn as_str(self) -> &'static str {
+        match self {
+            ColorizationMode::SystemAccent => "system_accent",
+            ColorizationMode::None => "none",
+            ColorizationMode::Custom => "custom",
+        }
+    }
+
+    /// JSON 值反解；未知值返回 `None`（调用方回落默认系统强调色）。
+    pub fn parse(s: &str) -> Option<Self> {
+        match s {
+            "system_accent" => Some(ColorizationMode::SystemAccent),
+            "none" => Some(ColorizationMode::None),
+            "custom" => Some(ColorizationMode::Custom),
+            _ => None,
+        }
+    }
+}
 /// 界面语言（v4.13 D38）。`FollowSystem`（默认）在运行时经平台探测解析为
 /// 具体语言（`crate::platform::system_ui_lang`：zh 系 → ZhCn，其余 → EnUs）。
 /// 显示文案不走固定中文 `label()`——语言卡经 `text::t()` 按**当前生效语言**
@@ -377,6 +574,25 @@ pub struct Settings {
     pub corner_pref: CornerPref,
     /// 面板边框颜色模式（P4；默认中性 = 现状）。
     pub border_mode: BorderMode,
+    /// Esc 键行为（B1，2026-09-20；默认「返回上一级」= 既有行为）。
+    pub esc_behavior: EscBehavior,
+    /// 退格键返回（B2，2026-09-20）：搜索框为空时按 Backspace 返回上一级；
+    /// 默认 false = 既有行为（Backspace 仅用于编辑输入）。
+    pub backspace_go_back: bool,
+    /// 着色模式（T6，2026-09-20；默认系统强调色 = 既有行为）。
+    pub colorization: ColorizationMode,
+    /// 自定义浓淡色（RGB；默认 [`CUSTOM_TINT_DEFAULT`]）。
+    pub custom_tint_color: [u8; 3],
+    /// 自定义着色强度（0–100，默认 100 = 该主题档满混合比）。
+    pub custom_tint_intensity: u8,
+    /// 单击激活（T7，2026-09-20）：默认 **true** = 既有行为（单击行即执行）；
+    /// 关闭 = 单击仅选中、双击才执行（对齐 CmdPal `SingleClickActivates`，
+    /// 但默认取值与 CmdPal 相反——保持 dd-run 既有交互不变）。
+    pub single_click_activation: bool,
+    /// 界面动效（T8，2026-09-20）：默认 **true** = 既有行为（搜索框聚焦下划线
+    /// 0.12s 过渡等装饰性过渡）；关闭 = 直出终态。**不涉及 DWM 过渡**
+    /// （`DWMWA_TRANSITIONS_FORCEDISABLED` 恒禁，避免弹窗闪烁）。
+    pub ui_animations: bool,
     /// 全局热键修饰键位掩码（M6 批次 6.3：MOD_ALT=1/CONTROL=2/SHIFT=4/WIN=8，
     /// 不含 NOREPEAT——注册时由热键线程统一补）。默认 Win+Alt。
     pub hotkey_mods: u32,
@@ -421,6 +637,13 @@ impl Default for Settings {
             material_opacity: 40,
             corner_pref: CornerPref::default(),
             border_mode: BorderMode::default(),
+            esc_behavior: EscBehavior::default(),
+            backspace_go_back: false,
+            colorization: ColorizationMode::default(),
+            custom_tint_color: CUSTOM_TINT_DEFAULT,
+            custom_tint_intensity: 100,
+            single_click_activation: true,
+            ui_animations: true,
             hotkey_mods: HOTKEY_MODS_DEFAULT,
             hotkey_vk: HOTKEY_VK_DEFAULT,
             autostart: false,
@@ -517,6 +740,50 @@ impl Settings {
                 s.border_mode = mode;
             }
         }
+        // Esc 键行为 / 退格键返回（B1/B2，2026-09-20）：字段缺失（旧版本配置）、
+        // 未知字符串或类型损坏 → 默认（返回上一级 / 关），零迁移。
+        if let Some(t) = v.get("esc_behavior").and_then(|t| t.as_str()) {
+            if let Some(b) = EscBehavior::parse(t) {
+                s.esc_behavior = b;
+            }
+        }
+        s.backspace_go_back = v
+            .get("backspace_go_back")
+            .and_then(|x| x.as_bool())
+            .unwrap_or(false);
+        // 着色模式 / 自定义色 / 强度（T6，2026-09-20）：字段缺失、未知字符串、
+        // 类型损坏或颜色数组非法 → 默认（系统强调色 / 默认蓝 / 100）。
+        if let Some(t) = v.get("colorization").and_then(|t| t.as_str()) {
+            if let Some(m) = ColorizationMode::parse(t) {
+                s.colorization = m;
+            }
+        }
+        if let Some(arr) = v.get("custom_tint_color").and_then(|x| x.as_array()) {
+            let rgb: Option<Vec<u8>> = arr
+                .iter()
+                .map(|c| c.as_u64().filter(|n| *n <= 255).map(|n| n as u8))
+                .collect();
+            if let Some(rgb) = rgb {
+                if rgb.len() == 3 {
+                    s.custom_tint_color = [rgb[0], rgb[1], rgb[2]];
+                }
+            }
+        }
+        s.custom_tint_intensity = v
+            .get("custom_tint_intensity")
+            .and_then(|x| x.as_u64())
+            .map(|x| x.clamp(0, 100) as u8)
+            .unwrap_or(100);
+        // 单击激活 / 界面动效（T7/T8，2026-09-20）：缺失、类型损坏 → 默认 true
+        // （= 既有行为），零迁移。
+        s.single_click_activation = v
+            .get("single_click_activation")
+            .and_then(|x| x.as_bool())
+            .unwrap_or(true);
+        s.ui_animations = v
+            .get("ui_animations")
+            .and_then(|x| x.as_bool())
+            .unwrap_or(true);
         // 全局热键（M6 批次 6.3）：掩码先剔除非法位；剔除后无任何修饰键或字段
         // 缺失/类型损坏 → 回落默认 Win+Alt + Space。
         if let Some(m) = v.get("hotkey_mods").and_then(|m| m.as_u64()) {
@@ -604,6 +871,13 @@ impl Settings {
             "material_opacity": self.material_opacity,
             "corner_pref": self.corner_pref.as_str(),
             "border_mode": self.border_mode.as_str(),
+            "esc_behavior": self.esc_behavior.as_str(),
+            "backspace_go_back": self.backspace_go_back,
+            "colorization": self.colorization.as_str(),
+            "custom_tint_color": self.custom_tint_color,
+            "custom_tint_intensity": self.custom_tint_intensity,
+            "single_click_activation": self.single_click_activation,
+            "ui_animations": self.ui_animations,
             "hotkey_mods": self.hotkey_mods,
             "hotkey_vk": self.hotkey_vk,
             "autostart": self.autostart,
@@ -843,7 +1117,7 @@ mod tests {
         assert_eq!(old.backdrop, Backdrop::Mica);
         assert_eq!(old.theme, ThemePref::Dark);
         assert_eq!(old.open_view, OpenView::All);
-        for b in [Backdrop::None, Backdrop::Mica, Backdrop::Acrylic] {
+        for b in Backdrop::ALL {
             let s = Settings {
                 backdrop: b,
                 ..Settings::default()
@@ -851,6 +1125,13 @@ mod tests {
             let parsed = Settings::parse_json(&s.to_json_string());
             assert_eq!(parsed.backdrop, b, "{} 往返一致", b.label());
         }
+        // M2（2026-09-20）：云母 Alt 档往返 + 稳定标识
+        assert_eq!(Backdrop::MicaAlt.as_str(), "mica_alt");
+        assert_eq!(Backdrop::parse("mica_alt"), Some(Backdrop::MicaAlt));
+        assert_eq!(
+            Settings::parse_json(r#"{"backdrop":"mica_alt"}"#).backdrop,
+            Backdrop::MicaAlt
+        );
         // 未知值 / 类型损坏 → 回落默认云母
         assert_eq!(
             Settings::parse_json(r#"{"backdrop":"frosted"}"#).backdrop,
@@ -860,6 +1141,131 @@ mod tests {
             Settings::parse_json(r#"{"backdrop":42}"#).backdrop,
             Backdrop::Mica
         );
+    }
+
+    /// B1/B2（2026-09-20）：Esc 行为与退格键返回——默认、往返、未知回落，
+    /// 以及 `decide` 的完整决策矩阵。
+    #[test]
+    fn esc_behavior_and_backspace_defaults_roundtrip_and_decide() {
+        let d = Settings::default();
+        assert_eq!(d.esc_behavior, EscBehavior::GoBack, "默认 = 既有行为");
+        assert!(!d.backspace_go_back, "默认关 = 既有行为");
+        for b in EscBehavior::ALL {
+            let s = Settings {
+                esc_behavior: b,
+                backspace_go_back: true,
+                ..Settings::default()
+            };
+            let parsed = Settings::parse_json(&s.to_json_string());
+            assert_eq!(parsed.esc_behavior, b, "{} 往返一致", b.label());
+            assert!(parsed.backspace_go_back, "退格开关往返一致");
+        }
+        assert_eq!(
+            Settings::parse_json(r#"{"esc_behavior":"nope"}"#).esc_behavior,
+            EscBehavior::GoBack
+        );
+        assert_eq!(
+            Settings::parse_json(r#"{"esc_behavior":7}"#).esc_behavior,
+            EscBehavior::GoBack
+        );
+        assert!(
+            !Settings::parse_json(r#"{"backspace_go_back":"yes"}"#).backspace_go_back,
+            "类型损坏 → 默认关"
+        );
+        // 决策矩阵：三档 × {Root, 非 Root} × {空, 非空}
+        use EscAction::{ClearSearch, GoBack as GoBackAct, Hide};
+        let m = |b: EscBehavior, root: bool, empty: bool| b.decide(root, empty);
+        assert_eq!(m(EscBehavior::GoBack, true, false), Hide, "Root → 隐藏");
+        assert_eq!(m(EscBehavior::GoBack, false, false), GoBackAct);
+        assert_eq!(m(EscBehavior::GoBack, false, true), GoBackAct);
+        assert_eq!(
+            m(EscBehavior::ClearThenGoBack, false, false),
+            ClearSearch,
+            "非空 → 先清搜索"
+        );
+        assert_eq!(
+            m(EscBehavior::ClearThenGoBack, true, false),
+            ClearSearch,
+            "非空优先于层级"
+        );
+        assert_eq!(m(EscBehavior::ClearThenGoBack, false, true), GoBackAct);
+        assert_eq!(m(EscBehavior::ClearThenGoBack, true, true), Hide);
+        assert_eq!(m(EscBehavior::AlwaysHide, false, false), Hide);
+        assert_eq!(m(EscBehavior::AlwaysHide, false, true), Hide);
+        assert_eq!(m(EscBehavior::AlwaysHide, true, false), Hide);
+    }
+
+    /// T6（2026-09-20）：着色三档——默认、往返、未知/非法回落、强度 clamp。
+    #[test]
+    fn colorization_defaults_roundtrip_and_sanitize() {
+        let d = Settings::default();
+        assert_eq!(
+            d.colorization,
+            ColorizationMode::SystemAccent,
+            "默认 = 既有行为"
+        );
+        assert_eq!(d.custom_tint_color, CUSTOM_TINT_DEFAULT);
+        assert_eq!(d.custom_tint_intensity, 100);
+        for m in ColorizationMode::ALL {
+            let s = Settings {
+                colorization: m,
+                custom_tint_color: [12, 34, 56],
+                custom_tint_intensity: 42,
+                ..Settings::default()
+            };
+            let parsed = Settings::parse_json(&s.to_json_string());
+            assert_eq!(parsed.colorization, m, "{} 往返一致", m.label());
+            assert_eq!(parsed.custom_tint_color, [12, 34, 56]);
+            assert_eq!(parsed.custom_tint_intensity, 42);
+        }
+        let bad = Settings::parse_json(
+            r#"{"colorization":"rainbow","custom_tint_color":[1,2],"custom_tint_intensity":300}"#,
+        );
+        assert_eq!(
+            bad.colorization,
+            ColorizationMode::SystemAccent,
+            "未知模式 → 默认"
+        );
+        assert_eq!(
+            bad.custom_tint_color, CUSTOM_TINT_DEFAULT,
+            "长度不符 → 默认色"
+        );
+        assert_eq!(bad.custom_tint_intensity, 100, "越界 clamp 到 100");
+        let bad2 =
+            Settings::parse_json(r#"{"custom_tint_color":[1,2,"x"],"custom_tint_intensity":-5}"#);
+        assert_eq!(
+            bad2.custom_tint_color, CUSTOM_TINT_DEFAULT,
+            "元素非法 → 默认色"
+        );
+        // 负数不是 u64 → 走「类型损坏 → 默认 100」口径（与 material_opacity 一致），
+        // 而非 clamp 到 0；越界**正数**才 clamp（上方 300 → 100 已覆盖）
+        assert_eq!(
+            bad2.custom_tint_intensity, 100,
+            "负数按类型损坏口径回落默认"
+        );
+    }
+
+    /// T7/T8（2026-09-20）：单击激活与界面动效——默认 true（= 既有行为）、
+    /// 往返一致、类型损坏回落 true。
+    #[test]
+    fn click_and_animation_defaults_roundtrip() {
+        let d = Settings::default();
+        assert!(d.single_click_activation, "默认单击激活（既有行为）");
+        assert!(d.ui_animations, "默认开动效（既有行为）");
+        let s = Settings {
+            single_click_activation: false,
+            ui_animations: false,
+            ..Settings::default()
+        };
+        let parsed = Settings::parse_json(&s.to_json_string());
+        assert!(!parsed.single_click_activation, "关档往返一致");
+        assert!(!parsed.ui_animations, "关档往返一致");
+        let bad = Settings::parse_json(r#"{"single_click_activation":"yes","ui_animations":3}"#);
+        assert!(bad.single_click_activation, "类型损坏 → 默认开");
+        assert!(bad.ui_animations, "类型损坏 → 默认开");
+        // 旧配置（两字段缺失）→ 默认开，其余字段不受影响
+        let old = Settings::parse_json(r#"{"theme":"dark"}"#);
+        assert!(old.single_click_activation && old.ui_animations);
     }
 
     // ── P2–P4（窗口材质与边框方案，2026-09-13）────────────────────────

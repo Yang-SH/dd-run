@@ -20,9 +20,10 @@ impl PaletteApp {
             self.handle_hotkey_capture(ctx);
             return;
         }
-        let (esc, down, up, enter, tab, shift_tab) = ctx.input_mut(|i| {
+        let (esc, backspace, down, up, enter, tab, shift_tab) = ctx.input_mut(|i| {
             (
                 i.consume_key(egui::Modifiers::NONE, egui::Key::Escape),
+                i.consume_key(egui::Modifiers::NONE, egui::Key::Backspace),
                 i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowDown),
                 i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowUp),
                 i.consume_key(egui::Modifiers::NONE, egui::Key::Enter),
@@ -87,11 +88,31 @@ impl PaletteApp {
         }
 
         if esc {
-            // 非 Root 先返回上一级（并聚焦回落后页面的搜索框），Root 再隐藏（§4.3）
-            if self.go_back_focused().is_none() {
-                self.hide(ctx);
+            // B1（2026-09-20）：Esc 行为三档（设置 `esc_behavior`），默认档 =
+            // 既有行为（非 Root 返回并聚焦回落后页面、Root 隐藏）。决策为纯函数，
+            // 副作用在此执行。
+            let is_root = self.stack.current().page_id.is_none();
+            let query_empty = self.stack.current().list.query().is_empty();
+            match self.settings.esc_behavior.decide(is_root, query_empty) {
+                dd_gui::settings::EscAction::ClearSearch => self.clear_current_query(ctx),
+                dd_gui::settings::EscAction::GoBack => {
+                    if self.go_back_focused().is_none() {
+                        self.hide(ctx);
+                    }
+                }
+                dd_gui::settings::EscAction::Hide => self.hide(ctx),
             }
             return;
+        }
+        // B2（2026-09-20）：退格键返回（默认关）。仅在「嵌套页 + 搜索框为空」时
+        // 生效——非空时 Backspace 仍归输入框（删字）。
+        if backspace && self.settings.backspace_go_back {
+            let is_root = self.stack.current().page_id.is_none();
+            let query_empty = self.stack.current().list.query().is_empty();
+            if !is_root && query_empty {
+                self.go_back_focused();
+                return;
+            }
         }
         if down || tab {
             self.stack.current_mut().list.move_down();
@@ -347,6 +368,7 @@ impl PaletteApp {
             theme::apply_panel_tint(
                 ctx,
                 theme::panel_tint_with_opacity(dark, self.settings.backdrop, pct),
+                self.colorization(),
             );
         }
     }
@@ -431,7 +453,7 @@ impl PaletteApp {
             if self.backdrop_active {
                 self.backdrop_active = false;
                 // M1：面板底回实色；M2：材质场景结束 → 停画描边。
-                theme::apply_panel_tint(ctx, None);
+                theme::apply_panel_tint(ctx, None, self.colorization());
                 crate::platform::set_window_border(hwnd, None);
                 // 倒计时 3 帧：点击帧（旧透明视觉）→ 第 1 个不透明帧绘制并呈现
                 // → 第 2 个不透明帧呈现后清 DWM 材质。全程无透明帧暴露窗口。
@@ -440,11 +462,9 @@ impl PaletteApp {
             return;
         }
         // ── 透明化方向（云母 / 亚克力）：DWM 先行，再切透明视觉 ──
-        let kind = match self.settings.backdrop {
-            dd_gui::settings::Backdrop::None => crate::platform::SystemBackdrop::None,
-            dd_gui::settings::Backdrop::Mica => crate::platform::SystemBackdrop::Mica,
-            dd_gui::settings::Backdrop::Acrylic => crate::platform::SystemBackdrop::Acrylic,
-        };
+        // M1：材质 → DWM 类型收敛为 `From<Backdrop>` 单一来源（platform.rs），
+        // 新增档位无需改本处。
+        let kind = crate::platform::SystemBackdrop::from(self.settings.backdrop);
         let ok = crate::platform::apply_system_backdrop(hwnd, kind);
         let active = ok;
         if active {
@@ -464,6 +484,7 @@ impl PaletteApp {
                     self.settings.backdrop,
                     self.settings.material_opacity,
                 ),
+                self.colorization(),
             );
         }
         if active != self.backdrop_active {
@@ -471,10 +492,156 @@ impl PaletteApp {
             if !active {
                 // apply_system_backdrop 失败（Win10 / 22621 以下）→ 回退不透明
                 // 面板底 + 停描边，视觉与 v4.6 一致。
-                theme::apply_panel_tint(ctx, None);
+                theme::apply_panel_tint(ctx, None, self.colorization());
                 crate::platform::set_window_border(hwnd, None);
             }
         }
+    }
+
+    /// B1（2026-09-20）：Esc 键行为。纯设置项（无附加副作用），照既有范式
+    /// 「落盘 + 日志」即可——按键分支每次读取生效值。
+    pub(crate) fn apply_esc_behavior(&mut self, b: dd_gui::settings::EscBehavior) {
+        if self.settings.esc_behavior == b {
+            return;
+        }
+        log::debug!("[dd-gui] Esc 键行为：{} → 立即生效并保存", b.label());
+        self.settings.esc_behavior = b;
+        self.settings.save();
+    }
+
+    /// T7（2026-09-20）：单击激活开关（默认开 = 既有行为）。纯设置项：
+    /// 行点击分支每次读取生效值。
+    pub(crate) fn apply_single_click_activation(&mut self, on: bool) {
+        if self.settings.single_click_activation == on {
+            return;
+        }
+        log::debug!(
+            "[dd-gui] 单击激活：{} → 立即生效并保存",
+            if on {
+                "开"
+            } else {
+                "关（单击选中、双击执行）"
+            }
+        );
+        self.settings.single_click_activation = on;
+        self.settings.save();
+    }
+
+    /// T8（2026-09-20）：界面动效开关（默认开 = 既有行为）。纯设置项：
+    /// 过渡调用点每次读取生效值（关闭 = 直出终态）。
+    pub(crate) fn apply_ui_animations(&mut self, on: bool) {
+        if self.settings.ui_animations == on {
+            return;
+        }
+        log::debug!(
+            "[dd-gui] 界面动效：{} → 立即生效并保存",
+            if on { "开" } else { "关" }
+        );
+        self.settings.ui_animations = on;
+        self.settings.save();
+    }
+
+    /// T6（2026-09-20）：着色配置投影（设置 → `theme::Colorization`）——
+    /// 所有 `apply_panel_tint` 调用点统一经此取值，避免各处重复拼装。
+    pub(crate) fn colorization(&self) -> theme::Colorization {
+        theme::Colorization::from_settings(&self.settings)
+    }
+
+    /// T6：着色模式（系统强调色 / 无 / 自定义）——即时重注册浓淡层 + 落盘。
+    pub(crate) fn apply_colorization(
+        &mut self,
+        ctx: &egui::Context,
+        mode: dd_gui::settings::ColorizationMode,
+    ) {
+        if self.settings.colorization == mode {
+            return;
+        }
+        log::debug!("[dd-gui] 着色模式：{} → 立即生效并保存", mode.label());
+        self.settings.colorization = mode;
+        self.settings.save();
+        self.repaint_panel_tint(ctx);
+    }
+
+    /// T6：自定义浓淡色——即时生效；**指针未按下时**才落盘（色盘拖动期逐帧
+    /// 触发，避免拖动期间频繁写盘）。
+    pub(crate) fn apply_custom_tint_color(&mut self, ctx: &egui::Context, rgb: [u8; 3]) {
+        if self.settings.custom_tint_color == rgb {
+            return;
+        }
+        self.settings.custom_tint_color = rgb;
+        self.repaint_panel_tint(ctx);
+        // 指钟未按下才落盘（色盘拖动期逐帧触发，避免频繁写盘）
+        if !ctx.input(|i| i.pointer.any_down()) {
+            self.settings.save();
+        }
+    }
+
+    /// T6：自定义着色强度（0–100）——拖动即时生效、松手落盘（同材质不透明度口径）。
+    pub(crate) fn apply_custom_tint_intensity(&mut self, ctx: &egui::Context, pct: u8) {
+        let pct = pct.min(100);
+        if self.settings.custom_tint_intensity == pct {
+            return;
+        }
+        self.settings.custom_tint_intensity = pct;
+        self.repaint_panel_tint(ctx);
+    }
+
+    /// T6：按当前设置重注册面板浓淡层（着色变更的统一出口；材质未生效时
+    /// 无视觉可调，仅更新内存值）。
+    pub(crate) fn repaint_panel_tint(&mut self, ctx: &egui::Context) {
+        if !self.backdrop_active {
+            return;
+        }
+        let dark = ctx.theme() == egui::Theme::Dark;
+        let tint = theme::panel_tint_with_opacity(
+            dark,
+            self.settings.backdrop,
+            self.settings.material_opacity,
+        );
+        theme::apply_panel_tint(ctx, tint, self.colorization());
+    }
+
+    /// B2（2026-09-20）：退格键返回开关（同上，纯设置项）。
+    pub(crate) fn apply_backspace_go_back(&mut self, on: bool) {
+        if self.settings.backspace_go_back == on {
+            return;
+        }
+        log::debug!(
+            "[dd-gui] 退格键返回：{} → 立即生效并保存",
+            if on { "开" } else { "关" }
+        );
+        self.settings.backspace_go_back = on;
+        self.settings.save();
+    }
+
+    /// B1：Esc「先清除搜索内容」档——清空当前页搜索框。嵌套页的过滤由扩展侧
+    /// 完成，清空后按空查询去抖重拉（根页走本地过滤，清空即恢复全量）。
+    fn clear_current_query(&mut self, ctx: &egui::Context) {
+        let is_nested = self.stack.current().page_id.is_some();
+        self.stack.current_mut().list.set_query(String::new());
+        if is_nested {
+            self.rearm_page_query_debounce();
+        }
+        ctx.request_repaint();
+    }
+
+    /// T5（2026-09-20）：「恢复默认外观」——复用既有 `apply_*` 即时生效链路
+    /// （各自幂等、各自落盘），默认值唯一来源 = `Settings::default()`；
+    /// 范围**刻意不含**热键 / 语言 / 搜索引擎 / 扩展启停 / 自启 / 面板尺寸
+    /// （那些属功能配置，重置外观不应改动）。
+    pub(crate) fn apply_reset_appearance(&mut self, ctx: &egui::Context) {
+        let d = dd_gui::settings::Settings::default();
+        self.apply_theme_pref(ctx, d.theme);
+        self.apply_backdrop(ctx, d.backdrop);
+        self.apply_material_opacity(ctx, d.material_opacity);
+        self.apply_corner_pref(d.corner_pref);
+        self.apply_border_mode(ctx, d.border_mode);
+        if self.settings.density != d.density {
+            self.settings.density = d.density;
+        }
+        self.settings.save();
+        log::info!("[dd-gui] 外观已恢复默认（主题/材质/浓淡/圆角/边框/密度）");
+        self.show_toast(self.tr("set.reset.toast"), Some(1_500));
     }
 
     /// 设置页改选「打开面板时显示」：立即生效（重算 root 首屏可见表）+ 持久化。

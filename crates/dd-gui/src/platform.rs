@@ -653,8 +653,26 @@ pub enum SystemBackdrop {
     None,
     /// 云母（`DWMSBT_MAINWINDOW`）。
     Mica,
+    /// 云母 Alt（`DWMSBT_TABBEDWINDOW`，M2 2026-09-20）：云母变体，色更浓、
+    /// 对比更强；Win11 22H2+ 支持，旧系统应用失败走既有回退链。
+    MicaAlt,
     /// 亚克力（`DWMSBT_TRANSIENTWINDOW`）。
     Acrylic,
+}
+
+/// M1（2026-09-20）：设置枚举 → DWM 类型的**唯一映射点**（参照 CmdPal
+/// `BackdropStyles` 注册表思想）。调用方不再各自 `match`——新增材质档
+/// 只需在 [`SystemBackdrop`] 与 [`dd_gui::settings::Backdrop`] 各加一行。
+impl From<dd_gui::settings::Backdrop> for SystemBackdrop {
+    fn from(b: dd_gui::settings::Backdrop) -> Self {
+        use dd_gui::settings::Backdrop;
+        match b {
+            Backdrop::None => SystemBackdrop::None,
+            Backdrop::Mica => SystemBackdrop::Mica,
+            Backdrop::MicaAlt => SystemBackdrop::MicaAlt,
+            Backdrop::Acrylic => SystemBackdrop::Acrylic,
+        }
+    }
 }
 
 /// 应用系统背景材质到主面板窗口（v4.7 D31，设计稿 8.1「材质效果」行）。
@@ -665,12 +683,13 @@ pub enum SystemBackdrop {
 pub fn apply_system_backdrop(hwnd: isize, backdrop: SystemBackdrop) -> bool {
     use windows_sys::Win32::Foundation::HWND;
     use windows_sys::Win32::Graphics::Dwm::{
-        DwmSetWindowAttribute, DWMSBT_MAINWINDOW, DWMSBT_NONE, DWMSBT_TRANSIENTWINDOW,
-        DWMWA_SYSTEMBACKDROP_TYPE,
+        DwmSetWindowAttribute, DWMSBT_MAINWINDOW, DWMSBT_NONE, DWMSBT_TABBEDWINDOW,
+        DWMSBT_TRANSIENTWINDOW, DWMWA_SYSTEMBACKDROP_TYPE,
     };
     let value: i32 = match backdrop {
         SystemBackdrop::None => DWMSBT_NONE,
         SystemBackdrop::Mica => DWMSBT_MAINWINDOW,
+        SystemBackdrop::MicaAlt => DWMSBT_TABBEDWINDOW,
         SystemBackdrop::Acrylic => DWMSBT_TRANSIENTWINDOW,
     };
     let hr = unsafe {

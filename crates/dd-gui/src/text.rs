@@ -226,14 +226,79 @@ const I18N: &[(&str, &str, &str)] = &[
         "亚克力：实时模糊，视觉更通透、GPU 开销略高",
         "Acrylic: live blur — clearer look, slightly higher GPU cost",
     ),
+    // M2（2026-09-20）：云母 Alt 档（Win11 22H2+）
+    (
+        "set.material.mica_alt.desc",
+        "云母变体：色彩更浓、明暗对比更强（Win11 22H2+）",
+        "Mica variant: heavier tint and stronger contrast (Win11 22H2+)",
+    ),
     ("set.material.none", "无材质", "None"),
     ("set.material.mica", "云母", "Mica"),
+    ("set.material.mica_alt", "云母 Alt", "Mica Alt"),
+    // ── 按键行为卡（B1/B2，2026-09-20）──
+    ("set.keys.name", "按键与交互", "Keys & interaction"),
+    (
+        "set.keys.desc",
+        "Esc、退格、单击与动效的行为，即时生效并保存",
+        "Escape, Backspace, click and animation behavior, applied instantly and saved",
+    ),
+    ("set.esc.name", "Esc 键行为", "Escape key behavior"),
+    ("set.esc.desc", "选择 Esc 键的行为", "Choose what the Escape key does"),
+    ("set.esc.go_back", "返回上一级（默认）", "Go back (default)"),
+    (
+        "set.esc.clear_then_back",
+        "先清除搜索内容，然后返回",
+        "Clear the search first, then go back",
+    ),
+    ("set.esc.always_hide", "始终隐藏面板", "Always hide the panel"),
+    ("set.backspace.name", "退格键返回", "Backspace goes back"),
+    (
+        "set.backspace.desc",
+        "搜索框为空时按 Backspace 返回上一级",
+        "Press Backspace on an empty search box to go back",
+    ),
+    // ── 恢复默认外观卡（T5，2026-09-20）──
+    // ── 单击激活 / 界面动效（T7/T8，2026-09-20）──
+    ("set.click.name", "单击激活", "Single-click activates"),
+    (
+        "set.click.desc",
+        "关闭后：单击仅选中，双击才执行",
+        "When off: a single click selects, double click activates",
+    ),
+    ("set.anim.name", "界面动效", "Interface animations"),
+    (
+        "set.anim.desc",
+        "关闭后界面过渡（如聚焦下划线）直出终态",
+        "When off, UI transitions (e.g. focus underline) jump to the final state",
+    ),
+    ("set.reset.name", "恢复默认外观", "Reset appearance"),
+    (
+        "set.reset.desc",
+        "将主题、材质、浓淡、圆角、边框与密度恢复为默认值（不含热键、语言与扩展）",
+        "Reset theme, material, tint, corner, border and density to defaults (hotkey, language and extensions are kept)",
+    ),
+    ("set.reset.action", "恢复默认", "Reset"),
+    ("set.reset.armed", "确认重置", "Confirm"),
+    ("set.reset.toast", "外观已恢复默认", "Appearance reset to defaults"),
     ("set.material.acrylic", "亚克力", "Acrylic"),
+    // ── 着色行（T6，2026-09-20）──
+    ("set.color.name", "着色", "Colorization"),
+    (
+        "set.color.desc",
+        "材质色层的着色来源（不影响主题强调色与选中色）",
+        "Where the material tint colour comes from (theme accent and selection are unaffected)",
+    ),
+    ("set.color.system_accent", "系统强调色", "System accent"),
+    ("set.color.none", "无着色", "None"),
+    ("set.color.custom", "自定义", "Custom"),
+    ("set.color.custom_color", "颜色", "Color"),
+    ("set.color.intensity", "强度", "Intensity"),
+    ("set.color.intensity.desc", "仅自定义档生效；拖动即时生效，松手保存", "Only applies to the custom mode; live while dragging, saved on release"),
     ("set.opacity.name", "不透明度", "Opacity"),
     (
         "set.opacity.desc",
-        "0 为纯材质，拉满面板最实；40 为推荐值；拖动即时生效，松手保存",
-        "0 = pure material, 100 = most solid; 40 recommended. Applies live, saved on release",
+        "材质色层的浓淡强度（非窗口透明度）：0 为纯材质、拉满面板最实；40 为推荐值；拖动即时生效，松手保存",
+        "Strength of the material tint layer (not window transparency): 0 = pure material, 100 = most solid; 40 recommended. Applies live, saved on release",
     ),
     ("set.corner.name", "窗口圆角", "Corner shape"),
     (
