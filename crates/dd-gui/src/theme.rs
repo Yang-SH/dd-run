@@ -507,8 +507,8 @@ pub fn card_fill(dark: bool, glass_card: bool) -> Color32 {
 /// 取不到系统强调色（非 Windows / DwmGetColorizationColor 失败）→ 纯面板色
 /// （中性回退，与既往一致）。每次 visuals 重建时取色（调用点均为事件驱动，
 /// DwmGetColorizationColor 为轻量 API，滑杆拖动期双调用/帧可忽略）。
-/// 着色配置（T6，2026-09-20）：从 `Settings` 投影出的三要素——模式 + 自定义色
-/// + 强度。theme 侧不直接依赖全量 `Settings`（渲染层只关心这三个值），用
+/// 着色配置（T6，2026-09-20）：从 `Settings` 投影出的三要素，即模式、自定义色
+/// 与强度。theme 侧不直接依赖全量 `Settings`（渲染层只关心这三个值），用
 /// [`Colorization::from_settings`] 单点投影。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Colorization {
