@@ -1,6 +1,6 @@
 # dd-run 安全审计与修复方案（2026-09-23）
 
-> **状态**：生效中 ｜ **版本**：v1.4 ｜ **最后更新**：2026-09-23
+> **状态**：生效中 ｜ **版本**：v1.5 ｜ **最后更新**：2026-09-23
 > **关联**：[protocol.md](./protocol.md) · [manifest-schema.md](./manifest-schema.md) · [implementation.md](./implementation.md) · [extensions.md](./extensions.md)
 
 ---
@@ -601,11 +601,12 @@ pub(crate) fn decode_icon_image(bytes: &[u8]) -> Option<egui::ColorImage> {
 
 ### 8.2 NDJSON 无界缓冲（S-02）
 
-- 源码：`.workbuddy/tmp/framing-probe/`（独立 crate，`dd-protocol = { path = … }` 依赖真实源码，非复刻）
-- 编译运行：
+- 源码：`.workbuddy/tmp/framing-probe/`（独立 crate，`dd-protocol = { path = … }` 依赖真实源码，非复刻；`Cargo.toml` 含空 `[workspace]` 表以免被仓库 workspace 吞并）
+- 编译运行（**本机无外网，须带 `--offline`**：独立 crate 无 `Cargo.lock` 时 cargo 会尝试更新 crates-io 索引而失败）：
 
 ```bash
-CARGO_TARGET_DIR=<repo>/target cargo run --release --target x86_64-pc-windows-gnu -q
+cd .workbuddy/tmp/framing-probe
+CARGO_TARGET_DIR=<repo>/target cargo run --offline --release --target x86_64-pc-windows-gnu -q
 ```
 
 - 实测输出见 §4.1：**修复前** 4 MiB 无换行 → `buffered = 4 MiB`（上限 1 MiB）→ 判定 `UNBOUNDED`。
@@ -645,3 +646,4 @@ verdict     = bounded — 上限生效
 | v1.2 | 2026-09-23 | **P0（S-01）修复落地**：新增 `crates/dd-ext/src/win_launch.rs`（`shell_open` = `ShellExecuteW(open)` + `target_is_safe`），`apps.rs` 的 `launch_shortcut`/`launch_url` 不再经 `cmd.exe`；§1 表格新增**状态**列；新增 §3.1.1 记录实施细节与**与初版方案的有意偏离**（字符级拒绝收窄为「空串/控制字符/裸双引号」，理由：`&` / `%` / `\|` 在真实路径中合法，收紧会误伤既有应用，而 `ShellExecuteW` 的 `lpFile` 不参与命令行解析故无注入面）；新增源码级回归护栏 `launch_path_does_not_use_cmd`；验收 = 3 条单测全绿 + 全仓 475 passed / 1 failed（既有机器绑定用例） |
 | v1.3 | 2026-09-23 | **中危批量修复（4/5）落地**：S-02（§4.1.1，`framing` 残留上限 + `poisoned`/`reset`，PoC 输出反转为 `bounded`）、S-03（§4.2.1，**方案按功能依赖收窄**：初版「只放行 http(s)」→ 实测文件搜索「打开」依赖 `file://`，改为三 scheme 白名单并保留 `file://` + 打开前 info 溯源）、S-04（§4.3.1，读盘前元数据校验 + 显式 `image::Limits`；同时**修正初版事实错误**——`image` 默认已有 512 MiB 分配上限、缺的是尺寸上限）、S-06（§4.5.1，危险命令二次确认，含"比命令名而不比子串"的判据设计），另 S-10 随批落地（§5.1，env 关键变量保护 + `dd-host` 引入零传递依赖的 `log`）。**本批 +12 条单测**；余 **S-05 待选型**（T1/T2/T3，§4.4）。§7.2 记**环境阻塞**：本会话 Rust `Stdio::piped()` spawn 恒报 `Os error 231`（已用零仓库代码探针定性），故 22 条 spawn 类集成用例无法在本会话判定，须真机复跑 |
 | v1.4 | 2026-09-23 | **提交前复核 + 环境阻塞销项 + 二次缺陷修正**：① §7.2 的「环境阻塞」改判为**会话环境瞬时限制并已销项**——复跑得 `roundtrip` 9/9、全仓 **488 passed / 1 failed**（唯一失败仍是既有机器绑定用例），故 22 条 `error 231` 与代码无关；该小节改写为「留档备查」并给出操作结论（**日后遇批量 `error 231` 先怀疑环境，不要改代码**）。② 清掉 §7.2 末尾 3 条**上批残留的重复验收项**（其 S-03 出处还写着 §7.3，实为 §7.4）。③ **修正本批实施时引入的二次缺陷**（§4.2.1 注）：`is_allowed_open_url` 原用 `u[..p.len()]` 按**字节长度切 `&str`** 做前缀比较，遇多字节开头的合法入参（`C:\中文\文件.txt`、`中中中中`）**直接 panic**（`end byte index 7 is not a char boundary`，已用 `.workbuddy/tmp/slice_probe.rs` 取证）→ 改为 `as_bytes()` 比较 + 新增护栏 `open_url_handles_non_ascii_without_panicking`；本批单测由 +12 增至 **+13**。验收勾选：全仓回归 ✅、PoC 反转 ✅、零协议变更 ✅；余 3 项（体积实测 / 真机走查 / S-05 选型后补文档）待做 |
+| v1.5 | 2026-09-23 | **取证脚本可复现性修正（§8.2）**：复跑 S-02 PoC 时发现独立 crate 需**带 `--offline`**（该 crate 未随带 `Cargo.lock`，cargo 会先更新 crates-io 索引 → 本机无外网则 `download of config.json failed`），已把命令与原因写入 §8.2 与 `framing-probe/Cargo.toml` 头注释；同时补记 `Cargo.toml` 含空 `[workspace]` 表（避免被仓库 workspace 吞并）。复跑实测仍为 `bounded — 上限生效`（buffered = 0 / frames = 1） |
