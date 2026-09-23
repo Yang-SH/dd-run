@@ -81,6 +81,18 @@ impl PaletteApp {
                     log::warn!("[dd-gui] host/open_url 参数解析失败（ext={ext_id}）");
                     return;
                 };
+                // S-03（2026-09-23）：scheme 白名单前置——只放行 http / https / file
+                // （理由与 `file://` 为何保留见 `platform::is_allowed_open_url` 文档）。
+                // 拒绝时**不静默**：记 warn（含 ext id 与 URL，便于溯源）+ 一次性 toast。
+                if !crate::platform::is_allowed_open_url(&params.url) {
+                    log::warn!(
+                        "[dd-gui] host/open_url 已拦截（scheme 不在白名单）ext={ext_id} url={}",
+                        params.url
+                    );
+                    let msg = crate::text::t(self.lang_effective, "toast.open_url_blocked");
+                    self.show_toast(msg.to_string(), Some(2_500));
+                    return;
+                }
                 log::debug!("[dd-gui] host/open_url（ext={ext_id}）：{}", params.url);
                 // v3.3 P1.5 修复：`file://` 协议改走 ShellExecute 自动派发——
                 // 目录 → Explorer 窗口；文件 → 关联程序（此前一律 webbrowser，
@@ -91,6 +103,10 @@ impl PaletteApp {
                 // 字面 `%`/`#` 路径优先，不存在才回退 percent-decode；UNC
                 // （`file://host/share`）也从原来的 None 变成受支持的 UNC 路径。
                 if let Some(path) = crate::platform::resolve_file_url_to_path(&params.url) {
+                    // S-03：`file://` = 「双击等价」（设计如此，文件搜索的打开动作依赖它）。
+                    // 记 info 落**扩展 id + 目标路径**——该能力无法由宿主验证"是否用户手势"，
+                    // 故至少保证可溯源（EDR/日志归因）。见审计文档 §4.2。
+                    log::info!("[dd-gui] host/open_url file:// 打开（ext={ext_id}, path={path}）");
                     if let Err(e) = crate::platform::open_path(&path) {
                         log::debug!(
                             "[dd-gui] host/open_url ShellExecute 失败（ext={ext_id}, path={path}）：{e}"

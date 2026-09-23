@@ -4,6 +4,27 @@
 
 ## [Unreleased]
 
+### 安全（中危批量修复：S-02 / S-03 / S-04 / S-06 + S-10，2026-09-23）
+
+- **背景**：承接 S-01（高危命令注入）之后的中危批次，覆盖「不受信输入打挂宿主」「能力语义越界」「无门槛执行」三类边界；逐项方案与验收见 `docs/security-audit-2026-09-23.md` §4–§5。
+- **S-02（NDJSON 解码器无界缓冲 → 内存耗尽）**：`dd-protocol/src/framing.rs` —— `Decoder` 新增 `poisoned` 位，**未终止残留同样受 `max` 约束**；超限即 `reset()` + 毒化并**只报一次** `TooLarge`（后续字节丢弃，避免流错位与帧洪泛）；新增 `is_poisoned()` / `reset()`。PoC 复跑：4 MiB 无换行由 `buffered = 4 MiB`（UNBOUNDED）反转为 `buffered = 0 / frames = 1`（bounded）。
+- **S-03（`host/open_url` 无 scheme 白名单）**：`dd-gui/src/platform.rs` 新增 `is_allowed_open_url`（**http / https / file**，大小写不敏感 + 拒绝空串/控制字符/裸引号），`app/host_actions.rs` 前置拦截（`warn` + toast，不静默），`file://` 打开前记 `info`（扩展 id + 路径）以溯源；`docs/protocol.md` §7.4 增「宿主执行策略（实现侧，非契约）」注。⚠️ **方案有意收窄**：初版为"只放行 http(s)"，核对消费者后发现**文件搜索「打开」依赖 `file://`**，故保留该 scheme 以免功能回归；被消除的是 `ms-msdt:` / `search-ms:` / `vbscript:` / `javascript:` / `data:` / `steam://` 等**无合法消费者**的静默处理器唤起。⚠️ **另修正一处本批实施时引入的二次缺陷**：前缀比较原用 `u[..p.len()]`（按**字节长度切 `&str`**），遇多字节开头的合法入参（如 `C:\中文\文件.txt`）会因落在字符边界内**直接 panic** → 改为 `as_bytes()` 比较，并加护栏 `open_url_handles_non_ascii_without_panicking`（取证与教训见审计文档 §4.2.1 注）。
+- **S-04（图标读盘/解码无上限）**：`dd-gui/src/ui/icons.rs` —— 新增 `read_icon_limited`（**先 `metadata` 后读内容**，> 512 KB 直接拒，拒绝发生在读盘前）与显式 `image::Limits`（宽高 ≤ 512、`max_alloc` 16 MiB）。同时**修正原报告的事实错误**：`image` 默认已有 512 MiB 分配上限，缺失的是尺寸上限与读盘前校验。
+- **S-06（Shell 兜底无门槛执行）**：`dd-ext/src/builtins/shell.rs` —— 新增 `is_dangerous_command`（12 个危险命令名 + `reg delete` / `net user` 子命令组合，**比命令名而非子串**、去路径去扩展名），命中且未确认 → 回 `Confirm{is_critical:true}`（描述含将被执行的原命令），确认后按 §8.3 重发放行；`where del` / `echo format` / `deleted_files.bat` / `reg query` / `net view` **不误伤**。
+- **S-10（`entry.env` 可覆盖宿主关键环境变量）**：`dd-host/src/process.rs` —— 新增 `PROTECTED_ENV_KEYS`（18 个：`PATH` / `COMSPEC` / `SYSTEMROOT` / `USERPROFILE` / `TEMP` …）与 `filter_env_overrides`；`spawn` 只注入非受保护键并 `warn` 被拒键；`dd-host` 新增 `log = "0.4"`（facade，零传递依赖）以让拒绝可观测。业务变量 `DDRUN_LANG` / `DD_WEBSEARCH_ENGINES` 不受影响。
+- **回归测试（+13）**：`unterminated_stream_is_bounded_and_reports_once` / `poisoned_decoder_discards_until_reset` / `residual_limit_boundary_is_exclusive`（S-02）；`open_url_allows_http_https_file_only` / `open_url_rejects_untrusted_schemes` / `open_url_handles_non_ascii_without_panicking`（S-03）；`read_icon_limited_rejects_oversize_without_reading` / `decode_icon_image_accepts_up_to_dimension_limit` / `decode_icon_image_rejects_over_dimension`（S-04）；`dangerous_command_detection_hits` / `dangerous_command_detection_does_not_over_block`（S-06）；`filter_env_overrides_blocks_protected_keys_case_insensitively` / `filter_env_overrides_keeps_business_vars`（S-10）。
+- **验证**：靶向单测全绿 —— `dd-protocol` **30 passed**、`dd-host --lib` **49 passed**、`dd-gui --lib`（`icons`/`open_url`）**11 passed**、`dd-ext --lib`（`win_launch`/`dangerous_command`）**7 passed**；`rustfmt --check` 改动文件无差异；全仓 `cargo test --workspace --no-fail-fast` = **488 passed / 1 failed**（唯一失败为既有**机器绑定**用例 `steam_installed_shown_uninstalled_filtered_root_lnk_shown`，非回归）。
+- **未做（待选型）**：S-05 扩展清单信任模型（信任台账 + 设置页审批），三方案 T1/T2/T3 见审计文档 §4.4；S-07/S-08/S-09/S-11 仍待做。零协议/清单字段变更（仅 §7.4 增实现侧策略注）。
+
+### 安全（S-01 命令注入修复：`cmd /C start` 参数引号错配，P0，2026-09-23）
+
+- **背景**：全量代码安全审计（79 个 `.rs` / 35,975 行）确认 11 项缺陷（1 高 / 5 中 / 5 低），清单与修复方案见 `docs/security-audit-2026-09-23.md`；本批处置其中唯一的**高危**项。
+- **症状**：`.lnk` / 协议 URL 的启动路径为 `cmd.exe /C start "" <不受信串>`——Rust 的 Windows 参数引用规则（含空格才加引号、参数内 `"` 转义为 `\"`）与 **cmd.exe 不认 `\` 转义**的解析规则错配，参数内 `&` 越界成为命令分隔符。PoC 实测两种形态均注入成功（含 `&` 无空格；含空格 + 裸 `"`）；`.url` 里一行 `URL=https://a/"&calc&"`（可通过既有协议前缀白名单）即可让宿主执行任意命令。
+- **修复**（`crates/dd-ext`，**换汇点而非加转义**）：新增 `src/win_launch.rs`——`shell_open` = `ShellExecuteW(verb="open")`（`lpFile` 不参与命令行解析，故注入面消失），配纯函数 `target_is_safe`；`builtins/apps.rs` 的 `launch_shortcut` / `launch_url` 改调它，**不再经 `cmd.exe`**；`lib.rs` 注册模块。`Launch::AppsFolder` 臂（`explorer.exe shell:AppsFolder\…`）保持不动——explorer 不是命令解释器，且 `parsing` 已被 `\` / `/` 过滤。
+- **与初版方案的一处有意偏离**：`target_is_safe` 只拒「空串 / 控制字符 / 裸双引号」，**不拒** `&` `%` `|`（它们在 Windows 文件名与 URL 中合法，如 `…\Start Menu\Programs\Foo & Bar\app.lnk`，拒绝会造成既有应用无法启动的功能回归；而本修法下没有解释器可注入，故对安全零增益）。
+- **回归测试**（`win_launch.rs`，+3）：`accepts_legitimate_targets`（8 例合法目标放行，防功能回归）/ `rejects_impossible_targets`（含两种注入形态）/ `launch_path_does_not_use_cmd`（源码断言 `apps.rs` 不含 `Command::new("cmd.exe")` 与 `"start"`——把这一类缺陷钉死，防日后被「便捷启动」改回）。
+- **验证**：`cargo build -p dd-ext` exit 0；`cargo test -p dd-ext --lib -- win_launch` **3 passed**；全量 `cargo test --workspace --no-fail-fast` **475 passed / 1 failed**（唯一失败 `steam_installed_shown_uninstalled_filtered_root_lnk_shown` 为**机器绑定**用例，断言本机装有 Flowframes；基线同为 1 failed，非本次回归）；`cargo build -p dd-gui --release` 重链宿主 exe。真机验证（`.lnk` / `.url` 条目启动行为不变）待确认。
+
 ### 修复（退格键无法删除输入内容，B2 回归，2026-09-23）
 
 - **症状**：默认设置下，文件搜索页及其它嵌套页的输入框**能键入字符，但 Backspace 无法删除已输入内容**（光标不动、字符删不掉）。

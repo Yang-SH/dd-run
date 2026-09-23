@@ -1,6 +1,6 @@
 # dd-run 实施方案
 
-> **状态**：生效中 ｜ **版本**：v0.1.1 ｜ **最后更新**：2026-09-15
+> **状态**：生效中 ｜ **版本**：v0.1.4 ｜ **最后更新**：2026-09-23
 > **关联**：[protocol.md](./protocol.md) · [manifest-schema.md](./manifest-schema.md) · [extensions.md](./extensions.md) · [../cmdpal-platform-agnostic-design.md](../cmdpal-platform-agnostic-design.md)
 
 ---
@@ -715,6 +715,63 @@ Backspace 仅用于编辑输入」）。被 `consume_key` 移除的事件 TextEd
 **验证**：`cargo test -p dd-gui backspace` = **4 passed / 0 failed**（含 settings 侧既有 1 例）；
 `cargo build -p dd-gui`（debug）与 `tools/package.sh`（release + `dist/`）重链产物。
 
+### 安全审计 + S-01 命令注入修复（2026-09-23）
+
+**背景**：对 `crates/` 全量代码做了一次按攻击面分组的安全审计（79 个 `.rs` / 35,975 行），
+确认 11 项缺陷（1 高 / 5 中 / 5 低）+ 14 项「已做对」核验项；缺陷清单、威胁模型、
+逐项修复方案与验收标准见 [`security-audit-2026-09-23.md`](./security-audit-2026-09-23.md)。本批先做 **P0 = S-01**。
+
+**S-01 症状**：`.lnk` / 协议 URL 的启动路径用 `cmd.exe /C start "" <不受信串>`——Rust 的
+Windows 参数引用规则（含空格才加引号、参数内 `"` 转义成 `\"`）与 **cmd.exe 不认 `\` 转义**
+的解析规则错配，导致参数内 `&` 越界成为命令分隔符。PoC 实测：`.url` 里一行
+`URL=https://a/"&calc&"`（通过既有协议前缀白名单 `url_protocol_allowed`）即可让宿主
+执行任意命令；反向的「含 `&` 且不含空格」同样注入成功。
+
+**根因定性**：这是**一类**缺陷（跨层引号语义错配），不是单点 bug。
+
+**修复**（3 文件，零协议/清单/依赖改动；**换汇点而非加转义**）：
+- 新增 `crates/dd-ext/src/win_launch.rs`：`shell_open` = `ShellExecuteW(verb="open")`，
+  及纯函数 `target_is_safe`；模块文档记录加固缘由与「为何不做激进的字符级拒绝」。
+- `builtins/apps.rs`：`launch_shortcut` / `launch_url` 改调 `win_launch::shell_open`，
+  不再经 `cmd.exe`；模块头文档写明「启动路径禁止改回 `cmd /C start`」。
+- `lib.rs`：注册 `pub mod win_launch;`。
+- **未动** `Launch::AppsFolder` 臂（`explorer.exe shell:AppsFolder\<parsing>`）：explorer
+  不是命令解释器，且 `parsing` 已被 `\` / `/` 过滤。
+
+**一处有意偏离原方案**：原方案的 `target_is_safe` 拒绝 `" & | ^ < > %`，实施时**收窄为
+只拒「空串 / 控制字符 / 裸双引号」**——`&` `%` `|` 在 Windows 文件名与 URL 中合法
+（`…\Start Menu\Programs\Foo & Bar\app.lnk`），拒绝会造成既有应用无法启动的**功能回归**；
+而 `ShellExecuteW` 的 `lpFile` 不参与命令行解析，字符级拒绝对安全零增益。安全性改由
+「汇点不含解析器」保证。
+
+**回归测试**（`win_launch.rs`，+3）：`accepts_legitimate_targets`（8 例合法目标放行，
+含 `&`/`%`/`|` 的路径与 `https`/`steam`/`shell:AppsFolder`）/ `rejects_impossible_targets`
+（空串、控制字符、两种注入形态）/ `launch_path_does_not_use_cmd`（**源码断言**：
+`builtins/apps.rs` 不含 `Command::new("cmd.exe")` 与 `"start"`，且含 `win_launch::shell_open`）。
+
+**验证**：`cargo build -p dd-ext` 通过；`cargo test -p dd-ext --lib -- win_launch` = **3 passed**；
+全仓 `cargo test --workspace --no-fail-fast` = **475 passed / 1 failed**（唯一失败为既有
+**机器绑定**用例 `steam_installed_shown_uninstalled_filtered_root_lnk_shown`，断言本机装有
+Flowframes；改动前基线同为 1 failed，非本次回归）；`cargo build -p dd-gui --release` 重链宿主 exe。
+真机验证（启动 `.lnk` / `.url` 条目行为不变）待用户确认。
+
+### 安全审计中危批量修复（S-02 / S-03 / S-04 / S-06 / S-10，2026-09-23）
+
+**范围**：审计确认的 5 项中危里处置 4 项（S-02 / S-03 / S-04 / S-06）＋低危 1 项（S-10，原计划随 S-05，实际独立落地）。逐项细节与验收判据见
+[`security-audit-2026-09-23.md`](./security-audit-2026-09-23.md) 的 §4.1.1 / §4.2.1 / §4.3.1 / §4.5.1 / §5.1。
+
+| 项 | 改动 | 关键判据 |
+|---|---|---|
+| **S-02** | `dd-protocol/src/framing.rs`：`Decoder` 加 `poisoned` 位；**未终止残留同样比 `max`**，超限即 `reset()` + 毒化 + **只报一次** `TooLarge`；新增 `is_poisoned()` / `reset()` | 分块投喂 4 KiB 无换行（上限 1 KiB）→ 恰好 1 个 `TooLarge`、`buffered ≤ max`；PoC 复跑由 `UNBOUNDED` **反转为 `bounded`** |
+| **S-03** | `dd-gui/src/platform.rs` 新增 `is_allowed_open_url`（**http / https / file** 三 scheme 白名单，含控制字符与裸引号拒绝）；`app/host_actions.rs` 前置拦截（warn + toast，不静默）+ `file://` 打开前 info 溯源（ext id + path）；`text.rs` 加 i18n 键；`docs/protocol.md` §7.4 加「宿主执行策略（实现侧，非契约）」注 | **方案有意偏离初版**：初版写"只放行 http(s)"，实施前核对消费者发现**文件搜索「打开」依赖 `file://`**（`bin/search.rs` 约 :1492），一律收紧会打断该功能 → 改为三 scheme 白名单并保留 `file://`（语义 = 双击等价），残余以 info 日志溯源。**实施后自查修正一处二次缺陷**：前缀比较原用 `u[..p.len()]`（按**字节长度切 `&str`**），遇多字节开头的合法入参（`C:\中文\文件.txt`）**直接 panic** → 改 `as_bytes()` 比较，并加护栏 `open_url_handles_non_ascii_without_panicking`（详见审计文档 §4.2.1 注） |
+| **S-04** | `dd-gui/src/ui/icons.rs`：新增 `read_icon_limited`（**先 `metadata` 后读**，> 512 KB 直接拒）；`decode_icon_image` 改走 `ImageReader` + 显式 `Limits`（宽高 ≤ 512、`max_alloc` 16 MiB） | 超限文件在读盘**之前**被拒；600×600 **合法** PNG 因超限被拒（正向/负向图均由 `dd_ext::png` 现场生成，故"被拒"确因限制而非图片非法） |
+| **S-06** | `dd-ext/src/builtins/shell.rs`：新增纯函数 `is_dangerous_command` + 两张表（12 个危险命令名、`reg delete` / `net user` 子命令组合）；`shell.run.query` 命中且未确认 → 回 `Confirm{is_critical:true}`（描述里带上将被执行的原命令） | **比命令名而非子串**（去路径、去扩展名）→ `where del` / `echo format` / `deleted_files.bat` 不误伤；`reg query` / `net view` 等查询子命令不拦；文档明确"**不是沙箱边界**" |
+| **S-10** | `dd-host/src/process.rs`：`PROTECTED_ENV_KEYS`（18 个系统关键变量）+ `filter_env_overrides`；`spawn` 改 `.envs(env_keep)` 并 warn 被拒键；`dd-host` 新增 `log = "0.4"`（facade，零传递依赖）以让"拒绝"可观测 | 大小写不敏感；业务变量 `DDRUN_LANG` / `DD_WEBSEARCH_ENGINES` 原样保留（i18n 与引擎配置通道不回归） |
+
+**验证**：靶向单测全绿 —— `dd-protocol` **30 passed**（+3）、`dd-host --lib` **49 passed**（+2）、`dd-gui --lib`（`icons`/`open_url` 过滤）**11 passed**（+6）、`dd-ext --lib`（`win_launch`/`dangerous_command` 过滤）**7 passed**（+5，含 P0 的 3 条）；`rustfmt --check` 改动文件**无差异**；全仓 `cargo test --workspace --no-fail-fast` = **488 passed / 1 failed**（21 个测试目标；唯一失败为既有**机器绑定**用例 `steam_installed_shown_uninstalled_filtered_root_lnk_shown`，非回归）。
+
+> ⚠️ **排查记录（留档）**：本日 17:0x 曾出现 22 条 spawn 用例批量失败（全部 `Os error 231` = `ERROR_PIPE_BUSY`），经「零仓库代码最小探针 + 临时还原 S-10 隔离实验 + 时间线」三层证据定性为**环境瞬时限制**，约 30 分钟后复跑即全绿。**日后遇批量 `error 231` 先怀疑环境，不要改代码**。详见审计文档 §7.2。
+
 ## 3. 验收映射总表
 
 | 验收项 | 内容 | 里程碑 |
@@ -755,6 +812,8 @@ Backspace 仅用于编辑输入」）。被 `consume_key` 移除的事件 TextEd
 | 2026-09-19 | **465** | +3：**E2E 首屏计时**（`app/e2e.rs`：三段分解 + 饱和不 panic + 系统发起等待为 0） |
 | 2026-09-20 | **470** | +5：**设置/个性化/材料 B1–B4**（`theme::backdrop_registry_covers_all_variants` / `settings::backdrop_default_is_mica_and_roundtrips`（含云母 Alt）/ `settings::esc_behavior_and_backspace_defaults_roundtrip_and_decide`（决策矩阵）/ `settings::colorization_defaults_roundtrip_and_sanitize` / `theme::colorization_mix_and_tint_rules` / `settings::click_and_animation_defaults_roundtrip`） |
 | 2026-09-23 | **473** | +3：**退格键无法删除输入内容修复**（`dd-gui`：`backspace_not_consumed_when_go_back_disabled` / `backspace_go_back_enabled_nested_empty_pops` / `backspace_go_back_enabled_but_query_nonempty_keeps_editing`）。本机实跑 **472 passed / 1 failed**（`steam_installed_shown_uninstalled_filtered_root_lnk_shown` 机器绑定，非回归） |
+| 2026-09-23 | **476** | +3：**安全审计 P0 — S-01 命令注入修复**（`dd-ext/src/win_launch.rs`：`accepts_legitimate_targets` / `rejects_impossible_targets` / `launch_path_does_not_use_cmd`）。本机实跑 **475 passed / 1 failed** |
+| 2026-09-23 | **489** | +13：**安全审计中危批量**（S-02 ×3 / S-03 ×3 / S-04 ×3 / S-06 ×2 / S-10 ×2；其中 S-03 第 3 条为实施后自查补的 `open_url_handles_non_ascii_without_panicking`）。本机实跑 **488 passed / 1 failed**（同上机器绑定例，非回归）；期间一度出现 22 条 `Os error 231` 批量失败，经取证定性为环境瞬时限制后复跑恢复（见审计文档 §7.2） |
 
 **两条使用注意**：① `crates/dd-host/tests/roundtrip*.rs` 在 `dd-ext-sample.exe` **未构建时会打印 SKIP 并 return**（计入 passed），故凡涉及协议/扩展行为，先 `cargo build -p dd-ext-sample` 再跑；② 「三关全绿」与 CI 四关**均为 debug profile**，`#[cfg(debug_assertions)]` 类 release-only 编译错误检不到 —— 交付/发布前必须实跑 `cargo build --release`（见 §7 构建环境记档与 `CHANGELOG` 的 release 阻塞条目）。
 
@@ -828,7 +887,7 @@ Backspace 仅用于编辑输入」）。被 `consume_key` 移除的事件 TextEd
 
 ### 6.1 遗留项台账（2026-09-13 汇总）
 
-> 各里程碑收尾后散落各 record 的未排期项，统一收敛于此。当前**全部销项，无开放项**。
+> 各里程碑收尾后散落各 record 的未排期项，统一收敛于此。**除 L11（安全审计 P1/P2）外全部销项。**
 
 | # | 项 | 来源 | 说明 / 归属 |
 |---|---|---|---|
@@ -842,6 +901,7 @@ Backspace 仅用于编辑输入」）。被 `consume_key` 移除的事件 TextEd
 | L8 | 设计稿 v4 C 组占位实施 | 设计稿 v4.3 §12 | ✅ 代码完成（2026-09-04，C1–C3）+ **真机验收通过**（2026-09-08，M6 集中回归 B 组：A1–A5/C1–C3） |
 | L9 | IME 交互中文输入环境人工复验 | 2026-09-03 记录 | ✅ 已销项（2026-09-08，M6 集中回归 D 组真机复验通过） |
 | L10 | A2 冷启动 GUI 瓶颈 | §6 R2 | ✅ 已销项（M6 批次 6.2 L10）：`setup_cjk_fonts` 改后台线程加载，不在主路径 |
+| L11 | 安全审计剩余项：**S-05**（扩展清单信任模型）+ S-07/S-08/S-09/S-11（低危） | [security-audit-2026-09-23.md](./security-audit-2026-09-23.md) §1 | 🟨 **部分销项**（2026-09-23）：**已修复** S-01（高危，见上方同名小节）、S-02 / S-03 / S-04 / S-06（中危）、S-10（低危，随批）——共 6 项。**余 5 项**：**S-05 待选型**（T1 首方自动信任 / T2 全量批准 / T3 仅台账，见审计文档 §4.4）+ S-07（剪贴板静默写）/ S-08（explorer raw_arg）/ S-09（缓存键碰撞）/ S-11（`serve_line` 的 `.expect` 面） |
 
 ---
 
@@ -875,5 +935,9 @@ Backspace 仅用于编辑输入」）。被 `consume_key` 移除的事件 TextEd
 | 2026-09-20 | **设置/个性化/材料 B1–B4 落地**（参照 PowerToys CmdPal）：材料注册表化 + 云母 Alt + 着色三档 + Esc/退格/单击/动效行为项 + 恢复默认外观 | ✅ 工作副本（470 passed；真机走查待做） |
 | 2026-09-19 | **E2E 首屏计时插桩**：宿主侧 input→paint 三段分解（`app/e2e.rs` + `tools/gui_e2e_parse.py`），A-33-05 感知指标待真机采样 | ✅ 工作副本（465 passed） |
 | 2026-09-19 | **dist 重打包**（E2 + E2E 插桩同源）+ 分发级冒烟：conformance 内置 9 步 / 示例 9 步（step 4 按 `has_fallback` 跳过）/ GUI 5s 存活 / sidecar 通道 `ipc` / zip 成员校验 | ✅ `dd-run-0.1.1.exe` 8,780,800 B · sidecar 831,488 B |
+| 2026-09-23 | **安全审计**：79 文件按攻击面走查 → 11 项缺陷（1 高 / 5 中 / 5 低）+ 14 项已核验；出 `security-audit-2026-09-23.md` | ✅ 工作副本 |
+| 2026-09-23 | **S-01 命令注入修复**（P0）：新增 `win_launch`（`ShellExecuteW(open)`）替掉 `cmd /C start`；+3 单测 | ✅ 工作副本（475 passed / 1 机器绑定失败） |
+| 2026-09-23 | **中危批量修复**：S-02 解码器残留上限 / S-03 `open_url` scheme 白名单（含实施后自查修正的字节切片 panic）/ S-04 图标读盘+解码双上限 / S-06 危险命令二次确认 | ✅ 工作副本（+13 单测；全仓 **488 passed / 1 机器绑定失败**） |
+| 2026-09-23 | 随批：S-10 `entry.env` 关键变量保护（`dd-host` 引入 `log` facade）；S-05 待选型 | ✅ 工作副本 |
 
 > 构建环境记档：本机 windows-gnu 链接需补 `as.exe`（与 dlltool 同目录）与 `libshlwapi.a`（2026-09-03 修复）；跑测试前须 `export APPDATA`（否则 apps 图标抽取测试必失败，见 CHANGELOG）。

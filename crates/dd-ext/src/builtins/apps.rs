@@ -16,8 +16,11 @@
 //!   - 图标：`IShellItemImageFactory::GetImage(48, SIIGBF_ICONONLY)`（UWP 与
 //!     .lnk 目标应用统一走此链路；.lnk 回退 `SHGetFileInfoW` 32px），alpha 按
 //!     per-pixel / AND 掩码正确生成（参考 ueli 的高质量图标显示）；
-//! - invoke：AppsFolder 项 → `explorer shell:AppsFolder\<parsing>`；`.lnk` →
-//!   `cmd /c start "" <lnk>` → `Dismiss`。
+//! - invoke：AppsFolder 项 → `explorer shell:AppsFolder\<parsing>`；`.lnk` / `.url` →
+//!   [`crate::win_launch::shell_open`]（`ShellExecuteW(open)`，**不经 cmd.exe**——
+//!   S-01 加固，见 `docs/security-audit-2026-09-23.md` §3.1）→ `Dismiss`。
+//!   ⚠️ 启动路径**禁止**改回 `cmd /C start`：那是跨层引号错配型命令注入的入口，
+//!   回归护栏见 `crate::win_launch::tests::launch_path_does_not_use_cmd`。
 //!
 //! `frozen=false`：应用列表随安装/卸载变化，属 fresh——宿主不落 frozen 桩、
 //! 每次冷启动 warm 拉取（与 [`docs/m4-record.md`](../../docs/m4-record.md) P4 语义一致）。
@@ -1106,24 +1109,25 @@ mod sys {
         }
     }
 
-    /// 启动 .lnk：`cmd /c start "" "<lnk>"`（CreateProcess 不解析 .lnk，start 负责）。
+    /// 启动 .lnk：交 [`crate::win_launch::shell_open`]——`ShellExecuteW(open)` 会解析
+    /// 快捷方式（`CreateProcess` 不会，故不能直接 `Command::new(path)`）。
+    ///
+    /// **S-01 加固（2026-09-23）**：原实现 `cmd /C start "" "<lnk>"` 存在跨层引号错配
+    /// （Rust 产出的 `\"` 转义对 cmd.exe 无效 → 参数内 `&` 越界为命令分隔符），已改为
+    /// 不经任何 shell 的 `ShellExecuteW`。详见 [`crate::win_launch`] 与
+    /// `docs/security-audit-2026-09-23.md` §3.1。
     fn launch_shortcut(path: &Path) -> Result<(), String> {
-        use std::os::windows::process::CommandExt;
-        let mut cmd = std::process::Command::new("cmd.exe");
-        cmd.args(["/C", "start", "", &path.to_string_lossy()]);
-        cmd.creation_flags(0x0800_0000); // CREATE_NO_WINDOW：隐藏 cmd 自身窗口
-        cmd.spawn().map(|_| ()).map_err(|e| e.to_string())
+        crate::win_launch::shell_open(&path.to_string_lossy())
     }
 
-    /// 启动协议 URL（`.url` 内容）：`cmd /c start "" "<url>"`——Windows shell
-    /// 按协议处理器解析（Steam 客户端注册了 steam:// 等）；与 .lnk 共用
-    /// `start` 通道，CREATE_NO_WINDOW 隐藏 cmd 自身窗口。
+    /// 启动协议 URL（`.url` 内容）：同样交 [`crate::win_launch::shell_open`]——
+    /// Windows 按协议处理器解析（Steam 客户端注册了 steam:// 等）。
+    ///
+    /// 入参在其调用点已由 [`url_protocol_allowed`]（约 :917）过滤协议前缀；本函数
+    /// 不再叠加字符级白名单（`&`/`%` 在 URL 中合法，收紧会误伤，理由见 `win_launch`
+    /// 模块文档「为什么校验只拒不可能合法的输入」）。
     fn launch_url(url: &str) -> Result<(), String> {
-        use std::os::windows::process::CommandExt;
-        let mut cmd = std::process::Command::new("cmd.exe");
-        cmd.args(["/C", "start", "", url]);
-        cmd.creation_flags(0x0800_0000);
-        cmd.spawn().map(|_| ()).map_err(|e| e.to_string())
+        crate::win_launch::shell_open(url)
     }
 
     #[cfg(test)]

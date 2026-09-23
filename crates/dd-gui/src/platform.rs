@@ -604,6 +604,35 @@ pub(crate) fn reveal_in_folder(_path: &str) -> Result<(), String> {
     Err("仅 Windows 支持资源管理器定位".to_string())
 }
 
+/// §7.4 `host/open_url` 的宿主侧**执行策略**（S-03，2026-09-23）：只放行 `http` / `https` / `file`。
+///
+/// 为什么需要：`host/open_url` 由任意扩展发起（清单声明 `capabilities` 即可），
+/// 加固前实现会把任意字符串交给 `ShellExecuteW` / 默认浏览器——于是 `ms-msdt:`
+/// （Follina 类）、`search-ms:`、`vbscript:`、`javascript:` 以及任何自定义协议都会被
+/// **静默**交给系统处理器或浏览器参数。收窄 scheme 白名单即消除这一整类调用。
+///
+/// 为什么**保留** `file://`：文件搜索扩展的「打开」动作正是用
+/// `host/open_url` + `file://`（`bin/search.rs` 约 :1492）打开用户选中的文件；
+/// 一律只放行 http(s) 会**直接打断该功能**（功能回归）。`file://` 的语义是
+/// 「双击等价」（目录 → Explorer、文件 → 关联程序），属**设计如此**，故本策略只做
+/// scheme 收窄、不改其行为；调用点另记扩展 id 以便溯源。
+///
+/// 同时拒绝空串、控制字符与裸双引号（在任何合法 URL 中都不可能出现）。
+pub(crate) fn is_allowed_open_url(url: &str) -> bool {
+    let u = url.trim();
+    if u.is_empty() || u.chars().any(|c| c.is_control() || c == '"') {
+        return false;
+    }
+    // ⚠️ 必须按**字节**比较前缀：不可写 `u[..p.len()]`——入参可能以多字节字符开头
+    //（如 `C:\中文\文件.txt`、`中中中中`），按字节长度切 `&str` 会落在字符边界内部
+    // 而 **panic**（实施时已实测复现：`end byte index 7 is not a char boundary`）。
+    // `[u8]::eq_ignore_ascii_case` 对任意字节序列都成立，且 ASCII 前缀比较语义不变。
+    let head = u.as_bytes();
+    ["http://", "https://", "file://"]
+        .iter()
+        .any(|p| u.len() > p.len() && head[..p.len()].eq_ignore_ascii_case(p.as_bytes()))
+}
+
 /// 用系统默认程序打开路径（v3.3 P1.5 修复 host/open_url file:// 派发）。
 ///
 /// 仿 `run_as_admin` 风格：`ShellExecuteW(verb="open", file=path)`。
@@ -1098,7 +1127,10 @@ impl Default for MouseHideScope {
 
 #[cfg(test)]
 mod tests {
-    use super::{cursor_should_hide, file_url_candidates, MouseHideScope, CURSOR_IDLE_HIDE};
+    use super::{
+        cursor_should_hide, file_url_candidates, is_allowed_open_url, MouseHideScope,
+        CURSOR_IDLE_HIDE,
+    };
     use std::time::{Duration, Instant};
 
     /// 面板唤起后鼠标未动 → 隐藏；刚动过 → 显示（v4.17a 修复的正是这条：
@@ -1249,5 +1281,70 @@ mod tests {
 
         let _ = std::fs::remove_file(&decoded);
         let _ = std::fs::remove_dir(&dir);
+    }
+
+    // ── S-03（2026-09-23）：host/open_url 的 scheme 白名单 ──────────────
+
+    /// 放行：`http` / `https` / `file`（大小写不敏感）。这三者是当前全部**合法消费者**：
+    /// WebSearch 开网页（http/https）、文件搜索的「打开」动作（file）。
+    #[test]
+    fn open_url_allows_http_https_file_only() {
+        for ok in [
+            "https://github.com/search?q=dd-run",
+            "http://localhost:8080/x",
+            "HTTPS://Example.com/Path",
+            "File:///C:/proj/src/main.rs",
+            "file://server/share/%E6%8A%A5%E5%91%8A.pdf",
+            "file:///G:/AI/dd-run",
+        ] {
+            assert!(is_allowed_open_url(ok), "合法目标被误拒：{ok}");
+        }
+    }
+
+    /// 拒绝：可被滥用的协议（`ms-msdt:` 是 Follina 类攻击链的经典入口）与
+    /// 任何自定义 scheme、空串、控制字符、裸引号。
+    #[test]
+    fn open_url_rejects_untrusted_schemes() {
+        for bad in [
+            "",
+            "   ",
+            "ms-msdt:/id PCWDiagnostic",
+            "search-ms:query=secret",
+            "vbscript:msgbox(1)",
+            "javascript:alert(1)",
+            "data:text/html,<script>1</script>",
+            "steam://rungameid/1",
+            "shell:AppsFolder\\x",
+            "about:blank",
+            "C:\\Windows\\System32\\calc.exe",
+            "https://a/b\r\nX",
+            "https://a/\"&calc&\"",
+            "https:",
+        ] {
+            assert!(!is_allowed_open_url(bad), "危险目标被放行：{bad:?}");
+        }
+    }
+
+    /// **首要判据：不 panic**。非 ASCII 开头的输入（Windows 中文路径、CJK 串、全角
+    /// 伪装 scheme）曾因「按字节长度切 `&str`」而 panic ——
+    /// `end byte index 7 is not a char boundary; it is inside '中'`。
+    /// 现改为**按字节**比较前缀（`[u8]::eq_ignore_ascii_case`），本用例把该回归锁死。
+    #[test]
+    fn open_url_handles_non_ascii_without_panicking() {
+        for s in [
+            "中中中中",          // 12 字节：切片点 7 落在字符内部（旧实现必 panic）
+            r"C:\中文\文件.txt", // 真实中文路径形态（旧实现必 panic）
+            r"C:\报告\2026 年度.docx",
+            "ｈｔｔｐ://example.com", // 全角伪装 scheme → 必须拒绝
+            "文件:///C:/x",
+            "https://例え.jp/パス", // 合法 https + 非 ASCII 正文 → 放行
+        ] {
+            let _ = is_allowed_open_url(s); // 走到这里即证明未 panic
+        }
+        assert!(!is_allowed_open_url("中中中中"));
+        assert!(!is_allowed_open_url(r"C:\中文\文件.txt"));
+        assert!(!is_allowed_open_url("ｈｔｔｐ://example.com"));
+        assert!(!is_allowed_open_url("文件:///C:/x"));
+        assert!(is_allowed_open_url("https://例え.jp/パス"));
     }
 }

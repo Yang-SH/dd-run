@@ -490,6 +490,7 @@ name = "dd-host"
 version = "0.1.1"
 dependencies = [
  "dd-protocol",
+ "log",
  "serde",
  "serde_json",
 ]

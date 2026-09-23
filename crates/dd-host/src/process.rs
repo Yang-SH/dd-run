@@ -8,6 +8,7 @@
 //! 这一条链路，以及宿主侧对扩展反向请求（`host/*`）的识别与应答。
 //! 页面栈、缓存、LRU 属 M1–M3，不在此处。
 
+use std::collections::BTreeMap;
 use std::io::Read;
 use std::io::Write as _;
 use std::process::{Child, ChildStdin, Command, ExitStatus, Stdio};
@@ -307,13 +308,76 @@ pub struct ExtensionProcess {
     stderr: Arc<Mutex<Vec<u8>>>,
 }
 
+/// 清单 `entry.env` **不得覆盖**的宿主关键环境变量（S-10，2026-09-23）。
+///
+/// 为什么需要：`entry.env` 由清单作者（即任意本地 JSON 的作者）完全控制，加固前
+/// 原样 `envs()` 注入意味着可改写 `PATH` / `ComSpec` / `SystemRoot` / `USERPROFILE` 等
+/// ——被 spawn 的扩展及其**全部子进程**都会按被篡改的查找路径解析可执行文件与系统目录，
+/// 构成劫持面（见 `docs/security-audit-2026-09-23.md` §5 S-10）。
+///
+/// 业务变量**不在**表内（`DDRUN_LANG`、`DD_WEBSEARCH_ENGINES` 等），注入行为不变。
+/// 比对**大小写不敏感**（Windows 环境变量名不区分大小写，`Path` 与 `PATH` 等价）。
+pub const PROTECTED_ENV_KEYS: &[&str] = &[
+    "PATH",
+    "PATHEXT",
+    "COMSPEC",
+    "SYSTEMROOT",
+    "WINDIR",
+    "SYSTEMDRIVE",
+    "SYSTEM32",
+    "USERPROFILE",
+    "APPDATA",
+    "LOCALAPPDATA",
+    "PROGRAMDATA",
+    "PROGRAMFILES",
+    "PROGRAMFILES(X86)",
+    "PROGRAMW6432",
+    "OS",
+    "PROCESSOR_ARCHITECTURE",
+    "TEMP",
+    "TMP",
+];
+
+/// 过滤清单声明的环境变量覆盖 → `(保留, 被拒)`（纯函数，便于单测）。
+///
+/// 返回顺序与 [`BTreeMap`] 的键序一致（确定性）；被拒键交由调用方记日志，
+/// **不静默丢弃**（否则表现为"环境变量莫名不生效"）。
+pub fn filter_env_overrides(
+    env: &BTreeMap<String, String>,
+) -> (Vec<(String, String)>, Vec<String>) {
+    let mut kept = Vec::with_capacity(env.len());
+    let mut rejected = Vec::new();
+    for (key, value) in env {
+        if PROTECTED_ENV_KEYS
+            .iter()
+            .any(|p| p.eq_ignore_ascii_case(key))
+        {
+            rejected.push(key.to_string());
+        } else {
+            kept.push((key.to_string(), value.to_string()));
+        }
+    }
+    (kept, rejected)
+}
+
 impl ExtensionProcess {
     /// §4 `spawned`：按清单启动子进程，接管 stdin/stdout/stderr。
+    ///
+    /// S-10：`entry.env` 经 [`filter_env_overrides`] 过滤——受保护的宿主关键变量
+    /// （`PATH` / `SystemRoot` / …）被拒并记 warn，其余照常注入。
     pub fn spawn(ext: &LoadedExtension) -> Result<Self, std::io::Error> {
+        let (env_keep, env_rejected) = filter_env_overrides(&ext.manifest.entry.env);
+        if !env_rejected.is_empty() {
+            log::warn!(
+                "[dd-host] 扩展 {} 的 entry.env 试图覆盖受保护的宿主环境变量，已忽略：{}",
+                ext.manifest.id,
+                env_rejected.join(", ")
+            );
+        }
         let mut command = Command::new(&ext.command);
         command
             .args(&ext.manifest.entry.args)
-            .envs(&ext.manifest.entry.env)
+            .envs(env_keep)
             .current_dir(&ext.cwd)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
@@ -1107,5 +1171,50 @@ mod tests {
             compose_failure_detail(Some("退出码 1".into()), Some("boom".into())).as_deref(),
             Some("退出码 1；stderr: boom")
         );
+    }
+
+    // ── S-10（2026-09-23）：entry.env 不得覆盖宿主关键环境变量 ──────────
+
+    /// 受保护键（大小写不敏感）被拒并**回传**给调用方记日志；其余照常保留。
+    #[test]
+    fn filter_env_overrides_blocks_protected_keys_case_insensitively() {
+        let mut env = BTreeMap::new();
+        env.insert("PATH".to_string(), r"C:\evil".to_string());
+        env.insert("Path".to_string(), r"C:\evil2".to_string());
+        env.insert("systemroot".to_string(), r"C:\fake".to_string());
+        env.insert("ComSpec".to_string(), r"C:\evil\cmd.exe".to_string());
+        env.insert("DD_EXT_FOO".to_string(), "1".to_string());
+
+        let (kept, rejected) = filter_env_overrides(&env);
+        assert_eq!(
+            kept,
+            vec![("DD_EXT_FOO".to_string(), "1".to_string())],
+            "仅业务变量保留"
+        );
+        assert_eq!(
+            rejected,
+            vec!["ComSpec", "PATH", "Path", "systemroot"]
+                .into_iter()
+                .map(str::to_string)
+                .collect::<Vec<_>>(),
+            "受保护键全部被拒（键序 = BTreeMap 序）"
+        );
+    }
+
+    /// 业务变量与语言通道必须**原样保留**（改这两条会切断 i18n 与搜索引擎配置）。
+    #[test]
+    fn filter_env_overrides_keeps_business_vars() {
+        let mut env = BTreeMap::new();
+        env.insert("DDRUN_LANG".to_string(), "en_us".to_string());
+        env.insert("DD_WEBSEARCH_ENGINES".to_string(), "[]".to_string());
+        env.insert("CUSTOM_FLAG".to_string(), "yes".to_string());
+
+        let (kept, rejected) = filter_env_overrides(&env);
+        assert!(rejected.is_empty(), "业务变量不得被拒：{rejected:?}");
+        assert_eq!(kept.len(), 3);
+        assert!(kept.iter().any(|(k, v)| k == "DDRUN_LANG" && v == "en_us"));
+        assert!(kept
+            .iter()
+            .any(|(k, v)| k == "DD_WEBSEARCH_ENGINES" && v == "[]"));
     }
 }

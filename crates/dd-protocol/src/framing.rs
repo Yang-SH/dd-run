@@ -29,6 +29,15 @@ pub struct BareNewlineError;
 pub struct Decoder {
     max: usize,
     buf: Vec<u8>,
+    /// S-02（2026-09-23）：已判定超限 → 此后**丢弃全部入参**且不再累积。
+    ///
+    /// 为什么需要：`max` 只对**已终止行**生效（切出 `\n` 后才比大小），
+    /// 对端若持续发送**不含换行**的字节流，`buf` 会无界增长到 OOM
+    /// （实测 4 MiB 无换行 → 缓冲 4 MiB，上限 1 MiB；见
+    /// `docs/security-audit-2026-09-23.md` §4.1）。故未终止残留同样受 `max`
+    /// 约束，一旦超限即置本标志：既避免流错位（丢弃而非截断），也避免
+    /// 每帧重复报错（`TooLarge` 只报一次）。
+    poisoned: bool,
 }
 
 impl Decoder {
@@ -37,6 +46,7 @@ impl Decoder {
         Self {
             max,
             buf: Vec::new(),
+            poisoned: false,
         }
     }
 
@@ -45,11 +55,30 @@ impl Decoder {
         Self::new(DEFAULT_MAX_MESSAGE_BYTES)
     }
 
+    /// 是否因超限而毒化（诊断用；语义见 [`Self::push`]）。
+    pub fn is_poisoned(&self) -> bool {
+        self.poisoned
+    }
+
+    /// 复位：清空残留并解除毒化。仅在**重建连接**（对端已换、流已重新同步）时调用。
+    pub fn reset(&mut self) {
+        self.poisoned = false;
+        self.buf.clear();
+        self.buf.shrink_to_fit();
+    }
+
     /// 喂入一段字节，切出所有完整消息。
     ///
     /// 行为按 §2.2：剥离行尾 `\r`（CRLF 容错）、忽略空行、超限产出
     /// [`Frame::TooLarge`]、非法 UTF-8 产出 [`Frame::InvalidUtf8`]。
+    ///
+    /// S-02：**未见换行的残留同样受上限约束**——`buf` 超 `max` 即产出一次
+    /// [`Frame::TooLarge`] 并毒化（此后入参全丢，直到 [`Self::reset`]）。
     pub fn push(&mut self, chunk: &[u8]) -> Vec<Frame> {
+        if self.poisoned {
+            // 已判定超限：丢弃而非累积（截断会导致"两半拼接成一条假消息"的流错位）
+            return Vec::new();
+        }
         self.buf.extend_from_slice(chunk);
         let mut frames = Vec::new();
         while let Some(pos) = self.buf.iter().position(|&b| b == b'\n') {
@@ -72,6 +101,16 @@ impl Decoder {
                 Ok(s) => frames.push(Frame::Message(s)),
                 Err(_) => frames.push(Frame::InvalidUtf8),
             }
+        }
+        // 残留（无换行）超限 → 一次 TooLarge + 毒化
+        if self.buf.len() > self.max {
+            let size = self.buf.len();
+            self.reset();
+            self.poisoned = true;
+            frames.push(Frame::TooLarge {
+                size,
+                max: self.max,
+            });
         }
         frames
     }
@@ -175,6 +214,62 @@ mod tests {
         let mut d = Decoder::with_default_limit();
         let frames = d.push(&b"\xff\xfe\n"[..]);
         assert_eq!(frames, vec![Frame::InvalidUtf8]);
+    }
+
+    // ── S-02（2026-09-23）：未终止残留同样受 max 约束 ──
+
+    /// 对端持续发送**不含换行**的字节流：缓冲区必须有界，且只报一次 `TooLarge`。
+    #[test]
+    fn unterminated_stream_is_bounded_and_reports_once() {
+        let mut d = Decoder::new(1024);
+        let chunk = vec![b'A'; 512];
+        let mut too_large = 0usize;
+        for _ in 0..8 {
+            // 共 4 KiB，上限 1 KiB
+            for f in d.push(&chunk) {
+                if matches!(f, Frame::TooLarge { .. }) {
+                    too_large += 1;
+                }
+            }
+        }
+        assert_eq!(too_large, 1, "超限只报一次（避免帧洪泛）");
+        assert!(
+            d.buffered() <= 1024,
+            "残留缓冲必须受上限约束，实得 {}",
+            d.buffered()
+        );
+        assert!(d.is_poisoned(), "超限后应毒化");
+    }
+
+    /// 毒化后：入参全丢、零帧、缓冲不增长；`reset()` 后恢复可用。
+    #[test]
+    fn poisoned_decoder_discards_until_reset() {
+        let mut d = Decoder::new(8);
+        let _ = d.push(&[b'A'; 64]); // 触发毒化
+        assert!(d.is_poisoned());
+
+        let frames = d.push(b"{\"a\":1}\n");
+        assert!(frames.is_empty(), "毒化期间不得产出任何帧");
+        assert_eq!(d.buffered(), 0, "毒化期间不得累积");
+
+        d.reset();
+        assert!(!d.is_poisoned());
+        let frames = d.push(b"{\"a\":1}\n");
+        assert_eq!(frames, vec![m("{\"a\":1}")], "reset 后恢复切帧");
+    }
+
+    /// 边界：残留恰好等于上限**不**毒化；多 1 字节才毒化（与 `line.len() > max` 同口径）。
+    #[test]
+    fn residual_limit_boundary_is_exclusive() {
+        let mut d = Decoder::new(16);
+        assert!(d.push(&[b'A'; 16]).is_empty(), "恰好等于上限 → 不报错");
+        assert!(!d.is_poisoned());
+        let frames = d.push(b"B");
+        assert_eq!(
+            frames,
+            vec![Frame::TooLarge { size: 17, max: 16 }],
+            "多 1 字节即超限"
+        );
     }
 
     #[test]

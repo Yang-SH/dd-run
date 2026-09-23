@@ -476,6 +476,8 @@ discovered → spawned → initializing → ready ⇄ busy ─┤
 ```
 
 > **能力前置**：扩展只能在 `initialize` 的 `capabilities` 中声明过的 `host/*` 方法才会被宿主响应；未声明而调用 → `-32601 Method not found`（验收 A12）。
+>
+> **宿主执行策略（实现侧，非契约）**：宿主**可以**对 `host/open_url` 施加比本规范更严格的执行策略。当前 dd-run 宿主只放行 `http` / `https` / `file` 三种 scheme（大小写不敏感），其余一律拒绝并记日志 + 一次性提示；`file://` 语义为「双击等价」（目录 → Explorer、文件 → 关联程序），是文件搜索扩展「打开」动作所依赖的行为。这是**宿主侧策略收紧，不改任何字段与方法名**，故不构成 §13 意义上的契约变更；扩展不应假设任意 scheme 都会被打开（安全审计 S-03，2026-09-23）。
 
 ---
 

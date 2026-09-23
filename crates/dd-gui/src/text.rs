@@ -136,6 +136,12 @@ const I18N: &[(&str, &str, &str)] = &[
     ("ctx.copied", "已复制到剪贴板", "Copied to clipboard"),
     ("ctx.admin_fail", "以管理员身份运行失败：{e}", "Failed to run as administrator: {e}"),
     ("ctx.locate_fail", "打开所在位置失败：{e}", "Failed to open file location: {e}"),
+    // ── host/open_url 执行策略（S-03，2026-09-23）──
+    (
+        "toast.open_url_blocked",
+        "已拦截不安全的外部打开请求（仅允许 http / https / file）",
+        "Blocked an unsafe open request (only http / https / file allowed)",
+    ),
     // ── Toast（invoke / page / health / refresh / keys）──
     (
         "toast.ext_busy",

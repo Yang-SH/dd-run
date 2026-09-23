@@ -59,6 +59,11 @@ pub mod png;
 /// 上移原因见模块文档（同一管线含 4 处真机坑，双份实现易漂移）。
 pub mod shell_icon;
 
+/// Shell 启动原语（安全加固 S-01，2026-09-23）：`ShellExecuteW(open)` 取代
+/// `cmd /C start <不受信>`，消除「Rust 参数引号 ↔ cmd.exe 解析」错配导致的命令注入。
+/// 使用者：`builtins::apps` 的 `.lnk` / 协议 URL 启动路径。
+pub mod win_launch;
+
 /// §5.3：扩展回"不高于宿主所发版本"的版本；v1.0 阶段恒为 `"1.0"`。
 pub const PROTOCOL_VERSION: &str = "1.0";
 

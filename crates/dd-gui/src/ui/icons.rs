@@ -56,11 +56,54 @@ pub(crate) fn icon_is_dark(img: &egui::ColorImage) -> bool {
     (sum / n) < 90
 }
 
+/// path 图标读盘的**文件大小上限**（S-04，2026-09-23）。
+///
+/// 图标本体是 24–48 px 的小图，正常 PNG/ICO 远小于 64 KB；512 KB 已是极大宽松值。
+/// 为什么需要：`icon.value` 完全由扩展响应决定（§8.6），加固前直接 `fs::read`
+/// 整文件读入 → 不受信扩展给一个 10 GB 路径即可让宿主 OOM
+/// （见 `docs/security-audit-2026-09-23.md` §4.3）。
+const MAX_ICON_BYTES: u64 = 512 * 1024;
+
+/// 图标解码的**尺寸上限**（宽/高各自，S-04）：超过即拒绝，不再分配像素缓冲。
+///
+/// 为什么需要：`image` 的默认 `Limits` 只限制总分配（512 MiB）、**不限尺寸**——
+/// 一张 8000×8000 的 PNG（256 MB RGBA）会被完整解出，对图标格（≤ 24 px）纯属浪费
+/// 且构成解压炸弹面。512 覆盖 256/512 px 高清图标，留足余量。
+const MAX_ICON_DIM: u32 = 512;
+
+/// 图标解码的**总分配上限**（S-04）：512×512×4 ≈ 1 MiB，限 16 MiB 足够容纳
+/// 解码中间态，同时把单张图的分配面收在两个数量级以内。
+const MAX_ICON_ALLOC: u64 = 16 * 1024 * 1024;
+
+/// 读图标文件：**先看元数据后读内容**，超限/非普通文件直接拒绝（S-04）。
+///
+/// 与 `fs::read` 的差别在于：拒绝发生在**读盘之前**，故超大文件不产生任何分配。
+fn read_icon_limited(path: &str) -> Option<Vec<u8>> {
+    let meta = std::fs::metadata(path).ok()?;
+    if !meta.is_file() || meta.len() > MAX_ICON_BYTES {
+        return None;
+    }
+    std::fs::read(path).ok()
+}
+
 /// 解码 PNG/ICO 字节 → egui 颜色纹理数据（§8.6 path 图标）。
 /// 独立函数便于无窗口单测（不依赖 egui Context）。
 /// 失败返回 `None`——调用方回落占位 glyph（设计稿 04）。
+///
+/// S-04：解码前**显式收紧 `image::Limits`**（宽/高 ≤ [`MAX_ICON_DIM`]、
+/// 总分配 ≤ [`MAX_ICON_ALLOC`]）——默认 `Limits` 只限分配不限尺寸，超大尺寸图仍会
+/// 被完整解出。
 pub(crate) fn decode_icon_image(bytes: &[u8]) -> Option<egui::ColorImage> {
-    let img = image::load_from_memory(bytes).ok()?.to_rgba8();
+    let mut reader = image::ImageReader::new(std::io::Cursor::new(bytes))
+        .with_guessed_format()
+        .ok()?;
+    let mut limits = image::Limits::default();
+    limits.max_image_width = Some(MAX_ICON_DIM);
+    limits.max_image_height = Some(MAX_ICON_DIM);
+    limits.max_alloc = Some(MAX_ICON_ALLOC);
+    reader.limits(limits);
+
+    let img = reader.decode().ok()?.to_rgba8();
     let (w, h) = img.dimensions();
     if w == 0 || h == 0 {
         return None;
@@ -108,8 +151,7 @@ impl PaletteApp {
                             text: PLACEHOLDER_GLYPH.to_string(),
                         }
                     } else {
-                        match std::fs::read(&icon.value)
-                            .ok()
+                        match read_icon_limited(&icon.value)
                             .and_then(|bytes| decode_icon_image(&bytes))
                         {
                             Some(img) => {
@@ -260,5 +302,66 @@ mod tests {
     fn decode_icon_image_rejects_garbage() {
         assert!(decode_icon_image(b"this is definitely not a png").is_none());
         assert!(decode_icon_image(&[]).is_none());
+    }
+
+    // ── S-04（2026-09-23）：读盘与解码双上限 ─────────────────────────
+
+    /// 超限文件在读盘**之前**被拒（不产生分配）；缺失/目录同样拒绝。
+    #[test]
+    fn read_icon_limited_rejects_oversize_without_reading() {
+        let dir = std::env::temp_dir().join(format!("dd-gui-icon-s04-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let small = dir.join("small.png");
+        std::fs::write(&small, PNG_1PX).unwrap();
+        assert!(
+            read_icon_limited(&small.to_string_lossy()).is_some(),
+            "小文件应放行"
+        );
+
+        // 超限文件：600 KB（> 512 KB 上限）——写入用 set_len 稀疏落盘，不实际占盘
+        let big = dir.join("big.png");
+        std::fs::File::create(&big)
+            .unwrap()
+            .set_len(600 * 1024)
+            .unwrap();
+        assert!(
+            read_icon_limited(&big.to_string_lossy()).is_none(),
+            "超限文件应在读盘前被拒"
+        );
+
+        assert!(
+            read_icon_limited(&dir.to_string_lossy()).is_none(),
+            "目录不是图标文件"
+        );
+        assert!(
+            read_icon_limited(&dir.join("nope.png").to_string_lossy()).is_none(),
+            "不存在的路径 → None"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 512×512 合法 PNG 正常解码（尺寸上限的正向边界）。
+    #[test]
+    fn decode_icon_image_accepts_up_to_dimension_limit() {
+        let side = MAX_ICON_DIM as usize;
+        let rgba = vec![0x80u8; side * side * 4];
+        let png =
+            dd_ext::png::encode_rgba(MAX_ICON_DIM, MAX_ICON_DIM, &rgba).expect("编码器应成功");
+        let img = decode_icon_image(&png).expect("512×512 应可解码");
+        assert_eq!(img.size, [side, side]);
+    }
+
+    /// 超过尺寸上限的合法 PNG 被拒（**合法性无误，仅因超限**）——解压炸弹面收敛。
+    #[test]
+    fn decode_icon_image_rejects_over_dimension() {
+        let side = (MAX_ICON_DIM + 88) as usize; // 600×600
+        let rgba = vec![0u8; side * side * 4];
+        let png = dd_ext::png::encode_rgba(side as u32, side as u32, &rgba).expect("编码器应成功");
+        assert!(
+            decode_icon_image(&png).is_none(),
+            "{side}×{side} 超过 {MAX_ICON_DIM} 上限应被拒"
+        );
     }
 }

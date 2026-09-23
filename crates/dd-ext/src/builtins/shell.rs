@@ -106,6 +106,57 @@ mod sys {
         }]
     }
 
+    /// 命中即需二次确认的**危险命令名**（S-06，2026-09-23）。
+    ///
+    /// 判据刻意保守：只列「显然不可逆或可致数据/系统损坏」的少数命令，避免把日常操作
+    /// 变成处处弹窗。比对的是**命令名**（去路径、去扩展名：`C:\Windows\System32\format.com`
+    /// → `format`），大小写不敏感。放在 `sys`（Windows）内是因为只有本模块的
+    /// `shell.run.query` 分支消费它——非 Windows 分支恒为占位，不引入未使用项。
+    const DANGEROUS_COMMANDS: &[&str] = &[
+        "format",   // 格式化卷
+        "diskpart", // 分区/卷操作（clean 不可逆）
+        "cipher",   // /w 擦除空闲空间，不可逆
+        "del",      // 删除文件
+        "erase",    // del 别名
+        "rd",       // 删除目录
+        "rmdir",    // rd 长名
+        "takeown",  // 夺取所有权（常与删除/替换连用）
+        "icacls",   // 改写 ACL（可致系统不可访问）
+        "vssadmin", // 删除卷影副本（勒索软件常用）
+        "bcdedit",  // 改写引导配置（可致无法启动）
+        "shutdown", // 关机/重启/注销
+    ];
+
+    /// 需二次确认的 `(命令, 子命令)` 组合（S-06）：同名的查询类子命令不该被拦
+    /// （`reg query` / `net view` 照常直接执行）。
+    const DANGEROUS_SUBCOMMANDS: &[(&str, &str)] = &[
+        ("reg", "delete"), // reg delete 删注册表项
+        ("net", "user"),   // net user 改账号/口令
+    ];
+
+    /// 危险命令判定（纯函数，便于单测）：见 [`DANGEROUS_COMMANDS`] / [`DANGEROUS_SUBCOMMANDS`]。
+    ///
+    /// 取首个词作为命令名，按 `\` / `/` 去路径、按 `.` 去扩展名后比对；`reg delete`
+    /// 一类需看第二个词。刻意**不做**复杂 shell 解析（多段 `&` / `|` 里的危险命令不追查）
+    /// —— 此处是「降低误触代价」的护栏，**不是沙箱边界**。
+    fn is_dangerous_command(query: &str) -> bool {
+        let lower = query.trim_start().to_ascii_lowercase();
+        let mut words = lower.split_whitespace();
+        let Some(head) = words.next() else {
+            return false;
+        };
+        // 去路径（C:\Windows\System32\format.com）→ 去扩展名（format.com → format）
+        let name = head.rsplit(['\\', '/']).next().unwrap_or(head);
+        let name = name.split('.').next().unwrap_or(name);
+        if DANGEROUS_COMMANDS.contains(&name) {
+            return true;
+        }
+        let sub = words.next().unwrap_or("");
+        DANGEROUS_SUBCOMMANDS
+            .iter()
+            .any(|(cmd, subcmd)| *cmd == name && *subcmd == sub)
+    }
+
     pub fn handle_invoke(params: &InvokeParams) -> (CommandResult, Vec<Effect>) {
         match params.id.as_str() {
             "shell.open_terminal" => {
@@ -150,6 +201,31 @@ mod sys {
                             )
                             .to_string(),
                             duration_ms: Some(2_500),
+                        },
+                        Vec::new(),
+                    );
+                }
+                // S-06（2026-09-23）：危险命令先确认。`system` 扩展的关机/重启/注销有
+                // Confirm 门禁，而破坏力相当的 `format` / `del /s` / `rd /s` 此前无任何确认
+                // ——防护强度与危险度不匹配。确认后宿主带 `context.confirmed = true` 重发
+                // （§8.3 既有机制，零协议改动）。
+                let confirmed = params
+                    .context
+                    .as_ref()
+                    .and_then(|c| c.confirmed)
+                    .unwrap_or(false);
+                if !confirmed && is_dangerous_command(query) {
+                    return (
+                        CommandResult::Confirm {
+                            title: tr("确认执行危险命令？", "Run this dangerous command?")
+                                .to_string(),
+                            description: tr(
+                                "将执行：{query}　该操作可能不可撤销",
+                                "Will run: {query} — this may be irreversible",
+                            )
+                            .replace("{query}", query),
+                            confirm_label: tr("执行", "Run").to_string(),
+                            is_critical: true,
                         },
                         Vec::new(),
                     );
@@ -352,6 +428,51 @@ mod sys {
                 started.elapsed() < Duration::from_secs(5),
                 "超时终止不应拖过长"
             );
+        }
+
+        // ── S-06（2026-09-23）：危险命令二次确认的判定 ─────────────────
+
+        /// 危险命令命中（含去路径/扩展名、大小写、`(命令,子命令)` 组合）。
+        #[test]
+        fn dangerous_command_detection_hits() {
+            for bad in [
+                "format D: /q",
+                "FORMAT C:",
+                r"C:\Windows\System32\format.com C:",
+                "del /s /q C:\\tmp",
+                "rd /s /q D:\\data",
+                "rmdir /s /q D:\\data",
+                "cipher /w:C:",
+                "diskpart",
+                "vssadmin delete shadows /all",
+                "bcdedit /set testsigning on",
+                "shutdown /s /t 0",
+                "  Takeown /f C:\\Windows\\System32",
+                "reg delete HKLM\\SOFTWARE\\Foo /f",
+                "net user administrator newpass",
+            ] {
+                assert!(is_dangerous_command(bad), "应判危险：{bad}");
+            }
+        }
+
+        /// 日常命令与**同命令的查询类子命令**不得误拦（否则面板会处处弹窗）。
+        #[test]
+        fn dangerous_command_detection_does_not_over_block() {
+            for ok in [
+                "echo hello",
+                "dir",
+                "git status",
+                "ipconfig /all",
+                "ping -n 2 127.0.0.1",
+                "reg query HKLM\\SOFTWARE",
+                "net view",
+                "where del",         // del 不是命令名
+                "echo format",       // 首个词是 echo
+                "deleted_files.bat", // 名字含 del 但命令名不同
+                "",
+            ] {
+                assert!(!is_dangerous_command(ok), "不应判危险：{ok}");
+            }
         }
 
         #[test]

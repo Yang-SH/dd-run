@@ -1,6 +1,6 @@
 # dd-run 文档索引
 
-> **状态**：生效中 ｜ **版本**：v1.21 ｜ **最后更新**：2026-09-20
+> **状态**：生效中 ｜ **版本**：v1.27 ｜ **最后更新**：2026-09-23
 > **用途**：全部文档的**唯一导航入口**——按模块分组、标注状态与读者，并定义文档格式规约。
 
 ---
@@ -15,6 +15,7 @@
 | **排查文件搜索问题** | [`search.md`](./search.md)（用户视角）→ [`search-file.md`](./search-file.md)（权威技术口径）→ [`search-file-p2-acceptance-2026-09-15.md`](./search-file-p2-acceptance-2026-09-15.md)（真机验收结论） |
 | **理解某个设计为什么这样做** | 先查 [`implementation.md`](./implementation.md) §4 ADR-1~ADR-4，再查设计文档对应章节 |
 | **改协议 / 改清单格式** | [`protocol.md`](./protocol.md) §13（演进规则）→ [`manifest-schema.md`](./manifest-schema.md) §9，**两者均为冻结契约，改动须走版本协商** |
+| **做安全加固 / 排查注入类缺陷** | [`security-audit-2026-09-23.md`](./security-audit-2026-09-23.md)（§1 结论总表 → §2.3 信任边界 → §3–§5 逐项修复 → §7 批次与验收） |
 
 ---
 
@@ -33,6 +34,8 @@ flowchart TD
 
     PLAN["专题方案<br/>search-file / refactor / apps / memory / icons / optimization / settings"] --> IMPL
     REVIEW["search-file-plan-review.md<br/>方案核对报告（历史）"] --> PLAN
+    AUDIT["security-audit-2026-09-23.md<br/>安全审计与修复方案"] --> IMPL
+    AUDIT -.-> PROTO
     USERDOC["search.md<br/>用户文档"] --> PLAN
     ARCHIVE["search-file-update.md<br/>历史蓝本（归档）"] --> PLAN
 ```
@@ -47,7 +50,7 @@ flowchart TD
 
 | 文档 | 状态 | 版本 | 行数 | 读者 | 职责 |
 |---|---|---|---|---|---|
-| [`protocol.md`](./protocol.md) | 已冻结 | v1.0 | 785 | 宿主与扩展作者 | 进程间通信：JSON-RPC over NDJSON、生命周期、8 种执行结果、错误码、超时 |
+| [`protocol.md`](./protocol.md) | 已冻结 | v1.0 | 787 | 宿主与扩展作者 | 进程间通信：JSON-RPC over NDJSON、生命周期、8 种执行结果、错误码、超时；**§7.4 含宿主对 `host/open_url` 的执行策略注（实现侧，非契约）** |
 | [`manifest-schema.md`](./manifest-schema.md) | 已冻结 | v1.0 | 159 | 扩展作者 | 扩展发现：清单字段、扫描目录、路径展开、9 条校验规则、内置注册 |
 
 ### B. 设计与实施（主线）
@@ -55,7 +58,7 @@ flowchart TD
 | 文档 | 状态 | 版本 | 行数 | 读者 | 职责 |
 |---|---|---|---|---|---|
 | [`../cmdpal-platform-agnostic-design.md`](../cmdpal-platform-agnostic-design.md) | 生效中 | v1.0 | 547 | 设计者与维护者 | 平台无关抽象模型、页面/扩展/宿主模型、上下游对照、**验收项 A1–A12 的定义源** |
-| [`implementation.md`](./implementation.md) | 生效中 | v0.1.1 | 853 | 维护者 | 实施主线：里程碑状态总表、目标与范围、ADR-1~4、验收映射（含 §3.1 测试基线台账）、遗留台账、实施沿革 |
+| [`implementation.md`](./implementation.md) | 生效中 | v0.1.4 | 943 | 维护者 | 实施主线：里程碑状态总表、目标与范围、ADR-1~4、验收映射（含 §3.1 测试基线台账）、遗留台账、实施沿革 |
 
 ### C. 开发指南与用户文档
 
@@ -88,6 +91,7 @@ flowchart TD
 | [`optimization-plan-review-2026-09-14.md`](./optimization-plan-review-2026-09-14.md) | 生效中 | 152 | **`optimization-plan.md` 二轮核对报告**：4 处事实错误 / 6 处不严谨 / 2 处规范不符 / 3 处存疑，逐条附依据与修改建议；对应修订已落实（该方案升至 v1.1） |
 | [`search-file-plan-review.md`](./search-file-plan-review.md) | 历史归档 | 149 | 文件搜索 v3.3 方案的编码前核对报告；每项结论已附**最终处置**（已解决 / 已规避 / 仍存在 / 已被取代） |
 | [`search-file-p2-acceptance-2026-09-15.md`](./search-file-p2-acceptance-2026-09-15.md) | 生效中（v1.4） | 269 | **文件搜索 P2 真机验收报告（两轮）**：A-33-05/06/07/08/10 逐项实测（环境矩阵、耗时分解、1000 次基准、故障注入与通道级恢复判据），含未闭环项与复现命令；v1.1 依扩展内**分阶段计时日志**更正耗时分解，v1.2 记 **A-33-05 阈值修订决策**（§4.1.1），**v1.3 补 `es.exe` 基线与回落分支并把 A-33-05/06 改判通过**（§4.2.1 记录回落失败静默缺陷的修复） |
+| [`security-audit-2026-09-23.md`](./security-audit-2026-09-23.md) | 生效中（v1.4） | 647 | **全量代码安全审计与修复方案 + 修复记录**：79 个源文件（35,975 行）按攻击面分组走查，确认 11 项缺陷（**1 高 / 5 中 / 5 低**）+ **14 项已核验安全项**；**已修复 6 项** —— S-01（命令注入，§3.1.1）、S-02（NDJSON 无界缓冲，§4.1.1）、S-03（`open_url` scheme 白名单，§4.2.1）、S-04（图标读盘+解码双上限，§4.3.1）、S-06（危险命令二次确认，§4.5.1）、S-10（`entry.env` 关键变量保护，§5.1）；**余 5 项**：S-05 待选型（T1/T2/T3，§4.4）+ S-07/S-08/S-09/S-11；含威胁模型与信任边界（§2.3）、逐项修复代码与验收判据、取证脚本（§8）、**「22 条 spawn 用例失败」的排查留档（§7.2，已定性为环境瞬时限制并复跑销项）** |
 
 ### F. 里程碑记录（历史证据，内容保持原样）
 
@@ -164,6 +168,8 @@ H1 之后**必须**紧跟此块（上下各留一个空行）：
 | 任务 | 未完成 `- [ ]`、已完成 `- [x]` |
 | 状态标记 | 只用 `✅` / `⚠️` / `❌` / `🟨`，**不使用装饰性 emoji** |
 | 行号 | 写成「约 :NNN」，避免硬编码行号随代码漂移 |
+| 行数 | §3 清单里的「行数」口径 = **换行符数**（`wc -l` 口径，含尾换行但不额外 +1）；新增文档后须实测回填，不得估算 |
+| 表格内竖线 | 单元格内容里的 `\|`（正则交替、代码 span）**必须写成 `\|`**，否则 GFM 会把该行切错列 |
 | 数字 | 版本号、字节数、测试数、测试阈值**必须实测取证**，不得沿用历史快照 |
 
 ### 4.3 新增文档流程
@@ -192,3 +198,4 @@ H1 之后**必须**紧跟此块（上下各留一个空行）：
 | 全仓文档行尾统一 CRLF（原 7 份偏离：[`protocol.md`](./protocol.md) 与 `examples/python-minimal/README.md` 全 LF；`extensions.md` 5 处、`manifest-schema.md` 3 处、`README.md`/`README.zh-CN.md` 各 2 处、`search-file.md` 1 处裸 LF） | 全仓 30 份 md | ✅ 已解决（2026-09-14）：7 份全部归一化，复检 bare-LF=0；`core.autocrlf=true` 下为工作区行为、不影响提交内容 |
 | 文件搜索 `Ctrl+F` 直达与真实图标（A-CF / A-IC） | [`search-file.md`](./search-file.md) §10.4 | ✅ 已落地（2026-09-19）：两项未达标**均已处置达标**——① E1 分层异步：按真实路径档**同步** 0.32 ms（原 191–704 ms）；② E2 零依赖 PNG 编码器：sidecar **831,488 B**、增量 **61,952 B ≤ 64 KB**。残留 ⚠️：A-IC-02b 扩展名档首抽负载敏感压线（两轮 50.29 / 66.84 ms，观察线 60；判因为机器负载、编码单张实测 0.62 ms，建议空闲复测）；**感知指标「输入→首屏 ≤200ms」已插桩待真机采样**（`search-file.md` §10.7 + `tools/gui_e2e_parse.py`）；验收工具 `tools/icon_acceptance.py --cold`（六项自动判定 + JSON 证据） |
 | 文件搜索 `f ` 前缀直达（已被 `Ctrl+F` 取代） | [`search-file.md`](./search-file.md) §6.1 | ✅ 已移除（2026-09-19）：`f ` 回归**普通搜索词**；前缀常量 / `file_search_drill_target()` / `maybe_drill_file_search()` / `file_drill` + `file_drill_armed` 状态 / `page.rs` 落地回填分支**整条删除**（无死代码残留），`Ctrl+F` 查询带入不再剥离前缀；面板内直达入口收敛为 `Ctrl+F` 一条（进入方式三条） |
+| 代码安全审计 11 项发现（**已修复 6 项** ✅ / 余 5 项） | [`security-audit-2026-09-23.md`](./security-audit-2026-09-23.md) §1、§7 | 🟨 **大部分销项**（2026-09-23）：**已修复** S-01（高，命令注入）、S-02（中，NDJSON 无界缓冲 —— PoC 已反转为 bounded）、S-03（中，`open_url` 三 scheme 白名单）、S-04（中，图标读盘/解码双上限）、S-06（中，危险命令二次确认）、S-10（低，`entry.env` 关键变量保护）= **6 项 / 共 +16 单测**（S-03 含实施后自查补的字节切片 panic 护栏）。**余 5 项**：**S-05 待选型**（信任模型 T1/T2/T3，见该文档 §4.4）+ S-07（剪贴板静默写）/ S-08（`explorer` raw_arg）/ S-09（缓存键碰撞）/ S-11（`serve_line` 的 `.expect` 面）。✅ 全仓 `cargo test --workspace` = **488 passed / 1 failed**（唯一失败为既有**机器绑定**用例，非回归）；进度同步登记于 [`implementation.md`](./implementation.md) §6.1 台账 L11 |
