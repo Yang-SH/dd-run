@@ -1059,6 +1059,93 @@ mod size_tests {
         );
     }
 
+    // ── 退格键回归（2026-09-23）────────────────────────────────────────
+    // B2 引入 `backspace_go_back` 时，把 Backspace 在 `handle_keys` 开头无条件
+    // `consume_key`，导致默认关时输入框也收不到退格 —— 文件搜索页无法删除已
+    // 输入内容。以下三例锁定修复后的语义：仅「开关开 + 嵌套页 + 空查询」才消费。
+
+    /// 判定某键的「按下」事件是否仍在 input 队列中（未被 `consume_key` 移除）。
+    fn key_still_in_queue(ctx: &egui::Context, key: egui::Key) -> bool {
+        ctx.input(|i| {
+            i.events.iter().any(|e| match e {
+                egui::Event::Key {
+                    pressed: true,
+                    key: k,
+                    ..
+                } => *k == key,
+                _ => false,
+            })
+        })
+    }
+
+    /// 默认关（`backspace_go_back=false`）：Backspace **不消费** → 留在事件队列
+    /// 交给 FilterBox 的 TextEdit 删字；且不得返回。
+    #[test]
+    fn backspace_not_consumed_when_go_back_disabled() {
+        let mut app = crate::test_support::make_app();
+        app.stack.push(dd_gui::navigation::PageState::nested(
+            super::FILE_SEARCH_PAGE_ID,
+            "文件搜索",
+            super::FILE_SEARCH_EXT_ID,
+            Vec::new(),
+        ));
+        app.stack.current_mut().list.set_query("abc".to_string());
+        let ctx = crate::test_support::ctx();
+        press_key(&ctx, egui::Key::Backspace, egui::Modifiers::NONE);
+        app.handle_keys(&ctx);
+
+        assert_eq!(app.stack.depth(), 2, "默认关：退格不得返回");
+        assert!(
+            key_still_in_queue(&ctx, egui::Key::Backspace),
+            "默认关时 Backspace 必须留给输入框（不得被 consume_key 吞掉）"
+        );
+    }
+
+    /// 开关开 + 嵌套页 + 搜索框为空：Backspace 被消费并返回上一级。
+    #[test]
+    fn backspace_go_back_enabled_nested_empty_pops() {
+        let mut app = crate::test_support::make_app();
+        app.settings.backspace_go_back = true;
+        app.stack.push(dd_gui::navigation::PageState::nested(
+            super::FILE_SEARCH_PAGE_ID,
+            "文件搜索",
+            super::FILE_SEARCH_EXT_ID,
+            Vec::new(),
+        ));
+        let ctx = crate::test_support::ctx();
+        press_key(&ctx, egui::Key::Backspace, egui::Modifiers::NONE);
+        app.handle_keys(&ctx);
+
+        assert_eq!(app.stack.depth(), 1, "嵌套页空查询：退格应返回上一级");
+        assert!(
+            !key_still_in_queue(&ctx, egui::Key::Backspace),
+            "返回时 Backspace 应被消费（不穿透到输入框）"
+        );
+    }
+
+    /// 开关开但搜索框**非空**：不得返回，Backspace 留给输入框删字。
+    #[test]
+    fn backspace_go_back_enabled_but_query_nonempty_keeps_editing() {
+        let mut app = crate::test_support::make_app();
+        app.settings.backspace_go_back = true;
+        app.stack.push(dd_gui::navigation::PageState::nested(
+            super::FILE_SEARCH_PAGE_ID,
+            "文件搜索",
+            super::FILE_SEARCH_EXT_ID,
+            Vec::new(),
+        ));
+        app.stack.current_mut().list.set_query("abcd".to_string());
+        let ctx = crate::test_support::ctx();
+        press_key(&ctx, egui::Key::Backspace, egui::Modifiers::NONE);
+        app.handle_keys(&ctx);
+
+        assert_eq!(app.stack.depth(), 2, "非空查询：退格不得返回");
+        assert!(
+            key_still_in_queue(&ctx, egui::Key::Backspace),
+            "非空查询时 Backspace 必须留给输入框"
+        );
+    }
+
     /// 纯决策：仅 Root 带入；首尾空白 trim；**不做前缀剥离**（`f ` 已是普通搜索
     /// 词）；空 / 仅空白 → 空查询进页。
     #[test]

@@ -4,6 +4,14 @@
 
 ## [Unreleased]
 
+### 修复（退格键无法删除输入内容，B2 回归，2026-09-23）
+
+- **症状**：默认设置下，文件搜索页及其它嵌套页的输入框**能键入字符，但 Backspace 无法删除已输入内容**（光标不动、字符删不掉）。
+- **根因**：`keys.rs::handle_keys` 在函数开头 `consume_key(Modifiers::NONE, Key::Backspace)` **无条件**移除退格事件；而 `backspace_go_back` **默认 false**（B2，2026-09-20，默认 = 既有行为）。被 `consume_key` 移除的事件 TextEdit 收不到 → 默认配置下退格被白白吞掉。**症状选择性**（能打字、删不掉）的机制：字符输入走 `Event::Text`（不受 `consume_key` 影响），退格走 `Key` 事件（被消费）。
+- **修复**（`crates/dd-gui/src/app/keys.rs`）：退格消费改为**按需**——初始按键批次不再消费 Backspace（仅保留 Esc / ↑ / ↓ / Enter / Tab / Shift+Tab）；仅当 `backspace_go_back == true` **且** 嵌套页 **且** 搜索框为空三者同真时，才 `consume_key(Backspace)` 并 `go_back_focused()`；其余情况一律不消费，退格留给输入框删字。
+- **回归测试**（`crates/dd-gui/src/app/mod.rs`，+3）：`backspace_not_consumed_when_go_back_disabled` / `backspace_go_back_enabled_nested_empty_pops` / `backspace_go_back_enabled_but_query_nonempty_keeps_editing`（配 `key_still_in_queue` 辅助）。
+- **验证**：`cargo test -p dd-gui backspace` **4 passed / 0 failed**；全量 `cargo test --workspace --no-fail-fast` **472 passed / 1 failed**（唯一失败 `steam_installed_shown_uninstalled_filtered_root_lnk_shown` 为本机**机器绑定**例，断言本机存在 Flowframes.lnk + Steam 游戏，非作者机必失败，**非回归**，见 `implementation.md` §3.1）；`cargo build -p dd-gui`（debug）+ `tools/package.sh`（release + `dist/`）重链产物。
+
 ### 新增（设置 / 个性化 / 材料样式：参照 PowerToys CmdPal，B1–B4，2026-09-20）
 
 - **方案**（设计稿先行，零代码起步）：`docs/settings-personalization-plan.md` v1.1——CmdPal 取证（`SettingsModel` / `BackdropStyles` / `AppearancePage`）→ dd-run 差距分析 → M/P/B 三方面优化 + T1–T10 任务清单。**四批一次落地 T1–T8；T9（背景图）/T10 未做**。

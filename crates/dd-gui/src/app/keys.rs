@@ -20,10 +20,14 @@ impl PaletteApp {
             self.handle_hotkey_capture(ctx);
             return;
         }
-        let (esc, backspace, down, up, enter, tab, shift_tab) = ctx.input_mut(|i| {
+        // ⚠️ Backspace **不在此处消费**（2026-09-23 修复）：它默认是文本编辑键
+        // （FilterBox 的 TextEdit 删字）。仅当下方「退格返回」分支确认要返回时才
+        // `consume_key`，其余情况一律留给输入框。此前在此无条件消费 Backspace，
+        // 导致默认关（`backspace_go_back=false`）时输入框也收不到退格——
+        // 文件搜索页无法删除已输入内容（B2 回归）。
+        let (esc, down, up, enter, tab, shift_tab) = ctx.input_mut(|i| {
             (
                 i.consume_key(egui::Modifiers::NONE, egui::Key::Escape),
-                i.consume_key(egui::Modifiers::NONE, egui::Key::Backspace),
                 i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowDown),
                 i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowUp),
                 i.consume_key(egui::Modifiers::NONE, egui::Key::Enter),
@@ -104,12 +108,17 @@ impl PaletteApp {
             }
             return;
         }
-        // B2（2026-09-20）：退格键返回（默认关）。仅在「嵌套页 + 搜索框为空」时
-        // 生效——非空时 Backspace 仍归输入框（删字）。
-        if backspace && self.settings.backspace_go_back {
+        // B2（2026-09-20）：退格键返回（默认关）。仅在「开关开 + 嵌套页 + 搜索框为空」
+        // 时**消费 Backspace** 并返回；其余情况一律不消费——退格留给输入框删字。
+        // 修复（2026-09-23）：消费动作必须收敛在此判定内（而非函数开头无条件消费），
+        // 否则默认关时输入框收不到退格，无法删除已输入内容。
+        if self.settings.backspace_go_back {
             let is_root = self.stack.current().page_id.is_none();
             let query_empty = self.stack.current().list.query().is_empty();
-            if !is_root && query_empty {
+            let go_back = !is_root
+                && query_empty
+                && ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Backspace));
+            if go_back {
                 self.go_back_focused();
                 return;
             }

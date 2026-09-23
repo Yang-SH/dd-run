@@ -690,6 +690,31 @@
 
 **未做**（方案 §4 / §5 T9–T10）：背景图通道（P2 项，一期互斥语义未实施）、ShowAppDetails 详情窗、全屏忽略热键、强调色实时监听、紧凑模式/Dock —— 均需另行立项。
 
+### 退格键无法删除输入内容修复（2026-09-23，真机反馈）
+
+**症状**：默认设置下，文件搜索页及其它嵌套页的输入框**能键入字符，但 Backspace 无法删除已输入内容**（光标不动、字符删不掉）。
+
+**根因**（`d252563` 落地 B2 时的实现缺陷）：`keys.rs::handle_keys` 在函数开头用
+`ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Backspace))` **无条件**移除退格事件；
+而 `backspace_go_back` **默认 false**（`settings.rs` 文档明确「默认 false = 既有行为，
+Backspace 仅用于编辑输入」）。被 `consume_key` 移除的事件 TextEdit 收不到 → 默认配置下退格被白白吞掉。
+**症状选择性的机制**：字符输入走 `Event::Text`（不受 `consume_key` 影响）故能打字；退格走 `Key`
+事件（被消费）故删不掉。
+
+**修复**（`crates/dd-gui/src/app/keys.rs`）：
+- 初始按键批次**移除 Backspace**（仅保留 Esc / ↑ / ↓ / Enter / Tab / Shift+Tab 的 `consume_key`）；
+- 「退格返回」分支改为**按需消费**：仅当 `backspace_go_back == true` **且** `!is_root` **且**
+  `query_empty` 三者同真时，才 `consume_key(Backspace)` 并 `go_back_focused()`；
+  其余情况一律不消费——退格留给输入框删字。
+
+**回归测试**（`crates/dd-gui/src/app/mod.rs`，+3）：`backspace_not_consumed_when_go_back_disabled`
+（默认关 → 事件仍在队列、不出栈）/ `backspace_go_back_enabled_nested_empty_pops`（开 + 嵌套 + 空
+→ 消费并出栈）/ `backspace_go_back_enabled_but_query_nonempty_keeps_editing`（开 + 非空 → 不消费不
+出栈）；配 `key_still_in_queue` 辅助判定。
+
+**验证**：`cargo test -p dd-gui backspace` = **4 passed / 0 failed**（含 settings 侧既有 1 例）；
+`cargo build -p dd-gui`（debug）与 `tools/package.sh`（release + `dist/`）重链产物。
+
 ## 3. 验收映射总表
 
 | 验收项 | 内容 | 里程碑 |
@@ -729,6 +754,7 @@
 | 2026-09-19 | **462** | +10：**E2 零依赖 PNG 编码器**（`png.rs`：往返 6 项[平坦/渐变/圆图标/噪声/1×1/1×300] + 结构走查 + 入参拒绝 + 长度/距离码表边界 + Adler/CRC 已知向量；`image` 转 dev-dependency 作解码 oracle） |
 | 2026-09-19 | **465** | +3：**E2E 首屏计时**（`app/e2e.rs`：三段分解 + 饱和不 panic + 系统发起等待为 0） |
 | 2026-09-20 | **470** | +5：**设置/个性化/材料 B1–B4**（`theme::backdrop_registry_covers_all_variants` / `settings::backdrop_default_is_mica_and_roundtrips`（含云母 Alt）/ `settings::esc_behavior_and_backspace_defaults_roundtrip_and_decide`（决策矩阵）/ `settings::colorization_defaults_roundtrip_and_sanitize` / `theme::colorization_mix_and_tint_rules` / `settings::click_and_animation_defaults_roundtrip`） |
+| 2026-09-23 | **473** | +3：**退格键无法删除输入内容修复**（`dd-gui`：`backspace_not_consumed_when_go_back_disabled` / `backspace_go_back_enabled_nested_empty_pops` / `backspace_go_back_enabled_but_query_nonempty_keeps_editing`）。本机实跑 **472 passed / 1 failed**（`steam_installed_shown_uninstalled_filtered_root_lnk_shown` 机器绑定，非回归） |
 
 **两条使用注意**：① `crates/dd-host/tests/roundtrip*.rs` 在 `dd-ext-sample.exe` **未构建时会打印 SKIP 并 return**（计入 passed），故凡涉及协议/扩展行为，先 `cargo build -p dd-ext-sample` 再跑；② 「三关全绿」与 CI 四关**均为 debug profile**，`#[cfg(debug_assertions)]` 类 release-only 编译错误检不到 —— 交付/发布前必须实跑 `cargo build --release`（见 §7 构建环境记档与 `CHANGELOG` 的 release 阻塞条目）。
 
