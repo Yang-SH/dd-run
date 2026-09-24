@@ -1,6 +1,6 @@
 # dd-run 实施方案
 
-> **状态**：生效中 ｜ **版本**：v0.1.6 ｜ **最后更新**：2026-09-24
+> **状态**：生效中 ｜ **版本**：v0.1.7 ｜ **最后更新**：2026-09-24
 > **关联**：[protocol.md](./protocol.md) · [manifest-schema.md](./manifest-schema.md) · [extensions.md](./extensions.md) · [../cmdpal-platform-agnostic-design.md](../cmdpal-platform-agnostic-design.md)
 
 ---
@@ -789,6 +789,20 @@ Flowframes；改动前基线同为 1 failed，非本次回归）；`cargo build 
 **验证**：新增单测 **19 条**（`dd-host::trust` 14 + `aggregator` 4 + `settings_view` 1）全绿；`dd-host --lib` 49 → **63 passed**；`rustfmt --check` 改动文件无差异；`clippy --workspace --all-targets` **无新增告警**（仅剩既有 `search.rs:614` 的工具链误报）。**A11 实测**（`.workbuddy/tmp/trust-probe/`，真实产物 `dist/extensions.d/dd-ext-search.exe` = 836,608 B）：哈希 **0.874 ms** / 台账读 **0.068 ms** / 已批准判定 **1.068 ms** / 首方与待批准走短路 **≈0 ms**（判据 <10 ms）。
 ⚠️ 全仓 `cargo test --workspace --no-fail-fast` 两次复跑均为 **487 passed / 21 failed**（总数 508，与 §3.1 台账一致），其中 **20 条为已知 `Os error 231`（`ERROR_PIPE_BUSY`）环境批** + 1 条既有机器绑定用例；**失败名单中无本项任何新测试**，环境自愈后预期 **507 passed / 1 failed**。
 
+### 安全审计低危收尾：S-07 / S-08 / S-09 / S-11（2026-09-24）
+
+**范围**：审计 11 项的最后 4 项低危，全部落地后**审计闭环**（11/11）。逐项实现与验收见
+[`security-audit-2026-09-23.md`](./security-audit-2026-09-23.md) §5.2–§5.5。
+
+| 项 | 改动 | 单测 |
+|---|---|---|
+| S-07 剪贴板 | `host_actions.rs`：1 MiB 上限**拒绝式**前置（纯函数 `clipboard_text_allowed`）+ 成功路径 `debug!`→`info!`（扩展 id + 字节数）+ 2 s 来源 toast；`text.rs` +2 键（`toast.clipboard_written` / `toast.clipboard_oversize`）。「可配置关闭」开关与 S-06 同口径刻意未做 | +2（边界放行 / 超限拒绝，按 UTF-8 字节计） |
+| S-08 reveal 路径 | `bin/search.rs` `valid_reveal_path` 四条收紧：空串 / `"` / 控制字符（`is_control`）/ `%` / `^`（explorer 原始命令行的二次解释面）；拒绝发生在 spawn 前，零副作用。选项②（`SHOpenFolderAndSelectItems` COM）列为后续可选项未实施 | 扩展既有用例断言（换行/制表/DEL/%/^ 全拒；空格/中文/UNC 不误伤） |
+| S-09 缓存碰撞 | `cache.rs`：文件名主干改 `{sanitize}-{fnv1a32:08x}`（**零依赖**纯本地 FNV-1a）；`load` 新名优先、旧名兼容一个版本，**两路都校验快照 `ext_id` 归属**（`read_verified`）；`invalidate_if_version_changed`/`remove` 双前缀清理（防旧名桩经兼容路径复活） | +2（碰撞 id 对互不覆盖 / 旧名兼容 + 伪造拒绝） |
+| S-11 panic 面 | `dd-ext/src/lib.rs`：新增 `make_result_checked`（收 `Result`，`Err` → `-32603` + 日志）替换 5 处 `.expect("序列化 X")`；`invoke` 序列化失败回 `-32603` 并**跳过全部副作用**；信封分支 `to_error_response().expect` 改 match（`None` 记日志不 panic）。**无需 test 钩子**——helper 显式收 `Result` 可直接注入失败 | +1（`Err` 注入 → `-32603` 保留 id；`Ok` 不受影响） |
+
+**验证**：`dd-host --lib` **65 passed**（63+2）；`dd-ext --lib` **105 passed** + 1 failed（既有机器绑定）；`dd-gui --lib` **228 passed** + 6 failed（**全部 `Os error 231` 环境批**，`test_support.rs` spawn，失败名单无本批新测试）；`dd-ext-search --bin reveal` **1 passed**；`rustfmt --check` 5 个改动文件无差异；`clippy --workspace --all-targets` **无新增告警**（仅剩既有 `search.rs:614` 工具链误报）。本批 **+5 条单测**，测试基线 508 → **513**。
+
 ## 3. 验收映射总表
 
 | 验收项 | 内容 | 里程碑 |
@@ -832,6 +846,7 @@ Flowframes；改动前基线同为 1 failed，非本次回归）；`cargo build 
 | 2026-09-23 | **476** | +3：**安全审计 P0 — S-01 命令注入修复**（`dd-ext/src/win_launch.rs`：`accepts_legitimate_targets` / `rejects_impossible_targets` / `launch_path_does_not_use_cmd`）。本机实跑 **475 passed / 1 failed** |
 | 2026-09-23 | **489** | +13：**安全审计中危批量**（S-02 ×3 / S-03 ×3 / S-04 ×3 / S-06 ×2 / S-10 ×2；其中 S-03 第 3 条为实施后自查补的 `open_url_handles_non_ascii_without_panicking`）。本机实跑 **488 passed / 1 failed**（同上机器绑定例，非回归）；期间一度出现 22 条 `Os error 231` 批量失败，经取证定性为环境瞬时限制后复跑恢复（见审计文档 §7.2） |
 | 2026-09-24 | **508** | +19：**S-05 扩展信任门禁**（`dd-host::trust` 14 条：判定 5 条短路规则 / 双哈希绑定与失效 / fail-closed / NIST 向量 / 分块一致；`aggregator` 4 条：fail-closed、计数、spawn 门禁拒绝与放行；`settings_view` 1 条：来源与信任状态）。本机实跑 **487 passed / 21 failed**——20 条为已知 `Os error 231`（`ERROR_PIPE_BUSY`）**环境批**（piped-stdio spawn，非回归，见审计 §7.2）、1 条既有机器绑定例；总数 508 与台账一致 |
+| 2026-09-24 | **513** | +5：**安全审计低危收尾**（S-07 ×2：剪贴板 1 MiB 边界放行 / 超限拒绝（按 UTF-8 字节计）；S-09 ×2：碰撞 id 对互不覆盖 / 旧名兼容 + `ext_id` 归属伪造拒绝；S-11 ×1：`Err` 注入回 `-32603` 保留 id 且 `Ok` 不受影响。S-08 为扩展既有用例断言，不计新条目）。本机实跑：`dd-host --lib` 65/65、`dd-ext --lib` 105+1（机器绑定）、`dd-gui --lib` 228+6（全为 `error 231` 环境批，名单无本批新测试） |
 
 **两条使用注意**：① `crates/dd-host/tests/roundtrip*.rs` 在 `dd-ext-sample.exe` **未构建时会打印 SKIP 并 return**（计入 passed），故凡涉及协议/扩展行为，先 `cargo build -p dd-ext-sample` 再跑；② 「三关全绿」与 CI 四关**均为 debug profile**，`#[cfg(debug_assertions)]` 类 release-only 编译错误检不到 —— 交付/发布前必须实跑 `cargo build --release`（见 §7 构建环境记档与 `CHANGELOG` 的 release 阻塞条目）。
 
@@ -919,7 +934,7 @@ Flowframes；改动前基线同为 1 failed，非本次回归）；`cargo build 
 | L8 | 设计稿 v4 C 组占位实施 | 设计稿 v4.3 §12 | ✅ 代码完成（2026-09-04，C1–C3）+ **真机验收通过**（2026-09-08，M6 集中回归 B 组：A1–A5/C1–C3） |
 | L9 | IME 交互中文输入环境人工复验 | 2026-09-03 记录 | ✅ 已销项（2026-09-08，M6 集中回归 D 组真机复验通过） |
 | L10 | A2 冷启动 GUI 瓶颈 | §6 R2 | ✅ 已销项（M6 批次 6.2 L10）：`setup_cjk_fonts` 改后台线程加载，不在主路径 |
-| L11 | 安全审计剩余项：低危 **S-07 / S-08 / S-09 / S-11** | [security-audit-2026-09-23.md](./security-audit-2026-09-23.md) §1 | 🟨 **大部分销项**：**已修复 7 项** —— S-01（高，见上方同名小节）、S-02 / S-03 / S-04 / S-06（中危）、**S-05**（中危，2026-09-24 见上方同名小节）、S-10（低危，随批）。**余 4 项低危待做**：S-07（剪贴板静默写）/ S-08（`explorer` raw_arg）/ S-09（缓存键碰撞）/ S-11（`serve_line` 的 `.expect` 面） |
+| L11 | 安全审计剩余项 | [security-audit-2026-09-23.md](./security-audit-2026-09-23.md) §1 | ✅ **全部销项（11/11）**：S-01（高）、S-02 / S-03 / S-04 / S-05 / S-06（中危）、S-07 / S-08 / S-09 / S-10 / S-11（低危）全部修复（低危收尾 2026-09-24 见上方同名小节）。**余待办**：真机走查（S-03 打开 / S-07 剪贴板提示 / S-08 显示所在目录 / S-05 审批流）与重打包体积实测 |
 
 ---
 
@@ -959,5 +974,6 @@ Flowframes；改动前基线同为 1 failed，非本次回归）；`cargo build 
 | 2026-09-23 | 随批：S-10 `entry.env` 关键变量保护（`dd-host` 引入 `log` facade）；S-05 待选型 | ✅ 工作副本 |
 | 2026-09-24 | **S-05 选型冻结**（T1′ 来源+首方白名单 / CNG `BCrypt` 哈希 / 设置页行内允许·阻止 + 面板页脚提示 / 同 id 撞车保持用户优先并告警）→ 落审计文档 §4.4.1–§4.4.2（判定表、`trust.json` schema、门禁落点、12 条验收）；**同时修正原 T1 判据漏洞**（只看 id 前缀 → 改「来源 AND 白名单」） | ✅ 工作副本（仅文档） |
 | 2026-09-24 | **S-05 实施落地**：新增 `dd-host/src/trust.rs`（台账 + 判定 + CNG SHA-256）/ `manifest::trust_file()`；`aggregator` 来源标注与**spawn 唯一入口门禁**；设置页行内审批 UI + 页脚空位提示；i18n 17 键 | ✅ 工作副本（+19 单测；`dd-host --lib` 63 passed；全仓 487/21 受 `error 231` 环境批阻塞，预期 507/1） |
+| 2026-09-24 | **低危收尾（审计闭环 11/11）**：S-07 剪贴板上限+溯源+toast / S-08 reveal 路径四条收紧 / S-09 缓存名 FNV-1a 指纹+旧名兼容 / S-11 序列化 `expect` 归零（`-32603`） | ✅ 工作副本（+5 单测；`dd-host` 65 / `dd-ext` 105+1 机器绑定 / `dd-gui` 228+6 环境批，名单无本批新测试） |
 
 > 构建环境记档：本机 windows-gnu 链接需补 `as.exe`（与 dlltool 同目录）与 `libshlwapi.a`（2026-09-03 修复）；跑测试前须 `export APPDATA`（否则 apps 图标抽取测试必失败，见 CHANGELOG）。

@@ -10,6 +10,15 @@ use dd_protocol::methods::{
 };
 use eframe::egui;
 
+/// S-07（2026-09-24）：`host/set_clipboard` 文本长度上限（UTF-8 字节数）。
+/// 超限**拒绝**（非截断——半截账号/地址比不写入更危险）。
+const MAX_CLIPBOARD_BYTES: usize = 1024 * 1024;
+
+/// S-07 纯决策（单测锚点）：文本是否允许写入剪贴板。
+fn clipboard_text_allowed(text: &str) -> bool {
+    text.len() <= MAX_CLIPBOARD_BYTES
+}
+
 impl PaletteApp {
     /// M4 P2：消费扩展的 `host/*` 请求并执行真实副作用（协议 §7.2–§7.4）。
     /// `host/show_status` → Toast；`host/set_clipboard` → 剪贴板；`host/open_url` → 浏览器。
@@ -60,6 +69,18 @@ impl PaletteApp {
                     log::warn!("[dd-gui] host/set_clipboard 参数解析失败（ext={ext_id}）");
                     return;
                 };
+                // S-07（2026-09-24）：长度上限前置——超限拒绝且**不静默**
+                //（warn 含扩展 id 与实际长度 + 一次性 toast）。
+                if !clipboard_text_allowed(&params.text) {
+                    log::warn!(
+                        "[dd-gui] host/set_clipboard 已拒绝（{} 字节超上限 {MAX_CLIPBOARD_BYTES}）ext={ext_id}",
+                        params.text.len()
+                    );
+                    let msg = self.tr("toast.clipboard_oversize").replace("{id}", ext_id);
+                    self.show_toast(msg, Some(2_500));
+                    return;
+                }
+                let len = params.text.len();
                 let result = std::thread::spawn(move || {
                     let mut cb = arboard::Clipboard::new()?;
                     cb.set_text(params.text)?;
@@ -67,7 +88,13 @@ impl PaletteApp {
                 })
                 .join();
                 match result {
-                    Ok(Ok(())) => log::debug!("[dd-gui] host/set_clipboard（ext={ext_id}）成功"),
+                    Ok(Ok(())) => {
+                        // S-07：不再静默——info 落**扩展 id + 长度**（可溯源），
+                        // 并给一次轻量 toast（覆盖用户复制中的账号/地址前可见）。
+                        log::info!("[dd-gui] host/set_clipboard（ext={ext_id}）成功：{len} 字节");
+                        let msg = self.tr("toast.clipboard_written").replace("{id}", ext_id);
+                        self.show_toast(msg, Some(2_000));
+                    }
                     Ok(Err(e)) => {
                         log::warn!("[dd-gui] host/set_clipboard（ext={ext_id}）失败：{e}")
                     }
@@ -163,5 +190,31 @@ impl PaletteApp {
                 });
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// S-07：1 MiB 以内放行。
+    #[test]
+    fn clipboard_text_allows_normal_and_boundary_sizes() {
+        assert!(clipboard_text_allowed(""));
+        assert!(clipboard_text_allowed("hello 剪贴板"));
+        // 恰好等于上限：放行（≤ 判据）
+        assert!(clipboard_text_allowed(&"a".repeat(MAX_CLIPBOARD_BYTES)));
+    }
+
+    /// S-07：超限拒绝（验收判据「超长文本被拒绝」）。
+    #[test]
+    fn clipboard_text_rejects_oversize() {
+        assert!(!clipboard_text_allowed(
+            &"a".repeat(MAX_CLIPBOARD_BYTES + 1)
+        ));
+        // 多字节字符按 UTF-8 字节数计（10 万个汉字 ≈ 300 KB，放行；
+        // 40 万个汉字 ≈ 1.2 MB，拒绝）
+        assert!(clipboard_text_allowed(&"账".repeat(100_000)));
+        assert!(!clipboard_text_allowed(&"账".repeat(400_000)));
     }
 }

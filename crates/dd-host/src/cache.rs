@@ -41,16 +41,35 @@ impl FrozenCache {
         Self { dir: dir.into() }
     }
 
-    /// 缓存文件路径：`{dir}/{ext_id}.{version}.json`（id/version 做文件名安全化）。
+    /// 缓存文件路径：`{dir}/{stem}.{version}.json`。
+    ///
+    /// S-09（2026-09-24）：`stem = {sanitize(ext_id)}-{fnv1a32(ext_id):08x}`——
+    /// 仅靠 `sanitize` 时不同 id 可映射到同一安全名（`a.b` 与 `a_b` 均为
+    /// `a_b`），互相覆盖/伪造桩；追加原串 FNV-1a 指纹后，跨扩展碰撞需同时
+    /// 通过字符折叠与 32 位指纹两道独立的映射（概率 ≈ 2^-32）。
     fn path(&self, ext_id: &str, version: &str) -> PathBuf {
+        self.dir
+            .join(format!("{}.{}.json", cache_stem(ext_id), sanitize(version)))
+    }
+
+    /// S-09 兼容路径（**一个版本**）：S-09 之前的旧文件名
+    /// `{sanitize(ext_id)}.{sanitize(version)}.json`。
+    fn legacy_path(&self, ext_id: &str, version: &str) -> PathBuf {
         self.dir
             .join(format!("{}.{}.json", sanitize(ext_id), sanitize(version)))
     }
 
     /// 读回快照；文件缺失 / 损坏 / 反序列化失败均返回 `None`（视为无桩）。
+    ///
+    /// 读取顺序：新名（含指纹）优先；缺失时回落旧名（升级兼容，一个版本）。
+    /// 两条路径都**校验快照内 `ext_id` 与请求一致**——旧名存在碰撞窗口
+    ///（S-09 之前即可被同安全名的其他扩展写入），ext_id 不符一律不采信。
     pub fn load(&self, ext_id: &str, version: &str) -> Option<FrozenSnapshot> {
-        let bytes = std::fs::read(self.path(ext_id, version)).ok()?;
-        serde_json::from_slice(&bytes).ok()
+        if let Ok(bytes) = std::fs::read(self.path(ext_id, version)) {
+            return read_verified(&bytes, ext_id);
+        }
+        let bytes = std::fs::read(self.legacy_path(ext_id, version)).ok()?;
+        read_verified(&bytes, ext_id)
     }
 
     /// 写入快照；目录不存在时自动创建。
@@ -71,11 +90,16 @@ impl FrozenCache {
         let Ok(entries) = std::fs::read_dir(&self.dir) else {
             return false;
         };
-        let prefix = format!("{}.", sanitize(ext_id));
+        // S-09：新旧两套文件名前缀都清理——遗留旧名桩若不清，会经 load 的
+        // 兼容回落路径被再次读到（复活已失效版本）。
+        let prefixes = [
+            format!("{}.", cache_stem(ext_id)),
+            format!("{}.", sanitize(ext_id)),
+        ];
         let mut removed = false;
         for entry in entries.flatten() {
             let name = entry.file_name().to_string_lossy().to_string();
-            if name.starts_with(&prefix) && name.ends_with(".json") {
+            if prefixes.iter().any(|p| name.starts_with(p)) && name.ends_with(".json") {
                 let bytes = std::fs::read(entry.path()).unwrap_or_default();
                 let parsed: Option<FrozenSnapshot> = serde_json::from_slice(&bytes).ok();
                 let stale = match parsed {
@@ -100,11 +124,15 @@ impl FrozenCache {
         let Ok(entries) = std::fs::read_dir(&self.dir) else {
             return false;
         };
-        let prefix = format!("{}.", sanitize(ext_id));
+        // S-09：同 invalidate——新旧两套前缀都清（遗留旧名桩也属"该扩展的历史桩"）
+        let prefixes = [
+            format!("{}.", cache_stem(ext_id)),
+            format!("{}.", sanitize(ext_id)),
+        ];
         let mut removed = false;
         for entry in entries.flatten() {
             let name = entry.file_name().to_string_lossy().to_string();
-            if name.starts_with(&prefix)
+            if prefixes.iter().any(|p| name.starts_with(p))
                 && name.ends_with(".json")
                 && std::fs::remove_file(entry.path()).is_ok()
             {
@@ -120,6 +148,29 @@ fn sanitize(s: &str) -> String {
     s.chars()
         .map(|c| if c.is_alphanumeric() { c } else { '_' })
         .collect()
+}
+
+/// FNV-1a 32 位哈希（S-09）：为安全化文件名补充原串指纹，防字符折叠碰撞。
+/// 纯本地实现，零依赖（dd-host 的依赖克制约束）。
+fn fnv1a32(s: &str) -> u32 {
+    let mut h: u32 = 0x811C_9DC5;
+    for b in s.as_bytes() {
+        h ^= u32::from(*b);
+        h = h.wrapping_mul(0x0100_0193);
+    }
+    h
+}
+
+/// S-09 缓存文件名主干：`{safe}-{hash:08x}`。
+fn cache_stem(ext_id: &str) -> String {
+    format!("{}-{:08x}", sanitize(ext_id), fnv1a32(ext_id))
+}
+
+/// S-09：读取并校验快照归属——`ext_id` 不符的桩一律不采信
+///（跨扩展伪造即使文件名命中也被此拦下）。
+fn read_verified(bytes: &[u8], ext_id: &str) -> Option<FrozenSnapshot> {
+    let snap: FrozenSnapshot = serde_json::from_slice(bytes).ok()?;
+    (snap.ext_id == ext_id).then_some(snap)
 }
 
 /// LRU 保活集合：最多保活 `capacity` 个扩展，超出则弹最久未用者。
@@ -303,6 +354,65 @@ mod tests {
         // 写坏文件
         std::fs::write(cache.path("bad", "1.0"), b"{not json").unwrap();
         assert_eq!(cache.load("bad", "1.0"), None, "损坏文件返回 None");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// S-09 验收：`a.b` 与 `a_b` 经 sanitize 同映射为 `a_b`，但各自带
+    /// 原串指纹 → 两个桩互不覆盖。
+    #[test]
+    fn frozen_collision_ids_do_not_overwrite() {
+        let dir = std::env::temp_dir().join("dd-run-cache-test-s09");
+        let _ = std::fs::remove_dir_all(&dir);
+        let cache = FrozenCache::new(&dir);
+        // 安全名相同（均折叠为 a_b）——旧实现此处第二个 save 会覆盖第一个
+        assert_eq!(sanitize("a.b"), sanitize("a_b"));
+        cache.save(&snap("a.b", "1.0", 1)).unwrap();
+        cache.save(&snap("a_b", "1.0", 3)).unwrap();
+        let loaded_ab = cache.load("a.b", "1.0").expect("a.b 的桩应独立存在");
+        let loaded_ab_ = cache.load("a_b", "1.0").expect("a_b 的桩应独立存在");
+        assert_eq!(loaded_ab.commands.len(), 1, "a.b 桩未被 a_b 覆盖");
+        assert_eq!(loaded_ab_.commands.len(), 3, "a_b 桩未被 a.b 覆盖");
+        // 指纹使两文件名不同
+        assert_ne!(
+            cache.path("a.b", "1.0"),
+            cache.path("a_b", "1.0"),
+            "同安全名但指纹不同 → 路径不同"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// S-09 兼容：旧名桩（升级前落盘）在 ext_id 一致时可读回；
+    /// ext_id 不符（碰撞窗口内他扩展写入）一律不采信。
+    #[test]
+    fn frozen_legacy_name_compat_with_ext_id_check() {
+        let dir = std::env::temp_dir().join("dd-run-cache-test-s09-legacy");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let cache = FrozenCache::new(&dir);
+        // 手工落一个旧名文件（S-09 前的格式）
+        let legacy = dir.join(format!("{}.{}.json", sanitize("ext.a"), sanitize("1.0")));
+        std::fs::write(
+            &legacy,
+            serde_json::to_vec(&snap("ext.a", "1.0", 2)).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            cache.load("ext.a", "1.0").map(|s| s.commands.len()),
+            Some(2),
+            "新名缺失时回落旧名，ext_id 一致即采信"
+        );
+        // ext_id 不符的旧名文件：不采信（防跨扩展伪造）
+        let forged = dir.join(format!("{}.{}.json", sanitize("victim"), sanitize("1.0")));
+        std::fs::write(
+            &forged,
+            serde_json::to_vec(&snap("attacker", "1.0", 9)).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            cache.load("victim", "1.0"),
+            None,
+            "快照内 ext_id 与请求不符 → 拒绝"
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 

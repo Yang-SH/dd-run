@@ -249,10 +249,18 @@ pub fn serve_line(spec: &ExtensionSpec, line: &str) -> (Vec<serde_json::Value>, 
         // 与宿主侧逐条一致）：批处理数组、缺 `jsonrpc`、非 `"2.0"`、`id` 类型非法、
         // `params` 非对象、`result`/`error` 并存均在此拦下。回错后连接保持（§9.3 非致命）。
         other => {
-            let err = other
-                .to_error_response()
-                .expect("Envelope 非 Valid 时必有错误响应");
-            return (vec![err], false);
+            // S-11（2026-09-24）：该分支结构上必有错误响应；万一为 `None`
+            //（不应发生）则不回、记日志——serve_line 保持「不 panic」承诺。
+            match other.to_error_response() {
+                Some(err) => return (vec![err], false),
+                None => {
+                    log(
+                        spec,
+                        "envelope 校验失败但无错误响应可回（不应发生），已忽略",
+                    );
+                    return (Vec::new(), false);
+                }
+            }
         }
     };
 
@@ -264,16 +272,24 @@ pub fn serve_line(spec: &ExtensionSpec, line: &str) -> (Vec<serde_json::Value>, 
     log(spec, &format!("<- {method} (id={id})"));
     match method.as_str() {
         METHOD_INITIALIZE => {
-            let result =
-                serde_json::to_value(initialize_result(spec)).expect("序列化 InitializeResult");
-            (vec![make_result(id, result)], false)
+            let result = make_result_checked(
+                spec,
+                id,
+                "InitializeResult",
+                serde_json::to_value(initialize_result(spec)),
+            );
+            (vec![result], false)
         }
         METHOD_TOP_LEVEL_COMMANDS => {
-            let result = serde_json::to_value(CommandListResult {
-                commands: (spec.top_level)(),
-            })
-            .expect("序列化 CommandListResult");
-            (vec![make_result(id, result)], false)
+            let result = make_result_checked(
+                spec,
+                id,
+                "CommandListResult",
+                serde_json::to_value(CommandListResult {
+                    commands: (spec.top_level)(),
+                }),
+            );
+            (vec![result], false)
         }
         METHOD_FALLBACK_COMMANDS => {
             // §6.2：无兜底时回空列表（防御——宿主只在 has_fallback=true 时调用）
@@ -282,9 +298,13 @@ pub fn serve_line(spec: &ExtensionSpec, line: &str) -> (Vec<serde_json::Value>, 
                 spec,
                 &format!("-> fallback_commands => {} 条模板", commands.len()),
             );
-            let result = serde_json::to_value(CommandListResult { commands })
-                .expect("序列化 CommandListResult");
-            (vec![make_result(id, result)], false)
+            let result = make_result_checked(
+                spec,
+                id,
+                "CommandListResult",
+                serde_json::to_value(CommandListResult { commands }),
+            );
+            (vec![result], false)
         }
         METHOD_GET_COMMAND => {
             let parsed = msg
@@ -312,9 +332,13 @@ pub fn serve_line(spec: &ExtensionSpec, line: &str) -> (Vec<serde_json::Value>, 
                     if command.is_some() { "found" } else { "null" }
                 ),
             );
-            let result = serde_json::to_value(GetCommandResult { command })
-                .expect("序列化 GetCommandResult");
-            (vec![make_result(id, result)], false)
+            let result = make_result_checked(
+                spec,
+                id,
+                "GetCommandResult",
+                serde_json::to_value(GetCommandResult { command }),
+            );
+            (vec![result], false)
         }
         METHOD_INVOKE => {
             let parsed = msg
@@ -341,11 +365,28 @@ pub fn serve_line(spec: &ExtensionSpec, line: &str) -> (Vec<serde_json::Value>, 
             );
             let (result, effects) = (spec.invoke)(&params);
             log(spec, &format!("-> invoke {} => {:?}", params.id, result));
+            // S-11：结果序列化失败 → 回 `-32603` 并**跳过全部副作用**
+            //（响应都发不出的请求，其 host/* 请求不应继续外发）。
+            let serialized = match serde_json::to_value(&result) {
+                Ok(v) => v,
+                Err(e) => {
+                    log(
+                        spec,
+                        &format!("序列化 CommandResult 失败：{e}（回 -32603）"),
+                    );
+                    return (
+                        vec![error_response(
+                            Some(id),
+                            error_codes::INTERNAL_ERROR,
+                            "Internal error",
+                            None,
+                        )],
+                        false,
+                    );
+                }
+            };
             // 发送顺序：结果响应在前，副作用（host/* 请求、items_changed）在后
-            let mut outputs = vec![make_result(
-                id,
-                serde_json::to_value(&result).expect("序列化 CommandResult"),
-            )];
+            let mut outputs = vec![make_result(id, serialized)];
             for effect in effects {
                 match effect {
                     Effect::HostRequest { method, params } => {
@@ -373,9 +414,11 @@ pub fn serve_line(spec: &ExtensionSpec, line: &str) -> (Vec<serde_json::Value>, 
                     let handler_fn = *handler;
                     log(spec, &format!("-> get_items {} => 子页", p.page_id));
                     (
-                        vec![make_result(
+                        vec![make_result_checked(
+                            spec,
                             id,
-                            serde_json::to_value(handler_fn(&p)).expect("序列化 GetItemsResult"),
+                            "GetItemsResult",
+                            serde_json::to_value(handler_fn(&p)),
                         )],
                         false,
                     )
@@ -460,6 +503,35 @@ fn make_items_changed(log_tag: &str, page_id: Option<String>) -> serde_json::Val
 
 fn make_result(id: u64, result: serde_json::Value) -> serde_json::Value {
     serde_json::json!({ "jsonrpc": JSONRPC_VERSION, "id": id, "result": result })
+}
+
+/// S-11（2026-09-24）：序列化失败不再 panic——回 `-32603 Internal error`
+/// 并记日志，保持 [`serve_line`] 的「不 panic」承诺（in-process 与子进程
+/// 两侧的稳定性契约，见审计文档 §5 S-11）。
+///
+/// `value` 显式取 `Result`（而非在内部序列化）：单测可直接注入 `Err`
+/// 构造性失败，无需 `#[cfg(test)]` 钩子。
+fn make_result_checked(
+    spec: &ExtensionSpec,
+    id: u64,
+    what: &str,
+    value: Result<serde_json::Value, serde_json::Error>,
+) -> serde_json::Value {
+    match value {
+        Ok(v) => make_result(id, v),
+        Err(e) => {
+            log(
+                spec,
+                &format!("序列化 {what} 失败：{e}（回 -32603 Internal error）"),
+            );
+            error_response(
+                Some(id),
+                error_codes::INTERNAL_ERROR,
+                "Internal error",
+                None,
+            )
+        }
+    }
 }
 
 // 注：错误响应构造统一走 `dd_protocol::envelope::error_response`（单一来源，O1）——
@@ -768,6 +840,21 @@ mod tests {
         let (out, _) = serve_line(&spec(), line);
         assert_eq!(out[0]["error"]["code"], error_codes::METHOD_NOT_FOUND);
         assert_eq!(out[0]["error"]["data"]["method"], "nope");
+    }
+
+    /// S-11 验收：序列化失败注入 `Err` → 回 `-32603` 错误响应而非 panic。
+    #[test]
+    fn serialization_failure_returns_internal_error_not_panic() {
+        let s = spec();
+        // 构造性失败：借 serde_json 对坏输入的解析错误作为 Err 注入
+        let err = serde_json::from_str::<serde_json::Value>("{bad").unwrap_err();
+        let resp = make_result_checked(&s, 7, "CommandListResult", Err(err));
+        assert_eq!(resp["error"]["code"], error_codes::INTERNAL_ERROR);
+        assert_eq!(resp["id"], 7, "错误响应保留原 id");
+        assert!(resp.get("result").is_none(), "错误响应不含 result");
+        // 正常路径不受影响：Ok 仍回 result
+        let ok = make_result_checked(&s, 7, "X", Ok(serde_json::json!({"a": 1})));
+        assert_eq!(ok["result"]["a"], 1);
     }
 
     #[test]

@@ -142,6 +142,17 @@ const I18N: &[(&str, &str, &str)] = &[
         "已拦截不安全的外部打开请求（仅允许 http / https / file）",
         "Blocked an unsafe open request (only http / https / file allowed)",
     ),
+    // ── host/set_clipboard 执行策略（S-07，2026-09-24）──
+    (
+        "toast.clipboard_written",
+        "扩展 {id} 已写入剪贴板",
+        "Extension {id} wrote to the clipboard",
+    ),
+    (
+        "toast.clipboard_oversize",
+        "已拒绝扩展 {id} 的剪贴板写入（内容超过 1 MiB 上限）",
+        "Rejected clipboard write from extension {id} (content exceeds the 1 MiB limit)",
+    ),
     // ── Toast（invoke / page / health / refresh / keys）──
     (
         "toast.ext_busy",

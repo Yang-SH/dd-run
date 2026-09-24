@@ -1,6 +1,6 @@
 # dd-run 安全审计与修复方案（2026-09-23）
 
-> **状态**：生效中 ｜ **版本**：v1.7 ｜ **最后更新**：2026-09-24
+> **状态**：生效中 ｜ **版本**：v1.8 ｜ **最后更新**：2026-09-24
 > **关联**：[protocol.md](./protocol.md) · [manifest-schema.md](./manifest-schema.md) · [implementation.md](./implementation.md) · [extensions.md](./extensions.md)
 
 ---
@@ -17,23 +17,23 @@
 | S-04 | 图标 `path` 无界读盘 + 无尺寸限制 → 内存耗尽 / 解压炸弹 | ⚠️ 中 | ✅ **已修复**（2026-09-23，§4.3.1） | CWE-400 / CWE-409 | `dd-gui/src/ui/icons.rs` :111 | 代码路径分析 |
 | S-05 | 扩展清单无完整性校验与信任分级（任意 exe） | ⚠️ 中 | ✅ **已修复**（2026-09-24，T1′ + CNG 哈希 + 设置页审批，见 §4.4.1–§4.4.3） | CWE-494 / CWE-345 | `dd-host/src/trust.rs`（新增）、`dd-gui/src/aggregator.rs` | 已复现（PoC：单测 + 真机待走查） |
 | S-06 | Shell 兜底「运行 {query}」= 无门槛任意命令执行 | ⚠️ 中（设计） | ✅ **已修复**（2026-09-23，§4.5.1：危险命令二次确认） | CWE-78 | `dd-ext/src/builtins/shell.rs` :137 | 代码路径分析 |
-| S-07 | `host/set_clipboard` 静默改写剪贴板（无上限、无提示） | 🟨 低 | ⏸ 待修复（P2） | CWE-863 | `dd-gui/src/app/host_actions.rs` :56 | 代码路径分析 |
-| S-08 | `explorer /select` 原始命令行仅拦 `"` | 🟨 低 | ⏸ 待修复（P2） | CWE-88 | `dd-ext/src/bin/search.rs` :1388 | 代码路径分析 |
-| S-09 | `FrozenCache` 文件名安全化可碰撞 → 跨扩展桩覆盖 | 🟨 低 | ⏸ 待修复（P2） | CWE-706 | `dd-host/src/cache.rs` :119 | 代码路径分析 |
+| S-07 | `host/set_clipboard` 静默改写剪贴板（无上限、无提示） | 🟨 低 | ✅ **已修复**（2026-09-24，§5.2） | CWE-863 | `dd-gui/src/app/host_actions.rs` :56 | 代码路径分析 |
+| S-08 | `explorer /select` 原始命令行仅拦 `"` | 🟨 低 | ✅ **已修复**（2026-09-24，§5.3，按选项①） | CWE-88 | `dd-ext/src/bin/search.rs` :1388 | 代码路径分析 |
+| S-09 | `FrozenCache` 文件名安全化可碰撞 → 跨扩展桩覆盖 | 🟨 低 | ✅ **已修复**（2026-09-24，§5.4） | CWE-706 | `dd-host/src/cache.rs` :119 | 代码路径分析 |
 | S-10 | 扩展 `entry.env` 可覆盖宿主关键环境变量 | 🟨 低 | ✅ **已修复**（2026-09-23，§5.1） | CWE-15 / CWE-668 | `dd-host/src/process.rs` :312 起 | 代码路径分析 |
-| S-11 | `serve_line` 内 `.expect()` 不变量（panic 面） | 🟨 低 | ⏸ 待修复（P2） | CWE-617 | `dd-ext/src/lib.rs` :249 等 | 代码路径分析 |
+| S-11 | `serve_line` 内 `.expect()` 不变量（panic 面） | 🟨 低 | ✅ **已修复**（2026-09-24，§5.5） | CWE-617 | `dd-ext/src/lib.rs` :249 等 | 代码路径分析 |
 
 **总体判断**：项目的安全基线**明显好于同类个人项目**——无网络监听、自研解析面为零、协议信封校验完备、依赖审计已在 CI 常态化（§6）。本次发现的实质问题集中在**「把不受信字符串交给宿主进程去 spawn / 打开 / 读盘」**这一类边界上。
 
-**修复进展（2026-09-23）**：**高危 1/1 已修复**（S-01，§3.1.1）；**中危 4/5 已修复**（S-02 §4.1.1、S-03 §4.2.1、S-04 §4.3.1、S-06 §4.5.1），余 **S-05**（扩展清单信任模型）——该项需信任台账 + 设置页审批 UI，属产品设计决策，待你选型后开工；低危 **S-10 已修复**（§5.1，随本批），余 S-07/S-08/S-09/S-11 待做。
+**修复进展（2026-09-24 更新）**：**11/11 全部修复**——高危 1/1（S-01 §3.1.1）、中危 5/5（S-02 §4.1.1、S-03 §4.2.1、S-04 §4.3.1、S-05 §4.4.1–§4.4.3、S-06 §4.5.1）、低危 5/5（S-07 §5.2、S-08 §5.3、S-09 §5.4、S-10 §5.1、S-11 §5.5）。剩余待办仅**真机走查**（各节验收判据中的真机项）与**重打包体积实测**。
 
 **修复批次（P0 + P1 主体已完成）**：
 
 | 批次 | 范围 | 状态 |
 |---|---|---|
 | P0 | S-01 | ✅ 已完成（2026-09-23）：确认可注入 + 修复成本极低（改用既有 `ShellExecuteW` 原语） |
-| P1 | S-02、S-04、S-05 | ✅ S-02 / S-04 已完成（§4.1.1 / §4.3.1）；⏸ **S-05 待选型**（唯一余项） |
-| P2 | S-03、S-06、S-07、S-08、S-09、S-10、S-11 | ✅ S-03 / S-06（提前做，小改动高收益）、S-10 已完成；⏸ S-07 / S-08 / S-09 / S-11 待做 |
+| P1 | S-02、S-04、S-05 | ✅ 全部完成（§4.1.1 / §4.3.1 / §4.4.1–§4.4.3） |
+| P2 | S-03、S-06、S-07、S-08、S-09、S-10、S-11 | ✅ 全部完成（S-03 §4.2.1、S-06 §4.5.1、S-07 §5.2、S-08 §5.3、S-09 §5.4、S-10 §5.1、S-11 §5.5） |
 
 ---
 
@@ -612,11 +612,11 @@ pub(crate) fn decode_icon_image(bytes: &[u8]) -> Option<egui::ColorImage> {
 
 | 编号 | 位置（约 : 行） | 现状 | 建议修复 | 验收 |
 |---|---|---|---|---|
-| S-07 | `dd-gui/src/app/host_actions.rs` :56 | 扩展可静默写剪贴板（无长度上限、无用户可见提示）；典型滥用是覆盖用户复制中的账号/地址 | ① 写入后发一次轻量 toast（"已由 X 扩展写入剪贴板"，可配置关闭）；② 文本长度上限（如 1 MiB）；③ 记 `log::info!` 含扩展 id 与长度 | 单测：超长文本被截断/拒绝；真机：Calc 复制结果仍正常且出现提示 |
-| S-08 | `dd-ext/src/bin/search.rs` :1388（`valid_reveal_path` :1378） | `explorer.exe` 走 `raw_arg("/select,\"<path>\"")`，仅拒绝 `"`；路径来自 Everything 索引（文件名可被攻击者构造） | ① 校验扩展到拒绝控制字符、`%`、`^`；② 更彻底：改用 `SHOpenFolderAndSelectItems` COM API，不经命令行 | 单测路径校验表；真机「显示所在目录」仍定位正确 |
-| S-09 | `dd-host/src/cache.rs` :119（`sanitize` / `path` :45） | 非字母数字统一替换为 `_`，不同 id 可映射到同一文件名（如 `a.b` 与 `a_b`）→ 可覆盖/伪造另一扩展的冷启动桩（仅影响标题等展示字段） | 文件名改为 `{safe}-{fnv1a(id):08x}.json`，保留读取旧名兼容一个版本 | 单测：构造碰撞 id 对，断言两个桩互不覆盖 |
+| S-07 | `dd-gui/src/app/host_actions.rs` :56 | ✅ **已修复**（2026-09-24）——实现与实测见 §5.2 | — | — |
+| S-08 | `dd-ext/src/bin/search.rs` :1388（`valid_reveal_path` :1378） | ✅ **已修复**（2026-09-24，按选项①）——实现与实测见 §5.3；选项②（`SHOpenFolderAndSelectItems` COM 路线）列为后续可选项未实施 | — | — |
+| S-09 | `dd-host/src/cache.rs` :119（`sanitize` / `path` :45） | ✅ **已修复**（2026-09-24）——实现与实测见 §5.4 | — | — |
 | S-10 | `dd-host/src/process.rs` :312 起 | ✅ **已修复**（2026-09-23）——实现与实测见 §5.1 | — | — |
-| S-11 | `dd-ext/src/lib.rs` :249、:263、:270、:281、:311、:342、:373（共 8 处，均在 `serve_line`/消息构造路径上） | `.expect("序列化 X")`；不变量成立时不会触发，但一旦触发即为 panic | 改为返回 `-32603 Internal error`（`error_response`）并记日志；`serve_line` 保持「不 panic」的既有承诺 | 单测：注入构造性失败（或加一个 `#[cfg(test)]` 钩子）断言返回错误响应而非 panic |
+| S-11 | `dd-ext/src/lib.rs` :249、:263、:270、:281、:311、:342、:373（共 **7** 处，均在 `serve_line`/消息构造路径上；v1.1 原记「8 处」系计数笔误，修复时以 git 考古复核 384cfc3 / ad2a62f 两时点均为 7 处、行号一一对应） | ✅ **已修复**（2026-09-24）——实现与实测见 §5.5 | — | — |
 
 ### 5.1 S-10 修复实现与验收（2026-09-23）
 
@@ -630,6 +630,56 @@ pub(crate) fn decode_icon_image(bytes: &[u8]) -> Option<egui::ColorImage> {
 | 依赖 | 为让「拒绝」可观测，`dd-host` 新增 `log = "0.4"`（facade，**零传递依赖**，与 dd-ext / dd-gui / dd-protocol 同口径；`Cargo.lock` 无新增 crate） |
 | 实测 | `cargo test -p dd-host --lib` = **49 passed**（含新增 2 条）：`filter_env_overrides_blocks_protected_keys_case_insensitively`（`PATH`/`Path`/`systemroot`/`ComSpec` 全拒且回传键名，仅 `DD_EXT_FOO` 保留）/ `filter_env_overrides_keeps_business_vars`（`DDRUN_LANG`、`DD_WEBSEARCH_ENGINES`、`CUSTOM_FLAG` 原样保留） |
 | 未做 | 未提供 `allow_env_override: true` 之类的清单逃生阀——目前无真实需求；如将来确有扩展需要，应与 S-05 的信任台账一起做（在台账里显式提示"该扩展会改写宿主环境变量"） |
+
+### 5.2 S-07 修复实现与验收（2026-09-24）
+
+**状态**：✅ **已修复**。改 2 个文件（`dd-gui/src/app/host_actions.rs`、`dd-gui/src/text.rs`），零协议/依赖改动。
+
+| 项 | 内容 |
+|---|---|
+| 实现 | ① **长度上限前置**：新增 `MAX_CLIPBOARD_BYTES`（1 MiB，UTF-8 字节数）与纯函数 `clipboard_text_allowed`；超限**拒绝（非截断）**——半截账号/地址比不写入更危险——并 warn（含扩展 id 与实际长度）+ 一次性 toast（`toast.clipboard_oversize`）；② **成功不再静默**：`log::debug!` 升为 `log::info!`（含扩展 id 与字节数，可溯源）+ 轻量 toast（2 s，`toast.clipboard_written`，"扩展 {id} 已写入剪贴板"），覆盖用户复制中的账号/地址前可见 |
+| 判据 | 上限按 **UTF-8 字节数**计（非字符数）——多字节文本同样受控；边界取 **≤ 上限放行**；i18n 双语键各 1（合计 +2 键） |
+| 未做 | 「可配置关闭」的设置开关**刻意未加**：与 S-06 的处理一致（属便利项而非安全项，牵动设置页/配置/i18n 三处；提示本身仅 2 s 且低频）；如需要可另轮补 |
+| 实测 | `cargo test -p dd-gui --lib clipboard_text` = **2 passed**：`clipboard_text_allows_normal_and_boundary_sizes`（空串/常规/恰好 1 MiB 放行）/ `clipboard_text_rejects_oversize`（1 MiB+1 拒绝；10 万汉字 ≈300 KB 放行、40 万汉字 ≈1.2 MB 拒绝——验证按字节计） |
+
+**验收标准**：单测（超长拒绝/边界放行/字节计）✅；真机：Calc 复制结果仍正常且出现提示——**待真机走查**。
+
+### 5.3 S-08 修复实现与验收（2026-09-24）
+
+**状态**：✅ **已修复（按选项①，最小面收紧）**。改 1 个文件（`dd-ext/src/bin/search.rs`），零依赖改动。
+
+| 项 | 内容 |
+|---|---|
+| 实现 | `valid_reveal_path` 由「仅拒 `"`」收紧为四条：空串、双引号（原始缺陷面）、**控制字符**（`c.is_control()`，含 `\n`/`\r`/`\t` 与 0x7F——可切断/伪造命令行参数边界）、**`%` 与 `^`**（cmd 层环境变量展开与转义歧义字符，explorer 命令行经 shell 层解析存在二次解释面） |
+| 误伤评估 | 合法文件名几乎不含 `%`/`^`；确有此类文件时用户仍可用「复制路径」后手工打开。拒绝发生在 **spawn 前**——双层门禁：`resolve_path_action` 前置拒绝 → 回「**路径已失效，请重新搜索**」Toast（零副作用）；`spawn_reveal` 内保留同判据作纵深防御（其「路径不合法」文案经该路由实际不可达） |
+| 未做 | 选项②（`SHOpenFolderAndSelectItems` COM API，不经命令行）**列为后续可选项未实施**：低危项按最小改动原则先落选项①；若日后发现真实误伤案例再升级 COM 路线 |
+| 实测 | `cargo test -p dd-ext --bin dd-ext-search reveal` = **1 passed**（既有 `invoke_reveal_rejects_stale_pid_and_invalid_path_without_effects` 扩展断言：换行/制表/DEL/`%`/`^` 全拒；空格/中文/UNC 不误伤） |
+
+**验收标准**：单测路径校验表 ✅；真机「显示所在目录」仍定位正确——**待真机走查**。
+
+### 5.4 S-09 修复实现与验收（2026-09-24）
+
+**状态**：✅ **已修复**。改 1 个文件（`dd-host/src/cache.rs`），零依赖改动（FNV-1a 纯本地实现，`dd-host` 依赖克制约束不变）。
+
+| 项 | 内容 |
+|---|---|
+| 实现 | ① 文件名主干改为 `{sanitize(ext_id)}-{fnv1a32(ext_id):08x}`——字符折叠（`sanitize`）与 32 位指纹是**两道独立映射**，跨扩展碰撞需同时通过（概率 ≈ 2^-32）；② `load` 优先读新名，缺失回落**旧名**（升级兼容，一个版本）；③ **两条路径都校验快照内 `ext_id` 与请求一致**（`read_verified`）——旧名固有的碰撞窗口内，他扩展写入的桩即使文件名命中也被拦下；④ `invalidate_if_version_changed` / `remove` 同时匹配新旧两套前缀——遗留旧名桩若不清，会经兼容回落路径被再次读到（复活已失效版本） |
+| 判据 | FNV-1a 32 位（初始 `0x811C9DC5`、质数 `0x01000193`）；「兼容一个版本」指旧名**只读不写**，且读取须过 `ext_id` 归属校验 |
+| 实测 | `cargo test -p dd-host --lib` = **65 passed**（63 + 2）：`frozen_collision_ids_do_not_overwrite`（`a.b` 与 `a_b` 同折叠为 `a_b`，两桩互不覆盖、路径不同——旧实现此处第二个 save 会覆盖第一个）/ `frozen_legacy_name_compat_with_ext_id_check`（旧名 + ext_id 一致可读回；伪造 ext_id 不符的旧名文件返回 `None`） |
+
+**验收标准**：单测（碰撞 id 对互不覆盖 / 旧名兼容 / 伪造拒绝）✅；本项无真机依赖（纯文件系统行为）。
+
+### 5.5 S-11 修复实现与验收（2026-09-24）
+
+**状态**：✅ **已修复**。改 1 个文件（`dd-ext/src/lib.rs`），零协议/依赖改动。
+
+| 项 | 内容 |
+|---|---|
+| 实现 | ① 新增 `make_result_checked(spec, id, what, Result<Value, Error>)` 辅助函数：`Ok` → 正常 result 响应；`Err` → `error_response(-32603 Internal error)` + 记日志（含 `what` 与错误详情）；替换 initialize / top_level_commands / fallback_commands / get_command / get_items **5 处** `.expect("序列化 X")`；② `invoke` 处**内联 match**：结果序列化失败回 `-32603` 并**跳过全部副作用**（响应都发不出的请求，其 host/* 请求不应继续外发）；③ 信封分支的 `to_error_response().expect(...)` 改为 match——`None`（结构上不应发生）时记日志不回、不 panic |
+| 判据 | `serve_line` 的「不 panic」承诺恢复完整（in-process 侧本有 `catch_unwind` 兜底，子进程侧 panic 即进程退出——修复后两侧都不再依赖兜底）；`#[cfg(test)]` 钩子**不需要**：helper 显式收 `Result`，单测直接注入 `Err` 构造性失败。**计数勘误**：§5 表原记「共 8 处」系 v1.1 起的笔误（表内同时列出 7 个行号）——git 考古复核审计时点（384cfc3）与修复前（ad2a62f）均为 **7 处**，与所列行号一一对应 |
+| 实测 | `cargo test -p dd-ext --lib serialization_failure` = **1 passed**：`serialization_failure_returns_internal_error_not_panic`（`Err` 注入 → `-32603` + 保留原 id + 无 `result` 字段；`Ok` 注入 → 正常响应不受影响）。`serve_line` 既有 30+ 条协议行为单测全绿（方法分发形状零变化） |
+
+**验收标准**：单测注入构造性失败断言错误响应 ✅（判据原文的"或加 #[cfg(test)] 钩子"以更优的 Result 注入方式满足）。
 
 ---
 
@@ -666,7 +716,7 @@ pub(crate) fn decode_icon_image(bytes: &[u8]) -> Option<egui::ColorImage> {
 | **P1** | S-02 | `dd-protocol/src/framing.rs` | ✅ **已完成**：约 40 行（含文档）+ **+3 条单测**（§4.1.1） |
 | **P1** | S-04 | `dd-gui/src/ui/icons.rs` | ✅ **已完成**：约 60 行 + **+3 条单测**（§4.3.1） |
 | **P1** | S-05 | `dd-host/src/trust.rs`（新增，710 行含单测）、`manifest.rs`、`dd-gui/src/aggregator.rs`、`app/{aggregate,keys,mod}.rs`、`ui/{settings_view,panel}.rs`、`text.rs` | ✅ **已完成 2026-09-24**（T1′ / CNG BCrypt / 设置页审批 + 页脚空位提示 / 同 id 撞车告警，见 §4.4.1–§4.4.3）——**+19 条单测** |
-| **P2** | S-03、S-06、S-07、S-08、S-09、S-11 | `platform.rs`、`app/host_actions.rs`、`text.rs`、`builtins/shell.rs`、`bin/search.rs`、`cache.rs`、`dd-ext/src/lib.rs`、`docs/protocol.md`（§7.4 注） | ✅ S-03（§4.2.1，+2 单测）、S-06（§4.5.1，+2 单测）已完成；⏸ S-07 / S-08 / S-09 / S-11 待做 |
+| **P2** | S-03、S-06、S-07、S-08、S-09、S-11 | `platform.rs`、`app/host_actions.rs`、`text.rs`、`builtins/shell.rs`、`bin/search.rs`、`cache.rs`、`dd-ext/src/lib.rs`、`docs/protocol.md`（§7.4 注） | ✅ **全部完成**：S-03（§4.2.1，+2 单测）、S-06（§4.5.1，+2 单测）、S-07（§5.2，+2 单测）、S-08（§5.3，扩展既有断言）、S-09（§5.4，+2 单测）、S-11（§5.5，+1 单测） |
 | **随批** | S-10 | `dd-host/src/process.rs`、`dd-host/Cargo.toml` | ✅ **已完成**（§5.1，+2 单测）——本可与 S-05 同批，实际独立落地（不依赖信任模型） |
 
 > S-03 未按原计划并入 S-05：核对消费者后发现它有**独立的、更紧的功能约束**（文件搜索依赖 `file://`），故先行单独落地（§4.2.1）。
@@ -679,13 +729,20 @@ pub(crate) fn decode_icon_image(bytes: &[u8]) -> Option<egui::ColorImage> {
 - [x] **S-04**：`cargo test -p dd-gui --lib -- icons` = **8 passed**（既有 3 + 新增 3，另 2 条为暗色检测）。
 - [x] **S-06**：`cargo test -p dd-ext --lib -- dangerous_command` = **2 passed**。
 - [x] **S-10**：`cargo test -p dd-host --lib` = **49 passed**（含新增 2）。
-- [x] **本批合计 +13 条单测**，全部靶向 §3–§5 的判据（3+3+3+2+2 = 13；含 P0 的 3 条则累计 +16）。
+- [x] **S-07**：`cargo test -p dd-gui --lib clipboard_text` = **2 passed**（§5.2）。
+- [x] **S-08**：`cargo test -p dd-ext --bin dd-ext-search reveal` = **1 passed**（扩展断言，§5.3）。
+- [x] **S-09**：`cargo test -p dd-host --lib` = **65 passed**（63 + 新增 2，§5.4）。
+- [x] **S-11**：`cargo test -p dd-ext --lib serialization_failure` = **1 passed**（Result 注入，§5.5）。
+- [x] **本批合计（S-07/08/09/11）+5 条单测**（S-07 2 + S-09 2 + S-11 1；S-08 为扩展既有用例断言）。
+- [x] **门禁（2026-09-24）**：rustfmt --check 5 个改动文件无差异；`cargo clippy --workspace --all-targets` EXIT=0，**无新增告警**（唯一代码告警仍是既有 `search.rs:614` clippy 1.96 误报）。
+- [x] **全仓回归（2026-09-24 复跑）**：`dd-host --lib` 65/65、`dd-ext --lib` 105 passed + 1 failed（既有机器绑定）、`dd-gui --lib` 228 passed + 6 failed（**全部 `Os error 231` 环境批**，`test_support.rs` spawn 被沙箱拦，失败名单无本批新测试——见下方留档条目）。
+- [x] **本批合计（前 7 项）+13 条单测**，全部靶向 §3–§5 的判据（3+3+3+2+2 = 13；含 P0 的 3 条则累计 +16）。
 - [x] **全仓回归**：`cargo test --workspace --no-fail-fast` = **488 passed / 1 failed**（2026-09-23 18:1x 复跑，21 个测试目标）。唯一失败为既有**机器绑定**用例 `steam_installed_shown_uninstalled_filtered_root_lnk_shown`（`apps.rs` :1510，断言本机装有 Flowframes）；改动前基线同为 1 failed，**非本次回归**。
 - [x] **§8.1 / §8.2 PoC 输出反转**：S-01 的两种注入形态现被拒且 `apps.rs` 已无 `cmd.exe`（源码断言）；S-02 的 4 KiB 无换行输入现被上限拦住（`unterminated_stream_is_bounded_and_reports_once`，§4.1.1）。
 - [x] **零协议/清单变更**：S-01–S-04、S-06、S-10 均未改字段、方法名或清单 schema；仅 `docs/protocol.md` §7.4 增加一段**实现侧策略注**（非契约）。
 - [ ] 体积无回归：`tools/package.sh` 产物 ≤ 当前基线 —— 待重打包实测（本批仅 +`log`（已在依赖树内）与若干内联常量，预期无可见增量）。
-- [ ] 真机回归：Apps 启动、WebSearch 开网页、**文件搜索「打开」**（S-03 的关键回归面）、Shell 危险命令确认弹窗、图标显示 —— 需真机走查。
-- [ ] 文档同步：`docs/protocol.md` §7.4 ✅ 已加；`docs/manifest-schema.md` §9（S-05 选型后）+ `extensions.md` 待办。
+- [ ] 真机回归：Apps 启动、WebSearch 开网页、**文件搜索「打开」**（S-03 的关键回归面）、Shell 危险命令确认弹窗、图标显示、**Calc 复制后出现"扩展已写入剪贴板"提示（S-07）**、**文件搜索「显示所在目录」定位正确（S-08）** —— 需真机走查。
+- [ ] 文档同步：`docs/protocol.md` §7.4 ✅ 已加；`docs/manifest-schema.md` §9 ✅（S-05 批）；`extensions.md` §6.1 ✅（S-05 批）。
 
 #### 一度出现的 22 条 spawn 用例失败（已排除，非缺陷 —— 留档备查）
 
@@ -761,3 +818,4 @@ verdict     = bounded — 上限生效
 | v1.5 | 2026-09-23 | **取证脚本可复现性修正（§8.2）**：复跑 S-02 PoC 时发现独立 crate 需**带 `--offline`**（该 crate 未随带 `Cargo.lock`，cargo 会先更新 crates-io 索引 → 本机无外网则 `download of config.json failed`），已把命令与原因写入 §8.2 与 `framing-probe/Cargo.toml` 头注释；同时补记 `Cargo.toml` 含空 `[workspace]` 表（避免被仓库 workspace 吞并）。复跑实测仍为 `bounded — 上限生效`（buffered = 0 / frames = 1） |
 | v1.6 | 2026-09-24 | **S-05 选型冻结（§4.4 → §4.4.1/§4.4.2）**：四项决策落定 —— D1 信任策略 **T1′**、D2 哈希 **Windows CNG `BCrypt`**（`windows-sys` 已在 lock，零新增）、D3 审批入口 **设置页行内「允许/阻止」+ 面板页脚提示**、D4 同 id 撞车 **保持用户目录优先 + 设置页告警**。**同时修正原 T1 的判据漏洞**：原文「`com.ddrun.*` 自动信任」只看 **id 前缀**，而 id 是清单作者自填 → `com.ddrun.evil` 即可白拿信任；改为「**来源 ∈ 随包 sidecar 目录 AND id ∈ 首方白名单**」（白名单单一事实来源 = 既有 `aggregator.rs::owned_sidecar_name_key` 的键集，当前仅 `com.ddrun.filesearch`）。新增：完整判定表（5 条短路规则，末条 fail-closed）、`trust.json` schema（宿主私有，非契约）、门禁落点、**12 条验收判据**、明确不做项（签名/非 Windows 门禁）、以及「**用户同意 + 变更检测 ≠ 防篡改**」的定性提醒 |
 | v1.7 | 2026-09-24 | **S-05 实施落地（§4.4.3 新增）**：新增 `dd-host/src/trust.rs`（台账 + `assess` 判定 + CNG SHA-256 分块流式，710 行含 14 单测）、`manifest::trust_file()`、`dd-gui/aggregator` 的门禁与来源标注、设置页行内审批 UI、页脚空位提示、i18n 17 键。**+19 条单测**。**三处与冻结方案的偏离如实记录**：① 未加 `SourceStatus::Pending` 等枚举变体，改用「与停用集同手法」的 `active` 过滤 + **spawn 唯一入口门禁**（无旁路由单一收口点保证；代价 = 待批准项不进 `sources`，可见性由设置页/启动 toast/页脚空位四处承担）；② 页脚提示落在**左块空位**而非新增行（页脚是严格单行几何契约 D35）；③ `dd-host` 新增 `chrono`（同版本已在依赖树内，lock 零新增）。**验收**：A1–A11 已有单测/实测证据（**A11 哈希开销实测 0.874 ms @836,608 B**，判据 <10 ms；首方/内置走短路 ≈0 ms），A12 待环境自愈后复跑（本轮 20 条失败为已知 `Os error 231` 环境批，**失败名单无本项新测试**）。§1/§7.1 状态改「已修复」 |
+| v1.8 | 2026-09-24 | **低危收尾：S-07/S-08/S-09/S-11 全部修复（§5.2–§5.5 新增），审计 11 项闭环**。S-07（§5.2）：剪贴板 1 MiB 上限**拒绝式**前置 + 成功改 `info!`（id+字节）+ 2 s 来源 toast，+2 单测；「可配置关闭」开关与 S-06 同口径刻意未做。S-08（§5.3）：`valid_reveal_path` 四条收紧（空串/`"`/控制字符/`%`/`^`），扩展既有用例断言；选项② COM 路线列为后续可选。S-09（§5.4）：缓存文件名加 **FNV-1a 32 位指纹**（零依赖），`load` 旧名兼容一个版本但**两路都校验快照 `ext_id` 归属**，invalidate/remove 双前缀清理，+2 单测（碰撞对互不覆盖 + 伪造拒绝）。S-11（§5.5）：`make_result_checked` 收 `Result` 替换 5 处 `.expect`，invoke 序列化失败回 `-32603` 并**跳过副作用**，信封 `expect` 改 match；**无需 test 钩子**（直接注入 `Err`），+1 单测。**门禁**：fmt 5 文件无差异、clippy 无新增告警；复跑 dd-host 65/65、dd-ext 105+1（机器绑定）、dd-gui 228+6（全为 `Os error 231` 环境批，失败名单无本批新测试）。本批 **+5 条单测**；余待办仅真机走查与重打包体积实测 |

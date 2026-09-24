@@ -1373,10 +1373,23 @@ fn get_file_items_with(params: &GetItemsParams, available: bool) -> GetItemsResu
 
 // ─── v3.3 P1：上下文菜单动作（显示所在目录 / 复制路径）────────────────
 
-/// 「显示所在目录」路径合法性（纯函数，单测锚点）：Windows 路径不允许双引号
-/// （`explorer /select,"<path>"` 手动引号会与非法引号冲突），且不得为空。
+/// 「显示所在目录」路径合法性（纯函数，单测锚点）。
+///
+/// S-08（2026-09-24）收紧：路径来自 Everything 索引（文件名可被攻击者构造），
+/// 将被拼进 `explorer /select,"<path>"` 的**原始命令行**，故除双引号外一并拒绝：
+/// - 双引号 `"`：与手写引号冲突（原始缺陷面）；
+/// - 控制字符（含 `\n`/`\r`/`\t` 与 0x7F）：可切断/伪造命令行参数边界；
+/// - `%` 与 `^`：cmd 层环境变量展开与转义歧义字符（explorer 命令行经
+///   shell 层解析时存在二次解释面）。
+///
+/// 合法文件名几乎不含 `%`/`^`（误伤面可忽略；确有此类文件时用户仍可
+/// 「复制路径」后手工打开）。更彻底的 `SHOpenFolderAndSelectItems` COM
+/// 路线（不经命令行）列为后续可选项，未在本轮实施。
 fn valid_reveal_path(path: &str) -> bool {
-    !path.is_empty() && !path.contains('"')
+    !path.is_empty()
+        && !path
+            .chars()
+            .any(|c| c == '"' || c == '%' || c == '^' || c.is_control())
 }
 
 /// 执行「显示所在目录」。
@@ -2173,6 +2186,15 @@ mod tests {
         assert!(!valid_reveal_path(r#"G:\ba"dd\x.txt"#));
         assert!(valid_reveal_path(r"G:\AI\dd-run\ok.txt"));
         assert!(!valid_reveal_path(""));
+        // S-08：控制字符 / % / ^ 一并拒绝
+        assert!(!valid_reveal_path("G:\\dir\n\\x.txt"), "换行拒绝");
+        assert!(!valid_reveal_path("G:\\dir\t\\x.txt"), "制表符拒绝");
+        assert!(!valid_reveal_path("G:\\dir\x7F\\x.txt"), "DEL 拒绝");
+        assert!(!valid_reveal_path("G:\\dir\\100%_off.txt"), "% 拒绝");
+        assert!(!valid_reveal_path("G:\\dir\\a^b.txt"), "^ 拒绝");
+        // 日常合法路径不误伤（空格 / 中文 / 盘符 / UNC）
+        assert!(valid_reveal_path(r"G:\AI project\新建文件夹\文件 名.txt"));
+        assert!(valid_reveal_path(r"\\NAS\share\report.docx"));
     }
 
     #[test]

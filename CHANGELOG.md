@@ -4,6 +4,17 @@
 
 ## [Unreleased]
 
+### 安全（低危收尾：S-07 / S-08 / S-09 / S-11，审计 11 项闭环，2026-09-24）
+
+- **背景**：审计 11 项的最后 4 项低危全部落地，**审计闭环**；逐项实现与验收见 `docs/security-audit-2026-09-23.md` §5.2–§5.5。
+- **S-07（`host/set_clipboard` 静默改写剪贴板）**：`dd-gui/app/host_actions.rs` —— ① **1 MiB 上限拒绝式前置**（纯函数 `clipboard_text_allowed`，按 UTF-8 字节计；超限 warn + toast，**不截断**——半截账号/地址比不写入更危险）；② 成功路径 `debug!` 升 `info!`（含扩展 id 与字节数，可溯源）；③ 写入后 2 s 轻量 toast「扩展 {id} 已写入剪贴板」（覆盖用户复制中的账号/地址前可见）。「可配置关闭」开关与 S-06 同口径刻意未做。
+- **S-08（`explorer /select` 原始命令行仅拦 `"`）**：`dd-ext/src/bin/search.rs` `valid_reveal_path` 收紧为四条——空串 / 双引号 / **控制字符**（含 `\n` `\r` `\t` 与 0x7F）/ **`%` 与 `^`**（cmd 层展开与转义歧义字符）；拒绝发生在 spawn 前（`resolve_path_action` 前置门控回「路径已失效，请重新搜索」Toast，`spawn_reveal` 内同判据纵深防御，零副作用）。合法路径（空格/中文/UNC）不误伤。更彻底的 `SHOpenFolderAndSelectItems` COM 路线列为后续可选项未实施。
+- **S-09（`FrozenCache` 文件名碰撞 → 跨扩展桩覆盖）**：`dd-host/src/cache.rs` —— 文件名主干改 `{sanitize(ext_id)}-{fnv1a32(ext_id):08x}`（字符折叠与 32 位指纹两道独立映射，**零依赖**纯本地 FNV-1a）；`load` 新名优先、**旧名兼容一个版本**，两路都校验快照内 `ext_id` 归属（伪造桩即使文件名命中也被拦下）；`invalidate_if_version_changed` / `remove` **双前缀清理**（防遗留旧名桩经兼容路径复活）。
+- **S-11（`serve_line` 内 `.expect()` panic 面）**：`dd-ext/src/lib.rs` —— 新增 `make_result_checked`（显式收 `Result`）替换 initialize / top_level / fallback / get_command / get_items **5 处** `.expect("序列化 X")`，失败回 **`-32603 Internal error`** + 日志；`invoke` 结果序列化失败回 `-32603` 并**跳过全部副作用**；信封分支 `to_error_response().expect` 改 match（`None` 记日志不 panic）。`serve_line` 的「不 panic」承诺恢复完整，**无需 `#[cfg(test)]` 钩子**（helper 可直接注入 `Err`）。
+- **回归测试（+5）**：`clipboard_text_allows_normal_and_boundary_sizes` / `clipboard_text_rejects_oversize`（10 万汉字放行、40 万汉字拒绝——验证按字节计）/ `frozen_collision_ids_do_not_overwrite`（`a.b` 与 `a_b` 互不覆盖，旧实现必失败）/ `frozen_legacy_name_compat_with_ext_id_check`（兼容读回 + 伪造拒绝）/ `serialization_failure_returns_internal_error_not_panic`。S-08 为扩展既有用例断言（换行/制表/DEL/%/^ 全拒）。
+- **验证**：`dd-host --lib` **65 passed**（63+2）；`dd-ext --lib` **105 passed** + 1 既有机器绑定失败；`dd-gui --lib` **228 passed** + 6 failed（全部 `Os error 231` 环境批，失败名单无本批新测试）；`dd-ext-search --bin reveal` **1 passed**；`rustfmt --check` 5 个改动文件无差异；`clippy --workspace --all-targets` **无新增告警**（仅剩既有 `search.rs:614` 工具链误报）。测试基线 508 → **513**。
+- **真机走查（待做）**：Calc 复制后出现剪贴板来源提示（S-07）；文件搜索「显示所在目录」定位正确（S-08）。
+
 ### 安全（S-05 扩展信任门禁：清单无完整性校验与信任分级，2026-09-24）
 
 - **背景**：`extensions.d/*.json` 里任何通过清单九条规则的扩展都会被**静默拉起**（任意 `command` + 任意 `entry.env` + 任意 `cwd`），宿主既不校验来源与哈希、也不征求用户同意，设置页也看不出哪个是随包首方。方案与逐条验收见 `docs/security-audit-2026-09-23.md` §4.4.1–§4.4.3。
