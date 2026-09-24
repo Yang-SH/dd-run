@@ -968,6 +968,7 @@ Flowframes；改动前基线同为 1 failed，非本次回归）；`cargo build 
 | 2026-09-20 | **设置/个性化/材料 B1–B4 落地**（参照 PowerToys CmdPal）：材料注册表化 + 云母 Alt + 着色三档 + Esc/退格/单击/动效行为项 + 恢复默认外观 | ✅ 工作副本（470 passed；真机走查待做） |
 | 2026-09-19 | **E2E 首屏计时插桩**：宿主侧 input→paint 三段分解（`app/e2e.rs` + `tools/gui_e2e_parse.py`），A-33-05 感知指标待真机采样 | ✅ 工作副本（465 passed） |
 | 2026-09-19 | **dist 重打包**（E2 + E2E 插桩同源）+ 分发级冒烟：conformance 内置 9 步 / 示例 9 步（step 4 按 `has_fallback` 跳过）/ GUI 5s 存活 / sidecar 通道 `ipc` / zip 成员校验 | ✅ `dd-run-0.1.1.exe` 8,780,800 B · sidecar 831,488 B |
+| 2026-09-24 | **dist 重打包（安全加固三批后）**：`cargo build --release`（6m40s）+ `tools/package.sh` exit 0；dist exe 与 release exe **sha256 一致**（`6691fa88…`），sidecar `dd-ext-search.exe` 837,632 B（+1,024 B，含 S-08/S-11） | ✅ `dd-run-0.1.1.exe` **9,105,408 B**（较 S-05 批后基线 +4,608 B / +0.05%，目标区间 9–11 MB 内）· sidecar 837,632 B |
 | 2026-09-23 | **安全审计**：79 文件按攻击面走查 → 11 项缺陷（1 高 / 5 中 / 5 低）+ 14 项已核验；出 `security-audit-2026-09-23.md` | ✅ 工作副本 |
 | 2026-09-23 | **S-01 命令注入修复**（P0）：新增 `win_launch`（`ShellExecuteW(open)`）替掉 `cmd /C start`；+3 单测 | ✅ 工作副本（475 passed / 1 机器绑定失败） |
 | 2026-09-23 | **中危批量修复**：S-02 解码器残留上限 / S-03 `open_url` scheme 白名单（含实施后自查修正的字节切片 panic）/ S-04 图标读盘+解码双上限 / S-06 危险命令二次确认 | ✅ 工作副本（+13 单测；全仓 **488 passed / 1 机器绑定失败**） |
