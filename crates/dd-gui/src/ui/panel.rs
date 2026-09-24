@@ -278,6 +278,17 @@ impl PaletteApp {
             .or_else(|| {
                 page.is_loading
                     .then(|| crate::text::t(self.lang_effective, "panel.loading").to_string())
+            })
+            // S-05：无选中项且非加载中时，复用左块**空位**提示「有 N 个扩展待批准」。
+            // 页脚是严格单行的几何契约（v4.10 D35），故不新增行、不改高度——只在
+            // 「本该空白」时占用。有选中项时该提示让位给上下文动作文本（C7），
+            // 由设置页卡片头与启动一次性 toast 兜底可见性。
+            .or_else(|| {
+                let n = dd_gui::aggregator::pending_count(&self.trust);
+                (n > 0).then(|| {
+                    crate::text::t(self.lang_effective, "footer.ext_pending")
+                        .replace("{n}", &n.to_string())
+                })
             });
         let keys_w = keys_width(ui, self.lang_effective)
             + if ext_chip_w > 0.0 {

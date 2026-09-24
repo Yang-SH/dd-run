@@ -400,6 +400,55 @@ const I18N: &[(&str, &str, &str)] = &[
         "No extensions found (check the extensions.d manifest directory)",
     ),
     ("set.ext.retry", "重试", "Retry"),
+    // ── 设置页 · 扩展信任（S-05，2026-09-24）──
+    // 来源三分：内置（宿主进程内）/ 随包 sidecar / 用户安装（%APPDATA%）。
+    ("set.ext.origin.builtin", "内置", "Built-in"),
+    ("set.ext.origin.sidecar", "随包", "Bundled"),
+    ("set.ext.origin.user", "用户安装", "User-installed"),
+    ("set.ext.trust.pending", "待批准", "Pending approval"),
+    ("set.ext.trust.blocked", "已阻止", "Blocked"),
+    ("set.ext.allow", "允许", "Allow"),
+    ("set.ext.block", "阻止", "Block"),
+    (
+        "set.ext.pending_summary",
+        "有 {n} 个扩展待批准（在你允许前不会被加载）",
+        "{n} extension(s) awaiting approval (not loaded until you allow them)",
+    ),
+    (
+        "set.ext.shadow_warn",
+        "与随包扩展同 id，但来自用户目录（会顶掉随包版本）",
+        "Same id as a bundled extension, but installed in the user directory",
+    ),
+    (
+        "set.ext.ledger_corrupt",
+        "信任台账（trust.json）损坏或版本不识别，已按「全部待批准」处理",
+        "Trust ledger (trust.json) is corrupt or has an unknown version; treated as empty",
+    ),
+    (
+        "set.ext.builtin_note",
+        "内置扩展（宿主进程内运行，无子进程）",
+        "Built-in (runs inside the host process, no subprocess)",
+    ),
+    ("set.ext.exe_path", "可执行文件：{p}", "Executable: {p}"),
+    // 面板页脚待批准提示：**只在无选中项时**占用左块空位——页脚是严格单行的几何
+    // 契约（D35），不新增行、不改高度。
+    (
+        "footer.ext_pending",
+        "有 {n} 个扩展待批准 → 设置 › 扩展",
+        "{n} extension(s) pending → Settings › Extensions",
+    ),
+    ("toast.ext_allowed", "已允许 {id}", "Allowed {id}"),
+    (
+        "toast.ext_pending",
+        "有 {n} 个扩展待批准，可在「设置 › 扩展」中允许",
+        "{n} extension(s) awaiting approval — allow them in Settings › Extensions",
+    ),
+    ("toast.ext_blocked", "已阻止 {id}", "Blocked {id}"),
+    (
+        "toast.ext_trust_fail",
+        "信任台账写入失败：{e}",
+        "Failed to write trust ledger: {e}",
+    ),
     // 宿主自有 sidecar 的显示名（清单 `name` 无 i18n 字段；内置名取自 dd-ext 规格
     // 自述，见 `aggregator::apply_owned_names`）。
     ("ext.name.filesearch", "文件搜索", "File Search"),

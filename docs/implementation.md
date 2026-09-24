@@ -1,6 +1,6 @@
 # dd-run 实施方案
 
-> **状态**：生效中 ｜ **版本**：v0.1.4 ｜ **最后更新**：2026-09-23
+> **状态**：生效中 ｜ **版本**：v0.1.6 ｜ **最后更新**：2026-09-24
 > **关联**：[protocol.md](./protocol.md) · [manifest-schema.md](./manifest-schema.md) · [extensions.md](./extensions.md) · [../cmdpal-platform-agnostic-design.md](../cmdpal-platform-agnostic-design.md)
 
 ---
@@ -772,6 +772,23 @@ Flowframes；改动前基线同为 1 failed，非本次回归）；`cargo build 
 
 > ⚠️ **排查记录（留档）**：本日 17:0x 曾出现 22 条 spawn 用例批量失败（全部 `Os error 231` = `ERROR_PIPE_BUSY`），经「零仓库代码最小探针 + 临时还原 S-10 隔离实验 + 时间线」三层证据定性为**环境瞬时限制**，约 30 分钟后复跑即全绿。**日后遇批量 `error 231` 先怀疑环境，不要改代码**。详见审计文档 §7.2。
 
+### 安全审计 S-05 扩展信任门禁（2026-09-24）
+
+**范围**：审计 11 项里的最后一项中危（S-05）。决策（T1′ / CNG 哈希 / 设置页审批 / 同 id 撞车告警）与逐条验收见
+[`security-audit-2026-09-23.md`](./security-audit-2026-09-23.md) §4.4.1–§4.4.3。
+
+| 层 | 改动 |
+|---|---|
+| `dd-host`（**新增 `trust.rs`**） | 台账 `TrustLedger`/`TrustEntry`/`Decision`/`LedgerState` + 判定 `assess` + SHA-256（Windows CNG `BCryptHashData`，64 KiB 分块流式）+ `FIRST_PARTY_IDS`；`manifest::trust_file()` → `%APPDATA%\dd-run\trust.json`；`Cargo.toml` 加 `chrono`（同版本已在依赖树内）与 `[target.'cfg(windows)'.dependencies] windows-sys` |
+| `dd-gui::aggregator` | 扫描结果携带**来源**（`ExtOrigin`）；`load_extension_sources` 返回具名结构 `ExtensionSources`（含判定表 + 台账状态）；`is_trusted`（**fail-closed**）/ `pending_count` / `origin_of`；**`spawn_and_initialize_with_info` 加门禁**（所有子进程 spawn 的唯一入口） |
+| `dd-gui` app 层 | `active` 过滤加信任维度（与停用集同一手法：`exts` 留全集给设置页）；`set_extension_trust()` 写台账 + 落盘 + 立即重聚合 + toast；新增 `trust` / `ledger_state` / `pending_notified` 状态 |
+| `dd-gui` UI | 设置页行内：来源标签（内置/随包/用户安装）+ 信任状态 + 「允许 / 阻止」按钮 + 清单/exe 路径 tooltip + 同 id 撞车告警行；卡片头待批准与台账损坏提示；面板页脚**空位**提示待批准；i18n 17 键 |
+
+**三处与冻结方案的偏离（均为实施收敛，已记入审计 §4.4.3）**：① 未加 `SourceStatus::Pending` 等枚举变体，改用「与停用集同手法」的过滤 + **spawn 唯一入口门禁**（无旁路由单一收口点保证；代价 = 待批准项不进 `sources`）；② 页脚提示落在**左块空位**而非新增行（页脚为严格单行几何契约 D35）；③ `dd-host` 新增 `chrono` 用于 `decided_at`（lock 零新增）。
+
+**验证**：新增单测 **19 条**（`dd-host::trust` 14 + `aggregator` 4 + `settings_view` 1）全绿；`dd-host --lib` 49 → **63 passed**；`rustfmt --check` 改动文件无差异；`clippy --workspace --all-targets` **无新增告警**（仅剩既有 `search.rs:614` 的工具链误报）。**A11 实测**（`.workbuddy/tmp/trust-probe/`，真实产物 `dist/extensions.d/dd-ext-search.exe` = 836,608 B）：哈希 **0.874 ms** / 台账读 **0.068 ms** / 已批准判定 **1.068 ms** / 首方与待批准走短路 **≈0 ms**（判据 <10 ms）。
+⚠️ 全仓 `cargo test --workspace --no-fail-fast` 两次复跑均为 **487 passed / 21 failed**（总数 508，与 §3.1 台账一致），其中 **20 条为已知 `Os error 231`（`ERROR_PIPE_BUSY`）环境批** + 1 条既有机器绑定用例；**失败名单中无本项任何新测试**，环境自愈后预期 **507 passed / 1 failed**。
+
 ## 3. 验收映射总表
 
 | 验收项 | 内容 | 里程碑 |
@@ -814,6 +831,7 @@ Flowframes；改动前基线同为 1 failed，非本次回归）；`cargo build 
 | 2026-09-23 | **473** | +3：**退格键无法删除输入内容修复**（`dd-gui`：`backspace_not_consumed_when_go_back_disabled` / `backspace_go_back_enabled_nested_empty_pops` / `backspace_go_back_enabled_but_query_nonempty_keeps_editing`）。本机实跑 **472 passed / 1 failed**（`steam_installed_shown_uninstalled_filtered_root_lnk_shown` 机器绑定，非回归） |
 | 2026-09-23 | **476** | +3：**安全审计 P0 — S-01 命令注入修复**（`dd-ext/src/win_launch.rs`：`accepts_legitimate_targets` / `rejects_impossible_targets` / `launch_path_does_not_use_cmd`）。本机实跑 **475 passed / 1 failed** |
 | 2026-09-23 | **489** | +13：**安全审计中危批量**（S-02 ×3 / S-03 ×3 / S-04 ×3 / S-06 ×2 / S-10 ×2；其中 S-03 第 3 条为实施后自查补的 `open_url_handles_non_ascii_without_panicking`）。本机实跑 **488 passed / 1 failed**（同上机器绑定例，非回归）；期间一度出现 22 条 `Os error 231` 批量失败，经取证定性为环境瞬时限制后复跑恢复（见审计文档 §7.2） |
+| 2026-09-24 | **508** | +19：**S-05 扩展信任门禁**（`dd-host::trust` 14 条：判定 5 条短路规则 / 双哈希绑定与失效 / fail-closed / NIST 向量 / 分块一致；`aggregator` 4 条：fail-closed、计数、spawn 门禁拒绝与放行；`settings_view` 1 条：来源与信任状态）。本机实跑 **487 passed / 21 failed**——20 条为已知 `Os error 231`（`ERROR_PIPE_BUSY`）**环境批**（piped-stdio spawn，非回归，见审计 §7.2）、1 条既有机器绑定例；总数 508 与台账一致 |
 
 **两条使用注意**：① `crates/dd-host/tests/roundtrip*.rs` 在 `dd-ext-sample.exe` **未构建时会打印 SKIP 并 return**（计入 passed），故凡涉及协议/扩展行为，先 `cargo build -p dd-ext-sample` 再跑；② 「三关全绿」与 CI 四关**均为 debug profile**，`#[cfg(debug_assertions)]` 类 release-only 编译错误检不到 —— 交付/发布前必须实跑 `cargo build --release`（见 §7 构建环境记档与 `CHANGELOG` 的 release 阻塞条目）。
 
@@ -901,7 +919,7 @@ Flowframes；改动前基线同为 1 failed，非本次回归）；`cargo build 
 | L8 | 设计稿 v4 C 组占位实施 | 设计稿 v4.3 §12 | ✅ 代码完成（2026-09-04，C1–C3）+ **真机验收通过**（2026-09-08，M6 集中回归 B 组：A1–A5/C1–C3） |
 | L9 | IME 交互中文输入环境人工复验 | 2026-09-03 记录 | ✅ 已销项（2026-09-08，M6 集中回归 D 组真机复验通过） |
 | L10 | A2 冷启动 GUI 瓶颈 | §6 R2 | ✅ 已销项（M6 批次 6.2 L10）：`setup_cjk_fonts` 改后台线程加载，不在主路径 |
-| L11 | 安全审计剩余项：**S-05**（扩展清单信任模型）+ S-07/S-08/S-09/S-11（低危） | [security-audit-2026-09-23.md](./security-audit-2026-09-23.md) §1 | 🟨 **部分销项**（2026-09-23）：**已修复** S-01（高危，见上方同名小节）、S-02 / S-03 / S-04 / S-06（中危）、S-10（低危，随批）——共 6 项。**余 5 项**：**S-05 待选型**（T1 首方自动信任 / T2 全量批准 / T3 仅台账，见审计文档 §4.4）+ S-07（剪贴板静默写）/ S-08（explorer raw_arg）/ S-09（缓存键碰撞）/ S-11（`serve_line` 的 `.expect` 面） |
+| L11 | 安全审计剩余项：低危 **S-07 / S-08 / S-09 / S-11** | [security-audit-2026-09-23.md](./security-audit-2026-09-23.md) §1 | 🟨 **大部分销项**：**已修复 7 项** —— S-01（高，见上方同名小节）、S-02 / S-03 / S-04 / S-06（中危）、**S-05**（中危，2026-09-24 见上方同名小节）、S-10（低危，随批）。**余 4 项低危待做**：S-07（剪贴板静默写）/ S-08（`explorer` raw_arg）/ S-09（缓存键碰撞）/ S-11（`serve_line` 的 `.expect` 面） |
 
 ---
 
@@ -939,5 +957,7 @@ Flowframes；改动前基线同为 1 failed，非本次回归）；`cargo build 
 | 2026-09-23 | **S-01 命令注入修复**（P0）：新增 `win_launch`（`ShellExecuteW(open)`）替掉 `cmd /C start`；+3 单测 | ✅ 工作副本（475 passed / 1 机器绑定失败） |
 | 2026-09-23 | **中危批量修复**：S-02 解码器残留上限 / S-03 `open_url` scheme 白名单（含实施后自查修正的字节切片 panic）/ S-04 图标读盘+解码双上限 / S-06 危险命令二次确认 | ✅ 工作副本（+13 单测；全仓 **488 passed / 1 机器绑定失败**） |
 | 2026-09-23 | 随批：S-10 `entry.env` 关键变量保护（`dd-host` 引入 `log` facade）；S-05 待选型 | ✅ 工作副本 |
+| 2026-09-24 | **S-05 选型冻结**（T1′ 来源+首方白名单 / CNG `BCrypt` 哈希 / 设置页行内允许·阻止 + 面板页脚提示 / 同 id 撞车保持用户优先并告警）→ 落审计文档 §4.4.1–§4.4.2（判定表、`trust.json` schema、门禁落点、12 条验收）；**同时修正原 T1 判据漏洞**（只看 id 前缀 → 改「来源 AND 白名单」） | ✅ 工作副本（仅文档） |
+| 2026-09-24 | **S-05 实施落地**：新增 `dd-host/src/trust.rs`（台账 + 判定 + CNG SHA-256）/ `manifest::trust_file()`；`aggregator` 来源标注与**spawn 唯一入口门禁**；设置页行内审批 UI + 页脚空位提示；i18n 17 键 | ✅ 工作副本（+19 单测；`dd-host --lib` 63 passed；全仓 487/21 受 `error 231` 环境批阻塞，预期 507/1） |
 
 > 构建环境记档：本机 windows-gnu 链接需补 `as.exe`（与 dlltool 同目录）与 `libshlwapi.a`（2026-09-03 修复）；跑测试前须 `export APPDATA`（否则 apps 图标抽取测试必失败，见 CHANGELOG）。

@@ -23,6 +23,10 @@ pub struct AggregatePayload {
     pub(crate) processes: Vec<(String, ExtClient)>,
     /// 已扫描扩展（含 manifest frozen/entry），供桩复热 spawn（M3）。
     pub(crate) exts: Vec<LoadedExtension>,
+    /// S-05 信任判定表（`id → 判定`）：设置页审批 UI 与面板页脚提示的数据源。
+    pub(crate) trust: HashMap<String, dd_host::trust::Assessment>,
+    /// S-05 信任台账读取状态（`Corrupt` → 设置页提示）。
+    pub(crate) ledger_state: dd_host::trust::LedgerState,
     /// M9：内置 in-process 规格表（`id → ExtensionSpec`），供复热链路重建内置客户端。
     pub(crate) inproc_specs: HashMap<String, ExtensionSpec>,
     /// 聚合线程内从"开始 scan"到"完成 collect+flatten"耗时（ms）。
@@ -56,13 +60,24 @@ pub fn spawn_aggregation(
         });
         // note（来源备注）不再进页脚（用户决策 2026-09-04）：丢弃即可，
         // 异常细节已由 load_extension_sources 内部日志输出。
-        let (exts, inproc_specs, _note) = aggregator::load_extension_sources(lang);
+        let aggregator::ExtensionSources {
+            exts,
+            inproc_specs,
+            note: _note,
+            trust,
+            ledger_state,
+        } = aggregator::load_extension_sources(lang);
         // M6 批次 6.3：停用扩展只从**聚合采集**中剔除——payload.exts 必须保留
         // 全集（self.exts 驱动设置页「扩展管理」列表，过滤掉会让已停用扩展从
         // 列表消失、无法再从 UI 启用，真机反馈 2026-09-05）。
+        //
+        // S-05（2026-09-24）：同手法再加一道**信任门禁**——未获信任（待批准 /
+        // 已阻止）的扩展同样只从采集集剔除，`exts` 仍保留以便设置页展示与批准。
+        // 第二道门在 `spawn_and_initialize_with_info`（spawn 唯一入口，覆盖桩复热）。
         let mut active: Vec<LoadedExtension> = exts
             .iter()
             .filter(|e| !disabled.contains(&e.manifest.id))
+            .filter(|e| aggregator::is_trusted(&trust, &e.manifest.id))
             .cloned()
             .collect();
         aggregator::inject_websearch_env(&mut active, &engines_json);
@@ -101,6 +116,8 @@ pub fn spawn_aggregation(
             sources,
             processes,
             exts,
+            trust,
+            ledger_state,
             inproc_specs,
             agg_ms,
         });
@@ -135,6 +152,19 @@ impl PaletteApp {
                 self.sources = payload.sources;
                 self.processes = payload.processes;
                 self.exts = payload.exts;
+                self.trust = payload.trust;
+                self.ledger_state = payload.ledger_state;
+                // S-05：首次出现「待批准」时给**一次** toast（不打断、不重复）。
+                // 为何需要：面板页脚只在"无选中项"时显示该提示，而实际使用时通常
+                // 总有选中项；设置页卡片头是"处理现场"，但用户未必会打开设置页。
+                if !self.pending_notified {
+                    let n = aggregator::pending_count(&self.trust);
+                    if n > 0 {
+                        self.pending_notified = true;
+                        let msg = self.tr("toast.ext_pending").replace("{n}", &n.to_string());
+                        self.show_toast(msg, Some(6_000));
+                    }
+                }
                 self.inproc_specs = payload.inproc_specs;
                 self.aggregating = false;
                 self.aggregate_rx = None;

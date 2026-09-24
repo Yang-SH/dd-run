@@ -239,6 +239,15 @@ pub fn config_file() -> Option<PathBuf> {
     dd_run_dir().map(|d| d.join("config.json"))
 }
 
+/// S-05（2026-09-24）：**扩展信任台账** = 数据根目录下 `trust.json`。
+///
+/// 宿主私有文件（记录用户对每个磁盘扩展的允许/阻止决策 + 内容哈希），
+/// **不是清单契约的一部分**——协议与 `manifest-schema` 均无此字段，扩展作者
+/// 无需感知。读写见 [`crate::trust`]。
+pub fn trust_file() -> Option<PathBuf> {
+    dd_run_dir().map(|d| d.join("trust.json"))
+}
+
 /// §4 路径展开：`${EXT_DIR}` → 清单目录，`~` → home，相对路径 → 相对清单目录，
 /// 绝对路径与 Windows 盘符路径原样返回。
 pub fn expand_path(raw: &str, ext_dir: &Path, home: &Path) -> PathBuf {

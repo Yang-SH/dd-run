@@ -6,7 +6,9 @@ use crate::ui::widgets::text_width;
 use dd_gui::aggregator::{SourceStatus, SourceSummary};
 use dd_gui::theme;
 use dd_host::manifest::LoadedExtension;
+use dd_host::trust::{Assessment, Decision, ExtOrigin, Trust};
 use eframe::egui;
+use std::collections::HashMap;
 
 /// 扩展管理的一行视图数据（纯函数产出，便于单测）。
 pub(crate) struct ExtRow {
@@ -17,6 +19,41 @@ pub(crate) struct ExtRow {
     pub(crate) enabled: bool,
     /// 失败原因 = `SourceStatus::Failed.error`；`None` = 正常（warm / stub）。
     pub(crate) failed_reason: Option<String>,
+    /// S-05：信任状态（待批准 / 已阻止 / 自动信任）。
+    pub(crate) trust: Trust,
+    /// S-05：来源（内置 / 随包 / 用户安装）——用户判断"这是不是官方的"的唯一依据。
+    pub(crate) origin: ExtOrigin,
+    /// S-05：与随包首方扩展同 id 但来自用户目录（D4 告警）。
+    pub(crate) shadow: bool,
+    /// 清单路径（展示 + 溯源）。
+    pub(crate) manifest_path: String,
+    /// 可执行文件路径（内置为名义路径，渲染时改用文案替代）。
+    pub(crate) exe_path: String,
+}
+
+impl ExtRow {
+    /// 是否需要在行内显示「允许 / 阻止」按钮（仅未获信任者）。
+    pub(crate) fn needs_approval(&self) -> bool {
+        matches!(self.trust, Trust::Pending | Trust::Blocked)
+    }
+
+    /// 信任状态文案键。
+    pub(crate) fn trust_key(&self) -> &'static str {
+        match self.trust {
+            Trust::Pending => "set.ext.trust.pending",
+            Trust::Blocked => "set.ext.trust.blocked",
+            Trust::AutoTrusted => "",
+        }
+    }
+
+    /// 来源文案键。
+    pub(crate) fn origin_key(&self) -> &'static str {
+        match self.origin {
+            ExtOrigin::Builtin => "set.ext.origin.builtin",
+            ExtOrigin::Sidecar => "set.ext.origin.sidecar",
+            ExtOrigin::UserDir => "set.ext.origin.user",
+        }
+    }
 }
 
 /// 取某扩展的失败原因（2026-09-10 增补）。
@@ -33,19 +70,31 @@ fn failed_reason(sources: &[SourceSummary], ext_id: &str) -> Option<String> {
         })
 }
 
-/// 汇总扩展管理行：清单 × 停用集 × 运行态。
+/// 汇总扩展管理行：清单 × 停用集 × 运行态 × **信任判定**（S-05）。
+///
+/// 判定表缺项时按 **fail-closed** 渲染（`Pending` / `UserDir`）：宁可显示"待批准"
+/// 也不显示成"可信"，与门禁本身同口径。
 fn extension_rows(
     exts: &[LoadedExtension],
     disabled: &[String],
     sources: &[SourceSummary],
+    trust: &HashMap<String, Assessment>,
 ) -> Vec<ExtRow> {
     exts.iter()
-        .map(|e| ExtRow {
-            id: e.manifest.id.clone(),
-            name: e.manifest.name.clone(),
-            version: e.manifest.version.clone(),
-            enabled: !disabled.iter().any(|x| x == &e.manifest.id),
-            failed_reason: failed_reason(sources, &e.manifest.id),
+        .map(|e| {
+            let a = trust.get(&e.manifest.id);
+            ExtRow {
+                id: e.manifest.id.clone(),
+                name: e.manifest.name.clone(),
+                version: e.manifest.version.clone(),
+                enabled: !disabled.iter().any(|x| x == &e.manifest.id),
+                failed_reason: failed_reason(sources, &e.manifest.id),
+                trust: a.map(|x| x.trust).unwrap_or(Trust::Pending),
+                origin: a.map(|x| x.origin).unwrap_or(ExtOrigin::UserDir),
+                shadow: a.map(|x| x.shadows_first_party()).unwrap_or(false),
+                manifest_path: e.path.display().to_string(),
+                exe_path: e.command.display().to_string(),
+            }
         })
         .collect()
 }
@@ -1685,10 +1734,16 @@ impl PaletteApp {
             &self.exts,
             &self.settings.disabled_extensions,
             &self.sources,
+            &self.trust,
         );
         let mut changed: Option<(String, bool)> = None;
         let mut retry_id: Option<String> = None;
+        // S-05：行内「允许 / 阻止」的收集位（闭包内只收集，落盘在闭包外）。
+        let mut trust_action: Option<(String, Decision)> = None;
         let lang = self.lang_effective;
+        // 卡片头汇总：待批准数（页脚另有提示，但设置页是"处理现场"）与台账损坏提示。
+        let pending = dd_gui::aggregator::pending_count(&self.trust);
+        let ledger_corrupt = matches!(self.ledger_state, dd_host::trust::LedgerState::Corrupt);
 
         draw_settings_card_frame(ui, p, self.backdrop_active, |card| {
             card.horizontal(|ui| {
@@ -1721,6 +1776,26 @@ impl PaletteApp {
                 });
             });
             card.add_space(4.0);
+            // S-05 提示区：待批准汇总 / 台账损坏（均只在需要时出现，不占常态版面）
+            if ledger_corrupt {
+                card.label(
+                    egui::RichText::new(crate::text::t(lang, "set.ext.ledger_corrupt"))
+                        .size(11.0)
+                        .color(p.danger),
+                );
+                card.add_space(4.0);
+            }
+            if pending > 0 {
+                card.label(
+                    egui::RichText::new(
+                        crate::text::t(lang, "set.ext.pending_summary")
+                            .replace("{n}", &pending.to_string()),
+                    )
+                    .size(11.0)
+                    .color(p.accent),
+                );
+                card.add_space(4.0);
+            }
             if rows.is_empty() {
                 card.label(
                     egui::RichText::new(crate::text::t(lang, "set.ext.empty"))
@@ -1731,6 +1806,9 @@ impl PaletteApp {
             for row in &rows {
                 let mut clicked = false;
                 let mut retry_clicked = false;
+                // S-05：本行是否点了「允许 / 阻止」
+                let mut allow_clicked = false;
+                let mut block_clicked = false;
                 card.horizontal(|ui| {
                     ui.spacing_mut().item_spacing.x = 0.0;
                     ui.allocate_exact_size(egui::vec2(16.0, 16.0), egui::Sense::hover());
@@ -1747,9 +1825,57 @@ impl PaletteApp {
                                 .color(p.text3)
                                 .monospace(),
                         );
-                        // 第三行 = 失败原因（仅失败时）：单行截断 + 悬停看全文。
-                        // 这是「扩展为什么起不来」的唯一用户可见出口——启动失败带
-                        // 被尝试的命令路径，熔断带退出码与 stderr 末行（2026-09-10 增补）。
+                        // S-05 第三行 = 来源标签 + 信任状态（仅未获信任时显色强调）。
+                        // 这是用户判断「这是不是官方的」与「为什么它没生效」的唯一出口。
+                        ui.add_space(2.0);
+                        let origin = crate::text::t(lang, row.origin_key());
+                        ui.horizontal(|ui| {
+                            ui.spacing_mut().item_spacing.x = 6.0;
+                            let origin_resp = ui.add(
+                                egui::Label::new(
+                                    egui::RichText::new(origin).size(10.0).color(p.text3),
+                                )
+                                .truncate(),
+                            );
+                            // 来源 tooltip：两条路径（清单 + exe），支持复制定位
+                            if ui.rect_contains_pointer(origin_resp.rect) {
+                                let detail = if row.origin == ExtOrigin::Builtin {
+                                    crate::text::t(lang, "set.ext.builtin_note").to_string()
+                                } else {
+                                    format!(
+                                        "{}\n{}",
+                                        row.manifest_path,
+                                        crate::text::t(lang, "set.ext.exe_path")
+                                            .replace("{p}", &row.exe_path)
+                                    )
+                                };
+                                origin_resp.show_tooltip_text(detail);
+                            }
+                            if row.needs_approval() {
+                                let is_pending = row.trust == Trust::Pending;
+                                ui.label(
+                                    egui::RichText::new(crate::text::t(lang, row.trust_key()))
+                                        .size(10.0)
+                                        .color(if is_pending { p.accent } else { p.danger }),
+                                );
+                            }
+                        });
+                        // D4 告警行：与随包扩展同 id 但来自用户目录
+                        if row.shadow {
+                            ui.add_space(2.0);
+                            ui.add(
+                                egui::Label::new(
+                                    egui::RichText::new(crate::text::t(
+                                        lang,
+                                        "set.ext.shadow_warn",
+                                    ))
+                                    .size(11.0)
+                                    .color(p.danger),
+                                )
+                                .truncate(),
+                            );
+                        }
+                        // 失败原因行（既有）：仅失败时
                         if let Some(reason) = &row.failed_reason {
                             ui.add_space(2.0);
                             let reason_resp = ui.add(
@@ -1766,6 +1892,19 @@ impl PaletteApp {
                     });
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         clicked = draw_switch_fn(ui, row.enabled, p);
+                        // S-05：未获信任 → 行内「允许 / 阻止」（Fluent 小按钮，贴开关左侧）。
+                        // 「已阻止」时按钮为「允许」（撤销路径），与「待批准」同文案，
+                        // 语义由左侧状态标签区分。
+                        if row.needs_approval() {
+                            ui.add_space(8.0);
+                            if fluent_button_small(ui, crate::text::t(lang, "set.ext.block"), p) {
+                                block_clicked = true;
+                            }
+                            ui.add_space(4.0);
+                            if fluent_button_small(ui, crate::text::t(lang, "set.ext.allow"), p) {
+                                allow_clicked = true;
+                            }
+                        }
                         // §11 用户手动重试：熔断（连续崩溃 Failed）的扩展显示「重试」
                         // 按钮（Fluent 小按钮，贴开关左侧）→ 解除熔断并重聚合（见循环外）。
                         if row.failed_reason.is_some() {
@@ -1782,10 +1921,20 @@ impl PaletteApp {
                 if retry_clicked {
                     retry_id = Some(row.id.clone());
                 }
+                if allow_clicked {
+                    trust_action = Some((row.id.clone(), Decision::Allow));
+                }
+                if block_clicked {
+                    trust_action = Some((row.id.clone(), Decision::Deny));
+                }
             }
         });
         if let Some((id, enabled)) = changed {
             self.apply_extension_enabled(&id, enabled);
+        }
+        // S-05：信任决策（写台账 + 落盘 + 立即重聚合，见 `set_extension_trust`）。
+        if let Some((id, decision)) = trust_action {
+            self.set_extension_trust(&id, decision);
         }
         if let Some(id) = retry_id {
             // 解除熔断（清零连续崩溃计数）+ 全量重聚合拉起该扩展：reset 后重聚合
@@ -2525,8 +2674,11 @@ mod tests {
             },
         ];
         let disabled = vec!["com.example.c".to_string()];
+        // S-05：传空判定表 → 全部按 fail-closed 渲染（Pending / UserDir），
+        // 本用例只关心失败原因与停用集，故同时锁定 fail-closed 口径。
+        let trust: HashMap<String, Assessment> = HashMap::new();
 
-        let rows = extension_rows(&exts, &disabled, &sources);
+        let rows = extension_rows(&exts, &disabled, &sources, &trust);
         assert_eq!(rows.len(), 3);
         assert!(rows[0].enabled, "a 未停用 → 开关开");
         assert_eq!(
@@ -2541,5 +2693,48 @@ mod tests {
             rows[2].failed_reason, None,
             "无运行态记录（未扫描到）→ 无失败原因"
         );
+        // fail-closed：判定表缺项不得被渲染成「可信」
+        assert_eq!(rows[0].trust, Trust::Pending, "缺项 → 待批准");
+        assert_eq!(rows[0].origin, ExtOrigin::UserDir, "缺项 → 按用户安装显示");
+        assert!(rows[0].needs_approval());
+        // `from_executable("a.exe")` → dir = "" → 清单路径 = "<id>.json"
+        assert_eq!(rows[0].manifest_path, "com.example.a.json");
+        assert_eq!(rows[0].exe_path, "a.exe");
+    }
+
+    /// S-05：信任状态与来源驱动行内按钮与标签（纯视图逻辑，不依赖 egui）。
+    #[test]
+    fn extension_rows_expose_trust_and_origin() {
+        let exts = vec![
+            dd_host::manifest::from_executable("x.exe".into(), "com.example.p", "P"),
+            dd_host::manifest::from_executable("y.exe".into(), "com.ddrun.filesearch", "F"),
+        ];
+        let mut trust: HashMap<String, Assessment> = HashMap::new();
+        trust.insert(
+            "com.example.p".to_string(),
+            Assessment {
+                id: "com.example.p".to_string(),
+                trust: Trust::Blocked,
+                origin: ExtOrigin::UserDir,
+            },
+        );
+        trust.insert(
+            "com.ddrun.filesearch".to_string(),
+            Assessment {
+                id: "com.ddrun.filesearch".to_string(),
+                trust: Trust::AutoTrusted,
+                origin: ExtOrigin::Builtin,
+            },
+        );
+
+        let rows = extension_rows(&exts, &[], &[], &trust);
+        // 已阻止：需要审批按钮（撤销路径），标签键为 blocked
+        assert!(rows[0].needs_approval());
+        assert_eq!(rows[0].trust_key(), "set.ext.trust.blocked");
+        assert_eq!(rows[0].origin_key(), "set.ext.origin.user");
+        // 自动信任：无按钮、无状态标签（常态不占版面）
+        assert!(!rows[1].needs_approval());
+        assert_eq!(rows[1].trust_key(), "");
+        assert_eq!(rows[1].origin_key(), "set.ext.origin.builtin");
     }
 }

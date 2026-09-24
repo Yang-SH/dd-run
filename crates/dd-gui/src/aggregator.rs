@@ -14,6 +14,11 @@
 //! - **扩展清单扫描双位置**（M7 批次 7.5）：用户数据目录 `extensions.d/`（manifest-schema
 //!   §2 主位置）+ **宿主 exe 同目录 `extensions.d/` 便携 sidecar**（免安装 zip「解压即用」）；
 //!   两处按 id 去重——用户目录优先覆盖分发版，sidecar 独有追加，内置仍最优先。
+//! - **信任门禁**（S-05，2026-09-24）：扫描到的每个扩展经 [`dd_host::trust::assess`] 判定
+//!   （来源 + 首方白名单 + 台账哈希），**只有 `AutoTrusted` 才进入 spawn 集合**——与既有的
+//!   「停用集」同一手法：`exts` 保留全集（设置页要展示并允许用户批准），`active` 只留放行者。
+//!   第二道门在 [`spawn_and_initialize_with_info`]（**所有子进程 spawn 的唯一入口**，含桩复热），
+//!   故不存在旁路。完整方案见 `docs/security-audit-2026-09-23.md` §4.4.1。
 //!
 //! M3 缓存与懒加载（见 [`docs/implementation.md`](../../docs/implementation.md) §M3）：
 //! - **frozen + 磁盘桩命中** → [`ExtItems::Stub`]：**不拉起进程**（A6），首屏读桩渲染；
@@ -33,6 +38,7 @@ use dd_host::builtin::merge_builtins;
 use dd_host::cache::{FrozenCache, FrozenSnapshot};
 use dd_host::manifest::{self, LoadedExtension, ScanOptions};
 use dd_host::process::ExtensionProcess;
+use dd_host::trust::{self, Assessment, ExtOrigin, LedgerState, Trust};
 use dd_protocol::messages::InitializeResult;
 use dd_protocol::model::CommandItem;
 
@@ -147,19 +153,70 @@ pub fn inject_websearch_env(exts: &mut [LoadedExtension], engines_json: &str) {
     }
 }
 
+/// [`load_extension_sources`] 的返回（S-05 起由 3 元组改为具名结构：字段增至 5 个，
+/// 元组已不可读）。
+pub struct ExtensionSources {
+    /// 全部已扫描扩展（内置 + 磁盘）。**含**未获信任者——设置页要展示它们并提供
+    /// 「允许 / 阻止」；只进入 spawn 集合的是经 [`is_trusted`] 过滤后的子集。
+    pub exts: Vec<LoadedExtension>,
+    /// 内置 in-process 规格表（`id → ExtensionSpec`），仅内置 5 个。
+    pub inproc_specs: HashMap<String, ExtensionSpec>,
+    /// 异常备注（仅目录不可读等异常时非空）。
+    pub note: String,
+    /// `id → 信任判定`（S-05）：设置页据此渲染来源标识与「待批准 / 已阻止」。
+    pub trust: HashMap<String, Assessment>,
+    /// 信任台账读取状态（`Corrupt` 时设置页须给出可操作提示，而非静默失效）。
+    pub ledger_state: LedgerState,
+}
+
+/// 该扩展是否获准拉起。**fail-closed**：判定表缺项一律视为未获准
+/// （正常情况下每个已扫描扩展都在表内；缺项意味着上游漏判，此时宁可拦下）。
+pub fn is_trusted(trust: &HashMap<String, Assessment>, id: &str) -> bool {
+    trust.get(id).map(|a| a.is_trusted()).unwrap_or(false)
+}
+
+/// 待用户批准的扩展数（面板页脚提示用；`Blocked` 是用户已定的决策，不再提醒）。
+pub fn pending_count(trust: &HashMap<String, Assessment>) -> usize {
+    trust.values().filter(|a| a.is_pending()).count()
+}
+
+/// 从清单目录推断扩展来源（S-05）。
+///
+/// **内置不走此函数**：其 `command` 是名义路径（`dd-ext-*.exe`）、从不 spawn，
+/// 来源在 [`load_extension_sources`] 内由 `specs` 命中直接判为 [`ExtOrigin::Builtin`]。
+///
+/// 判定 = 清单目录是否等于「宿主 exe 同目录的 `extensions.d`」。两侧都做
+/// canonicalize 以容忍 `..` / 符号链接等写法差异；任一侧不可解析时回落为字面比较。
+pub fn origin_of(ext: &LoadedExtension) -> ExtOrigin {
+    match sidecar_extensions_dir() {
+        Some(d) if same_dir(&ext.dir, &d) => ExtOrigin::Sidecar,
+        _ => ExtOrigin::UserDir,
+    }
+}
+
+/// 两个目录是否指向同一位置（canonicalize 优先，失败回落字面比较）。
+fn same_dir(a: &std::path::Path, b: &std::path::Path) -> bool {
+    if a == b {
+        return true;
+    }
+    match (std::fs::canonicalize(a), std::fs::canonicalize(b)) {
+        (Ok(x), Ok(y)) => x == y,
+        _ => false,
+    }
+}
+
 /// 扫描扩展目录并**合并内置扩展**（M4 P4 → M9 in-process）。
 ///
-/// 返回 `(扩展列表, 内置 in-process 规格表, 备注)`：
+/// 返回 [`ExtensionSources`]（S-05 起）：
 /// - **扩展列表**：内置 5 个（**恒注册，不依赖磁盘 exe**）+ 扩展目录中的第三方
 ///   清单（同 id 以内置优先，`merge_builtins` 去重）。列表用于 UI 展示与
 ///   id/名称查询；内置项的 `command` 为名义路径，**不会被 spawn**。
 /// - **规格表**：`id → ExtensionSpec`，仅内置 5 个。宿主据此以 in-process 方式
 ///   驱动内置扩展（[`crate::ext_client::ExtClient::open_builtin`]）。
+/// - **信任判定表**：每个扩展一条（内置判为 `Builtin` → 自动信任）。
 /// - **备注**：仅在异常时非空（目录不可读），供 UI 提示。M9 起内置恒可用，
 ///   不再有"找不到内置 exe"类备注。
-pub fn load_extension_sources(
-    lang: Lang,
-) -> (Vec<LoadedExtension>, HashMap<String, ExtensionSpec>, String) {
+pub fn load_extension_sources(lang: Lang) -> ExtensionSources {
     // M9：内置扩展恒注册（in-process，无需 exe / 无需物化内嵌 exe）。
     let builtins = dd_host::builtin::builtin_registrations();
     // 运行期规格（按生效语言构造；宿主已在聚合前经 `dd_ext::i18n::set_lang` 设语言）。
@@ -169,17 +226,68 @@ pub fn load_extension_sources(
         .collect();
 
     let mut note = String::new();
-    let mut merged = merge_builtins(
-        builtins,
-        merge_sidecar_scan(manifest::extensions_dir(), &mut note),
-    );
+    // 扫描结果**携带来源**（S-05）：去重前先记下，合并后仍能判定
+    // （`merge_scanned_dirs` 同 id 保留用户目录项 → 该 id 的来源即 UserDir）。
+    let scanned = merge_sidecar_scan(manifest::extensions_dir(), &mut note);
+    let origin_by_id: HashMap<String, ExtOrigin> = scanned
+        .iter()
+        .map(|(e, o)| (e.manifest.id.clone(), *o))
+        .collect();
+    let mut merged = merge_builtins(builtins, scanned.into_iter().map(|(e, _)| e).collect());
     // 显示名本地化：清单 `name` 是单串、无 i18n（schema v1.0 冻结），故宿主自有
     // 扩展的名称在注册后统一覆盖（内置取自述 display_name）。
     apply_owned_names(&mut merged, &specs, lang);
     if merged.is_empty() && note.is_empty() {
         note = "无可用扩展（内置与扩展目录均为空）".to_string();
     }
-    (merged, specs, note)
+
+    // S-05：信任判定（台账读一次，逐扩展短路判定——首方与内置不做哈希，故常见
+    // 情形零额外 I/O）。
+    let (ledger, ledger_state) = trust::TrustLedger::load_with_state();
+    if ledger_state == LedgerState::Corrupt {
+        log::warn!(
+            "[dd-gui] 信任台账损坏/版本不识别 → 视作空台账：所有用户安装的扩展回到「待批准」\
+             （设置页可逐个批准；文件不会因此被删）"
+        );
+    }
+    if !trust::hash_available() {
+        log::warn!("[dd-gui] 当前平台无哈希实现 → S-05 信任门禁不生效（已声明的缺口，非 Windows）");
+    }
+    let mut trust_map = HashMap::with_capacity(merged.len());
+    for ext in &merged {
+        let origin = if specs.contains_key(&ext.manifest.id) {
+            ExtOrigin::Builtin
+        } else {
+            origin_by_id
+                .get(&ext.manifest.id)
+                .copied()
+                .unwrap_or(ExtOrigin::UserDir)
+        };
+        let a = trust::assess(ext, origin, &ledger);
+        if !a.is_trusted() {
+            log::info!(
+                "[dd-gui] 扩展 {} 未获信任（trust={:?}, origin={:?}）→ 不拉起；设置页「扩展」可批准",
+                a.id,
+                a.trust,
+                a.origin
+            );
+        }
+        if a.shadows_first_party() {
+            log::warn!(
+                "[dd-gui] 扩展 {} 与随包扩展同 id 但来自用户数据目录（会顶掉随包版本）——设置页已告警",
+                a.id
+            );
+        }
+        trust_map.insert(a.id.clone(), a);
+    }
+
+    ExtensionSources {
+        exts: merged,
+        inproc_specs: specs,
+        note,
+        trust: trust_map,
+        ledger_state,
+    }
 }
 
 /// 覆盖**宿主自有扩展**的显示名（本地化）。
@@ -217,7 +325,7 @@ fn owned_sidecar_name_key(id: &str) -> Option<&'static str> {
 /// sidecar 随包携带），解压后与 exe 的相对位置不变——扫描此目录即可
 /// 「解压即用」，无需先把清单拷入用户数据目录。
 /// 开发期 / 内嵌物化目录下无此子目录：`scan_dir` 对不存在目录视作空（非错误）。
-fn sidecar_extensions_dir() -> Option<PathBuf> {
+pub fn sidecar_extensions_dir() -> Option<PathBuf> {
     std::env::current_exe()
         .ok()
         .and_then(|p| p.parent().map(|d| d.join("extensions.d")))
@@ -226,28 +334,41 @@ fn sidecar_extensions_dir() -> Option<PathBuf> {
 /// 合并用户目录与便携 sidecar 两处扫描结果：**同 id 保留 `first`**（用户目录
 /// 优先——用户手动放置的版本覆盖分发自带版本），`second` 其余按原序追加。
 /// 与内置扩展的去重（内置最优先）由 [`merge_builtins`] 负责。
+///
+/// S-05：元素携带来源（[`ExtOrigin`]）——同 id 保留的是用户目录项，故该 id 的来源
+/// 即 `UserDir`，与「是否可能自动信任」的判定天然一致（D4：不改本语义）。
 fn merge_scanned_dirs(
-    first: Vec<LoadedExtension>,
-    second: Vec<LoadedExtension>,
-) -> Vec<LoadedExtension> {
-    let mut merged = first;
-    for ext in second {
-        if !merged.iter().any(|e| e.manifest.id == ext.manifest.id) {
-            merged.push(ext);
+    mut first: Vec<(LoadedExtension, ExtOrigin)>,
+    second: Vec<(LoadedExtension, ExtOrigin)>,
+) -> Vec<(LoadedExtension, ExtOrigin)> {
+    for item in second {
+        if !first
+            .iter()
+            .any(|(e, _)| e.manifest.id == item.0.manifest.id)
+        {
+            first.push(item);
         }
     }
-    merged
+    first
 }
 
 /// 扫描用户数据目录 `extensions.d` + 便携 sidecar，异常记入 `note`。
-fn merge_sidecar_scan(user_dir: Option<PathBuf>, note: &mut String) -> Vec<LoadedExtension> {
-    let mut scanned = match user_dir {
+/// 返回值携带每个扩展的[来源][ExtOrigin]（S-05）。
+fn merge_sidecar_scan(
+    user_dir: Option<PathBuf>,
+    note: &mut String,
+) -> Vec<(LoadedExtension, ExtOrigin)> {
+    let mut scanned: Vec<(LoadedExtension, ExtOrigin)> = match user_dir {
         Some(d) => {
             let outcome = manifest::scan_dir(&d, &ScanOptions::default());
             if let Some(err) = &outcome.dir_error {
                 push_note(note, &format!("扩展目录不可读：{err}"));
             }
-            outcome.loaded
+            outcome
+                .loaded
+                .into_iter()
+                .map(|e| (e, ExtOrigin::UserDir))
+                .collect()
         }
         None => {
             push_note(note, "无法定位扩展目录（home 环境变量缺失）");
@@ -261,7 +382,14 @@ fn merge_sidecar_scan(user_dir: Option<PathBuf>, note: &mut String) -> Vec<Loade
         if let Some(err) = &outcome.dir_error {
             push_note(note, &format!("扩展目录不可读：{err}"));
         }
-        scanned = merge_scanned_dirs(scanned, outcome.loaded);
+        scanned = merge_scanned_dirs(
+            scanned,
+            outcome
+                .loaded
+                .into_iter()
+                .map(|e| (e, ExtOrigin::Sidecar))
+                .collect(),
+        );
     }
     scanned
 }
@@ -353,6 +481,24 @@ pub fn spawn_and_initialize(ext: &LoadedExtension) -> Result<ExtensionProcess, S
 pub fn spawn_and_initialize_with_info(
     ext: &LoadedExtension,
 ) -> Result<(ExtensionProcess, InitializeResult), String> {
+    // S-05 信任门禁（**第二道，且是所有子进程 spawn 的唯一入口**）：未获信任者一律
+    // 不拉起。第一道在 `load_extension_sources` 的 `active` 过滤（决定"谁进集合"）；
+    // 此处兜底覆盖桩复热等一切路径——即使上游漏判也拦得住。
+    //
+    // 成本：仅对**用户批准过的**扩展重复一次读盘哈希（首方 sidecar 与内置走短路，
+    // 不做哈希），且仅在 spawn 时发生，冷启动热路径无额外开销。
+    let a = trust::assess(ext, origin_of(ext), &trust::TrustLedger::load());
+    if !a.is_trusted() {
+        let label = match a.trust {
+            Trust::Pending => "待批准",
+            Trust::Blocked => "已被阻止",
+            Trust::AutoTrusted => unreachable!("is_trusted() 为真时不会进入此分支"),
+        };
+        return Err(format!(
+            "扩展未获信任（{label}）：{} —— 请在设置页「扩展」中允许该扩展",
+            ext.manifest.id
+        ));
+    }
     // 失败信息一律带**可操作线索**：spawn 失败附被尝试的命令路径（PATH / 路径类
     // 问题一眼可见），握手失败附扩展 stderr 末行（根因通常就在那里）。
     // 2026-09-10 真机反馈驱动：此前只报「spawn 失败：os error 2」，排查只能靠猜。
@@ -740,9 +886,15 @@ mod tests {
 
     /// 对照：`specs` 未命中（第三方/sidecar）仍走子进程——exe 不存在 → Failed
     /// （不 panic、不误判为 Ready）。
+    ///
+    /// S-05 起需同时通过信任门禁：此处用**随包首方**扩展（来源 = sidecar 目录 +
+    /// 首方白名单 → 自动信任），以保证本用例仍在验证"非内置走子进程"本身，而不是
+    /// 被信任门禁提前拦下（后者由 `spawn_gate_rejects_untrusted_extension` 覆盖）。
     #[test]
     fn collect_top_level_non_builtin_still_uses_subprocess() {
-        let ext = loaded_ext("com.example.third", "user");
+        let dir = sidecar_extensions_dir().expect("本机应能定位宿主 exe 目录");
+        let mut ext = loaded_ext("com.ddrun.filesearch", "sidecar");
+        ext.dir = dir;
         let specs: HashMap<String, ExtensionSpec> = HashMap::new();
 
         let result = collect_top_level(std::slice::from_ref(&ext), &specs, None);
@@ -760,13 +912,17 @@ mod tests {
     fn merge_scanned_dirs_user_dir_wins_and_sidecar_appends() {
         // M7 批次 7.5：便携 sidecar 合并语义——同 id 用户目录优先（覆盖分发版）、
         // sidecar 独有扩展按原序追加；first 顺序保持。
-        let user = vec![loaded_ext("com.a", "user"), loaded_ext("com.b", "user")];
+        // S-05：元素携带来源，去重后来源应保留"胜出者"的来源。
+        let user = vec![
+            (loaded_ext("com.a", "user"), ExtOrigin::UserDir),
+            (loaded_ext("com.b", "user"), ExtOrigin::UserDir),
+        ];
         let sidecar = vec![
-            loaded_ext("com.b", "sidecar"),
-            loaded_ext("com.c", "sidecar"),
+            (loaded_ext("com.b", "sidecar"), ExtOrigin::Sidecar),
+            (loaded_ext("com.c", "sidecar"), ExtOrigin::Sidecar),
         ];
         let merged = merge_scanned_dirs(user, sidecar);
-        let ids: Vec<&str> = merged.iter().map(|e| e.manifest.id.as_str()).collect();
+        let ids: Vec<&str> = merged.iter().map(|(e, _)| e.manifest.id.as_str()).collect();
         assert_eq!(
             ids,
             ["com.a", "com.b", "com.c"],
@@ -774,19 +930,115 @@ mod tests {
         );
         // com.b 保留的是用户目录那份（path 前缀区分来源）
         assert_eq!(
-            merged[1].path,
+            merged[1].0.path,
             PathBuf::from(r"user\com.b.json"),
             "同 id 应保留用户目录版本（覆盖分发版）"
         );
+        // S-05：同 id 撞车时来源 = 用户目录（→ 不获自动信任，且设置页告警）
+        assert_eq!(
+            merged[1].1,
+            ExtOrigin::UserDir,
+            "同 id 保留用户目录项 → 来源必须是 UserDir（否则会绕开 S-05 判据）"
+        );
+        assert_eq!(merged[2].1, ExtOrigin::Sidecar);
     }
 
     #[test]
     fn merge_scanned_dirs_empty_sidecar_keeps_user_order() {
         // sidecar 无此扩展（zip 未带 / 目录不存在）→ 用户目录原样保留。
-        let user = vec![loaded_ext("com.a", "user"), loaded_ext("com.b", "user")];
+        let user = vec![
+            (loaded_ext("com.a", "user"), ExtOrigin::UserDir),
+            (loaded_ext("com.b", "user"), ExtOrigin::UserDir),
+        ];
         let merged = merge_scanned_dirs(user, Vec::new());
-        let ids: Vec<&str> = merged.iter().map(|e| e.manifest.id.as_str()).collect();
+        let ids: Vec<&str> = merged.iter().map(|(e, _)| e.manifest.id.as_str()).collect();
         assert_eq!(ids, ["com.a", "com.b"]);
+        assert!(merged.iter().all(|(_, o)| *o == ExtOrigin::UserDir));
+    }
+
+    // ── S-05（2026-09-24）：信任门禁的接线（策略本体见 dd-host::trust 单测）──
+
+    /// **fail-closed**：判定表缺项一律视为未获准（宁可拦下，不放行）。
+    #[test]
+    fn is_trusted_is_fail_closed_for_missing_entry() {
+        let trust: HashMap<String, Assessment> = HashMap::new();
+        assert!(
+            !is_trusted(&trust, "com.unknown"),
+            "缺项必须判为未获信任（fail-closed）"
+        );
+    }
+
+    /// 页脚计数只统计「待批准」——「已阻止」是用户已定的决策，不再提醒。
+    #[test]
+    fn pending_count_excludes_blocked_and_trusted() {
+        let mut trust = HashMap::new();
+        trust.insert(
+            "a".to_string(),
+            Assessment {
+                id: "a".to_string(),
+                trust: Trust::Pending,
+                origin: ExtOrigin::UserDir,
+            },
+        );
+        trust.insert(
+            "b".to_string(),
+            Assessment {
+                id: "b".to_string(),
+                trust: Trust::Blocked,
+                origin: ExtOrigin::UserDir,
+            },
+        );
+        trust.insert(
+            "c".to_string(),
+            Assessment {
+                id: "c".to_string(),
+                trust: Trust::AutoTrusted,
+                origin: ExtOrigin::Sidecar,
+            },
+        );
+        assert_eq!(pending_count(&trust), 1);
+        assert!(is_trusted(&trust, "c"));
+        assert!(!is_trusted(&trust, "a") && !is_trusted(&trust, "b"));
+    }
+
+    /// **spawn 唯一入口的门禁**：未获信任的扩展不得被拉起（即使绕过上游过滤）。
+    #[test]
+    fn spawn_gate_rejects_untrusted_extension() {
+        // `loaded_ext` 造的是磁盘形态清单（path 不存在）→ 无台账记录 → Pending。
+        let ext = loaded_ext("com.example.untrusted", "user");
+        // `.map(|_| ())`：`ExtensionProcess` 未实现 Debug，`expect_err` 需要 Ok 侧 Debug。
+        let err = spawn_and_initialize_with_info(&ext)
+            .map(|_| ())
+            .expect_err("未获信任必须被拦下");
+        assert!(
+            err.contains("未获信任"),
+            "错误信息应指明是信任门禁拦下的，实得：{err}"
+        );
+        assert!(
+            err.contains("com.example.untrusted"),
+            "错误信息应含扩展 id，便于用户定位：{err}"
+        );
+    }
+
+    /// 对照：**随包首方**扩展（来源 = sidecar 目录 + 白名单）自动信任，门禁放行，
+    /// 于是错误信息回到"spawn 失败"这一真实原因（而非信任拒绝）——说明门禁没有
+    /// 误伤零摩擦路径。
+    #[test]
+    fn spawn_gate_passes_first_party_sidecar() {
+        let dir = sidecar_extensions_dir().expect("本机应能定位宿主 exe 目录");
+        let mut ext = loaded_ext("com.ddrun.filesearch", "sidecar");
+        ext.dir = dir; // 使其被判为 Sidecar 来源
+        let err = spawn_and_initialize_with_info(&ext)
+            .map(|_| ())
+            .expect_err("exe 不存在 → 仍应失败");
+        assert!(
+            err.contains("spawn 失败") || err.contains("initialize 失败"),
+            "首方扩展应通过信任门禁、失败于真实原因，实得：{err}"
+        );
+        assert!(
+            !err.contains("未获信任"),
+            "首方 sidecar 不应被信任门禁拦下：{err}"
+        );
     }
 
     #[test]

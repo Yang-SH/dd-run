@@ -489,10 +489,12 @@ dependencies = [
 name = "dd-host"
 version = "0.1.1"
 dependencies = [
+ "chrono",
  "dd-protocol",
  "log",
  "serde",
  "serde_json",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

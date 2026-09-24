@@ -228,6 +228,13 @@ pub struct PaletteApp {
     /// 已扫描扩展（含 manifest frozen/entry），供桩复热 spawn（M3）。
     /// M9：内置扩展条目也在其中（元数据/展示用；其 `command` 为名义路径）。
     pub(crate) exts: Vec<LoadedExtension>,
+    /// S-05 信任判定表（`id → 判定`）：设置页据此渲染来源标识与「待批准 / 已阻止」，
+    /// 面板页脚据此给出待批准提示。**全集**（含未获信任者）。
+    pub(crate) trust: HashMap<String, dd_host::trust::Assessment>,
+    /// S-05 信任台账读取状态（`Corrupt` → 设置页给出可操作提示，不静默）。
+    pub(crate) ledger_state: dd_host::trust::LedgerState,
+    /// S-05：是否已就「待批准」提示过一次（每次运行至多一次，避免反复打扰）。
+    pub(crate) pending_notified: bool,
     /// M9：内置 in-process 规格表（`id → ExtensionSpec`）——复热链路据此重建
     /// 内置客户端（`ExtClient::open_builtin`），不依赖 `exts` 里的名义 exe 路径。
     pub(crate) inproc_specs: HashMap<String, ExtensionSpec>,
@@ -429,6 +436,9 @@ impl PaletteApp {
             processes: Vec::new(),
             exts: Vec::new(),
             inproc_specs: HashMap::new(),
+            trust: HashMap::new(),
+            ledger_state: dd_host::trust::LedgerState::Missing,
+            pending_notified: false,
             lru: LruWarmSet::new(LRU_WARM_CAPACITY),
             cold,
             inflight: HashSet::new(),

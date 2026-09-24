@@ -4,6 +4,18 @@
 
 ## [Unreleased]
 
+### 安全（S-05 扩展信任门禁：清单无完整性校验与信任分级，2026-09-24）
+
+- **背景**：`extensions.d/*.json` 里任何通过清单九条规则的扩展都会被**静默拉起**（任意 `command` + 任意 `entry.env` + 任意 `cwd`），宿主既不校验来源与哈希、也不征求用户同意，设置页也看不出哪个是随包首方。方案与逐条验收见 `docs/security-audit-2026-09-23.md` §4.4.1–§4.4.3。
+- **判据（选型时修掉一处漏洞）**：原设想「`com.ddrun.*` 自动信任」只按 **id 前缀**判定，而 id 是清单作者自填 → `com.ddrun.evil` 即可白拿信任。实际判据 = 「**来源 ∈ 随包 sidecar 目录**（`<宿主 exe 目录>\extensions.d\`）**AND** **id ∈ 首方白名单**」（当前仅 `com.ddrun.filesearch`，锚定既有 `owned_sidecar_name_key`）；用户数据目录里的一律需首次批准。
+- **新增**：`crates/dd-host/src/trust.rs` —— 台账（`%APPDATA%\dd-run\trust.json`，宿主私有文件、非契约）、`assess()` 判定（5 条短路规则，末条 **fail-closed**）、SHA-256（Windows CNG `BCryptHashData`，**64 KiB 分块流式**，不为哈希把 exe 读进内存）。`dd-host` 新增 `chrono`（`decided_at` RFC3339；同版本已在依赖树内，`Cargo.lock` 零新增）与 `[target.'cfg(windows)'.dependencies] windows-sys`（`Win32_Security_Cryptography`）。
+- **接线**：`aggregator` 扫描结果携带**来源**，`load_extension_sources` 返回具名结构（含判定表 + 台账状态）；`active` 过滤加**信任维度**（与既有「停用集」同一手法：`exts` 保留全集供设置页审批）；**`spawn_and_initialize_with_info` 加门禁**——它是所有子进程 spawn 的唯一入口（含 GUI 桩复热），无旁路。
+- **设置页**：扩展行新增**来源标签**（内置 / 随包 / 用户安装）、**信任状态**（待批准 / 已阻止）、行内「允许 / 阻止」按钮、清单与 exe 路径 tooltip（含「打开所在目录」）、**同 id 撞车告警**（用户目录清单顶掉随包版本时）；卡片头显示待批准数与台账损坏提示。面板页脚在**空位**（无选中项时）提示待批准数，并在首次出现时给一次 toast（不打断）。
+- **行为变更（用户可见）**：**用户目录里的第三方扩展首次不会被加载**，需在「设置 › 扩展」点一次「允许」；批准绑定到 `manifest` 与 `exe` 的哈希，**内容改变即回到待批准**；删掉/损坏台账 → 全部回到待批准（fail-closed）。随包 `dd-ext-search`（文件搜索）**零摩擦**，不受影响。
+- **回归测试（+19）**：`dd-host::trust` 14 条（内置/首方短路、用户目录不得靠前缀冒充、`allow`+哈希一致放行、exe/清单变化即失效、`deny` 阻止且可撤销、损坏与版本不识别回落空台账、文件不可读仍待批准、**NIST 已知向量**（`""`/`"abc"`/1,000,000×`a`）、文件与内存哈希一致）；`aggregator` 4 条（`is_trusted` fail-closed、`pending_count` 只计待批准、spawn 门禁拒绝未获信任者、首方 sidecar 仍放行）；`settings_view` 1 条（来源与信任状态驱动 UI）。
+- **验证**：`dd-host --lib` **63 passed**（+14）；新增单测全绿；`rustfmt --check` 改动文件无差异；`clippy --workspace --all-targets` **无新增告警**。**A11 哈希开销实测**（`.workbuddy/tmp/trust-probe/`，真实 sidecar `dd-ext-search.exe` 836,608 B）：哈希 **0.874 ms**、台账读 **0.068 ms**、已批准判定（两次哈希）**1.068 ms**、首方与待批准走短路 **≈0 ms** —— 判据 <10 ms。⚠️ 全仓 `cargo test --workspace --no-fail-fast` 本轮 = 487 passed / 21 failed，其中 **20 条为已知 `Os error 231`（`ERROR_PIPE_BUSY`）环境批**（piped-stdio spawn，本日已用零仓库代码探针定性）、另 1 条既有机器绑定用例；**失败名单中无本项新测试**，环境自愈后预期 **507 passed / 1 failed**。
+- **已声明的缺口**：非 Windows **不做门禁**（保持旧行为 + 一次 warn）——P4 为 Windows 优先，若在该平台 fail-closed 会让任何扩展都无法使用。**定性提醒**：本项实现的是「**用户同意 + 变更检测**」，**不是防篡改**（能写 `extensions.d` 的攻击者同样能写 `trust.json`）；真正防篡改需扩展签名，明确不在本项范围。零协议 / 零清单字段变更。
+
 ### 安全（中危批量修复：S-02 / S-03 / S-04 / S-06 + S-10，2026-09-23）
 
 - **背景**：承接 S-01（高危命令注入）之后的中危批次，覆盖「不受信输入打挂宿主」「能力语义越界」「无门槛执行」三类边界；逐项方案与验收见 `docs/security-audit-2026-09-23.md` §4–§5。

@@ -1,6 +1,6 @@
 # dd-run 安全审计与修复方案（2026-09-23）
 
-> **状态**：生效中 ｜ **版本**：v1.5 ｜ **最后更新**：2026-09-23
+> **状态**：生效中 ｜ **版本**：v1.7 ｜ **最后更新**：2026-09-24
 > **关联**：[protocol.md](./protocol.md) · [manifest-schema.md](./manifest-schema.md) · [implementation.md](./implementation.md) · [extensions.md](./extensions.md)
 
 ---
@@ -15,7 +15,7 @@
 | S-02 | NDJSON 解码器对「无换行输入」无界缓冲 → 内存耗尽 | ⚠️ 中 | ✅ **已修复**（2026-09-23，§4.1.1） | CWE-400 / CWE-770 | `dd-protocol/src/framing.rs` :52–77 | 已复现（PoC） |
 | S-03 | `host/open_url` 无 scheme 白名单 → 可被静默唤起任意协议处理器 | ⚠️ 中 | ✅ **已修复**（2026-09-23，§4.2.1；**方案按功能依赖收窄**） | CWE-749 / CWE-939 | `dd-gui/src/platform.rs` :613 前后、`app/host_actions.rs` :77–101 | 代码路径分析 |
 | S-04 | 图标 `path` 无界读盘 + 无尺寸限制 → 内存耗尽 / 解压炸弹 | ⚠️ 中 | ✅ **已修复**（2026-09-23，§4.3.1） | CWE-400 / CWE-409 | `dd-gui/src/ui/icons.rs` :111 | 代码路径分析 |
-| S-05 | 扩展清单无完整性校验与信任分级（任意 exe） | ⚠️ 中 | ⏸ **待修复（P1，唯一余项）**：需信任台账 + 设置页审批 UI，属**产品设计决策**，另轮开工 | CWE-494 / CWE-345 | `dd-host/src/manifest.rs` :497 | 代码路径分析 |
+| S-05 | 扩展清单无完整性校验与信任分级（任意 exe） | ⚠️ 中 | ✅ **已修复**（2026-09-24，T1′ + CNG 哈希 + 设置页审批，见 §4.4.1–§4.4.3） | CWE-494 / CWE-345 | `dd-host/src/trust.rs`（新增）、`dd-gui/src/aggregator.rs` | 已复现（PoC：单测 + 真机待走查） |
 | S-06 | Shell 兜底「运行 {query}」= 无门槛任意命令执行 | ⚠️ 中（设计） | ✅ **已修复**（2026-09-23，§4.5.1：危险命令二次确认） | CWE-78 | `dd-ext/src/builtins/shell.rs` :137 | 代码路径分析 |
 | S-07 | `host/set_clipboard` 静默改写剪贴板（无上限、无提示） | 🟨 低 | ⏸ 待修复（P2） | CWE-863 | `dd-gui/src/app/host_actions.rs` :56 | 代码路径分析 |
 | S-08 | `explorer /select` 原始命令行仅拦 `"` | 🟨 低 | ⏸ 待修复（P2） | CWE-88 | `dd-ext/src/bin/search.rs` :1388 | 代码路径分析 |
@@ -452,17 +452,129 @@ pub(crate) fn decode_icon_image(bytes: &[u8]) -> Option<egui::ColorImage> {
 1. **信任台账 + 首次确认**：新增 `%APPDATA%\dd-run\trust.json`，记录 `{ext_id, manifest_sha256, exe_sha256, decision}`。扫描到**非内置**扩展且台账无记录/哈希变化 → 该扩展**不 spawn**，只以「待批准」状态出现在设置页，由用户选择「允许 / 阻止」；批准后写入台账。哈希变化（更新）需重新确认。
 2. **UI 分级标识**：设置页扩展列表区分「内置 / 用户安装 / 已阻止」，并显示清单路径与可执行文件路径（可一键打开所在目录）。
 
-**状态：⏸ 待选型（唯一余项）**。本项是本批**唯一需要产品决策**的改动——它会改变运行时行为（未批准的扩展不再拉起），且有一个必须由你拍板的岔路：
+**状态：✅ 已实施（2026-09-24，实施记录见 §4.4.3）**。本项是本批**唯一需要产品决策**的改动——它会改变运行时行为（未批准的扩展不再拉起）。原列三个岔路（T1 / T2 / T3）在选型时**发现 T1 有判据漏洞并修正为 T1′**，见表下注。
 
-| 选项 | 首方扩展（`com.ddrun.*`，如随包分发的 `dd-ext-search`）如何处理 | 影响 |
+| 选项 | 首方扩展（随包 `dd-ext-search`）如何处理 | 影响 |
 |---|---|---|
-| **T1（建议）** | `com.ddrun.*` 与「exe 位于宿主同目录」的扩展**自动信任**，其余需首次批准 | 现有安装零摩擦（文件搜索照常工作），仍能拦住"被塞进 `extensions.d` 的陌生清单" |
-| T2 | 全部（含首方）都要首次批准 | 最严；代价是升级/重装后文件搜索会被挡住直到用户点一次「允许」 |
-| T3 | 只做**台账 + 设置页展示**（记录哈希、标出来源），不阻断 spawn | 零摩擦、纯可观测（能事后发现异常），但**拦不住首次驻留**——安全性弱于 S-05 的初衷 |
+| **T1′（已采纳）** | **来源 ∈ 随包 sidecar 目录** AND **id ∈ 首方白名单**（当前仅 `com.ddrun.filesearch`）→ 自动信任；其余需首次批准 | 现有安装零摩擦（文件搜索照常），仍能拦住"被塞进 `extensions.d` 的陌生清单" |
+| T2（未采纳） | 全部（含首方）都要首次批准 | 最严；代价是升级/重装后文件搜索会被挡住直到用户点一次「允许」 |
+| T3（未采纳） | 只做台账 + 设置页展示，不阻断 spawn | 零摩擦、纯可观测，但**拦不住首次驻留**——安全性弱于 S-05 的初衷 |
+
+> ⚠️ **选型时发现并修正的判据漏洞（原 T1 不可用）**：原方案写「`com.ddrun.*` 自动信任」，但 **id 是清单作者自填的字符串**——攻击者写一份 id 为 `com.ddrun.evil` 的清单即白拿自动信任。故判据改为「**来源**（清单位于随包 sidecar 目录，即 `<宿主 exe 目录>\extensions.d\`）**AND** id 在首方白名单」，两者都满足才自动信任。前缀本身不再是信任依据。
 
 `entry.env` 的关键变量保护**已单独落地**（见 §5.1 S-10），不依赖本项选型。
 
-**验收标准（选型后据此实施）**：手写 `%APPDATA%\dd-run\extensions.d\evil.json`（指向任意 exe）→ 启动后 ① 无对应子进程（`tasklist` 断言）；② 面板中不出现其命令；③ 设置页出现待批准条目；④ 点击「允许」后才 spawn 且写入 `trust.json`；⑤ 修改该 exe 内容后（哈希变化）回到待批准态。
+#### 4.4.1 决策记录（2026-09-24 冻结）
+
+| 编号 | 决策 | 取值 |
+|---|---|---|
+| **S-05-D1** | 信任策略 | **T1′**（来源 + 首方 id 白名单自动信任，其余首次批准） |
+| **S-05-D2** | 哈希实现 | **Windows CNG `BCryptHashData`**（SHA-256）。`windows-sys` 已在 `Cargo.lock`（dd-gui / dd-ext 已依赖）→ **lock 零新增**、体积增量可忽略；`dd-host` 以 `cfg(windows)` 门控新增该依赖 |
+| **S-05-D3** | 审批入口 | **设置页扩展行内「允许 / 阻止」+ 面板页脚一行提示**（`有 N 个扩展待批准`，N=0 不显示）；不行走模态弹窗（与面板「秒开」体验冲突） |
+| **S-05-D4** | 同 id 撞车 | **保持「用户目录优先」既有语义**（不改 `merge_scanned_dirs`）+ 在设置页对该行显式告警「与随包扩展同 id，来源为用户目录」 |
+
+**D1 的完整判定表**（`classify(ext, origin, ledger) -> Trust`）：
+
+| 条件（自上而下短路） | 结果 |
+|---|---|
+| 内置扩展（in-process，`specs` 命中，不在磁盘扫描集内） | 不经本判定（其 `command` 为名义路径，**从不 spawn**） |
+| `origin == Sidecar`（清单位于 `<host exe dir>\extensions.d\`）**且** `id ∈ FIRST_PARTY_IDS` | `AutoTrusted` |
+| 台账有该 id，`decision == "allow"`，且 `manifest_sha256` **与** `exe_sha256` 均与当前一致 | `AutoTrusted` |
+| 台账有该 id，`decision == "deny"`，且两哈希与当前一致 | `Blocked` |
+| 台账无该 id 记录 / 哈希任一变化 / 台账损坏或不可读 / `command` 不存在或不可读 | `Pending`（**fail-closed**） |
+
+`FIRST_PARTY_IDS` 的单一事实来源 = 既有 `aggregator.rs::owned_sidecar_name_key`（`aggregator.rs` :207）的键集（当前仅 `com.ddrun.filesearch`），不新造概念、不重复维护。
+
+**D2 的边界（已声明的缺口）**：非 Windows 平台**不做门禁**（保持旧行为 + 一次性 `log::warn`）。理由：P4 为 Windows 优先，非 Windows 下 `extensions.d` 生态尚不存在；若选 fail-closed 会让该平台任何扩展都无法使用。此为**主动取舍**，非疏漏。
+
+**台账文件（宿主私有，非清单契约，不改冻结 schema）**：`%APPDATA%\dd-run\trust.json`（`dd-host::manifest::trust_file()`，紧邻 `config_file()`）：
+
+```json
+{
+  "version": 1,
+  "entries": [
+    {
+      "id": "com.example.foo",
+      "manifest_sha256": "<64 hex>",
+      "exe_sha256": "<64 hex>",
+      "decision": "allow",
+      "decided_at": "2026-09-24T09:40:00+08:00",
+      "manifest_path": "C:\\Users\\me\\AppData\\Roaming\\dd-run\\extensions.d\\foo.json"
+    }
+  ]
+}
+```
+
+- 读失败 / 解析失败 / `version` 不识别 → 视作**空台账**（等价于全部 `Pending`）+ `log::warn` + 设置页提示一行；
+- 写：best-effort（复用 `settings.rs::save` 同模式：`create_dir_all` + 失败仅记日志）；
+- 哈希对象 = **文件原始字节**（清单文件、`ext.command` 解析后的 exe）；**每次启动全量重算**（不做 mtime 快判——那会弱化「改动即可见」这一核心性质）。
+
+**门禁落点（2 处，无旁路）**：`aggregator.rs::load_one`（首屏，:382）与 `spawn_and_initialize_with_info`（GUI 桩复热，:345）；新增 `ExtOutcome::Pending` / `SourceStatus::Pending` / `ExtItems::Pending`，使待批准项在面板结果中**不出现**但在设置页可见。
+
+#### 4.4.2 验收标准（依 D1–D4，实施后逐条核）
+
+| # | 判据 |
+|---|---|
+| A1 | 手写 `%APPDATA%\dd-run\extensions.d\evil.json`（指向任意 exe）→ 无对应子进程（`tasklist` 断言）、面板中不出现其命令、设置页出现「待批准」条目 |
+| A2 | 设置页点「允许」→ 才 spawn，且 `trust.json` 写入该 id 的两枚哈希与 `decision:"allow"` |
+| A3 | 改动被批准 exe 的内容 → 下次启动回到「待批准」 |
+| A4 | 删除 `trust.json` → 全部回到「待批准」（fail-closed） |
+| A5 | `trust.json` 写入非法 JSON → 回到「待批准」且设置页给出可操作提示（不静默） |
+| A6 | **解压态零摩擦**：`dist/` 布局（`dd-run.exe` + `extensions.d/`）下文件搜索开箱可用，**不出现任何待批准项** |
+| A7 | `com.ddrun.evil`（有前缀、来源为用户目录）**不**获得自动信任 → 待批准 |
+| A8 | 同 id 撞车（用户目录放 `com.ddrun.filesearch.json` 指向别的 exe）→ 设置页显示「与随包扩展同 id」告警，且该行不获自动信任 |
+| A9 | 点「阻止」→ 不再 spawn；再次「允许」可撤销 |
+| A10 | 既有「停用集」（`settings.disabled_extensions`）与信任状态互不干扰（停止用 ≠ 未批准） |
+| A11 | 哈希开销实测并记录（`dd-ext-search.exe` 实测 **836,608 B**，判据 <10 ms/启动） |
+| A12 | 全仓 `cargo test --workspace --no-fail-fast` 基线 488 只增不减；本项新增单测 ≥ 12 条 |
+
+**明确不做**：① 扩展签名 / 公钥验签（真正意义上的防篡改，另一个量级）；② 非 Windows 门禁（见 D2 缺口声明）；③ 任何协议 / 清单字段变更。**定性提醒**：本项实现的是「**用户同意 + 变更检测**」，不是防篡改——能写 `extensions.d` 的攻击者同样能写 `trust.json`。
+
+#### 4.4.3 实施记录与验收（2026-09-24）
+
+**改动清单**（零协议 / 零清单字段变更）：
+
+| 文件 | 内容 | 规模 |
+|---|---|---|
+| `crates/dd-host/src/trust.rs`（**新增**） | 台账（`TrustLedger` / `TrustEntry` / `Decision` / `LedgerState`）、判定（`assess` / `Assessment` / `Trust` / `ExtOrigin`）、哈希（CNG `BCryptHashData`，64 KiB 分块流式）、`FIRST_PARTY_IDS` | 710 行（含 **14 条单测**） |
+| `crates/dd-host/src/manifest.rs` | 新增 `trust_file()`（数据根目录下 `trust.json`） | +10 行 |
+| `crates/dd-host/Cargo.toml` | `chrono`（`decided_at` RFC3339）+ `[target.'cfg(windows)'.dependencies] windows-sys`（feature `Win32_Security_Cryptography`） | +11 行 |
+| `crates/dd-gui/src/aggregator.rs` | 扫描结果**携带来源**（`ExtOrigin`）；`load_extension_sources` 返回具名结构 `ExtensionSources`（含判定表 + 台账状态）；新增 `is_trusted`（fail-closed）/ `pending_count` / `origin_of`；**spawn 唯一入口加门禁** | +约 150 行（含 4 条新单测） |
+| `crates/dd-gui/src/app/{aggregate,keys,mod}.rs` | `active` 过滤加信任维度；`set_extension_trust()`（写台账 + 落盘 + 立即重聚合 + toast）；`trust` / `ledger_state` / `pending_notified` 状态 | +约 70 行 |
+| `crates/dd-gui/src/ui/settings_view.rs` | 行内来源标签（内置/随包/用户安装）+ 信任状态 + 「允许 / 阻止」按钮 + 路径 tooltip + 同 id 撞车告警行；卡片头待批准/台账损坏提示 | +约 120 行（含 1 条新单测） |
+| `crates/dd-gui/src/ui/panel.rs` | 待批准提示落在页脚左块**空位** | +12 行 |
+| `crates/dd-gui/src/text.rs` | i18n 键 17 条（zh/en） | +60 行 |
+
+> ⚠️ **三处与冻结方案的偏离（均为实施中的收敛，据实记录）**
+>
+> 1. **未新增 `ExtOutcome::Pending` / `SourceStatus::Pending` / `ExtItems::Pending` 变体**，改用「**与既有停用集（`disabled_extensions`）完全同手法**」：`exts` 保留全集（设置页要展示并批准），`active` 只留放行者；第二道门安在 `spawn_and_initialize_with_info` —— **它已是所有子进程 spawn 的唯一入口**（含 GUI 桩复热），故"无旁路"性质由**单一收口点**保证，而非由枚举状态保证。
+>    - 收敛理由：`SourceStatus` 的 `match` 分布在 4 个文件（`pool.rs` / `app/aggregate.rs` / `settings_view.rs` / `flatten`），加变体会引来一批与 S-05 无关的改动；而"待批准"本质是**"不进采集集"**，与停用集同构。
+>    - 代价（明确记录）：待批准项**不出现在 `sources`** 里，故页脚状态点/健康检查看不到它；可见性改由「设置页卡片头 + 行内标签 + 启动一次性 toast + 页脚空位提示」四处承担。
+> 2. **页脚提示落在左块空位，而非新增一行**：页脚是**严格单行的几何契约**（v4.10 D35：`FOOTER_PAD_Y + KEYCAP_H + FOOTER_PAD_Y = 36px`，禁止换行），新增行会破坏它。故提示只在「无选中项且非加载中」时占用左块（该位置本应空白）；有选中项时让位给上下文动作文本（C7），可见性由启动 toast 兜底。
+> 3. **`dd-host` 新增 `chrono`**（`decided_at` 用 RFC3339 本地时区）：手搓 civil→days 易错（`dd-ext` 已有同结论），且 `chrono 0.4` 同版本已在依赖树内（`dd-ext` 依赖，M9 起其代码在宿主进程内运行）→ **`Cargo.lock` 零新增**、产物无可见增量。
+
+**验收结果（A1–A12）**：
+
+| # | 结果 | 证据 |
+|---|---|---|
+| A1 | ✅ 逻辑已证；真机待走查 | `user_dir_cannot_impersonate_first_party_by_id` + `spawn_gate_rejects_untrusted_extension`（错误信息含 id 与"未获信任"）；真机 `tasklist` 走查列入待办 |
+| A2 | ✅ | `allow_entry_with_matching_hashes_is_auto_trusted`；`set_extension_trust` 写台账（两枚哈希 + `decision` + `decided_at` + 清单路径） |
+| A3 | ✅ | `changed_exe_hash_revokes_approval`（改 exe / 改清单**各测一次**，均回 `Pending`） |
+| A4 | ✅ | 台账 `Missing` → 空台账 → 用户目录扩展一律 `Pending`（fail-closed） |
+| A5 | ✅ | `corrupt_or_unsupported_ledger_falls_back_to_empty`（非法 JSON / 版本 99）+ 设置页 `set.ext.ledger_corrupt` 提示行（不静默） |
+| A6 | ✅ 单测已证；真机待走查 | `first_party_sidecar_is_auto_trusted`（来源 + 白名单双满足） |
+| A7 | ✅ | `user_dir_cannot_impersonate_first_party_by_id`（`com.ddrun.evil` 与 `com.ddrun.filesearch` **均**不自动信任） |
+| A8 | ✅ | `user_dir_same_id_as_first_party_flags_shadow` + 设置页告警行（`set.ext.shadow_warn`） |
+| A9 | ✅ | `deny_entry_blocks_and_allow_revokes`（同 id 只留一条记录，可撤销） |
+| A10 | ✅ 代码路径 | 停用集（`disabled_extensions`）与信任判定是**两条独立过滤链**、两个独立存储（`config.json` vs `trust.json`）；互不覆盖 |
+| A11 | ✅ **实测** | `.workbuddy/tmp/trust-probe/`（独立 crate，真实产物 `dist/extensions.d/dd-ext-search.exe` = **836,608 B**）：`sha256_file` **0.874 ms** / `TrustLedger::load` **0.068 ms** / 无记录判定 **0.000 ms**（短路）/ 已批准判定（两次哈希）**1.068 ms** —— 全部 **≪ 10 ms 判据**；首方与内置走短路，常见情形**零哈希开销** |
+| A12 | ⏳ 新增已达 19 条；全仓复跑受环境阻塞 | 新增 **19 条**（14 + 4 + 1，> 12 条要求）；全仓 `cargo test --workspace --no-fail-fast` 两次复跑均为 **487 passed / 21 failed**（总数 **508**，与 §3.1 台账登记一致），失败构成为 **20 条已知 `Os error 231`（`ERROR_PIPE_BUSY`）环境批**（dd-host roundtrip/builtin 与 dd-gui `test_support` 的 piped-stdio spawn）+ 1 条既有机器绑定用例；**失败名单中无本项任何新测试**。环境自愈后复跑预期 **507 passed / 1 failed**（= 508 − 1 机器绑定） |
+
+> **环境批的处置依据**：与本日早前那批（22 条）同源，已用「零仓库代码的最小探针 + 临时还原改动 + 时间线」三层证据定性为环境限制（详见 §7.2 留档），**不要改代码**。
+
+**顺带修掉的既有测试假设**：`collect_top_level_non_builtin_still_uses_subprocess` 原先用「磁盘上不存在的第三方扩展」验证"非内置走子进程"，引入门禁后该前提失效（会先被信任门禁拦下）→ 改用**随包首方**扩展（自动信任）以保持原意图，另加 `spawn_gate_rejects_untrusted_extension` 覆盖门禁分支。
+
+
 
 ### 4.5 S-06 Shell 兜底「运行 {query}」无门槛执行任意命令
 
@@ -553,7 +665,7 @@ pub(crate) fn decode_icon_image(bytes: &[u8]) -> Option<egui::ColorImage> {
 | **P0** | S-01 | `dd-ext/src/win_launch.rs`（新增）、`builtins/apps.rs`、`dd-ext/src/lib.rs` | ✅ **已完成 2026-09-23**：新增 1 模块（约 150 行含单测）+ 改 2 文件；**+3 条单测**（§3.1.1） |
 | **P1** | S-02 | `dd-protocol/src/framing.rs` | ✅ **已完成**：约 40 行（含文档）+ **+3 条单测**（§4.1.1） |
 | **P1** | S-04 | `dd-gui/src/ui/icons.rs` | ✅ **已完成**：约 60 行 + **+3 条单测**（§4.3.1） |
-| **P1** | S-05 | `dd-host/src/manifest.rs`、`dd-gui/src/ui/settings_view.rs`（新增 `trust.json` 读写） | ⏸ **待选型**（唯一余项，T1/T2/T3 三选一，见 §4.4）——约 250 行含设置页 UI + 6 条单测 |
+| **P1** | S-05 | `dd-host/src/trust.rs`（新增，710 行含单测）、`manifest.rs`、`dd-gui/src/aggregator.rs`、`app/{aggregate,keys,mod}.rs`、`ui/{settings_view,panel}.rs`、`text.rs` | ✅ **已完成 2026-09-24**（T1′ / CNG BCrypt / 设置页审批 + 页脚空位提示 / 同 id 撞车告警，见 §4.4.1–§4.4.3）——**+19 条单测** |
 | **P2** | S-03、S-06、S-07、S-08、S-09、S-11 | `platform.rs`、`app/host_actions.rs`、`text.rs`、`builtins/shell.rs`、`bin/search.rs`、`cache.rs`、`dd-ext/src/lib.rs`、`docs/protocol.md`（§7.4 注） | ✅ S-03（§4.2.1，+2 单测）、S-06（§4.5.1，+2 单测）已完成；⏸ S-07 / S-08 / S-09 / S-11 待做 |
 | **随批** | S-10 | `dd-host/src/process.rs`、`dd-host/Cargo.toml` | ✅ **已完成**（§5.1，+2 单测）——本可与 S-05 同批，实际独立落地（不依赖信任模型） |
 
@@ -647,3 +759,5 @@ verdict     = bounded — 上限生效
 | v1.3 | 2026-09-23 | **中危批量修复（4/5）落地**：S-02（§4.1.1，`framing` 残留上限 + `poisoned`/`reset`，PoC 输出反转为 `bounded`）、S-03（§4.2.1，**方案按功能依赖收窄**：初版「只放行 http(s)」→ 实测文件搜索「打开」依赖 `file://`，改为三 scheme 白名单并保留 `file://` + 打开前 info 溯源）、S-04（§4.3.1，读盘前元数据校验 + 显式 `image::Limits`；同时**修正初版事实错误**——`image` 默认已有 512 MiB 分配上限、缺的是尺寸上限）、S-06（§4.5.1，危险命令二次确认，含"比命令名而不比子串"的判据设计），另 S-10 随批落地（§5.1，env 关键变量保护 + `dd-host` 引入零传递依赖的 `log`）。**本批 +12 条单测**；余 **S-05 待选型**（T1/T2/T3，§4.4）。§7.2 记**环境阻塞**：本会话 Rust `Stdio::piped()` spawn 恒报 `Os error 231`（已用零仓库代码探针定性），故 22 条 spawn 类集成用例无法在本会话判定，须真机复跑 |
 | v1.4 | 2026-09-23 | **提交前复核 + 环境阻塞销项 + 二次缺陷修正**：① §7.2 的「环境阻塞」改判为**会话环境瞬时限制并已销项**——复跑得 `roundtrip` 9/9、全仓 **488 passed / 1 failed**（唯一失败仍是既有机器绑定用例），故 22 条 `error 231` 与代码无关；该小节改写为「留档备查」并给出操作结论（**日后遇批量 `error 231` 先怀疑环境，不要改代码**）。② 清掉 §7.2 末尾 3 条**上批残留的重复验收项**（其 S-03 出处还写着 §7.3，实为 §7.4）。③ **修正本批实施时引入的二次缺陷**（§4.2.1 注）：`is_allowed_open_url` 原用 `u[..p.len()]` 按**字节长度切 `&str`** 做前缀比较，遇多字节开头的合法入参（`C:\中文\文件.txt`、`中中中中`）**直接 panic**（`end byte index 7 is not a char boundary`，已用 `.workbuddy/tmp/slice_probe.rs` 取证）→ 改为 `as_bytes()` 比较 + 新增护栏 `open_url_handles_non_ascii_without_panicking`；本批单测由 +12 增至 **+13**。验收勾选：全仓回归 ✅、PoC 反转 ✅、零协议变更 ✅；余 3 项（体积实测 / 真机走查 / S-05 选型后补文档）待做 |
 | v1.5 | 2026-09-23 | **取证脚本可复现性修正（§8.2）**：复跑 S-02 PoC 时发现独立 crate 需**带 `--offline`**（该 crate 未随带 `Cargo.lock`，cargo 会先更新 crates-io 索引 → 本机无外网则 `download of config.json failed`），已把命令与原因写入 §8.2 与 `framing-probe/Cargo.toml` 头注释；同时补记 `Cargo.toml` 含空 `[workspace]` 表（避免被仓库 workspace 吞并）。复跑实测仍为 `bounded — 上限生效`（buffered = 0 / frames = 1） |
+| v1.6 | 2026-09-24 | **S-05 选型冻结（§4.4 → §4.4.1/§4.4.2）**：四项决策落定 —— D1 信任策略 **T1′**、D2 哈希 **Windows CNG `BCrypt`**（`windows-sys` 已在 lock，零新增）、D3 审批入口 **设置页行内「允许/阻止」+ 面板页脚提示**、D4 同 id 撞车 **保持用户目录优先 + 设置页告警**。**同时修正原 T1 的判据漏洞**：原文「`com.ddrun.*` 自动信任」只看 **id 前缀**，而 id 是清单作者自填 → `com.ddrun.evil` 即可白拿信任；改为「**来源 ∈ 随包 sidecar 目录 AND id ∈ 首方白名单**」（白名单单一事实来源 = 既有 `aggregator.rs::owned_sidecar_name_key` 的键集，当前仅 `com.ddrun.filesearch`）。新增：完整判定表（5 条短路规则，末条 fail-closed）、`trust.json` schema（宿主私有，非契约）、门禁落点、**12 条验收判据**、明确不做项（签名/非 Windows 门禁）、以及「**用户同意 + 变更检测 ≠ 防篡改**」的定性提醒 |
+| v1.7 | 2026-09-24 | **S-05 实施落地（§4.4.3 新增）**：新增 `dd-host/src/trust.rs`（台账 + `assess` 判定 + CNG SHA-256 分块流式，710 行含 14 单测）、`manifest::trust_file()`、`dd-gui/aggregator` 的门禁与来源标注、设置页行内审批 UI、页脚空位提示、i18n 17 键。**+19 条单测**。**三处与冻结方案的偏离如实记录**：① 未加 `SourceStatus::Pending` 等枚举变体，改用「与停用集同手法」的 `active` 过滤 + **spawn 唯一入口门禁**（无旁路由单一收口点保证；代价 = 待批准项不进 `sources`，可见性由设置页/启动 toast/页脚空位四处承担）；② 页脚提示落在**左块空位**而非新增行（页脚是严格单行几何契约 D35）；③ `dd-host` 新增 `chrono`（同版本已在依赖树内，lock 零新增）。**验收**：A1–A11 已有单测/实测证据（**A11 哈希开销实测 0.874 ms @836,608 B**，判据 <10 ms；首方/内置走短路 ≈0 ms），A12 待环境自愈后复跑（本轮 20 条失败为已知 `Os error 231` 环境批，**失败名单无本项新测试**）。§1/§7.1 状态改「已修复」 |

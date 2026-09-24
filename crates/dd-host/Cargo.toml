@@ -14,3 +14,17 @@ serde_json = "1"
 # 只会看到"某个环境变量莫名不生效"）。`log` 仅为 facade（零传递依赖），后端由
 # `dd-protocol::logging` 提供——与 dd-ext / dd-gui 同口径（O4 可观测性）。
 log = "0.4"
+# S-05（2026-09-24）：信任台账的 `decided_at` 用 RFC3339 本地时区。手搓 civil→days
+# 易错（dd-ext 已有同结论），故用成熟库；`chrono 0.4` 同版本已在依赖树内
+# （dd-ext 依赖，且 M9 起内置扩展 in-process 跑在宿主内）→ 产物无可见增量。
+chrono = "0.4"
+
+# S-05：扩展内容哈希走 Windows CNG（`bcrypt.dll` 的 SHA-256），不引入纯 Rust 哈希
+# crate。`windows-sys` 0.61 已在 `Cargo.lock`（dd-gui / dd-ext 已依赖）→ **lock
+# 零新增**。非 Windows 不启用该依赖，`trust::sha256_*` 回落为返回 `Err` 的占位
+# （门禁在非 Windows 不生效，见 `trust` 模块文档「已声明的缺口」）。
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = [
+    "Win32_Foundation",
+    "Win32_Security_Cryptography",
+] }

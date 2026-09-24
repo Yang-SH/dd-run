@@ -5,6 +5,7 @@ use crate::app::PaletteApp;
 use crate::ui::settings_view::SettingsCategory;
 use dd_gui::navigation::PageState;
 use dd_gui::theme;
+use dd_host::trust::{Decision, TrustLedger};
 use eframe::egui;
 use std::sync::mpsc;
 
@@ -288,6 +289,45 @@ impl PaletteApp {
         crate::tray::set_tray_lang(self.lang_effective);
         // 扩展进程须以新 DDRUN_LANG 重启才生效；离开设置页时重聚合消费。
         self.lang_dirty = true;
+    }
+
+    /// 设置页扩展**信任决策**（S-05，2026-09-24）：写台账 → 落盘 → 立即重聚合。
+    ///
+    /// 与 [`Self::apply_extension_enabled`] 的分工（两者都影响"是否被拉起"，但语义不同）：
+    /// - **停用集**：用户主动关掉一个**已获信任**的扩展；只改内存/配置，**不写信任台账**；
+    /// - **信任决策**：决定一个扩展**是否有资格**被拉起；必须写台账（跨启动持久），
+    ///   且哈希随内容绑定（内容一变即回到待批准）。
+    ///
+    /// 失败一律 toast（不静默）：用户点了「允许」却什么都没发生是最坏体验。
+    /// 成功则**立即重聚合**——批准后首屏即出现其命令，阻止后立即停掉。
+    pub(crate) fn set_extension_trust(&mut self, id: &str, decision: Decision) {
+        let Some(ext) = self.exts.iter().find(|e| e.manifest.id == id).cloned() else {
+            self.show_toast(self.tr("toast.ext_missing").to_string(), Some(3_000));
+            return;
+        };
+        let mut ledger = TrustLedger::load();
+        if let Err(e) = ledger.record(&ext, decision) {
+            log::warn!("[dd-gui] 信任台账记录失败（{id}）：{e}");
+            let msg = self.tr("toast.ext_trust_fail").replace("{e}", &e);
+            self.show_toast(msg, Some(4_000));
+            return;
+        }
+        if let Err(e) = ledger.save() {
+            log::warn!("[dd-gui] 信任台账写盘失败（{id}）：{e}");
+            let msg = self
+                .tr("toast.ext_trust_fail")
+                .replace("{e}", &e.to_string());
+            self.show_toast(msg, Some(4_000));
+            return;
+        }
+        log::info!("[dd-gui] 扩展 {id} 信任决策已记录：{decision:?}");
+        self.restart_aggregation();
+        let key = match decision {
+            Decision::Allow => "toast.ext_allowed",
+            Decision::Deny => "toast.ext_blocked",
+        };
+        let msg = self.tr(key).replace("{id}", id);
+        self.show_toast(msg, Some(2_000));
     }
 
     /// 设置页扩展启停（M6 批次 6.3）：更新停用表 + 落盘 + 置脏标记
