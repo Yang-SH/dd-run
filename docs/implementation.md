@@ -1,6 +1,6 @@
 # dd-run 实施方案
 
-> **状态**：生效中 ｜ **版本**：v0.1.7 ｜ **最后更新**：2026-09-24
+> **状态**：生效中 ｜ **版本**：v0.1.8 ｜ **最后更新**：2026-09-28
 > **关联**：[protocol.md](./protocol.md) · [manifest-schema.md](./manifest-schema.md) · [extensions.md](./extensions.md) · [../cmdpal-platform-agnostic-design.md](../cmdpal-platform-agnostic-design.md)
 
 ---
@@ -803,6 +803,20 @@ Flowframes；改动前基线同为 1 failed，非本次回归）；`cargo build 
 
 **验证**：`dd-host --lib` **65 passed**（63+2）；`dd-ext --lib` **105 passed** + 1 failed（既有机器绑定）；`dd-gui --lib` **228 passed** + 6 failed（**全部 `Os error 231` 环境批**，`test_support.rs` spawn，失败名单无本批新测试）；`dd-ext-search --bin reveal` **1 passed**；`rustfmt --check` 5 个改动文件无差异；`clippy --workspace --all-targets` **无新增告警**（仅剩既有 `search.rs:614` 工具链误报）。本批 **+5 条单测**，测试基线 508 → **513**。
 
+### 设置页排版与控件字号统一（K1–K3，D42，2026-09-27 落地）
+
+**范围**：纯视觉批次——零行为变更、零协议改动、零设置字段变更。方案（真机截图 + 源码/像素双取证）、
+K-T1~K-T4 任务清单与 V-1~V-7 校验标准见 [`settings-keys-typography-plan.md`](./settings-keys-typography-plan.md)（v1.1，含落地勘误）；
+设计稿 D42 / v4.19 入稿见 [`../cmdpal-ui-mockups.html`](../cmdpal-ui-mockups.html)。
+
+| 项 | 改动 | 单测 |
+|---|---|---|
+| K1 排版 | `settings_view.rs`：设置行块 36→**40** ×8（按键卡 4 行 / 语言卡 2 处 / 自启卡 / 搜索行为卡）；行↔行与卡头→行 1 间距 8→**12** ×4（按键卡）；行名-描述统一补 `+2` ×4（搜索行为卡 +4→+2 并修正错注释）；左宽公式归一（行 2–4 `−16`→`−40−16` 开关宽） | — |
+| K2 控件排印 | 新常量组 `CONTROL_H=28` / `CONTROL_FONT_PT=12` / `POPUP_ITEM_H=24`（D42 compact 档）：自绘 dropdown、fluent_button、URL 输入框、popup 选项行改档；按钮宽度预测量同步 14→12 | +1（常量锚定 `control_typography_constants_d42`） |
+| K3 宽度自适应 | 新增纯函数 `dropdown_width = clamp(最长选项宽+40, 180, 260)`；Esc 键行为卡（200→函数）与语言卡（180→函数）接入；**搜索引擎卡维持 260 定值不接规则**（预设名为短名，接规则会收窄背离 v4.9 加宽初衷——方案 §3.3 v1.1 勘误） | +1（两分支精确断言（短集 = 180 / 超长集 = 260）+ 真实 zh/en 集落 (180, 260]，`dropdown_width_clamps_zh_and_en`） |
+
+**验证**：`cargo fmt` 单文件校验无差异；`cargo clippy --workspace --all-targets` 0 告警；`cargo test --workspace` **515 passed / 0 failed**（基线 513 → 515）。落地时实测更正方案估宽前提：Esc 卡最长选项为「先清除搜索内容，然后返回」（13 全角字），zh 实测 ≈188（headless）/ ≈196（真机雅黑）——单测断言与 V-4 判据相应修正。**真机走查 V-1~V-7（含截图留档）待做**。
+
 ## 3. 验收映射总表
 
 | 验收项 | 内容 | 里程碑 |
@@ -847,6 +861,7 @@ Flowframes；改动前基线同为 1 failed，非本次回归）；`cargo build 
 | 2026-09-23 | **489** | +13：**安全审计中危批量**（S-02 ×3 / S-03 ×3 / S-04 ×3 / S-06 ×2 / S-10 ×2；其中 S-03 第 3 条为实施后自查补的 `open_url_handles_non_ascii_without_panicking`）。本机实跑 **488 passed / 1 failed**（同上机器绑定例，非回归）；期间一度出现 22 条 `Os error 231` 批量失败，经取证定性为环境瞬时限制后复跑恢复（见审计文档 §7.2） |
 | 2026-09-24 | **508** | +19：**S-05 扩展信任门禁**（`dd-host::trust` 14 条：判定 5 条短路规则 / 双哈希绑定与失效 / fail-closed / NIST 向量 / 分块一致；`aggregator` 4 条：fail-closed、计数、spawn 门禁拒绝与放行；`settings_view` 1 条：来源与信任状态）。本机实跑 **487 passed / 21 failed**——20 条为已知 `Os error 231`（`ERROR_PIPE_BUSY`）**环境批**（piped-stdio spawn，非回归，见审计 §7.2）、1 条既有机器绑定例；总数 508 与台账一致 |
 | 2026-09-24 | **513** | +5：**安全审计低危收尾**（S-07 ×2：剪贴板 1 MiB 边界放行 / 超限拒绝（按 UTF-8 字节计）；S-09 ×2：碰撞 id 对互不覆盖 / 旧名兼容 + `ext_id` 归属伪造拒绝；S-11 ×1：`Err` 注入回 `-32603` 保留 id 且 `Ok` 不受影响。S-08 为扩展既有用例断言，不计新条目）。本机实跑：`dd-host --lib` 65/65、`dd-ext --lib` 105+1（机器绑定）、`dd-gui --lib` 228+6（全为 `error 231` 环境批，名单无本批新测试） |
+| 2026-09-27 | **515** | +2：**设置页排版与控件字号统一（K 批，D42）**（`control_typography_constants_d42` 常量锚定；`dropdown_width_clamps_zh_and_en` 两分支精确断言（短集 = 180 / 超长集 = 260）+ 真实 zh/en 选项集落 (180, 260] 区间）。本机实跑 `cargo test --workspace` **515 passed / 0 failed** |
 
 **两条使用注意**：① `crates/dd-host/tests/roundtrip*.rs` 在 `dd-ext-sample.exe` **未构建时会打印 SKIP 并 return**（计入 passed），故凡涉及协议/扩展行为，先 `cargo build -p dd-ext-sample` 再跑；② 「三关全绿」与 CI 四关**均为 debug profile**，`#[cfg(debug_assertions)]` 类 release-only 编译错误检不到 —— 交付/发布前必须实跑 `cargo build --release`（见 §7 构建环境记档与 `CHANGELOG` 的 release 阻塞条目）。
 

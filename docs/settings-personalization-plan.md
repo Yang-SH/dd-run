@@ -1,6 +1,6 @@
 # dd-run 设置 / 个性化 / 材料样式优化方案（参照 PowerToys CmdPal）
 
-> **状态**：**B1–B4 已落地**（T1–T8 ✅；T9/T10 未做）｜ **版本**：v1.1 ｜ **最后更新**：2026-09-20
+> **状态**：**B1–B4 已落地**（T1–T8 ✅；T9/T10 未做）；**K 批（按键卡排版/控件排印，D42）已落地**（2026-09-27，见 [settings-keys-typography-plan.md](./settings-keys-typography-plan.md)）｜ **版本**：v1.2 ｜ **最后更新**：2026-09-28
 > **关联**：[settings.rs](../crates/dd-gui/src/settings.rs) · [settings_view.rs](../crates/dd-gui/src/ui/settings_view.rs) · [theme.rs](../crates/dd-gui/src/theme.rs) · [platform.rs](../crates/dd-gui/src/platform.rs) · [cmdpal-window-material-effects.html](../cmdpal-window-material-effects.html) · [cmdpal-ui-mockups.html](../cmdpal-ui-mockups.html) · [INDEX.md](./INDEX.md)
 > **参照来源**：`microsoft/PowerToys` 仓库 `src/modules/cmdpal/`（`SettingsModel.cs` / `BackdropStyles.cs` / `BackdropStyleConfig.cs` / `AppearanceSettingsViewModel.cs` / `AppearancePage.xaml` / `BackdropControllerKind.cs`，main 分支）与 Microsoft Learn「Command Palette settings」文档。
 
@@ -274,3 +274,4 @@
 |---|---|---|
 | v1.0 | 2026-09-20 | 首版：CmdPal 参考要点分析 + 差距分析 + M/P/B 三方面优化方案 + T1–T10 任务清单（未改任何代码） |
 | v1.1 | 2026-09-20 | **B1–B4 落地（T1–T8）**：材料注册表化 + Mica Alt + 滑杆口径文案；Esc 三档 / 退格返回 / 恢复默认外观；着色三档（系统强调色/无/自定义+强度）；单击激活与界面动效开关。470 passed / clippy 0 / release exit 0；**T9（背景图）/ T10 未做**，见 §4 |
+| v1.2 | 2026-09-28 | 状态行补记：**K 批（按键卡排版 / 全设置页控件排印，D42）已落地**（2026-09-27）——本稿 B1–B4 所落的「按键与交互」卡随 D42 统一行块 40 / 行距 12 / 控件 28·12；方案与验收见 [settings-keys-typography-plan.md](./settings-keys-typography-plan.md) |

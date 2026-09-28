@@ -10,6 +10,14 @@ use dd_host::trust::{Assessment, Decision, ExtOrigin, Trust};
 use eframe::egui;
 use std::collections::HashMap;
 
+// 设置页自绘控件排印（D42：Fluent compact 档，文字 = ramp base200）。
+// K2：v4.9/D34「整体字号放大」把控件与正文一并提到 14，控件失去次级定位——
+// 此处仅回调控件档（正文/行名 14 semibold / 描述 12 不变），并配套把盒高
+// 32→28（Fluent compact 成对比例，12pt 文字 + 32px 盒会显空旷）。
+pub(crate) const CONTROL_H: f32 = 28.0; // 下拉框/标准按钮/输入框盒高（原 32）
+pub(crate) const CONTROL_FONT_PT: f32 = 12.0; // 控件文字（原 14；ramp base200）
+const POPUP_ITEM_H: f32 = 24.0; // 下拉 popup 选项行高（原 28）
+
 /// 扩展管理的一行视图数据（纯函数产出，便于单测）。
 pub(crate) struct ExtRow {
     pub(crate) id: String,
@@ -938,8 +946,16 @@ impl PaletteApp {
             crate::text::t(lang, "set.hotkey.change")
         };
         let reset_text_btn = crate::text::t(lang, "set.hotkey.reset");
-        let change_w = text_width(ui, change_text_btn, egui::FontId::proportional(14.0)) + 24.0;
-        let reset_w = text_width(ui, reset_text_btn, egui::FontId::proportional(14.0)) + 24.0;
+        let change_w = text_width(
+            ui,
+            change_text_btn,
+            egui::FontId::proportional(CONTROL_FONT_PT),
+        ) + 24.0;
+        let reset_w = text_width(
+            ui,
+            reset_text_btn,
+            egui::FontId::proportional(CONTROL_FONT_PT),
+        ) + 24.0;
         // 8 = Change 与 Reset 之间的 gap，4 = 卡片内右边距
         let buttons_total_w = change_w + reset_w + 8.0 + 4.0;
         draw_settings_card_frame(ui, p, self.backdrop_active, |card| {
@@ -1054,7 +1070,7 @@ impl PaletteApp {
                 );
                 ui.add_space(12.0);
                 ui.vertical(|ui| {
-                    ui.set_min_height(36.0);
+                    ui.set_min_height(40.0);
                     ui.label(
                         dd_gui::theme::semibold_title(
                             crate::text::t(lang, "set.autostart.name"),
@@ -1082,7 +1098,7 @@ impl PaletteApp {
         }
 
         // ── 卡 4：语言（v4.13 D38 + v4.15 真机反馈修）── ComboBox 三选
-        //（跟随系统/简体中文/English，宽 180 高 32 与搜索引擎 ComboBox 同规格）；
+        //（跟随系统/简体中文/English，宽 180 高 28 与搜索引擎 ComboBox 同规格）；
         // 切换经 apply_lang 即时生效。语言卡自身文案也走 t()（当前生效语言）——
         // 切换后本卡文案随语言刷新，是 i18n 端到端的第一个验证点。
         //
@@ -1090,7 +1106,8 @@ impl PaletteApp {
         // 描述自然延伸覆盖右侧 ComboBox——加 `.wrap()` + 左列 `allocate_ui` 锁宽
         // = 描述在 `avail - combo_w - 16` 范围内换行、不再侵入下拉；②egui
         // `ComboBox` 视觉过于 native、控件高度自适应会盖住左侧标题——自绘
-        // `draw_fluent_dropdown` 锁 32 高、统一 Fluent 2 控件库口径（圆角 4
+        // `draw_fluent_dropdown` 锁 28 高（D42 compact 档）、统一 Fluent 2 控件
+        // 库口径（圆角 4
         // / 1px border-strong / 右侧 ▼ ChevronDown / popup_below_widget 自动
         // 处理外部点击收起）。
         ui.add_space(8.0);
@@ -1104,14 +1121,15 @@ impl PaletteApp {
         ];
         // Lang 序：FollowSystem=0 / ZhCn=1 / EnUs=2，与 labels 严格对齐。
         let selected_idx = lang_pref as usize;
-        let combo_w: f32 = 180.0;
+        // D42/K3：宽度自适应——内容短恒落下限 180（= D38 规格，行为不变）。
+        let combo_w = dropdown_width(ui, &labels);
         draw_settings_card_frame(ui, p, self.backdrop_active, |card| {
             card.horizontal(|ui| {
                 ui.spacing_mut().item_spacing.x = 0.0;
                 // 左：图标 + 标题描述（强制宽度 = available - combo_w - gap，
                 // 确保描述 Label 在此范围内 wrap，不再延伸覆盖右侧下拉）
                 let left_w = (ui.available_width() - combo_w - 16.0).max(160.0);
-                ui.allocate_ui(egui::vec2(left_w, 36.0), |ui| {
+                ui.allocate_ui(egui::vec2(left_w, 40.0), |ui| {
                     ui.horizontal(|ui| {
                         ui.spacing_mut().item_spacing.x = 0.0;
                         let (icon_rect, _) =
@@ -1125,7 +1143,7 @@ impl PaletteApp {
                         );
                         ui.add_space(12.0);
                         ui.vertical(|ui| {
-                            ui.set_min_height(36.0);
+                            ui.set_min_height(40.0);
                             ui.label(
                                 dd_gui::theme::semibold_title(
                                     crate::text::t(lang_eff, "settings.lang.name"),
@@ -1186,13 +1204,15 @@ impl PaletteApp {
                 ui.allocate_exact_size(egui::vec2(16.0, 16.0), egui::Sense::hover());
                 ui.add_space(12.0);
                 ui.vertical(|ui| {
-                    ui.set_min_height(36.0);
+                    ui.set_min_height(40.0);
                     ui.label(
                         egui::RichText::new(crate::text::t(lang, "set.search.apps.name"))
                             .size(14.0)
                             .color(p.text),
                     );
-                    ui.add_space(4.0); // name ↔ desc 间距（材质卡口径）
+                    // D42/K1：行名→描述统一 +2（原 +4，注释「材质卡口径」系错
+                    // 标——材质卡实际为 +2，见方案 §1.2）。
+                    ui.add_space(2.0);
                     ui.add(
                         egui::Label::new(
                             egui::RichText::new(crate::text::t(lang, "set.search.apps.desc"))
@@ -1226,11 +1246,13 @@ impl PaletteApp {
         let mut backspace_toggled = false;
         let mut click_toggled = false; // T7
         let mut anim_toggled = false; // T8
-        let combo_w: f32 = 200.0;
         let labels: Vec<&str> = dd_gui::settings::EscBehavior::ALL
             .iter()
             .map(|b| crate::text::t(lang, b.name_key()))
             .collect();
+        // D42/K3：宽度自适应（原硬编码 200——zh 落下限 180 与语言卡一致，
+        // 长英文选项撑宽封顶 260，消除英文文案溢出盒外）。
+        let combo_w = dropdown_width(ui, &labels);
         let selected_idx = dd_gui::settings::EscBehavior::ALL
             .iter()
             .position(|b| *b == esc_pref)
@@ -1266,17 +1288,19 @@ impl PaletteApp {
                 });
             });
             // ── 行 1：Esc 键行为（左描述 + 右下拉）──
-            card.add_space(8.0);
+            card.add_space(12.0);
             let left_w = (card.available_width() - combo_w - 16.0).max(160.0);
             card.horizontal(|ui| {
                 ui.spacing_mut().item_spacing.x = 0.0;
-                ui.allocate_ui(egui::vec2(left_w, 36.0), |ui| {
+                ui.allocate_ui(egui::vec2(left_w, 40.0), |ui| {
                     ui.vertical(|ui| {
                         ui.label(
                             egui::RichText::new(crate::text::t(lang, "set.esc.name"))
                                 .size(14.0)
                                 .color(p.text),
                         );
+                        // D42/K1：行名→描述 +2（与自启/语言卡统一口径）
+                        ui.add_space(2.0);
                         ui.add(
                             egui::Label::new(
                                 egui::RichText::new(crate::text::t(lang, "set.esc.desc"))
@@ -1296,17 +1320,19 @@ impl PaletteApp {
                 });
             });
             // ── 行 2：退格键返回（左描述 + 右开关）──
-            card.add_space(8.0);
-            let left_w2 = (card.available_width() - 16.0).max(160.0);
+            card.add_space(12.0);
+            let left_w2 = (card.available_width() - 40.0 - 16.0).max(160.0);
             card.horizontal(|ui| {
                 ui.spacing_mut().item_spacing.x = 0.0;
-                ui.allocate_ui(egui::vec2(left_w2, 36.0), |ui| {
+                ui.allocate_ui(egui::vec2(left_w2, 40.0), |ui| {
                     ui.vertical(|ui| {
                         ui.label(
                             egui::RichText::new(crate::text::t(lang, "set.backspace.name"))
                                 .size(14.0)
                                 .color(p.text),
                         );
+                        // D42/K1：行名→描述 +2（与自启/语言卡统一口径）
+                        ui.add_space(2.0);
                         ui.add(
                             egui::Label::new(
                                 egui::RichText::new(crate::text::t(lang, "set.backspace.desc"))
@@ -1322,17 +1348,19 @@ impl PaletteApp {
                 });
             });
             // ── 行 3：单击激活（T7；左描述 + 右开关）──
-            card.add_space(8.0);
-            let left_w3 = (card.available_width() - 16.0).max(160.0);
+            card.add_space(12.0);
+            let left_w3 = (card.available_width() - 40.0 - 16.0).max(160.0);
             card.horizontal(|ui| {
                 ui.spacing_mut().item_spacing.x = 0.0;
-                ui.allocate_ui(egui::vec2(left_w3, 36.0), |ui| {
+                ui.allocate_ui(egui::vec2(left_w3, 40.0), |ui| {
                     ui.vertical(|ui| {
                         ui.label(
                             egui::RichText::new(crate::text::t(lang, "set.click.name"))
                                 .size(14.0)
                                 .color(p.text),
                         );
+                        // D42/K1：行名→描述 +2（与自启/语言卡统一口径）
+                        ui.add_space(2.0);
                         ui.add(
                             egui::Label::new(
                                 egui::RichText::new(crate::text::t(lang, "set.click.desc"))
@@ -1348,17 +1376,19 @@ impl PaletteApp {
                 });
             });
             // ── 行 4：界面动效（T8；左描述 + 右开关）──
-            card.add_space(8.0);
-            let left_w4 = (card.available_width() - 16.0).max(160.0);
+            card.add_space(12.0);
+            let left_w4 = (card.available_width() - 40.0 - 16.0).max(160.0);
             card.horizontal(|ui| {
                 ui.spacing_mut().item_spacing.x = 0.0;
-                ui.allocate_ui(egui::vec2(left_w4, 36.0), |ui| {
+                ui.allocate_ui(egui::vec2(left_w4, 40.0), |ui| {
                     ui.vertical(|ui| {
                         ui.label(
                             egui::RichText::new(crate::text::t(lang, "set.anim.name"))
                                 .size(14.0)
                                 .color(p.text),
                         );
+                        // D42/K1：行名→描述 +2（与自启/语言卡统一口径）
+                        ui.add_space(2.0);
                         ui.add(
                             egui::Label::new(
                                 egui::RichText::new(crate::text::t(lang, "set.anim.desc"))
@@ -1584,22 +1614,25 @@ impl PaletteApp {
                 });
             }
             card.add_space(8.0);
-            // ── 添加预设引擎：下拉框（v4.9 高 32 / 宽 260——旧 180×~18 过窄
-            // 过矮；v4.15 起用自绘 draw_fluent_dropdown 与语言下拉同款）──
+            // ── 添加预设引擎：下拉框（v4.9 宽 260——旧 180×~18 过窄过矮；
+            // v4.15 起用自绘 draw_fluent_dropdown 与语言下拉同款；D42 起高随
+            // 控件 compact 档 28。宽维持 260 不接 K3 规则：预设名为短名（最长
+            // DuckDuckGo），接规则会收窄到 180、背离 v4.9 加宽初衷；260 =
+            // 规则上限，规格不冲突）──
             card.horizontal(|ui| {
                 ui.spacing_mut().item_spacing.x = 0.0;
                 ui.add_space(28.0);
-                ui.set_min_height(32.0);
+                ui.set_min_height(CONTROL_H);
                 ui.label(
                     egui::RichText::new(self.tr("set.search.add_engine"))
                         .size(14.0)
                         .color(p.text2),
                 );
                 ui.add_space(12.0);
-                ui.spacing_mut().interact_size.y = 32.0; // Fluent 控件高 32
-                                                         // v4.15 二轮反馈：搜索引擎下拉与语言下拉统一 Fluent 2 控件
-                                                         // 口径（替换 egui ComboBox）。labels[0] = 占位文案（「选择预
-                                                         // 设引擎...」/「已全部添加」），预设名从 idx=1 起，拾取偏移 -1。
+                ui.spacing_mut().interact_size.y = CONTROL_H; // Fluent 控件高（D42 compact 档）
+                                                              // v4.15 二轮反馈：搜索引擎下拉与语言下拉统一 Fluent 2 控件
+                                                              // 口径（替换 egui ComboBox）。labels[0] = 占位文案（「选择预
+                                                              // 设引擎...」/「已全部添加」），预设名从 idx=1 起，拾取偏移 -1。
                 let (dd_labels, dd_enabled): (Vec<&str>, bool) = if addable.is_empty() {
                     (vec![self.tr("set.search.presets_done")], false)
                 } else {
@@ -1625,11 +1658,12 @@ impl PaletteApp {
                 ui.add_space(28.0);
                 let add_label = self.tr("set.search.add");
                 let url_hint = self.tr("set.search.url_hint");
-                let btn_w = text_width(ui, add_label, egui::FontId::proportional(14.0)) + 24.0;
+                let btn_w =
+                    text_width(ui, add_label, egui::FontId::proportional(CONTROL_FONT_PT)) + 24.0;
                 let url_w = (ui.available_width() - btn_w - 8.0).max(160.0);
                 // 外框几何完全自管（allocate 精确 32 高），与按钮同高同线
                 let (box_rect, _) =
-                    ui.allocate_exact_size(egui::vec2(url_w, 32.0), egui::Sense::hover());
+                    ui.allocate_exact_size(egui::vec2(url_w, CONTROL_H), egui::Sense::hover());
                 let url_edit_id = egui::Id::new("dd-engine-url");
                 let url_focused = ui.ctx().memory(|m| m.has_focus(url_edit_id));
                 let radius = egui::CornerRadius::same(4);
@@ -1660,7 +1694,7 @@ impl PaletteApp {
                     egui::TextEdit::singleline(&mut self.engine_url_buf)
                         .id(url_edit_id)
                         .desired_width(url_w - 24.0)
-                        .font(egui::FontId::proportional(14.0))
+                        .font(egui::FontId::proportional(CONTROL_FONT_PT))
                         .text_color(p.text)
                         .vertical_align(egui::Align::Center)
                         .frame(egui::Frame::new().inner_margin(egui::Margin::symmetric(12, 0)))
@@ -2392,11 +2426,12 @@ pub(crate) fn draw_switch_fn(ui: &mut egui::Ui, on: bool, p: &theme::Palette) ->
 }
 
 /// Fluent 2 标准次级按钮（v4.9，真机 2026-09-06 反馈"恢复默认/更改不像按钮"）：
-/// 高 32 / 文字 14（body）/ 左右 padding 12 / 圆角 4（radius-m）/ 1px
+/// 高 28（D42 compact 档，原 32）/ 文字 12（D42 控件档，原 14 body）/ 左右
+/// padding 12 / 圆角 4（radius-m）/ 1px
 /// `--border-strong` 描边 / card 底；hover = bg1Hover、按下 = bg1Pressed
 /// （Fluent 控件态三段）。返回是否被点击。
 pub(crate) fn fluent_button(ui: &mut egui::Ui, text: &str, p: &theme::Palette) -> bool {
-    fluent_button_sized(ui, text, p, 32.0, 14.0, 12.0)
+    fluent_button_sized(ui, text, p, CONTROL_H, CONTROL_FONT_PT, 12.0)
 }
 
 /// Fluent 2 小按钮（列表行内动作，如引擎「删除」）：高 24 / 文字 12 / padding 8。
@@ -2467,8 +2502,22 @@ fn draw_keycap(ui: &mut egui::Ui, cap: &str, p: &theme::Palette) {
     );
 }
 
-/// Fluent 2 标准下拉控件（v4.15）：高 32、宽 `width`、圆角 4、1px
-/// `--border-strong` 描边、`card` 底；左侧文字 + 右侧 ▼ 字符（Segoe Fluent
+/// 下拉宽度自适应（D42/K3）：`clamp(最长选项宽 + 左右 pad 24 + 箭头区 16,
+/// 180, 260)`。zh 选项集常态落下限 180（与语言卡 D38 规格一致）；长英文
+/// 选项撑宽、至上限 260 封顶（消除硬编码宽下英文文案溢出盒外）。极端超
+/// 上限文案不做字符截断——现有选项集实测均 ≤260，上限即兜底。
+fn dropdown_width(ui: &egui::Ui, labels: &[&str]) -> f32 {
+    let font = egui::FontId::proportional(CONTROL_FONT_PT);
+    let longest = labels
+        .iter()
+        .map(|l| text_width(ui, l, font.clone()))
+        .fold(0.0_f32, f32::max);
+    (longest + 24.0 + 16.0).clamp(180.0, 260.0)
+}
+
+/// Fluent 2 标准下拉控件（v4.15；D42 改 compact 档）：高 28（原 32）、宽
+/// `width`、圆角 4、1px
+/// `--border-strong` 描边、`card` 底；左侧文字（12）+ 右侧 ▼ 字符（Segoe Fluent
 /// Icons `E70D` ChevronDown）；hover/press 三态（card → row_hover →
 /// row_pressed，与 fluent_button 同链路）；点击展开 popup
 ///（egui `Popup::from_toggle_button_response` 自管 toggle + 内置点击外部收起
@@ -2504,8 +2553,8 @@ fn draw_fluent_dropdown(
     enabled: bool,
 ) -> Option<usize> {
     use egui::containers::{Popup, PopupCloseBehavior};
-    let h: f32 = 32.0;
-    let font = egui::FontId::proportional(14.0);
+    let h: f32 = CONTROL_H;
+    let font = egui::FontId::proportional(CONTROL_FONT_PT);
 
     // ── 按钮：rect_filled + 描边 + 文字 + ▼ ──
     let (rect, resp) = ui.allocate_exact_size(egui::vec2(width, h), egui::Sense::click());
@@ -2575,7 +2624,7 @@ fn draw_fluent_dropdown(
             for (i, label) in labels.iter().enumerate() {
                 let is_sel = i == selected;
                 let (item_rect, item_resp) =
-                    ui.allocate_exact_size(egui::vec2(item_w, 28.0), egui::Sense::click());
+                    ui.allocate_exact_size(egui::vec2(item_w, POPUP_ITEM_H), egui::Sense::click());
                 let item_fill = if is_sel {
                     p.row_selected
                 } else if ui.rect_contains_pointer(item_rect) {
@@ -2611,6 +2660,55 @@ mod tests {
         // §08 v4.6（B5）：默认选中首栏「外观」；open_settings 每次进入重置到
         // default（与 go_home 复位语义一致），栏目不落盘。
         assert_eq!(SettingsCategory::default(), SettingsCategory::Appearance);
+    }
+
+    /// D42（K2）：控件排印 compact 档常量锚定，防回归漂移。
+    /// 盒高 28 / 控件文字 12（ramp base200）/ popup 选项行高 24。
+    #[test]
+    fn control_typography_constants_d42() {
+        assert_eq!(CONTROL_H, 28.0);
+        assert_eq!(CONTROL_FONT_PT, 12.0);
+        assert_eq!(POPUP_ITEM_H, 24.0);
+    }
+
+    /// D42/K3：下拉宽度自适应——①下限/上限两分支精确断言（短选项 = 180、
+    /// 超长选项 = 260）；②真实 zh/en 选项集落在 (180, 260] 区间内且不溢出。
+    /// 注：方案 §3.3「zh 常态落 180」估宽前提不成立——Esc 卡最长选项实为
+    /// 「先清除搜索内容，然后返回」（13 全角字 ≈188+），非「返回上一级
+    /// （默认）」；headless 默认字体无 CJK，按 fallback 字形计宽。
+    #[test]
+    fn dropdown_width_clamps_zh_and_en() {
+        let ctx = egui::Context::default();
+        let mut out = ctx.run_ui(Default::default(), |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                // ① 分支行为：短选项 → 下限 180；超长选项 → 上限 260。
+                assert_eq!(dropdown_width(ui, &["Go"]), 180.0);
+                assert_eq!(
+                    dropdown_width(
+                        ui,
+                        &["Clear the search first, then go back and then go back again"],
+                    ),
+                    260.0
+                );
+                // ② 真实选项集：zh/en 均在区间内（en 按最长英文选项撑宽）。
+                let zh_labels = [
+                    "返回上一级（默认）",
+                    "先清除搜索内容，然后返回",
+                    "始终隐藏面板",
+                ];
+                let en_labels = [
+                    "Go back (default)",
+                    "Clear the search first, then go back",
+                    "Always hide the panel",
+                ];
+                let zh = dropdown_width(ui, &zh_labels);
+                let en = dropdown_width(ui, &en_labels);
+                assert!((180.0..=260.0).contains(&zh), "zh width = {zh}");
+                assert!(en > 180.0 && en <= 260.0, "en width = {en}");
+            });
+        });
+        // headless 无渲染后端：丢弃字体纹理增量（不消费会在 Drop 时 panic）。
+        out.textures_delta.clear();
     }
 
     /// P2 v6：自绘滑杆的指针→档位纯函数——映射、越界钳制与零宽防除零。
