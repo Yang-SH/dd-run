@@ -627,18 +627,28 @@ impl PaletteApp {
             card.add_space(8.0);
             card.horizontal(|ui| {
                 ui.spacing_mut().item_spacing.x = 0.0;
-                ui.vertical(|ui| {
-                    ui.label(
-                        egui::RichText::new(crate::text::t(lang, "set.opacity.name"))
-                            .size(14.0)
-                            .color(p.text),
-                    );
-                    ui.add_space(2.0);
-                    ui.label(
-                        egui::RichText::new(crate::text::t(lang, "set.opacity.desc"))
-                            .size(12.0)
-                            .color(p.text3),
-                    );
+                // 右侧百分比预留固定宽（最宽 "100%"），左列 allocate_ui 锁宽
+                // ——长描述在左列范围内换行，不再占满整行把百分比顶到右缘
+                // 叠画在首行行尾（同语言卡 v4.15 修法）。
+                let pct_w = text_width(ui, "100%", egui::FontId::proportional(12.0));
+                let left_w = (ui.available_width() - pct_w).max(160.0);
+                ui.allocate_ui(egui::vec2(left_w, 36.0), |ui| {
+                    ui.vertical(|ui| {
+                        ui.label(
+                            egui::RichText::new(crate::text::t(lang, "set.opacity.name"))
+                                .size(14.0)
+                                .color(p.text),
+                        );
+                        ui.add_space(2.0);
+                        ui.add(
+                            egui::Label::new(
+                                egui::RichText::new(crate::text::t(lang, "set.opacity.desc"))
+                                    .size(12.0)
+                                    .color(p.text3),
+                            )
+                            .wrap(),
+                        );
+                    });
                 });
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     ui.label(
@@ -1069,24 +1079,30 @@ impl PaletteApp {
                     p.text2,
                 );
                 ui.add_space(12.0);
-                ui.vertical(|ui| {
-                    ui.set_min_height(40.0);
-                    ui.label(
-                        dd_gui::theme::semibold_title(
-                            crate::text::t(lang, "set.autostart.name"),
-                            14.0,
-                        )
-                        .color(p.text),
-                    );
-                    ui.add_space(2.0);
-                    ui.add(
-                        egui::Label::new(
-                            egui::RichText::new(crate::text::t(lang, "set.autostart.desc"))
-                                .size(12.0)
-                                .color(p.text3),
-                        )
-                        .wrap(),
-                    );
+                // 右侧开关 40 宽 + 16 间距预算，左列 allocate_ui 锁宽——长英文
+                // 描述在左列范围内换行，不再占满整行把开关顶到右缘叠画
+                // （同语言卡 v4.15 / 按键卡 D42 修法）。
+                let left_w = (ui.available_width() - 40.0 - 16.0).max(160.0);
+                ui.allocate_ui(egui::vec2(left_w, 40.0), |ui| {
+                    ui.vertical(|ui| {
+                        ui.set_min_height(40.0);
+                        ui.label(
+                            dd_gui::theme::semibold_title(
+                                crate::text::t(lang, "set.autostart.name"),
+                                14.0,
+                            )
+                            .color(p.text),
+                        );
+                        ui.add_space(2.0);
+                        ui.add(
+                            egui::Label::new(
+                                egui::RichText::new(crate::text::t(lang, "set.autostart.desc"))
+                                    .size(12.0)
+                                    .color(p.text3),
+                            )
+                            .wrap(),
+                        );
+                    });
                 });
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     autostart_toggled = draw_switch_fn(ui, autostart_on, p);
@@ -1203,24 +1219,30 @@ impl PaletteApp {
                 // 与其他卡卡头图标对齐的 16px 空槽位
                 ui.allocate_exact_size(egui::vec2(16.0, 16.0), egui::Sense::hover());
                 ui.add_space(12.0);
-                ui.vertical(|ui| {
-                    ui.set_min_height(40.0);
-                    ui.label(
-                        egui::RichText::new(crate::text::t(lang, "set.search.apps.name"))
-                            .size(14.0)
-                            .color(p.text),
-                    );
-                    // D42/K1：行名→描述统一 +2（原 +4，注释「材质卡口径」系错
-                    // 标——材质卡实际为 +2，见方案 §1.2）。
-                    ui.add_space(2.0);
-                    ui.add(
-                        egui::Label::new(
-                            egui::RichText::new(crate::text::t(lang, "set.search.apps.desc"))
-                                .size(12.0)
-                                .color(p.text3),
-                        )
-                        .wrap(),
-                    );
+                // 右侧开关 40 宽 + 16 间距预算，左列 allocate_ui 锁宽——长英文
+                // 描述在左列范围内换行，不再占满整行把开关顶到右缘叠画
+                // （同语言卡 v4.15 / 按键卡 D42 修法）。
+                let left_w = (ui.available_width() - 40.0 - 16.0).max(160.0);
+                ui.allocate_ui(egui::vec2(left_w, 40.0), |ui| {
+                    ui.vertical(|ui| {
+                        ui.set_min_height(40.0);
+                        ui.label(
+                            egui::RichText::new(crate::text::t(lang, "set.search.apps.name"))
+                                .size(14.0)
+                                .color(p.text),
+                        );
+                        // D42/K1：行名→描述统一 +2（原 +4，注释「材质卡口径」系错
+                        // 标——材质卡实际为 +2，见方案 §1.2）。
+                        ui.add_space(2.0);
+                        ui.add(
+                            egui::Label::new(
+                                egui::RichText::new(crate::text::t(lang, "set.search.apps.desc"))
+                                    .size(12.0)
+                                    .color(p.text3),
+                            )
+                            .wrap(),
+                        );
+                    });
                 });
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     apps_toggled = draw_switch_fn(ui, apps_on, p);
@@ -1456,20 +1478,33 @@ impl PaletteApp {
                     p.text2,
                 );
                 ui.add_space(12.0);
-                ui.vertical(|ui| {
-                    ui.set_min_height(36.0);
-                    ui.label(
-                        dd_gui::theme::semibold_title(crate::text::t(lang, "set.reset.name"), 14.0)
+                // 右侧按钮按 fluent_button 同口径预算宽（文字 + 2×12 padding、
+                // 36 下限），左列 allocate_ui 锁宽——长描述在左列范围内换行，
+                // 不再占满整行把按钮顶到右缘叠画在首行行尾（同语言卡 v4.15
+                // 修法；armed 文案「确认重置」与「恢复默认」同宽，预算恒成立）。
+                let btn_w =
+                    (text_width(ui, btn_label, egui::FontId::proportional(CONTROL_FONT_PT)) + 24.0)
+                        .max(36.0);
+                let left_w = (ui.available_width() - btn_w - 16.0).max(160.0);
+                ui.allocate_ui(egui::vec2(left_w, 36.0), |ui| {
+                    ui.vertical(|ui| {
+                        ui.set_min_height(36.0);
+                        ui.label(
+                            dd_gui::theme::semibold_title(
+                                crate::text::t(lang, "set.reset.name"),
+                                14.0,
+                            )
                             .color(p.text),
-                    );
-                    ui.add(
-                        egui::Label::new(
-                            egui::RichText::new(crate::text::t(lang, "set.reset.desc"))
-                                .size(12.0)
-                                .color(p.text3),
-                        )
-                        .wrap(),
-                    );
+                        );
+                        ui.add(
+                            egui::Label::new(
+                                egui::RichText::new(crate::text::t(lang, "set.reset.desc"))
+                                    .size(12.0)
+                                    .color(p.text3),
+                            )
+                            .wrap(),
+                        );
+                    });
                 });
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     clicked = fluent_button(ui, btn_label, p);
@@ -1847,8 +1882,29 @@ impl PaletteApp {
                     ui.spacing_mut().item_spacing.x = 0.0;
                     ui.allocate_exact_size(egui::vec2(16.0, 16.0), egui::Sense::hover());
                     ui.add_space(12.0);
+                    // 右侧控件宽预算（开关 40 + 按需的小按钮，小按钮宽 =
+                    // 文字 + 16 padding、32 下限），左列 set_max_width 锁宽
+                    // ——长名称 / version·id 在左列内换行，不再占满整行把
+                    // 开关与按钮顶到右缘叠画（同语言卡 v4.15 修法）。
+                    let font12 = egui::FontId::proportional(12.0);
+                    let small_btn_w = |ui: &egui::Ui, t: &str| {
+                        (text_width(ui, t, font12.clone()) + 16.0).max(32.0)
+                    };
+                    let mut right_w = 40.0; // 开关
+                    if row.needs_approval() {
+                        right_w += 8.0
+                            + small_btn_w(ui, crate::text::t(lang, "set.ext.block"))
+                            + 4.0
+                            + small_btn_w(ui, crate::text::t(lang, "set.ext.allow"));
+                    }
+                    if row.failed_reason.is_some() {
+                        right_w += 8.0 + small_btn_w(ui, crate::text::t(lang, "set.ext.retry"));
+                    }
+                    let left_w = (ui.available_width() - right_w).max(160.0);
                     ui.vertical(|ui| {
                         ui.set_min_height(36.0);
+                        // 左列锁宽：须在加内容前设置，换行/截断均以此为界
+                        ui.set_max_width(left_w);
                         // 名称独占一行（v4.8：版本不再拼在名称后）
                         ui.label(egui::RichText::new(&row.name).size(14.0).color(p.text));
                         ui.add_space(2.0);
