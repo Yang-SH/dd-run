@@ -11,16 +11,16 @@
 
 | 里程碑 | 状态 | 关闭日期 / commit | 一句话结论 | 详情 |
 |---|---|---|---|---|
-| M0 地基与协议冻结 | ✅ 已关闭 | 2026-09-01 | workspace 可构建，协议 v1.0 冻结，40/40 测试全绿 | [m0-record](./m0-record.md) |
-| M1 最小可用面板 | ✅ 已关闭 | 2026-09-02 | 热键唤起 + 全键盘走通，R1/ADR-2 真机验收通过 | [m1-record](./m1-record.md) |
-| M2 命令执行与状态机 | ✅ 已关闭 | 2026-09-02 | 8 种 Kind + 页面栈 + invoke，24/24 单测，A4/A5/A9 达成 | [m2-record](./m2-record.md) |
-| M3 缓存与懒加载 | ✅ 已关闭 | 2026-09-02 | frozen 桩 / LRU / 冷启动计时，73/73 测试，A6/A7/A2 达标 | [m3-record](./m3-record.md) |
-| M4 内置扩展与健壮性 | ✅ 已关闭 | 2026-09-04 `757f3b4` | 5 内置扩展 + 崩溃恢复 + nucleo 过滤（A3 实测 3.7ms），A8 真机通过 | [m4-record](./m4-record.md) |
+| M0 地基与协议冻结 | ✅ 已关闭 | 2026-09-01 | workspace 可构建，协议 v1.0 冻结，40/40 测试全绿 | [m0-record](./archive/m0-record.md) |
+| M1 最小可用面板 | ✅ 已关闭 | 2026-09-02 | 热键唤起 + 全键盘走通，R1/ADR-2 真机验收通过 | [m1-record](./archive/m1-record.md) |
+| M2 命令执行与状态机 | ✅ 已关闭 | 2026-09-02 | 8 种 Kind + 页面栈 + invoke，24/24 单测，A4/A5/A9 达成 | [m2-record](./archive/m2-record.md) |
+| M3 缓存与懒加载 | ✅ 已关闭 | 2026-09-02 | frozen 桩 / LRU / 冷启动计时，73/73 测试，A6/A7/A2 达标 | [m3-record](./archive/m3-record.md) |
+| M4 内置扩展与健壮性 | ✅ 已关闭 | 2026-09-04 `757f3b4` | 5 内置扩展 + 崩溃恢复 + nucleo 过滤（A3 实测 3.7ms），A8 真机通过 | [m4-record](./archive/m4-record.md) |
 | M5 ueli 风格 UI 重构 | ✅ 已关闭 | 2026-09-04 `5cf32b7` | 换肤/图标/设置/右键/类型标签/C 组占位全落地（含 L8） | [§2 M5](#m5--ueli-风格-ui-重构插队于-m4-后) |
 | M6 日常打磨 | ✅ 已关闭 | 2026-09-08 | 拼音搜索 / 冷启动字体 / 设置占位 / 遗留清扫 / 三子页优化 | [§2 M6](#m6--日常打磨2026-09-05-立项) |
 | M7 发布工程 | ✅ 已关闭 | 2026-09-10 `v0.1.1` | CI / 256px 图标 / sidecar 定案 / tag 演练发版（安装器取消） | [§2 M7](#m7--发布工程2026-09-08-立项) |
 | M8 扩展生态验证 | ✅ 已关闭 | 2026-09-10 | 非 Rust 扩展走通协议全链路（10 项全 ✓），指南 + conformance | [§2 M8](#m8--扩展生态验证2026-09-10-立项) |
-| M9 内置扩展进程内化 | ✅ 已关闭 | 2026-09-11 | 5 内置扩展改 in-process，单文件分发，进程隔离仅第三方 | [m9-inprocess-builtins](./m9-inprocess-builtins.md) |
+| M9 内置扩展进程内化 | ✅ 已关闭 | 2026-09-11 | 5 内置扩展改 in-process，单文件分发，进程隔离仅第三方 | [m9-inprocess-builtins](./archive/m9-inprocess-builtins.md) |
 | v5.2 UI 优化 B1–B8 | ✅ 已关闭 | 2026-09-13 `815e212..da0589c` | 字重/强调色/滚动条/下划线/结果行/设置页/悬停/自适应 | [cmdpal-ui-optimization-v5.html](../cmdpal-ui-optimization-v5.html) |
 | 图标与字体优化 I1/I2/F1/F2 | ✅ 已关闭 | 2026-09-12 `3545d3f` | 占位 glyph / I2 显式色 / F1 token 化 / F2 密度三档（I3 未做） | [icons-typography-plan](./icons-typography-plan.md) |
 | O2 协议方法名常量层 | ✅ 已落地 | 2026-09-14（已提交 `6ee4931`） | 12 个方法名收敛为 `dd-protocol::methods` 单一来源，全仓生产代码改用常量 + 一致性测试锁 SSOT | [§2 O2](#o2--协议方法名常量层2026-09-14-落地) |
@@ -55,7 +55,7 @@
 - 扩展机制：**清单发现 + 子进程 JSON-RPC（第三方 / sidecar）**，**内置扩展走 in-process**（见 ADR-1）；支持第三方扩展
 - frozen / stub / LRU 懒加载
 
-**明确不在 MVP**（见 README 非目标）：Windows 专属扩展（§7 中 9 个 `🪟` 项）、Gallery 商店、WASM 沙箱、进程注册发现、FormPage/MarkdownPage（按需追加，非阻塞）。
+**明确不在 MVP**（见 README 非目标）：Windows 专属扩展（§7 中 9 个 Windows 专属项）、Gallery 商店、WASM 沙箱、进程注册发现、FormPage/MarkdownPage（按需追加，非阻塞）。
 
 ---
 
@@ -65,7 +65,7 @@
 
 **目标**：Cargo workspace 可构建，宿主能与一个示例扩展完成完整握手与一次命令拉取。
 
-> **实施记录**：M0 已完成（2026-09-01）。分两步实施：第一步 workspace 脚手架 + `dd-protocol` 协议类型 + 协议一致性测试；第二步 `dd-host` 清单扫描/进程管理 + `dd-ext-sample` 示例扩展 + `dd-run` CLI + 全链路往返。过程、验收标准与测试结果（40/40 测试全绿 + CLI 实跑）见 [`./m0-record.md`](./m0-record.md)。
+> **实施记录**：M0 已完成（2026-09-01）。分两步实施：第一步 workspace 脚手架 + `dd-protocol` 协议类型 + 协议一致性测试；第二步 `dd-host` 清单扫描/进程管理 + `dd-ext-sample` 示例扩展 + `dd-run` CLI + 全链路往返。过程、验收标准与测试结果（40/40 测试全绿 + CLI 实跑）见 [`./m0-record.md`](./archive/m0-record.md)。
 
 **为什么先做协议**：协议是宿主与扩展之间**唯一的硬契约**。它一旦变动，两侧代码都要改；先冻结再写业务，可避免返工。
 
@@ -167,7 +167,7 @@
 
 | 任务 | 说明 |
 |---|---|
-| 内置扩展 ×5 | Apps / Calc / System / WebSearch / Shell——**全部为 ✅ 跨平台或 ⚙️ 平台相关，无一是 🪟 Windows 专属**（见设计文档 §7 平台列） |
+| 内置扩展 ×5 | Apps / Calc / System / WebSearch / Shell——**全部为 ✅ 跨平台或「按 OS」平台相关，无一是 Windows 专属**（见设计文档 §7 平台列） |
 | 平台适配 | Apps 索引按 OS 分路径（Win `shell:AppsFolder` 应用本体 + 开始菜单 `.lnk` 兜底 / macOS `/Applications` / Linux `.desktop`+PATH）；System 与 Shell 按 OS 分命令 |
 | 崩溃恢复 | stdout EOF / 非 0 退出码检测 → in-flight 请求立即失败 → stub 回退 → 宿主继续运行 |
 | 连续崩溃保护 | 连续 N 次（建议 3）后标记"暂时不可用"，宿主重启或手动重试才恢复 |
@@ -262,7 +262,7 @@
 
 ### M9 — 内置扩展进程内化（2026-09-11 立项）
 
-设计稿：[`docs/m9-inprocess-builtins.md`](./m9-inprocess-builtins.md)（v1.2）。动机：把 5 个内置扩展从「启动时多个子进程」改为**宿主进程内**调用（ueli / PowerToys CmdPal 主流做法），启动 0 进程、不再物化内嵌 exe、单文件体积下降；**第三方 / sidecar 仍子进程**（保留 M8 语言无关证明与未信任代码崩溃隔离）。协议 v1.0 **零改动**（仅"谁调用 `serve_line`"变化）。
+设计稿：[`docs/m9-inprocess-builtins.md`](./archive/m9-inprocess-builtins.md)（v1.2）。动机：把 5 个内置扩展从「启动时多个子进程」改为**宿主进程内**调用（ueli / PowerToys CmdPal 主流做法），启动 0 进程、不再物化内嵌 exe、单文件体积下降；**第三方 / sidecar 仍子进程**（保留 M8 语言无关证明与未信任代码崩溃隔离）。协议 v1.0 **零改动**（仅"谁调用 `serve_line`"变化）。
 
 | 批次 | 内容 | 验收标准 | 状态 |
 |---|---|---|---|
@@ -402,7 +402,7 @@
 | 项目 | 状态 | 落点 |
 |---|---|---|
 | P1 材质单选化（三段 pill：无材质/云母/亚克力） | ✅ | `ui/settings_view.rs` draw_material_card 重构（复用 `draw_density_pill` 口径）+ `text.rs` |
-| P2 不透明度滑杆（0–100，默认 40 = 推荐观感档；v2 直控式） | ✅ | `settings.rs` `material_opacity: u8` + `theme.rs` `panel_tint_with_opacity`（`alpha = cap × pct/100`；v5 cap 按材质两主题同档：云母 0.75 / 亚克力 1.0，0 = 纯材质）+ `app/keys.rs` `apply_material_opacity`（拖动不落盘、松手 `drag_stopped` 落盘）；v3/v4 浓淡基色 = `theme::tint_color`（面板色 × 系统强调色，暗 8%/亮 30%，DeskBox `BuildContentTintColor` 配方 + 亮度层补偿）；v5 行填充材质适配 = `theme::row_fills`（hover 分档：云母加权 7%/7.8% 玻璃、亚克力减重 3.5%/3.9%；selected 同走玻璃治扫动闪烁；回退实色）+ 页脚同步浓淡层（材质态 footer 与面板同源 `panel_fill`，消除底部色差带）；v6 设置卡控件风格对齐（自绘 Fluent 滑杆：轨 4px/accent_stroke 已选段/白钮描边、百分比右对齐行头；边框 pill 竖排修复；pill `dim` 置灰参数） |
+| P2 不透明度滑杆（0–100，默认 40 = 推荐观感档；v2 直控式） | ✅ | `settings.rs` `material_opacity: u8` + `theme.rs` `panel_tint_with_opacity`（`alpha = cap × pct/100`；v5 cap 按材质两主题同档：云母 0.75 / 亚克力 1.0，0 = 纯材质）+ `app/keys.rs` `apply_material_opacity`（拖动不落盘、松手 `drag_stopped` 落盘）；v3/v4 浓淡基色 = `theme::tint_color`（面板色 × 系统强调色，暗 8%/亮 30%，DeskBox `BuildContentTintColor` 配方 + 亮度层补偿）；v5 行填充材质适配 = `theme::row_fills`（hover 分档：云母加权 7%/7.8% 玻璃、亚克力减重 3.5%/3.9%；selected 同走玻璃治扫动闪烁；回退实色）+ 页脚同步浓淡层（材质态 footer 与面板同源 `panel_fill`，消除底部色差带）；v6 设置卡控件风格对齐（自绘 Fluent 滑杆：轨 4px/accent_stroke 已选段/白钮描边；边框 pill 竖排修复；pill `dim` 置灰参数）；v4.20 百分比移至滑杆同一行右缘（`draw_slider_row_with_pct`：右缘按最宽 `100%` 预留、拖动当帧显新值；着色强度滑杆同款接入） |
 | P3 窗口圆角三选（圆角/小圆角/方角） | ✅ | `settings.rs` `CornerPref` + `platform.rs` `apply_window_chrome(hwnd, pref)` 映射 `DWMWCP_ROUND/ROUNDSMALL/DONOTROUND` + `apply_corner_pref` |
 | P4 面板边框三选（中性/强调色/关） | ✅ | `settings.rs` `BorderMode` + `platform.rs` `system_accent_color`（`DwmGetColorizationColor`，COLORREF 0x00BBGGRR）+ `app/keys.rs` `border_color` 单点收口（refresh_backdrop / apply_theme_pref / apply_border_mode 同源） |
 
@@ -475,8 +475,8 @@
 |---|---|---|
 | CHANGELOG 缺日期 | ✅ | `CHANGELOG.md` 的 `[0.1.0]` 标题补日期 `2026-09-06`（取自 `git for-each-ref` 的 tag creatordate，实测值） |
 | `examples/python-minimal/README.md` 行尾 | ✅ | **已合规**（全仓 `.md` 均 `i/lf w/crlf`）——2026-09-14 的行尾归一化已覆盖该文件，本批仅作确认 |
-| I3 图标 32px 回退 | ⏸ 保留不做 | 设计文档 [`icons-typography-plan.md`](./icons-typography-plan.md) 已定「视真机效果再定，不阻塞交付」——属**真机依赖项**（Phase 2 范畴） |
-| LRU 容量可配 | 🔵 转功能项 | `pool.rs` 为编译期常量；需 Settings 字段 + 设置页行 + 持久化 + 消费点改造，**明确不在 O8 范围**，待单独立项 |
+| I3 图标 32px 回退 | 保留不做 | 设计文档 [`icons-typography-plan.md`](./icons-typography-plan.md) 已定「视真机效果再定，不阻塞交付」——属**真机依赖项**（Phase 2 范畴） |
+| LRU 容量可配 | 转功能项 | `pool.rs` 为编译期常量；需 Settings 字段 + 设置页行 + 持久化 + 消费点改造，**明确不在 O8 范围**，待单独立项 |
 
 **验证**：`cargo fmt --all -- --check` 无差异；`cargo clippy --workspace --all-targets` 0 warning；`cargo test --workspace` **422 passed / 0 failed**（本批无代码改动）。
 
@@ -929,7 +929,7 @@ K-T1~K-T4 任务清单与 V-1~V-7 校验标准见 [`settings-keys-typography-pla
 | R2 | **冷启动 A2 < 200ms** 数据就绪实测 ~2ms 达标；total 高因 GUI/wgpu+msyh 字体加载 | ✅ 已关闭（2026-09-02）：A2 数据就绪 ~2ms 达标（真机记录值，代码内无基准工具可复跑）；total 高因 GUI/wgpu+msyh 字体（R2 记录瓶颈、不调目标） |
 | R3 | **A3 < 16ms/帧** 在大结果集下可能不达标 | ✅ 已关闭（2026-09-03，M4 P5）：nucleo 打分排序，2000 项 ×6 字段实测 3.7ms < 16ms/帧 |
 | R4 | 上游 PowerToys 文档引用边界复核 | ✅ 已采用 **MIT**；引用边界已复核销项（批次 8.3，2026-09-10，见 L6） |
-| R5 | 设计文档 §7 中 **9 个 `🪟` Windows 专属扩展**不可移植 | 已在 §7 加平台列标记；MVP 不纳入 |
+| R5 | 设计文档 §7 中 **9 个 Windows 专属扩展**不可移植 | 已在 §7 加平台列标记；MVP 不纳入 |
 | R6 | CmdPal 仍处于 **preview**，上游接口可能演进 | 设计文档已标注核验日期；协议 v1.0 冻结后以本协议为准 |
 | R7 | 设计稿字体依赖 Google Fonts（国内可能不可达） | 已改为本地优先分层字体栈，CDN 仅作渐进增强 |
 

@@ -1,6 +1,7 @@
 # dd-run 扩展清单 schema v1.0
 
 > **状态**：已冻结 ｜ **版本**：v1.0 ｜ **最后更新**：2026-09-13 ｜ 与 [`protocol.md`](./protocol.md) 配套使用；上手路径见 [`extensions.md`](./extensions.md)。
+> **关联**：[protocol.md](./protocol.md) · [extensions.md](./extensions.md) · [INDEX.md](./INDEX.md)
 > **上游依据**：[`cmdpal-platform-agnostic-design.md`](../cmdpal-platform-agnostic-design.md) §6.1（扩展发现，MVP 默认 = 清单文件扫描）、§6.3（frozen）。
 
 ---
@@ -157,7 +158,7 @@
 - 注册事实源 = `dd-host` 的 `builtin::BUILTINS` 硬编码表（id / 名称 / frozen / capabilities，与各扩展 `initialize` 自述对齐）；GUI 侧据此产出内置注册项，并靠 `merge_builtins` 并入聚合结果——**内置 id 最优先**，用户/sidecar 清单不能覆盖或顶替同名内置扩展。
 - **运行形态 = 宿主进程内（in-process）**：内置扩展**不再各自 `spawn` 子进程**，而是由宿主进程内经 `dd_ext::serve_line` 直调。
 - ⚠️ **`dd-gui::embedded` 模块现状（M9 B4 起）**：`build.rs` 的 `EMBED_EXES` 已清空为 `&[]`，`EMBEDDED` 恒为空表、`materialize()` 恒返回 `None`，宿主回退「exe 同目录发现」/ sidecar 路径。该模块保留为**将来内嵌 sidecar**（如 `dd-ext-search`）的扩展点；**不再有 5 个内置 exe 被内嵌或物化**，`%APPDATA%/dd-run/cache/embedded/` 亦不再被填充。
-- ⚠️ **ADR-1 的适用边界**：进程隔离现在只覆盖**第三方扩展与 sidecar**（如 file-search）——内置扩展走 in-process，不 spawn、不共用子进程生命周期实现。详见 [`implementation.md`](./implementation.md) 的 ADR-1 修订表述与 [`m9-inprocess-builtins.md`](./m9-inprocess-builtins.md)。
+- ⚠️ **ADR-1 的适用边界**：进程隔离现在只覆盖**第三方扩展与 sidecar**（如 file-search）——内置扩展走 in-process，不 spawn、不共用子进程生命周期实现。详见 [`implementation.md`](./implementation.md) 的 ADR-1 修订表述与 [`m9-inprocess-builtins.md`](./archive/m9-inprocess-builtins.md)。
 
 **file-search（`com.ddrun.filesearch`）** 是目前唯一的清单注册型官方扩展（同目录另有 `com.example.sample.json`，属开发示例、不随包分发）：清单源码在 `examples/extensions.d/com.ddrun.filesearch.json`，由 `tools/package.sh` 归集进 `dist/extensions.d/` 作为 sidecar 随包分发（位置与优先级见 §2 便携 sidecar）；开发期可将该清单拷入用户扩展目录，并把 `entry.command` 指向本地构建产物进行调试。
 

@@ -1,6 +1,7 @@
 # 文档描述 ↔ 代码实现 差异清单（2026-09-13）
 
-> **状态**：复核通过，进入修复阶段 ｜ **版本**：v1.6 ｜ **最后更新**：2026-09-19
+> **状态**：历史归档（2026-09-29 随全仓归档收进 docs/archive/；原「生效中（复核报告，所列修正已落地）」） ｜ **版本**：v1.6 ｜ **最后更新**：2026-09-29
+> **关联**：[doc-audit-2026-09-13.md](./doc-audit-2026-09-13.md) · [implementation.md](../implementation.md) · [INDEX.md](../INDEX.md)
 > **阶段说明**：v1.0 为纯只读核对记录。v1.1 经三路独立复核（P 系 / M+E 系 / I+D+R+S 系逐条验真），修正了 9 处清单自身的不实或偏差条目（见 §1.2），并开始按"文档对齐代码"落实修复。v1.2 追加 §10，记录 09-13 复核之后由**代码侧改动**（而非文档对齐）消除的差异（P-06）。v1.3 追加 §11，记录 O2 方法名常量层落地闭环的 P-18。v1.4 追加 §12，记录 O1 协议错误码接线闭环的 P-01 及其同批差异。v1.5 为**自查修订**：补齐 v1.4 遗漏的清单状态标注（§3 表 P-02/P-03/P-04、§4 表 P-14/P-15、§5 表 P-01/P-15），并使 §12 的闭环条目与本清单各表逐行对应。v1.6 追加 §14，记录 §7 一致性取样项因「`f ` 前缀直达在 2026-09-19 被移除」而失效（不改协议语义，故不升 `MINOR`）。
 
 ---
@@ -60,7 +61,7 @@
   - 宿主通知轮询：`process.rs:527` — `TooLarge` / `InvalidUtf8` 走 `Ok(_) => {}` **静默丢弃**。
   - 扩展侧：`crates/dd-ext/src/lib.rs:114-137` — `run()` 只处理 `Frame::Message`，`TooLarge` / `InvalidUtf8` 同样静默丢弃、不回复不关闭。
 - **差异**：不一致。**两侧都没有实现文档规定的"回错 + 关连接"**。
-- **处置（2026-09-15）**：✅ **已闭环**——两侧按本节规定补齐（宿主 `abort_oversized` 终止子进程、扩展 `run()` 回错后退出），校验规则与错误响应形状收口于 `dd-protocol::envelope`。详见 §12 与 [`optimization-plan.md`](./optimization-plan.md) §2.2.1。
+- **处置（2026-09-15）**：✅ **已闭环**——两侧按本节规定补齐（宿主 `abort_oversized` 终止子进程、扩展 `run()` 回错后退出），校验规则与错误响应形状收口于 `dd-protocol::envelope`。详见 §12 与 [`optimization-plan.md`](../optimization-plan.md) §2.2.1。
 
 ### S-01 ｜ 边界条件 ｜ 文档体系自我违反自己定的红线
 
@@ -261,11 +262,11 @@ v1.2：记录 09-13 复核之后、由**代码侧改动**（而非「文档对�
 
 | ID | 变化 | 依据 |
 |---|---|---|
-| P-06 | ✅ **已解决** | in-process 适配器 `poll_notifications` 改为**消费式取走**（`std::mem::take`，取走即清空）——同一 `items_changed` 只上报一次，与子进程路径的一次性消费语义一致；`unmatched` 同时改为有界（`DIAGNOSTIC_BUS_CAP = 64`，与子进程路径同口径）。[`protocol.md`](./protocol.md) §7.1「实现现状」注记同步更正。 |
+| P-06 | ✅ **已解决** | in-process 适配器 `poll_notifications` 改为**消费式取走**（`std::mem::take`，取走即清空）——同一 `items_changed` 只上报一次，与子进程路径的一次性消费语义一致；`unmatched` 同时改为有界（`DIAGNOSTIC_BUS_CAP = 64`，与子进程路径同口径）。[`protocol.md`](../protocol.md) §7.1「实现现状」注记同步更正。 |
 
 **连带变更**：本文 §3 的 P-06 行标注 ✅；§6 的 P-06 行移除（差异已消失，不再属「文档侧缺口」）。
 
-**备注（数值）**：§7 抽样条目提及的「`dist/` 字节数 8,601,088 B」为 2026-09-12 快照，已被 2026-09-14 实测值 **8,623,616 B** 取代（见 [`optimization-plan.md`](./optimization-plan.md) §2.1）。`implementation.md` 同值处标注为「2026-09-12 实测」，属历史记录、本批不改。
+**备注（数值）**：§7 抽样条目提及的「`dist/` 字节数 8,601,088 B」为 2026-09-12 快照，已被 2026-09-14 实测值 **8,623,616 B** 取代（见 [`optimization-plan.md`](../optimization-plan.md) §2.1）。`implementation.md` 同值处标注为「2026-09-12 实测」，属历史记录、本批不改。
 
 **生效前提**：上述代码改动位于**工作副本**，随对应代码批提交后生效。
 
@@ -273,11 +274,11 @@ v1.2：记录 09-13 复核之后、由**代码侧改动**（而非「文档对�
 
 ## 11. 后续状态变更（2026-09-14，O2 方法名常量层）
 
-v1.2（续）：记录又一处由**代码侧重构**（而非「文档对齐代码」）消除的差异。触发项 = [`optimization-plan.md`](./optimization-plan.md) Phase 1 首项 **O2**。
+v1.2（续）：记录又一处由**代码侧重构**（而非「文档对齐代码」）消除的差异。触发项 = [`optimization-plan.md`](../optimization-plan.md) Phase 1 首项 **O2**。
 
 | ID | 变化 | 依据 |
 |---|---|---|
-| P-18 | ✅ **已解决** | 新增 `crates/dd-protocol/src/methods.rs` 常量层——协议 §1.3 全部 **12 个方法**（7 host→ext 请求 + 3 ext→host 请求 + 2 通知）各有常量，另提供 `HOST_METHODS`（清单 `capabilities` 白名单，`dd-host::manifest::HOST_CAPABILITIES` 改为其别名）、`HOST_METHOD_PREFIX`（§3.3 对端请求判别）、`ALL_METHODS`（比对基线）；宿主/扩展/CLI 的**生产代码**统一改为常量引用（逐文件清单与豁免说明见 [`optimization-plan.md`](./optimization-plan.md) §2.3.1）。P-18 指出的「无常量级核对基线」根因随之消失。 |
+| P-18 | ✅ **已解决** | 新增 `crates/dd-protocol/src/methods.rs` 常量层——协议 §1.3 全部 **12 个方法**（7 host→ext 请求 + 3 ext→host 请求 + 2 通知）各有常量，另提供 `HOST_METHODS`（清单 `capabilities` 白名单，`dd-host::manifest::HOST_CAPABILITIES` 改为其别名）、`HOST_METHOD_PREFIX`（§3.3 对端请求判别）、`ALL_METHODS`（比对基线）；宿主/扩展/CLI 的**生产代码**统一改为常量引用（逐文件清单与豁免说明见 [`optimization-plan.md`](../optimization-plan.md) §2.3.1）。P-18 指出的「无常量级核对基线」根因随之消失。 |
 
 **新增核对基线**：`crates/dd-protocol/tests/consistency.rs::method_constants_match_protocol_method_table` —— 测试期从 `docs/protocol.md` §1.3 两张表抽取方法名，与 `ALL_METHODS` **逐项同序**断言相等；文档增删方法或常量拼错即测试失败。P-18 的「无常量级核对基线」由此转为**机器可验**。
 
@@ -285,7 +286,7 @@ v1.2（续）：记录又一处由**代码侧重构**（而非「文档对齐代
 
 **验证**：`cargo fmt --all -- --check` 无差异；`cargo clippy --workspace --all-targets` 0 warning；`cargo test --workspace` **403 passed / 0 failed**（基线 402，+1）。
 
-**连带变更**：本文 §4 的 P-18 行已标注 ✅；§9「未修 / 留人工确认」中移除 P-18；[`INDEX.md`](./INDEX.md) §5 对应行改 ✅；[`protocol.md`](./protocol.md) §1.3 加实现侧注记；[`implementation.md`](./implementation.md) 里程碑总表与 §2 增记本批（**详述处为 `optimization-plan.md` §2.3.1**，本文与 implementation 只记结论与落点）。
+**连带变更**：本文 §4 的 P-18 行已标注 ✅；§9「未修 / 留人工确认」中移除 P-18；[`INDEX.md`](../INDEX.md) §5 对应行改 ✅；[`protocol.md`](../protocol.md) §1.3 加实现侧注记；[`implementation.md`](../implementation.md) 里程碑总表与 §2 增记本批（**详述处为 `optimization-plan.md` §2.3.1**，本文与 implementation 只记结论与落点）。
 
 ---
 
@@ -293,11 +294,11 @@ v1.2（续）：记录又一处由**代码侧重构**（而非「文档对齐代
 
 ## 12. 后续状态变更（2026-09-15，O1 协议错误码接线）
 
-v1.3：记录第三处由**代码侧实现**（而非「文档对齐代码」）消除的差异。触发项 = [`optimization-plan.md`](./optimization-plan.md) Phase 1 第二项 **O1**。
+v1.3：记录第三处由**代码侧实现**（而非「文档对齐代码」）消除的差异。触发项 = [`optimization-plan.md`](../optimization-plan.md) Phase 1 第二项 **O1**。
 
 | ID | 变化 | 依据 |
 |---|---|---|
-| P-01 | ✅ **已解决** | 两侧均已实现「回 `-32600` + 关闭连接」。**单一来源**：新增 `crates/dd-protocol/src/envelope.rs`（三态判定 `Valid` / `ParseError` / `InvalidRequest { id, reason }`，另有 `error_response` 构造）——宿主 `dd-host/src/process.rs`（`call` / `poll_notifications` / `handle_line` / `route_messages` 四入口，新增 `abort_oversized` 与 `reply_envelope_error`）与扩展 `dd-ext/src/lib.rs`（`run` 帧循环 + `serve_line`）全部改用之，`dd-ext-sample` 同步（示例扩展代表第三方写法）。逐文件清单见 [`optimization-plan.md`](./optimization-plan.md) §2.2.1。 |
+| P-01 | ✅ **已解决** | 两侧均已实现「回 `-32600` + 关闭连接」。**单一来源**：新增 `crates/dd-protocol/src/envelope.rs`（三态判定 `Valid` / `ParseError` / `InvalidRequest { id, reason }`，另有 `error_response` 构造）——宿主 `dd-host/src/process.rs`（`call` / `poll_notifications` / `handle_line` / `route_messages` 四入口，新增 `abort_oversized` 与 `reply_envelope_error`）与扩展 `dd-ext/src/lib.rs`（`run` 帧循环 + `serve_line`）全部改用之，`dd-ext-sample` 同步（示例扩展代表第三方写法）。逐文件清单见 [`optimization-plan.md`](../optimization-plan.md) §2.2.1。 |
 
 **同批一并闭环的相邻差异**（原清单未单列，此处登记）：
 
@@ -318,9 +319,9 @@ v1.3：记录第三处由**代码侧实现**（而非「文档对齐代码」）
 
 **验证**：`cargo fmt --all -- --check` 无差异；`cargo clippy --workspace --all-targets` 0 warning；`cargo test --workspace` **422 passed / 0 failed**（基线 403，+19）；`dd-run-cli --conformance --ext-id com.ddrun.calc` 9 步全绿。新增端到端测试 `roundtrip::oversized_request_closes_connection_with_32600` 以**真实子进程**验证「超限 → 回 `-32600` → 关连接 → 进程退出」。
 
-**仍在待决策（本批未动）**：~~`-32002 command_not_found` 无产出点、`PageInfo` 运行时不传递——二者属 §13 `MINOR` 演进范畴，保持 [`INDEX.md`](./INDEX.md) §5 状态。~~ → **已于 2026-09-17 定稿**（见 §13）。
+**仍在待决策（本批未动）**：~~`-32002 command_not_found` 无产出点、`PageInfo` 运行时不传递——二者属 §13 `MINOR` 演进范畴，保持 [`INDEX.md`](../INDEX.md) §5 状态。~~ → **已于 2026-09-17 定稿**（见 §13）。
 
-**连带变更**：本文 §2 的 P-01 详细条目补「处置」说明；§3 表（P-02/P-03/P-04）、§4 表（P-14/P-15）、§5 表（P-01/P-15）均标注 ✅；§9「未修 / 留人工确认」移除 P-01；[`INDEX.md`](./INDEX.md) §5 对应行改 ✅；[`protocol.md`](./protocol.md) §2.3/§3.2/§3.4/§9.3 更新实现现状注记；[`implementation.md`](./implementation.md) 里程碑总表与 §2 增记本批（**详述处为 `optimization-plan.md` §2.2.1**）。
+**连带变更**：本文 §2 的 P-01 详细条目补「处置」说明；§3 表（P-02/P-03/P-04）、§4 表（P-14/P-15）、§5 表（P-01/P-15）均标注 ✅；§9「未修 / 留人工确认」移除 P-01；[`INDEX.md`](../INDEX.md) §5 对应行改 ✅；[`protocol.md`](../protocol.md) §2.3/§3.2/§3.4/§9.3 更新实现现状注记；[`implementation.md`](../implementation.md) 里程碑总表与 §2 增记本批（**详述处为 `optimization-plan.md` §2.2.1**）。
 
 ---
 
@@ -329,8 +330,8 @@ v1.3：记录第三处由**代码侧实现**（而非「文档对齐代码」）
 | 清单条目 | 变更 | 依据 / 落点 |
 |---|---|---|
 | **P-13**（非 UTF-8 帧「文档未覆盖」，§4 与 §6 两行） | ✅ **已消除** | `protocol.md` **§2.2 规则 6** 已定义该帧的处置与「无对应 JSON-RPC 错误码」（宿主 `call` 路径返 `InvalidUtf8`、通知路径与扩展帧循环静默丢弃）；文档侧缺口不复存在，§4 与 §6 两行同步标 ✅ |
-| **E-01 领域**（`-32002` 归因，§2 详细条目） | ✅ **口径定稿** | `-32002` 判为**扩展侧可用错误码**（宿主与内置运行时不产出）；`protocol.md` §9.2 表格行与注记由「保留码、待接线」改写为**终态口径**，[`INDEX.md`](./INDEX.md) §5 该项关闭 |
-| `PageInfo`（INDEX §5 独立项，非本清单条目） | ✅ **口径定稿** | 明确**维持不传递**（v1.0 预留定义）；`protocol.md` §8.5 注记改写，宿主页标题改由宿主侧信息提供（顺带修掉嵌套页标题显示原始 `page_id` 的缺陷，见 [`implementation.md`](./implementation.md) §2） |
+| **E-01 领域**（`-32002` 归因，§2 详细条目） | ✅ **口径定稿** | `-32002` 判为**扩展侧可用错误码**（宿主与内置运行时不产出）；`protocol.md` §9.2 表格行与注记由「保留码、待接线」改写为**终态口径**，[`INDEX.md`](../INDEX.md) §5 该项关闭 |
+| `PageInfo`（INDEX §5 独立项，非本清单条目） | ✅ **口径定稿** | 明确**维持不传递**（v1.0 预留定义）；`protocol.md` §8.5 注记改写，宿主页标题改由宿主侧信息提供（顺带修掉嵌套页标题显示原始 `page_id` 的缺陷，见 [`implementation.md`](../implementation.md) §2） |
 
 > **性质**：三项均**不改协议语义**（v1.0 零改动，仅注记口径与实现侧行为修正），故本文不升版本号；`INDEX.md` §5 两项开放项随本批关闭。
 
@@ -340,10 +341,10 @@ v1.3：记录第三处由**代码侧实现**（而非「文档对齐代码」）
 
 | 清单条目 | 变更 | 依据 / 落点 |
 |---|---|---|
-| §7「已确认一致（抽样）」中的 `f ` 前缀进页一行 | ⚠️ **该取样项已失效** | 2026-09-19 移除 `f ` 前缀直达：该功能与配套代码（`FILE_SEARCH_PREFIX` / `file_search_drill_target()` / `maybe_drill_file_search()` / `file_drill(_armed)` / `page.rs` 落地回填）**已全部不存在**，「文档 ↔ 代码一致」不再适用；[`search-file.md`](./search-file.md) §6.1 / §8 v3.7 与 [`INDEX.md`](./INDEX.md) §5 已同步登记 |
+| §7「已确认一致（抽样）」中的 `f ` 前缀进页一行 | ⚠️ **该取样项已失效** | 2026-09-19 移除 `f ` 前缀直达：该功能与配套代码（`FILE_SEARCH_PREFIX` / `file_search_drill_target()` / `maybe_drill_file_search()` / `file_drill(_armed)` / `page.rs` 落地回填）**已全部不存在**，「文档 ↔ 代码一致」不再适用；[`search-file.md`](../search-file.md) §6.1 / §8 v3.7 与 [`INDEX.md`](../INDEX.md) §5 已同步登记 |
 
 > **性质**：**不改协议语义**（v1.0 零改动，仅宿主侧入口收敛），故本文不升版本号；§7 该行已就地加删除线与指向本节的标注。
 
 ---
 
-> **本阶段约束复述**：v1.0 为纯只读核对记录；v1.1 完成三路复核验真（修正清单自身 9 处）并落实上述修复，**已登记进 [`INDEX.md`](./INDEX.md)**（§3.E 清单与 §5 未闭环项）；v1.2 追加 §10/§11，记录代码侧消除的差异（P-06、P-18）与过期数值的取代；v1.3 追加 §12，记录 P-01 及其同批协议错误码差异的闭环；追加 §13，记录 P-13 复核消除与两项协议口径定稿；追加 §14，记录 §7 一致性取样项因「`f ` 前缀直达移除」失效。
+> **本阶段约束复述**：v1.0 为纯只读核对记录；v1.1 完成三路复核验真（修正清单自身 9 处）并落实上述修复，**已登记进 [`INDEX.md`](../INDEX.md)**（§3.E 清单与 §5 未闭环项）；v1.2 追加 §10/§11，记录代码侧消除的差异（P-06、P-18）与过期数值的取代；v1.3 追加 §12，记录 P-01 及其同批协议错误码差异的闭环；追加 §13，记录 P-13 复核消除与两项协议口径定稿；追加 §14，记录 §7 一致性取样项因「`f ` 前缀直达移除」失效。

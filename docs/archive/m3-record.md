@@ -1,6 +1,7 @@
 # M3 实施记录 — 缓存与懒加载
 
-> **状态**：✅ 已关闭（2026-09-02 真机复验通过：**A6** frozen 冷启动不拉起进程 + 点击桩项复热成功；**A2** 数据就绪 <agg> ~2ms < 200ms 达标，total 高因 GUI/wgpu+msyh 字体加载，R2 记录瓶颈不调目标）。
+> **状态**：已落地 ｜ ✅ 已关闭（2026-09-02 真机复验通过：**A6** frozen 冷启动不拉起进程 + 点击桩项复热成功；**A2** 数据就绪 <agg> ~2ms < 200ms 达标，total 高因 GUI/wgpu+msyh 字体加载，R2 记录瓶颈不调目标）。
+> **版本**：v1.0（实施期记录，未再修订） ｜ **最后更新**：2026-09-02 ｜ **关联**：[implementation.md](../implementation.md) · [INDEX.md](../INDEX.md)
 > **逻辑层 `cache.rs` + 协议 `get_command` 接线 + UI 接线全部落地**：
 > frozen 磁盘桩读盘不拉起进程 / 点击桩项复热（spawn→initialize→get_command→执行，协议 §6.4）/
 > LRU 保活 8 个 warm 进程超容驱逐回落 stub / `ColdStartTimer` A2 计时 / 页脚三态 ◌✓✗。

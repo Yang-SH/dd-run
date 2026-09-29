@@ -1,7 +1,8 @@
 # optimization-plan.md 核对报告（2026-09-14）
 
-> **状态**：核查记录 ｜ **版本**：v1.0 ｜ **最后更新**：2026-09-14
-> **关联**：[optimization-plan.md](./optimization-plan.md) · [INDEX.md](./INDEX.md) · [protocol.md](./protocol.md) · [implementation.md](./implementation.md) · [memory-optimization-plan.md](./memory-optimization-plan.md) · [m9-inprocess-builtins.md](./m9-inprocess-builtins.md) · [doc-code-diff-2026-09-13.md](./doc-code-diff-2026-09-13.md)
+> **状态**：历史归档（2026-09-29 随全仓归档收进 docs/archive/；原「生效中（核查记录）」，对应修订已落实） ｜ **版本**：v1.0 ｜ **最后更新**：2026-09-29
+> **关联**：[optimization-plan.md](../optimization-plan.md) · [INDEX.md](../INDEX.md) · [protocol.md](../protocol.md) · [implementation.md](../implementation.md) · [memory-optimization-plan.md](../memory-optimization-plan.md) · [m9-inprocess-builtins.md](./m9-inprocess-builtins.md) · [doc-code-diff-2026-09-13.md](./doc-code-diff-2026-09-13.md)
+> 2026-09-29 补强注：§5 W-4 所引 optimization-plan 原 emoji 优先级图例已按 [INDEX §4](../INDEX.md) 规约改为纯文字（高/中/低/战略）；本文引文保留当时原文，不构成新的规约违规。
 
 ---
 
@@ -22,7 +23,7 @@
 | ❌ 事实错误 | 4 | 行号失效 ×2、字节数过期 ×1、归因错误 ×1（含两处归因） |
 | ⚠️ 遗漏 / 不严谨 | 6 | |
 | 🟨 规范不符 | 2 | |
-| ❓ 数据存疑 / 需补注 | 3 | |
+| 数据存疑 / 需补注 | 3 | |
 | ✅ 抽检通过 | 20+ | 见 §5 |
 
 **结论先行**：文档的**骨架、结论方向与绝大部分取证是准确的**——最关键的行号（`ext_inprocess.rs:262`、`dd-run-cli/src/main.rs:472,501`、`platform.rs:60/146`）、依赖引用面、协议现状表均逐条吻合。但仍存在 **4 处确凿事实错误**（尤以「eprintln 日志示例行号」指向非日志行、体积字节数与 `dist` 产物不符为要）与若干规范不符项。
@@ -60,7 +61,7 @@
 | **S-1** | 全篇（§2.1/2.3/2.4/2.5 等） | 大量**硬编码精确行号**（`platform.rs:60/146`、`ext_inprocess.rs:262`、`process.rs:358` …）。INDEX §4.2 明文要求「行号写成「约 :NNN」，避免随代码漂移」 | 统一改为「约 :NNN」。本文档因硬编码行号已实际出现 E-1 类失效风险 |
 | **S-2** | §2.3（L75） | 「CLI：`dd-run-cli/src/main.rs` **多處**」——繁体字混用 | 改「多处」 |
 
-### D. 数据存疑 / 建议补注（❓）
+### D. 数据存疑 / 建议补注
 
 | # | 位置 | 内容 | 建议 |
 |---|---|---|---|
@@ -145,7 +146,7 @@ rg -n "use log|tracing::|env_logger" crates
 
 **未改动**：文档结论方向、O1–O8 划分、Phase 1–3 排序、§2.2 协议现状表（抽检一致）均保持原样。
 
-**登记**：本报告入 [`INDEX.md`](./INDEX.md) §3.E；`optimization-plan.md` 状态仍「规划中」。
+**登记**：本报告入 [`INDEX.md`](../INDEX.md) §3.E；`optimization-plan.md` 状态仍「规划中」。
 
 ---
 

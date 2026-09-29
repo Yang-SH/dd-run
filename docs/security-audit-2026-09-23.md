@@ -221,7 +221,7 @@ ShellExecuteW 对 `.lnk` 与协议 URL 的解析与 `cmd /C start` **语义等�
 | ② 非法输入拒绝（含 S-01 两种已复现注入形态）：空串 / 纯空白 / `\n` / `\r\n` / `\0` / `\t` / `https://…/"&calc&"` / `C:\a b\x"&cd.>…&"z` → `false` | ✅ `win_launch::tests::rejects_impossible_targets` |
 | ③ 回归护栏：读 `builtins/apps.rs` 源码断言**不含** `Command::new("cmd.exe")` 与 `"start"`，且**含** `win_launch::shell_open` | ✅ `win_launch::tests::launch_path_does_not_use_cmd` |
 | ④ 构建与全仓回归 | ✅ `cargo build -p dd-ext` 通过；`cargo test --workspace --no-fail-fast` ∈ 既有基线（无新增失败，见 §7.2） |
-| ⑤ 真机行为不变 | ⏸ 待人工（本环境无法保活 GUI 进程，须用户真机启动验证 `.lnk` / `.url` 条目） |
+| ⑤ 真机行为不变 | 待人工（本环境无法保活 GUI 进程，须用户真机启动验证 `.lnk` / `.url` 条目） |
 
 > 判据 ③ 的护栏价值：S-01 属**一类**缺陷而非单点 bug——日后任何为「便捷启动」加回 `cmd /C start` 的改动都会把注入面带回来，故用源码断言把它钉死。
 
@@ -568,7 +568,7 @@ pub(crate) fn decode_icon_image(bytes: &[u8]) -> Option<egui::ColorImage> {
 | A9 | ✅ | `deny_entry_blocks_and_allow_revokes`（同 id 只留一条记录，可撤销） |
 | A10 | ✅ 代码路径 | 停用集（`disabled_extensions`）与信任判定是**两条独立过滤链**、两个独立存储（`config.json` vs `trust.json`）；互不覆盖 |
 | A11 | ✅ **实测** | `.workbuddy/tmp/trust-probe/`（独立 crate，真实产物 `dist/extensions.d/dd-ext-search.exe` = **836,608 B**）：`sha256_file` **0.874 ms** / `TrustLedger::load` **0.068 ms** / 无记录判定 **0.000 ms**（短路）/ 已批准判定（两次哈希）**1.068 ms** —— 全部 **≪ 10 ms 判据**；首方与内置走短路，常见情形**零哈希开销** |
-| A12 | ⏳ 新增已达 19 条；全仓复跑受环境阻塞 | 新增 **19 条**（14 + 4 + 1，> 12 条要求）；全仓 `cargo test --workspace --no-fail-fast` 两次复跑均为 **487 passed / 21 failed**（总数 **508**，与 §3.1 台账登记一致），失败构成为 **20 条已知 `Os error 231`（`ERROR_PIPE_BUSY`）环境批**（dd-host roundtrip/builtin 与 dd-gui `test_support` 的 piped-stdio spawn）+ 1 条既有机器绑定用例；**失败名单中无本项任何新测试**。环境自愈后复跑预期 **507 passed / 1 failed**（= 508 − 1 机器绑定） |
+| A12 | 进行中：新增已达 19 条；全仓复跑受环境阻塞 | 新增 **19 条**（14 + 4 + 1，> 12 条要求）；全仓 `cargo test --workspace --no-fail-fast` 两次复跑均为 **487 passed / 21 failed**（总数 **508**，与 §3.1 台账登记一致），失败构成为 **20 条已知 `Os error 231`（`ERROR_PIPE_BUSY`）环境批**（dd-host roundtrip/builtin 与 dd-gui `test_support` 的 piped-stdio spawn）+ 1 条既有机器绑定用例；**失败名单中无本项任何新测试**。环境自愈后复跑预期 **507 passed / 1 failed**（= 508 − 1 机器绑定） |
 
 > **环境批的处置依据**：与本日早前那批（22 条）同源，已用「零仓库代码的最小探针 + 临时还原改动 + 时间线」三层证据定性为环境限制（详见 §7.2 留档），**不要改代码**。
 

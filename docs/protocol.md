@@ -1,6 +1,7 @@
 # dd-run Extension Protocol v1.0
 
 > **状态**：已冻结 ｜ **版本**：v1.0 ｜ **最后更新**：2026-09-14（变更须走 §13 协议演进规则）
+> **关联**：[manifest-schema.md](./manifest-schema.md) · [extensions.md](./extensions.md) · [INDEX.md](./INDEX.md)
 > **受众**：写宿主的人与写扩展的人——这是二者之间**唯一的硬契约**。
 > **上手路径**：第一次写扩展请先读 [`extensions.md`](./extensions.md)（那份是"路径"，本文是"规范"）。
 > **上游依据**：[`cmdpal-platform-agnostic-design.md`](../cmdpal-platform-agnostic-design.md) §5（扩展契约）、§6（宿主模型）。
@@ -173,7 +174,7 @@ JSON-RPC 2.0 允许数组形式的批量请求，**本协议不支持**。收到
 
 ## 4. 生命周期状态机
 
-```
+```text
                     ┌──────────────────────────────┐
                     ↓                              │
 discovered → spawned → initializing → ready ⇄ busy ─┤

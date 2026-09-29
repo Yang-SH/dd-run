@@ -1,8 +1,9 @@
 # M4 实施记录 — 内置扩展与健壮性
 
-> **状态**：✅ 已关闭（2026-09-04，commit `757f3b4`）。P1–P3 健壮性基础层 + P4 共享扩展运行时与
+> **状态**：已落地 ｜ ✅ 已关闭（2026-09-04，commit `757f3b4`）。P1–P3 健壮性基础层 + P4 共享扩展运行时与
+> **版本**：v1.0（实施期记录，未再修订） ｜ **最后更新**：2026-09-04 ｜ **关联**：[implementation.md](../implementation.md) · [INDEX.md](../INDEX.md)
 > 5 内置扩展 + 宿主 fallback 轮 + P5 A3 nucleo 模糊过滤（2000 项实测 3.7ms < 16ms/帧）全部完成，
-> 真机复验通过；过程、决策与验收证据见下文。未排期遗留项见 [`./implementation.md`](./implementation.md) §6.1。
+> 真机复验通过；过程、决策与验收证据见下文。未排期遗留项见 [`./implementation.md`](../implementation.md) §6.1。
 > **目标**（implementation.md §M4）：MVP 内置 5 个扩展（Apps / Calc / System / WebSearch / Shell），
 > 扩展崩溃不影响宿主；连续崩溃受保护；能力注入（`host/*`）接 UI；过滤性能达标。
 > **验收映射**：A8（扩展崩溃后宿主不退出、可恢复）、A10（内置扩展功能清单核对）、

@@ -1,11 +1,11 @@
 # dd-run 文件搜索扩展升级设计（v2 评审蓝本）
 
 > **状态**：历史归档 ｜ **版本**：v2（蓝本）｜ **最后更新**：2026-09-13
-> **关联**：[search-file.md](./search-file.md) · [search.md](./search.md)
+> **关联**：[search-file.md](../search-file.md) · [search.md](../search.md)
 
 ---
 
-> **本文为历史记录，内容仅代表撰写时点（v2 评审蓝本），权威口径以 [search-file.md](./search-file.md) 为准。**
+> **本文为历史记录，内容仅代表撰写时点（v2 评审蓝本），权威口径以 [search-file.md](../search-file.md) 为准。**
 > 下文"待核实""LazyLock"等表述仅作决策留痕，不得据以编码。
 
 ## 1. 结论处置表（旧结论 → 最终处置）
@@ -79,7 +79,7 @@
 
 实现要点：
 
-- client 满足 `Send`/`Sync` 但**不得**用自建全局 `LazyLock` 永久持有：宿主 warm 进程池使扩展长驻，Everything 重启后静态 client 永久失效 → 改用 `EverythingClient::shared()` 的 `Arc`/`Weak` 语义（释放后自动重建）+ 探活重建阈值。详见 [`search-file.md`](./search-file.md) §9.2 P2.2。
+- client 满足 `Send`/`Sync` 但**不得**用自建全局 `LazyLock` 永久持有：宿主 warm 进程池使扩展长驻，Everything 重启后静态 client 永久失效 → 改用 `EverythingClient::shared()` 的 `Arc`/`Weak` 语义（释放后自动重建）+ 探活重建阈值。详见 [`search-file.md`](../search-file.md) §9.2 P2.2。
 - `query_wait` **已确认提供 `.timeout(Duration)`**（默认 3000ms > 宿主 `get_items` 2000ms）→ **必须显式设为 1000–1200ms**，未设置即视为缺陷并阻断；不得自行套用 `recv_timeout` 兜底。**代码已落实**：`search.rs` 的 `IPC_TIMEOUT = 1200ms`（约 :436）并用于 `query_wait(...).timeout(IPC_TIMEOUT)`（约 :497）。
 - UTF-16 天然返回：`decode_output` / `split_path` 在 IPC 通道上删除（es.exe 回落通道保留 GBK 解码）。
 - **已结案项**：`RequestFlags` 暴露 `Attributes`（16 个常量之一）→ 用 `get_u32(Attributes) & 0x10` 精确判定目录，IPC 通道不再用 `guess_is_dir`（es.exe 回落通道保留）；`DateModified` 单位为 **FILETIME**（`QueryValue::Time(FILETIME)`）→ 复用 `filetime_to_unix`。

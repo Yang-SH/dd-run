@@ -1,0 +1,459 @@
+# dd-run 稳定性 · 可用性 · 安全性加固方案（R 系列）
+
+> **状态**：规划中 ｜ **版本**：v1.4 ｜ **最后更新**：2026-09-29
+> **关联**：[security-audit-2026-09-23.md](./security-audit-2026-09-23.md)（S-01–S-11 已闭环，本文不重复）· [future-features-plan.md](./future-features-plan.md)（N1–N5 功能向，本文不重叠）· [optimization-plan.md](./optimization-plan.md) · [search-file.md](./search-file.md) · [search.md](./search.md) · [implementation.md](./implementation.md) · [protocol.md](./protocol.md) · [manifest-schema.md](./manifest-schema.md) · [INDEX.md](./INDEX.md)
+
+---
+
+## 1. 结论总表
+
+本文是 S-01–S-11 安全审计闭环之后的**新一轮加固规划**，来源为 2026-09-29 对全仓的三路只读代码审查（安全 / 稳定 / 可用各一路独立取证），全部 file:line 证据已于同日**逐一回读源码核对**（v1.1，更正两处子代理误报，见 §10 版本演进）。编号空间核查：S（审计）、D（设计决策）、N（功能提案）、T/I/O/K/P（各专题）均已占用，**R 系列空闲**，本文取 R（Robustness）。v1.3 增补审查（v1.1 同日）补两个维度面：**进程级防护与可诊断性**（单实例、panic 取证）、**量化验收与门禁制度**（内存基线、兼容矩阵、CI 处置），产出 R-25/R-26 与 V-13~V-16。
+
+下表为 30 秒结论；逐项证据、方案与验收见 §3–§5，实施批次、任务勾选清单与真机走查总清单见 §6，明确不做与缓办见 §7，与既有文档关系见 §9。
+
+| 编号 | 维度 | 级别 | 问题（一句话） | 落点 | 批次 |
+|---|---|---|---|---|---|
+| R-01 | 稳定 | ❌ P0 | 窗口最小化时 `raw.screen_rect` 为 `None`，`unwrap()` 崩溃整个启动器 | `ui/chrome.rs` 约 :133、:177 | 一 |
+| R-02 | 稳定 | ❌ P0 | config.json / trust.json / 冻结缓存**非原子写盘**，崩溃即丢全部设置或审批态 | `settings.rs` 约 :944 · `trust.rs` 约 :232 · `cache.rs` 约 :79 | 一 |
+| R-03 | 稳定 | ⚠️ P1 | 面板隐藏期间第三方扩展 stdout **无界入站队列**，流氓扩展可 OOM | `dd-host/process.rs` 约 :402、:789 | 四 |
+| R-04 | 稳定 | ⚠️ P1 | in-process 内置调用**无超时**：首屏 apps COM 枚举挂死 → 首屏永不落地 / 扩展永久 busy | `ext_client.rs` 约 :124–:142 · `builtins/apps.rs` 约 :297–:432 | 四 |
+| R-05 | 稳定 | 🟨 P2 | 启动期 6 处线程创建 `.expect` 是仅存的 fail-fast 面 | `hotkey.rs` 约 :74（Windows 实路径）· `tray.rs` 约 :138 · `platform.rs` 约 :89 | 一 |
+| R-06 | 稳定 | 🟨 P2 | 锁中毒后 `.unwrap()/.expect()` 级联 panic（websearch 会话性死亡 / sidecar 退出） | `websearch.rs` 约 :114、:121 · `search.rs` ×7 | 一 |
+| R-07 | 稳定 | 🟨 P2 | `host/set_clipboard` 在 UI 线程 `spawn().join()`，剪贴板被占用时面板卡顿 | `app/host_actions.rs` 约 :89 | 一 |
+| R-08 | 稳定 | 🟨 P2 | es.exe 错误信息 200 字节截断可落在多字节字符内 → sidecar panic | `dd-ext/src/bin/search.rs` 约 :459 | 一 |
+| R-09 | 稳定 | 🟨 P2 | 测试基线红：sys 测试断言开发机才装的软件（Flowframes），任何其他机器必失败 | `builtins/apps.rs` 约 :1510 | 一 |
+| R-10 | 安全 | ⚠️ 中 | S-06 确认门被 `&`/`\|` 多段命令绕过（只查首词）——粘贴型社工即触发 | `builtins/shell.rs` 约 :142–:158 | 二 |
+| R-11 | 安全 | ⚠️ 中 | Start Menu `.url` 文件无上限整读（S-04 同类漏网，in-process、每次启动复现） | `builtins/apps.rs` 约 :585、:618 | 二 |
+| R-12 | 安全 | ⚠️ 中 | 首方 sidecar **零完整性校验**（白名单短路在哈希之前），便携布局下 S-05 性质对 `dd-ext-search.exe` 不成立 | `dd-host/trust.rs` 约 :277 | 二 |
+| R-13 | 安全 | 🟨 低 | calc 递归下降无深度上限 → 宿主进程栈溢出（abort，`catch_unwind` 拦不住） | `builtins/calc.rs` 约 :322–:330 | 二 |
+| R-14 | 安全 | 🟨 低 | 清单 / config.json 读盘无体积上限（每次启动，超限 JSON → 启动期 OOM/长挂） | `manifest.rs` 约 :324 · `settings.rs` 约 :915 | 二 |
+| R-15 | 可用 | ❌ 高 | **启动时热键注册失败完全无提示**（冲突常见：PowerToys Run / ueli / Listary），面板打不开且无从诊断 | `hotkey.rs` 约 :154–:162 + `app/lifecycle.rs` 约 :186–:198 | 三 |
+| R-16 | 可用 | ❌ 高 | `host/open_url` 启动浏览器/文件失败静默——选中「在 Google 搜索」后无任何反应 | `app/host_actions.rs` 约 :135–:142 | 三 |
+| R-17 | 可用 | ❌ 高 | 设置保存失败静默——不可写目录下所有修改「看似成功」，重启回滚且无解释 | `settings.rs` 约 :932–:950 | 三 |
+| R-18 | 可用 | ⚠️ 中 | 2 条热键 toast 硬编码中文，绕过 i18n（en 用户看中文） | `app/lifecycle.rs` 约 :191、:197 | 三 |
+| R-19 | 可用 | ⚠️ 中 | 托盘 tooltip / 菜单硬编码 `Win+Alt+Space`，改绑热键后展示错误组合 | `tray.rs` 约 :67 · `text.rs` 约 :467 | 三 |
+| R-20 | 可用 | ⚠️ 中 | 清单 JSON 解析失败的扩展**无声消失**（skipped 列表被丢弃），用户无从排查 | `aggregator.rs` 约 :357–:372 · `app/aggregate.rs` 约 :61–:66 | 三 |
+| R-21 | 可用 | ⚠️ 中 | 热键捕获接受系统关键组合（如 Alt+Space 全局劫持窗口菜单）且无警示 | `app/keys.rs` 约 :230–:241 | 三 |
+| R-22 | 可用 | ⚠️ 中 | IME 组词期间的 Enter 直接触发选中项——中文输入回车上屏可能误执行命令行 | `app/keys.rs` 约 :34、:135–:137 | 三 |
+| R-23 | 可用 | 🟨 低 | 查询无长度上限，粘贴超大文本直入模糊匹配 / es.exe 参数 | `state.rs` 约 :234（`set_query` 入口） | 三 |
+| R-24 | 可用 | 🟨 低 | sidecar 自述仍写已移除的 `f ` 前缀（过时文案，描述一旦上屏即误导） | `dd-ext/src/bin/search.rs` 约 :1190–:1192 | 三 |
+| R-25 | 稳定 | ⚠️ P1 | 崩溃零痕迹：无 `panic::set_hook`、日志恒写 stderr 且 release 无控制台，未知崩溃（R-01 同级）用户无痕迹可报、无从诊断 | `dd-gui/main.rs` 入口 + `dd-protocol/logging.rs` | 一 |
+| R-26 | 稳定 | 🟨 P2 | 无单实例保护：双开导致热键注册失败误导排障（R-15 假阳性）、托盘冲突、config.json 并发写丢失 | `dd-gui/main.rs` 启动早期 | 四 |
+
+> 26 项全部满足：**零冻结契约改动**（protocol/manifest v1.0 字段、方法、错误码不动）、**零新增依赖**、不绕过 S-05 门禁（R-12 反而是补强它）。预计四批累计 diff 约 +810/−215，新增单测约 36（批一 9 / 批二 16 / 批三 7 / 批四 4，见 §6.1）；逐项验收标准内嵌于 §3–§5 各项「验收」（三口径），通用口径见 §6.5。
+
+---
+
+## 2. 审查方法与基线
+
+### 2.1 输入
+
+- **三路独立只读审查**（2026-09-29）：安全路（信任门完整性 / 残余汇点 / unsafe / 解析健壮性）、稳定路（panic 面 / UI 线程阻塞 / 资源生命周期 / 静默吞错）、可用路（错误反馈 / i18n / 交互边界 / 文档一致性），每路均要求 file:line 级证据。
+- **人工全量核对**（v1.1）：主审对本文引用的全部 file:line 逐一回读源码确认；子代理证据有两处不准（R-23 文件路径、R-06 计数），已在本文更正（§10）。
+
+### 2.2 当前基线（2026-09-29 实测）
+
+- `cargo clippy --workspace --all-targets`：仅 1 条真实告警（`dd-protocol` thread_local 可 const 化，随批一顺手修），其余为并行构建锁文件噪音。
+- `cargo test --workspace`：**dd-ext 105/106，1 失败**——`steam_installed_shown_uninstalled_filtered_root_lnk_shown`（= R-09，断言本机开始菜单存在 Flowframes，本机未装即红）；dd-gui 236/236 通过。
+- **兼容矩阵与走查登记**（v1.3 增补）：目标兼容 **Windows 10 / 11（x64）**；具体版本下限未单独验证，发现低版本问题再收窄矩阵。§6.2 每条真机走查执行时须**登记实测 OS 版本/构建号**，避免「开发机稳定、用户机器崩溃」的覆盖盲区（多显示器 / DPI / RDP 类问题即其典型，见 V-14）。
+
+### 2.3 已确认可靠的面（本轮不再动）
+
+S-01–S-11 修复逐项复核与审计记录一致；manifest/exe 双哈希**每次 spawn 重验**、disabled_extensions 过滤先于 collect、framing 毒化逻辑与上限边界、websearch 模板 scheme 强制链、unsafe 全量走查（CNG/COM vtable/GDI/DWM/消息循环）句柄配对正确、子进程退出清理（Drop 强杀 + stdin EOF）、损坏文件启动回退（config 回默认 / trust fail-closed / 冻结桩拒载）均健全。**本方案只补缺口，不推翻既有设计。**
+
+---
+
+## 3. 稳定性（R-01 – R-09、R-25 – R-26）
+
+### R-01（P0）最小化窗口触发 `screen_rect` unwrap panic
+
+- **证据**：`crates/dd-gui/src/ui/chrome.rs` 约 :133 与 :177 均为 `let screen = ctx.input(|i| i.raw.screen_rect).unwrap();`。egui-winit 0.36.2（Cargo.lock 实测版本）在 Windows 窗口最小化（0 尺寸）时**刻意**将 `raw.screen_rect` 置 `None`；而可见路径无条件调 `chrome_begin/chrome_end`（`app/mod.rs` 约 :760、:768）。焦点丢失自隐依赖 `ever_focused`（`app/lifecycle.rs` 约 :246–:264），1 Hz 看门狗重绘与 OS 状态瞬时错位即可触达。
+- **影响**：UI 线程 panic → 启动器整体崩溃。这是运行路径上**唯一确认的全应用崩溃向量**。
+- **方案**：两处改用本帧已解析的 `i.screen_rect`（egui InputState 提供且首帧后恒有值），不引入新分支语义；抽 `fn current_screen_rect(ctx) -> Rect` 便于复用与单测。
+- **验收**（三口径，通用门禁与记录规则见 §6.5）：
+  - 单测 `r01_screen_rect_fallback_raw_none` / `r01_screen_rect_prefers_raw`：egui 测试上下文分别注入 `raw.screen_rect = None` 与有值两态——断言辅助函数分别**回落本帧已解析 `screen_rect`（不 panic）**与**优先取 `raw`**（防语义漂移）；
+  - 真机 V-1 + V-14（同类触发族同判据）；
+  - 回归：遮罩 / 缩放热区既有行为不变（V-1 判据内含），批一全量门禁绿。
+
+### R-02（P0）持久化非原子写盘
+
+- **证据**：`settings.rs` 约 :944（config.json）、`dd-host/src/trust.rs` 约 :232（trust.json）、`dd-host/src/cache.rs` 约 :79（冻结桩）均为直接 `std::fs::write`。写盘中途崩溃/断电 → 半截文件：config 丢全部设置；trust.json 解析失败 → `LedgerState::Corrupt` fail-closed，**所有已批准扩展回 Pending 需重新审批**。写盘频率高（每次设置切换、每次隐藏面板 `persist_panel_size`，`app/lifecycle.rs` 约 :123 起）。
+- **方案**：两 crate 各落一个 `atomic_write(path, bytes)` 小助手（同目录写 `.tmp` → `std::fs::rename`，Windows 侧走 `MOVEFILE_REPLACE_EXISTING` 可覆盖），三处写盘接入；不引入 fsync 以免拖慢 UI 线程（崩溃窗口从「整个写入时长」缩到「一次 rename」）。
+- **验收**（三口径，见 §6.5）：
+  - 单测 3 条：`r02_atomic_write_replaces_existing`（旧文件存在→内容**整体**替换）/ `r02_atomic_write_missing_dir`（目标目录缺失→创建后写入成功）/ `r02_atomic_write_failure_keeps_old`（目录置只读使写入失败→**原文件保持完整旧内容、无 `.tmp` 残留**）；
+  - 真机 V-2（判据含 R-17 一次性 toast 口径）；
+  - 回归：`persist_panel_size` 高频路径（每次隐藏面板）无引入卡顿——V-2 附带连续 20 次唤起-隐藏无感知延迟。
+
+### R-03（P1）扩展 stdout / host 请求无界入站队列
+
+- **证据**：`dd-host/process.rs` 约 :402–:403 读线程把帧推入**无界** `mpsc::channel`，仅在面板可见的 `ui()` 里 `poll_notifications` 排空；约 :789 的 `host_requests.push` 同构。流氓/有缺陷扩展在面板隐藏期间刷 stdout（每行 ≤1 MiB 不触发 TooLarge）→ 内存无界增长 → OOM 崩溃。
+- **方案**：入站帧队列定容（如 128），满则丢新帧并置 `overflown` 标志，消费端合成一条告警通知（日志 + 扩展健康面可见）；`host_requests` 定容 32 并 drop-oldest（溢出需连续 32 条未消费的反向请求，先记日志）。不触碰协议。
+- **验收**（三口径，见 §6.5）：
+  - 单测 2 条：`r03_inbound_queue_bounded_flag`（注入 >128 帧→队列长度恒 128、`overflown` 标志置位）/ `r03_host_requests_drop_oldest`（>32 条反向请求→保留最新 32 条、最早丢弃）；
+  - 真机 V-10；
+  - 回归：面板可见期间的正常通知流（`poll_notifications` 排空）行为不变——既有通知单测全绿。
+
+### R-04（P1）in-process 内置调用无超时
+
+- **证据**：`ext_client.rs` 约 :124–:142 注明「in-process 无超时（纯函数调用）」。但首屏 `apps.top_level` 首调做 ~400 应用 COM 枚举 + 逐项图标提取（`builtins/apps.rs` 约 :297 起 `APP_CACHE: OnceLock`），其中 `lnk_target` 的 `target.is_file()`（apps.rs 约 :789）与 `GetImage` 在死 UNC 快捷方式上可阻塞至网络超时；一旦挂死：首屏永不落地（永久「加载中」）或该扩展 `inflight` 永占、回复 busy 直到重启。
+- **方案**（改造型，放批四）：in-process invoke/get_items 包一层线程 + `recv_timeout`；超时返回协议层 `Timeout` 错误、清 `inflight`、该扩展本会话标记 Failed（UI 已有 Failed 渲染 + Retry）；超时线程自然滞留（受 OS 网络超时上界约束，不强行 kill），apps 的 `OnceLock` 只在成功路径落缓存、失败路径加**负缓存**避免每次聚合重付 400 应用枚举。panic 隔离面不变（`ext_inprocess.rs` 约 :264 的 `catch_unwind` 继续包裹）。
+- **验收**（三口径，见 §6.5）：
+  - 单测 2 条：`r04_slow_ext_timeout_failed_reset`（假慢扩展超时→协议 `Timeout` 错误→`inflight` 复位→扩展呈 Failed + Retry）/ `r04_apps_negative_cache`（枚举失败路径落负缓存→二次聚合**不再重付全量枚举**）；
+  - 真机 V-11（判据含超时阈值 T——**初值 5 s**，实施时按真机首屏耗时实测校准并在 §10 留痕）；
+  - 回归：panic 隔离面不变（`ext_inprocess.rs` 约 :264 `catch_unwind` 路径既有测试全绿）、熔断 / 池化无回归（批四验收门内含）。
+
+### R-05（P2）启动期线程创建 `.expect`
+
+- **证据**：Windows 实路径 3 处——`hotkey.rs` 约 :74（热键线程）、`tray.rs` 约 :138（托盘线程）、`platform.rs` 约 :89（CJK 字体加载线程）；另 3 处为跨平台占位/测试桩（hotkey.rs 约 :103、:120，tray.rs 约 :155），一并治理。线程创建失败即启动崩溃，是 panic 面清点后仅存的 fail-fast 残留。
+- **方案**：对齐托盘既有降级口径——失败记 `log::error!` 并继续（无热键 / 无托盘运行）；其中热键降级与 R-15 的「不可用提示」共用同一状态位，用户可感知。
+- **验收**（三口径，见 §6.5）：
+  - 单测不可达（线程创建失败无法稳定注入）→ **代码评审口径**：grep 确认 6 处启动期线程 `.expect(` 清零，且各降级路径均有 `log::error!`；
+  - 真机：无独立 V 项——热键线程降级与 R-15 状态位共位，由 V-3 侧证「无热键运行」用户可感知；
+  - 回归：正常启动路径托盘 / 热键 / CJK 字体行为不变（每批五步冒烟隐含覆盖）。
+
+### R-06（P2）锁中毒级联
+
+- **证据**：`websearch.rs` 约 :114、:121 `CONFIGURED_ENGINES_JSON.write()/read().expect("引擎配置锁未中毒")`——任何持锁 panic 后 websearch 整会话死亡（被 `catch_unwind` 接住变 `-32603`，功能报废至重启）；sidecar `search.rs` 共 **7 处**非测试 `lock().unwrap()`（约 :76、:89、:116、:133、:139、:509、:520）中毒即进程退出。
+- **方案**：统一改 `lock().unwrap_or_else(|e| e.into_inner())`（PoisonError 取回内层数据；这些锁保护的都是可整体重建的配置/索引缓存，中毒续用安全）。
+- **验收**（三口径，见 §6.5）：
+  - 单测 2 条：`r06_websearch_poisoned_lock` / `r06_sidecar_poisoned_lock`——持锁线程内 panic 制造中毒后，主路径经 `into_inner()` 取回数据**仍可读写且内容完整**；
+  - 真机：无独立 V 项（中毒注入不可达），随批一冒烟覆盖正常读写路径；
+  - 回归：websearch 引擎切换 / 搜索功能行为不变。
+
+### R-07（P2）剪贴板写入在 UI 线程 join
+
+- **证据**：`app/host_actions.rs` 约 :89 `METHOD_HOST_SET_CLIPBOARD` 分支 `thread::spawn(...).join()`——`poll_host_requests` 在 `ui()` 内调用，arboard 打开 Win32 剪贴板（与剪贴板管理器争 `OpenClipboard`）期间整个面板冻结。spawn 毫无收益。
+- **方案**：去掉 join——写入移交常驻工作线程 + `mpsc`，结果（成功/失败）经既有 toast 通道反馈（与 R-16 同一套失败提示基建）。
+- **验收**（三口径，见 §6.5）：
+  - 单测 `r07_clipboard_worker_roundtrip`：请求入队→（假）工作线程消费→成功 / 失败结果回传 UI 线程（mpsc 纯逻辑）；
+  - 真机 V-12（剪贴板占用器场景：面板无卡顿 + 结果 toast 正常）；
+  - 回归：写入内容与来源 toast（S-07 既有行为）不变。
+
+### R-08（P2）es.exe 错误信息截断字节边界 panic
+
+- **证据**：`dd-ext/src/bin/search.rs` 约 :459 `&t[..t.len().min(200)]`——本地化/中文路径下 200 字节可落在多字节字符内 → `not a char boundary` panic（sidecar 进程内，进程退出由宿主熔断兜底，故低）。
+- **方案**：改 `t.chars().take(200).collect::<String>()`。
+- **验收**（三口径，见 §6.5）：
+  - 单测 `r08_error_truncate_multibyte_safe`：构造 >200 字节且截断边界落在多字节字符内的错误串（CJK / emoji 各一）→ 返回合法 `String`、`chars().count() ≤ 200`、**不 panic**；
+  - 真机：无独立 V 项，随批一冒烟（es.exe 出错路径）覆盖；
+  - 回归：ASCII 错误信息截断展示不变。
+
+### R-09（P2）测试基线依赖开发机环境
+
+- **证据**：`builtins/apps.rs` 约 :1510 sys 测试断言开始菜单含 Flowframes（开发机自装软件），任何其他机器/CI 必失败；本次基线实测即红（§2.2）。顺带：`dd-protocol` 的 thread_local clippy 告警一行修。
+- **方案**：该测试的软件枚举断言改为**合成夹具**（临时 Start Menu 目录注入 `.lnk`，枚举函数已可注入目录则直接复用；否则最小参数化），机器相关断言一律 `#[ignore]` 并更名 `machine_*` 注明前提。目标：`cargo test --workspace` 在裸机全绿。
+- **验收**（三口径，见 §6.5）：
+  - 改造单测 `r09_apps_enum_from_fixture`：临时 Start Menu 目录合成 `.lnk` 夹具→枚举结果**含夹具项**；机器相关断言更名 `machine_*` + `#[ignore]` 并注明运行前提；
+  - 门禁：裸机 `cargo test --workspace --no-fail-fast` **连续两次全绿**（debug 构建）——即批一验收门本身；
+  - 回归：apps 枚举生产行为不变（夹具仅入测试路径）。
+
+### R-25（P1，v1.3 增补）崩溃零痕迹：无 panic hook，日志对发行用户不可达
+
+- **证据**：全仓 grep 无 `panic::set_hook`（2026-09-29 复核）；O4 日志后端**恒写 stderr**（`dd-protocol/src/logging.rs`，§2.4 设计约束），而 release 构建无控制台（`main.rs` 约 :27 `windows_subsystem = "windows"`）——默认 `debug` 级别的全部日志对发行用户**不存在**。本方案 §5 开头已自认此矛盾，但 R-15~R-17 只解决了**已知失败**的 toast 反馈；R-01 这类未知崩溃修复后，未来任何同级崩溃用户手里无痕迹可报、开发者完全无从诊断——「稳定可靠运行」缺了事后取证这一环。
+- **方案**：进程入口挂 `panic::set_hook`，panic 信息（时间戳 + message + location + 线程名）**追加写入** `%APPDATA%\dd-run\logs\panic.log`（目录解析复用 `dd-host::manifest` 的 `%APPDATA%\dd-run` 口径，约 :202–:209）。目录创建/写盘失败一律静默放弃（hook 内**不得二次 panic**）；格式化抽纯函数便于单测。默认行为不变（hook 落盘后仍走标准 panic 流程），全量日志文件化见 §7 缓办行。
+- **验收**（三口径，见 §6.5）：
+  - 单测 `r25_panic_log_format_states`：格式化纯函数三态断言（含 location / 多行 message / 缺 location）；路径不可写时格式化与降级**不 panic**；
+  - 真机 V-16（注入 panic→`logs\panic.log` 追加一条、时间戳 / message / location 齐备；正常退出路径不新增条目）；
+  - 回归：默认 panic 流程行为不变（hook 落盘后仍按标准流程展开）。
+
+### R-26（P2，v1.3 增补）无单实例保护
+
+- **证据**：全仓 grep 无 `CreateMutexW` / 单实例检测（2026-09-29 复核）。双开的实际后果与本方案三项直接冲突：① 第二实例热键注册失败 → R-15 toast「可能被其他程序占用」，**误导排障方向**（真凶是自己）；② 托盘双图标；③ config.json 并发写——R-02 原子写只保证文件不损坏，**不解决 last-writer-wins 丢设置**。
+- **方案**：启动早期（O4 init 之后、eframe 创建之前）`CreateMutexW`（命名 `Local\dd-run-single-instance`）；`ERROR_ALREADY_EXISTS` → `MessageBoxW`（user32 已链接，零新依赖）提示「dd-run 已在运行」后退出。属启动行为变更，按改造型纪律放批四。
+- **验收**（三口径，见 §6.5）：
+  - 单测不可达（进程级互斥）→ **代码评审口径**：互斥体命名、句柄随进程退出释放的语义注释声明；
+  - 真机 V-15（双开→第二实例弹「已在运行」退出、原实例热键 / 托盘 / 设置三面无损；附带开机自启复启一次）；
+  - 回归：单实例启动与自启路径行为不变。
+
+---
+
+## 4. 安全性（R-10 – R-14）
+
+### R-10（中）S-06 确认门被多段命令绕过
+
+- **证据**：`builtins/shell.rs` 约 :142–:158——`is_dangerous_command` 只取**首词**比对（约 :140 注释自认「多段 `&`/`|` 不追查」），约 :217 以此决定是否回 `Confirm`，约 :233 `run_capture("cmd.exe", &["/C", query])` 原样执行。query = `echo hi & rd /s /q C:\...\Documents` → 首词 `echo` 不在名单 → **不弹确认直接执行破坏段**。S-06 的威胁模型（粘贴误触/社工）恰恰最常以一行多段命令出现。
+- **方案**：判定前把 query 按 `&&` / `&` / `|` / 换行切段，**每段**首词各自过一遍 `is_dangerous_command`，任一段命中即 `Confirm{is_critical:true}`；纯函数改动，协议零改动（沿用 §8.3 确认重发机制）。
+- **验收**（三口径，见 §6.5）：
+  - 单测 6 条：`r10_dangerous_seg_amp` / `r10_dangerous_seg_double_amp` / `r10_dangerous_seg_pipe` / `r10_dangerous_seg_newline`（`&` / `&&` / `|` / 换行切段逐段判定，各含「首段无害、次段危险」用例）+ `r10_safe_multiseg_no_confirm` / `r10_safe_single_no_confirm`（全无害多段与普通单段**不误报**两条负例）；
+  - 判据：任一段首词命中名单 → `Confirm{is_critical:true}`；纯函数判定，协议零改动；
+  - 回归：单段危险命令确认行为不变（S-06 既有测试全绿）。
+
+### R-11（中）Start Menu `.url` 无上限整读（S-04 同类漏网）
+
+- **证据**：`builtins/apps.rs` 约 :585（`url_target`）与约 :618（`url_icon_file`）对 `.url` 直接 `std::fs::read(path).ok()?`，无 metadata 限幅。审计信任假设 C 已明确「Start Menu 内容不受信」；本扩展 M9 起 **in-process**，数 GB `.url`（恶意安装包放置）→ 每次启动首屏聚合整读 → OOM/挂死，无需任何扩展批准、持久复现。
+- **方案**：仿 S-04 `read_icon_limited` 口径——先 `fs::metadata`，非普通文件或 `len > 64 KiB` 直接 `None`（两处各一判断）。
+- **验收**（三口径，见 §6.5）：
+  - 单测 3 条：`r11_url_over_limit_rejected`（>64 KiB → `None`）/ `r11_url_normal_parsed`（小文件正常解析出目标）/ `r11_url_directory_rejected`（目录 / 非普通文件 → `None`）；
+  - 真机：无独立 V 项（数 GB `.url` 难以真实放置，以单测构造为准）+ 批二冒烟（正常 `.url` 应用不受影响）；
+  - 回归：正常 `.url` 快捷方式图标 / 目标解析不变。
+
+### R-12（中）首方 sidecar 零完整性校验，S-05 对其不成立
+
+- **证据**：`dd-host/trust.rs` 约 :277 `ExtOrigin::Sidecar if FIRST_PARTY_IDS.contains(&id.as_str()) => Trust::AutoTrusted`（白名单现值 = `com.ddrun.filesearch`，约 :55）——短路在哈希**之前**，`dd-ext-search.exe` 从不参与 `hashes_match`。旗舰分发形态是便携 zip（manifest-schema §2），`extensions.d\` 在用户可写位置：同用户程序替换 sidecar exe（或加一份指向自己 exe 的 `com.ddrun.filesearch.json`）→ 每次启动（含开机自启）**静默拉起，零审批、台账零痕迹**，等于给了伪装受信组件的持久化点。
+- **方案**：首跑钉扎——sidecar 首次出现时计算双哈希写入 trust.json（`Decision::Allow`、来源标 sidecar、附 `pinned_host_version`）；此后每次 spawn 走 `hashes_match`。哈希不符时按 `pinned_host_version` 是否等于当前宿主版本分流：**版本相同** → `Pending` + 设置页告警（既有 UI 渲染兜底）；**版本不同**（随应用升级正常变更）→ 静默重钉，保持零摩擦升级。信任锚 = 应用分发包本身，残余窗口（升级后首启前被替换）在 §7 声明。trust.json 非冻结契约、永不导出（N5 已定），格式扩展零兼容负担。
+- **验收**（三口径，见 §6.5）：
+  - 单测 3 态：`r12_sidecar_pin_on_first_sight`（首现→双哈希写入 trust.json、`Allow`、来源标 sidecar）/ `r12_same_version_tamper_pending`（哈希不符且 pinned == 当前版本→`Pending` + 设置页告警位）/ `r12_upgrade_repin_silent`（pinned != 当前版本→静默重钉新哈希）；
+  - 真机 V-9（同版替换 / 正常升级两场景分别走查）；
+  - 回归：第三方扩展信任门（S-05）行为零变化——既有信任门测试全绿。
+
+### R-13（低）calc 求值器无递归深度上限
+
+- **证据**：`builtins/calc.rs` 约 :322–:330 `parse_atom` 的 `'('` 分支递归回 `parse_expr`，深度 ∝ 输入长度；calc 在宿主进程内执行，**栈溢出是 abort，`catch_unwind`（ext_inprocess.rs 约 :264）拦不住**。入口：粘贴 ~10^5 个 `(` 后选中 `= …` 兜底项。
+- **方案**：`Parser` 加 `depth: u32`，递归入口超 256 返回 `EvalError::Domain`。
+- **验收**（三口径，见 §6.5）：
+  - 单测 2 条：`r13_depth_over_limit_rejected`（257 层 `(` → `EvalError::Domain`）/ `r13_depth_at_limit_ok`（256 层内正常求值）；
+  - 真机：无独立 V 项——粘贴超深表达式入查询框、选中 calc 兜底项一次（批二冒烟），宿主不崩；
+  - 回归：calc 正常用例全绿。
+
+### R-14（低）清单 / config.json 读盘无体积上限
+
+- **证据**：`dd-host/src/manifest.rs` 约 :324（对 `extensions.d` 下每个 `.json` `fs::read_to_string`）、`settings.rs` 约 :915（config.json）。校验发生在读入**之后**，4 GB 外形合法的 JSON → 每次启动整读+解析 → 启动期 OOM/长挂。
+- **方案**：读入前 `fs::metadata` 限幅（清单与 config 各 1 MiB，余量充足），超限记 `ParseError` 跳过 / 回默认。
+- **验收**（三口径，见 §6.5）：
+  - 单测 2 条：`r14_manifest_over_limit_skipped`（>1 MiB 清单→记 `ParseError` 跳过，**同目录其余扩展正常加载**）/ `r14_config_over_limit_defaults`（>1 MiB config.json→回默认不 panic）；
+  - 真机：无独立 V 项，批二冒烟放置一次超限清单后正常启动；
+  - 回归：正常体积清单 / config 加载行为不变。
+
+---
+
+## 5. 可用性（R-15 – R-24）
+
+> 背景放大器：release 构建无控制台（`main.rs` 约 :27 `windows_subsystem = "windows"`），日志后端恒写 stderr（约 :48–:51）——一切「记日志即可」的失败对发行用户**不可见**。所以本节把「静默失败」升级为「UI 可见反馈」，并复用既有 toast 基建（`show_toast` / `tr()`），不新造轮子。
+
+### R-15（高）启动热键注册失败完全无提示
+
+- **证据**：`hotkey.rs` 约 :154–:162 启动注册失败仅 `log::debug!` + `ReRegistered(false)`；`app/lifecycle.rs` 约 :186–:198 的处理仅当 `hotkey_prev` 为 `Some` 才 toast，而启动时它是 `None`（`app/mod.rs` 约 :423）→ 无任何提示。设置页热键卡仍正常展示「当前组合」键帽（`ui/settings_view.rs` 约 :985–:1012），无失效标记。装了 PowerToys Run / ueli / Listary 的用户热键冲突极常见，结果就是「面板打不开、无从诊断」。
+- **方案**：① 启动 `ReRegistered(false)` → 错误 toast「热键注册失败，可能被其他程序占用，请到设置更换」；② 热键卡加「未注册」状态徽标（复用 Failed 渲染口径）；③ 顺带覆盖 `GetMessageW` 出错导致热键线程静默死亡的同款提示（hotkey.rs 约 :173–:175 `r == -1` 即 break，置同一状态位）。
+- **验收**（三口径，见 §6.5）：
+  - 单测 `r15_hotkey_failed_state_flags`：启动注册失败→置「未注册」位；`GetMessageW` 返回 -1 退出→置同一状态位；重注册成功→复位（三段流转各一断言）；
+  - 真机 V-3（PowerToys Run 占用场景：启动即见错误 toast + 热键卡「未注册」徽标）；
+  - 回归：正常注册路径**不出现任何新 toast**（不误报）。
+
+### R-16（高）`host/open_url` 失败静默
+
+- **证据**：`app/host_actions.rs` 约 :135–:142 两处失败仅 `log::debug!/warn!`（`open_path` 失败 debug、`webbrowser::open` 失败 warn）。websearch 选中后面板已 `Dismiss`，浏览器启动失败 = 看起来「应用把命令吃了」。
+- **方案**：失败路径 `show_error_toast(tr("toast.open_fail").replace("{e}", …))`（新增 i18n 键，zh/en 同批）。
+- **验收**（三口径，见 §6.5）：
+  - 真机 V-4（无默认浏览器 / 断网两失败源均出 `toast.open_fail`，文案含失败原因摘要）；
+  - 回归：成功路径（默认浏览器正常打开）行为与既有日志不变；新增 i18n 键经 R-18 同款完备性单测覆盖。
+
+### R-17（高）设置保存失败静默
+
+- **证据**：`settings.rs` 约 :932–:950 best-effort 写盘失败仅 `log::warn!`；不可写目录（OneDrive 占位 / AV 锁 / 策略）下所有修改重启即回滚且无解释。
+- **方案**：每会话首次写失败弹一次性 toast（含「本次修改可能未保存」口径）；与 R-02 的原子写在同一函数落地。
+- **验收**（三口径，见 §6.5）：
+  - 真机 V-2 合并口径：配置目录置只读后修改设置→失败 toast **恰出现一次**（会话内不重复轰炸），恢复可写后再修改→不再出现；
+  - 回归：正常保存路径无 toast；与 R-02 同落点，其原子写单测覆盖本项代码路径。
+
+### R-18（中）热键 toast 硬编码中文
+
+- **证据**：`app/lifecycle.rs` 约 :191 `self.show_toast("全局热键已更新", None)`、约 :197 `show_toast("新热键注册失败（可能被占用），已恢复原热键", None)`——全 UI 代码仅有的两处绕过 `t()/tr()` 的用户可见字符串（i18n 表本身有双向完备性单测）。
+- **方案**：新增 `toast.hotkey_updated` / `toast.hotkey_failed` 键，走 `self.tr()`。
+- **验收**（三口径，见 §6.5）：
+  - 单测：既有 i18n 双向完备性单测键表扩入 `toast.hotkey_updated` / `toast.hotkey_failed`（zh / en **均存在且非空**即绿）；
+  - 真机：V-3 场景在 en 语言下复跑一次→两条热键 toast 均为英文；
+  - 回归：zh 语言 toast 文案语义不变。
+
+### R-19（中）托盘热键标签不随改绑更新
+
+- **证据**：`tray.rs` 约 :67 `const TOOLTIP: &str = "dd-run — Win+Alt+Space"`（D38 注释自认静态妥协）；`text.rs` 约 :467 `tray.toggle` 双语内嵌 `\tWin+Alt+Space`。用户改绑后托盘持续展示错误组合（`settings.rs` 约 :660/:678 已有 `hotkey_mods_label`/`hotkey_vk_label` 动态拼装函数可复用）。
+- **方案**：菜单创建时按 `settings.hotkey_mods/vk` 动态拼装 tooltip 与菜单项尾缀（NIM_MODIFY 跨线程复杂度维持 D38 结论不动，仅取当前值）。
+- **验收**（三口径，见 §6.5）：
+  - 真机 V-5：改绑为非默认组合（如 Ctrl+Shift+P）→ tooltip = `dd-run — Ctrl+Shift+P`、菜单尾缀同步展示；**改绑后即时**与**重启后**两条路径都验证；
+  - 回归：默认组合（未改绑）展示行为与 D38 静态口径一致。
+
+### R-20（中）清单解析失败的扩展无声消失
+
+- **证据**：`aggregator.rs` 约 :357–:372 只有 `dir_error` 变 note，`outcome.skipped`（manifest.rs 约 :535 的逐清单失败原因）被丢弃；`app/aggregate.rs` 约 :61–:66 又把 note 按 2026-09-04 用户决策丢弃。对比之下信任门 Pending/Blocked、Failed 原因 + Retry 都已优秀呈现——唯独「JSON 写错一个逗号 → 扩展无声蒸发」。
+- **方案**：`skipped`（路径 + 原因）以警告行渲染在扩展卡顶部（复用既有 Failed 行样式，只读不可 Retry），不改页脚 note 语义。
+- **验收**（三口径，见 §6.5）：
+  - 单测 `r20_skipped_aggregated_with_reason`：目录含一条语法错误清单→聚合结果 `skipped` 含（路径, 原因）；全合法目录→`skipped` 为空（正负例）；
+  - 真机 V-6（扩展卡顶部警告行 = 路径 + 原因，只读、不可 Retry）；
+  - 回归：页脚 note 语义不变（2026-09-04 用户决策口径）。
+
+### R-21（中）热键捕获接受系统关键组合
+
+- **证据**：`app/keys.rs` 约 :230–:241 任何含 Ctrl/Alt 的组合均接受（`mods & 0b0011 != 0` 即通过），如 Alt+Space 会全局劫持所有应用的窗口菜单键且 `RegisterHotKey` 会成功。注册失败的回滚路径（hotkey.rs 约 :180–:201）已健全，缺的是事前警示。
+- **方案**：捕获确认时对已知关键组合（Alt+Space / Ctrl+Esc / Ctrl+Shift+Esc / Alt+F4 等）出确认提示（「该组合为系统常用快捷键，仍要使用？」），不硬禁。
+- **验收**（三口径，见 §6.5）：
+  - 单测 `r21_hotkey_blacklist_matches`：Alt+Space / Ctrl+Esc / Ctrl+Shift+Esc / Alt+F4 命中名单；Win+D 等非名单组合不命中（负例）；
+  - 真机 V-8（确认提示出现→选择「仍要使用」→注册成功）；
+  - 回归：非黑名单组合捕获流程零摩擦不变（无新增弹窗）。
+
+### R-22（中）IME 组词期 Enter 误触发
+
+- **证据**：`app/keys.rs` 约 :34（`consume_key(Enter)`）与约 :135–:137（`enter → confirm_selected()`）——Enter 无条件消费并激活，全链路无 IME 组合中态检查。中文用户输入 `ipconfig` 回车上屏的那一帧若与激活同帧，可能直接执行选中行（危险命令有确认门，普通命令没有）。
+- **方案**：本帧收到过 `Event::Ime`（Commit/Compose 系）则跳过一次激活（吞掉该 Enter，仅上屏），下一帧恢复正常。
+- **验收**（三口径，见 §6.5）：
+  - 单测 `r22_ime_frame_skips_activate`：同帧含 `Event::Ime`（Commit 系）+ Enter→**不激活**且该 Enter 被吞（仅上屏）；无 Ime 帧 Enter→正常激活（负例）；
+  - 真机 V-7（微软拼音 / 搜狗组词中回车上屏）；
+  - 回归：非 IME 环境回车逐帧行为一致。
+
+### R-23（低）查询无长度上限
+
+- **证据**：`state.rs` 约 :234 `set_query` 入口无任何 clamp（grep 无 `MAX_QUERY`/`truncate`/`chars().take`）；空白查询已按空处理（约 :366）但长度不设防。超大粘贴直入模糊匹配，文件搜索页经 200ms debounce（`app/refresh.rs` 约 :13）进入 es.exe argv，超长输入只会离谱失败。
+- **方案**：`set_query` 入口 clamp 至 256 字符（静默截断，光标置尾）。
+- **验收**（三口径，见 §6.5）：
+  - 单测 `r23_query_clamp_boundary`：输入 300 字符→查询截为前 256、光标置尾；恰 256→不截断（256 / 257 边界双断言）；
+  - 真机：无独立 V 项，随批三冒烟粘贴一次超长文本（文件搜索页不向 es.exe 传入离谱参数）；
+  - 回归：正常查询与 200 ms debounce 链路行为不变。
+
+### R-24（低）sidecar 过期的 `f ` 前缀自述
+
+- **证据**：`dd-ext/src/bin/search.rs` 约 :1190–:1192 描述文案仍写「输入 f 后空格直接进入」——`f ` 前缀 2026-09-19 已移除（search.md §2）。当前该字段未上屏，属潜伏误导，描述一旦展示即穿帮。
+- **方案**：改为与 search.md 一致的自述（Ctrl+F 口径）。一行改动，随批三。
+- **验收**（三口径，见 §6.5）：
+  - 单测 `r24_sidecar_description_matches_spec`：sidecar 自述字段断言**不含 `f ` 前缀字样**、含 Ctrl+F 口径关键短语（与 search.md §2 一致）；
+  - 真机：无独立 V 项（该字段当前未上屏），随批三代码评审核对文案；
+  - 回归：描述渲染路径不变。
+
+---
+
+## 6. 实施批次与真机走查清单
+
+> 排序原则：先**低风险高价值**（机械修复、崩溃面收敛），再**纯函数安全补强**，再**UI 反馈层**，最后**改造型**（需要真机压测的行为变更）。每批独立可交付、独立回滚，批间无耦合依赖。
+
+### 6.1 批次表
+
+| 批次 | 内容 | 改动量预估 | 新增单测 | 验收门 |
+|---|---|---|---|---|
+| **批一 崩溃与资源面收敛** | R-01、R-02、R-05、R-06、R-07、R-08、R-09、R-25（含 clippy 一行修） | +270/−70 | 约 9 | workspace 测试全绿（R-09 修完基线即绿）· fmt/clippy 零差异零告警 · 真机 V-1/V-2/V-12/V-16 |
+| **批二 安全补强** | R-10、R-11、R-12、R-13、R-14 | +150/−40 | 约 16 | 新增单测全绿 · R-12 三态真机走查（V-9）· 重打包体积记录 |
+| **批三 可用性与反馈** | R-15、R-16、R-17、R-18、R-19、R-20、R-21、R-22、R-23、R-24 | +220/−60 | 约 7 | 新增 i18n 键双向完备单测绿 · 真机 V-3~V-8 · 亮暗 × 中英四象限抽查 |
+| **批四 资源、挂死与进程防护（改造型）** | R-03、R-04、R-26 | +170/−45 | 约 4 | 注入式单测（超量帧 / 慢扩展）· 真机 V-10/V-11/V-15 · 熔断/池化行为无回归 |
+
+批四完成后执行 **V-13（内存基线）** 并回写 [implementation.md](./implementation.md) §3.1 台账；V-14（多显示器 / DPI / RDP）随批一 V-1 同场执行。
+
+### 6.2 真机走查总清单（V 系列）
+
+> v1.3 起：每条走查执行时在备注登记**实测 OS 版本/构建号**（§2.2 兼容矩阵）；涉及内存/性能的判据首轮建立基线后纳入回归。
+
+| 编号 | 场景 | 覆盖项 | 通过判据 |
+|---|---|---|---|
+| V-1 | Win+D / 任务栏最小化期间反复唤起-隐藏-重绘（含 1 Hz 看门狗帧） | R-01 | 唤起-隐藏循环 ≥ 50 次、进程全程存活无崩溃；遮罩 / 缩放热区行为与改前一致（前后各录一次唤起位置对比） |
+| V-2 | 切换设置 ≥ 20 次后检查 config.json 无 `.tmp` 残留、重启设置保留；配置目录置只读再改设置 | R-02、R-17 | 文件完整；失败 toast 出现**一次**且不重复轰炸；连续 20 次唤起-隐藏无感知卡顿（R-02 回归判据） |
+| V-3 | 预先占用热键（如启用 PowerToys Run）后启动 | R-15 | 启动即见错误 toast；热键卡出现「未注册」徽标 |
+| V-4 | 无默认浏览器 / 断网时选中「在 Google 搜索」 | R-16 | 失败 toast 可见，非无声无息 |
+| V-5 | 改绑热键后重启查看托盘 | R-19 | tooltip 与菜单尾缀显示新组合 |
+| V-6 | 放置一个 JSON 有语法错误的第三方清单 | R-20 | 扩展卡顶部出现「路径 + 原因」警告行 |
+| V-7 | 微软拼音 / 搜狗输入法组词中按回车上屏 | R-22 | 仅上屏，不触发选中项；正常无组词时回车行为不变 |
+| V-8 | 捕获 Alt+Space 并确认 | R-21 | 出现系统组合确认提示，确认后正常注册 |
+| V-9 | 手工替换 `extensions.d\dd-ext-search.exe` / 正常升级宿主 | R-12 | 同版替换 → 设置页 Pending 告警、Ctrl+F 有明确提示；升级 → 静默重钉零摩擦 |
+| V-10 | 面板隐藏期间用 test 扩展高频刷 stdout（注入 ≥ 10 000 帧） | R-03 | RSS 增量收敛至队列上界量级（128 帧 × 1 MiB ≈ ≤128 MiB）且随继续注入**不再增长**；恢复可见后出现一次溢出告警 |
+| V-11 | 构造指向死 UNC 的 `.lnk` 后首屏聚合 | R-04 | 超时阈值 T（初值 5 s）内返回 `Timeout`；首屏可降级落地，apps 呈 Failed + Retry，无永久「加载中」 |
+| V-12 | 运行剪贴板占用器后执行 `host/set_clipboard` | R-07 | 面板无卡顿，复制结果 toast 正常 |
+| V-13 | 挂机 24 h（面板常驻）+ 唤起-隐藏 500 次循环后记录 RSS | 稳定运行全局 | 首轮建立**内存基线**并回写 implementation.md §3.1 台账；此后每次走查对比，RSS 增量超基线 +50 MB（或 +30%，取大者）须排查后方可放行（同时为 §7 icon_cache 缓办项提供转正/继续缓办的数据依据） |
+| V-14 | 多显示器热拔插 / DPI 变更 / RDP 断连重连期间反复唤起-隐藏 | R-01（同类触发族） | 无崩溃，`screen_rect` 解析降级正常，窗口落在可见屏 |
+| V-15 | 面板运行中再次启动 dd-run.exe（双开） | R-26 | 第二实例弹「已在运行」提示后退出；原实例热键 / 托盘 / 设置读写不受影响 |
+| V-16 | 注入一次 panic（debug 构建或临时探针） | R-25 | `%APPDATA%\dd-run\logs\panic.log` 追加一条含时间戳 / message / location 的记录；hook 自身失败不产生二次 panic |
+
+### 6.3 批间纪律
+
+每批完成后：`cargo fmt` + `cargo clippy --workspace --all-targets` + `cargo test --workspace` 全绿 → `tools/package.sh` 重打包 → 回写 [implementation.md](./implementation.md) §3.1 测试基线台账与本方案状态 → CHANGELOG 记录。全程零新增依赖、零冻结契约改动。
+
+### 6.4 任务清单（实施进度勾选）
+
+> 勾选口径：代码落地 + 对应验收门（含指明的 V 项走查）通过后勾选；部分完成在行内注记。
+
+**批一 崩溃与资源面收敛**
+
+- [ ] R-01 最小化 `screen_rect` unwrap 崩溃：chrome.rs 两处改用已解析 screen_rect + 辅助函数单测（V-1）——代码 + 单测已落地（2026-09-29：`current_screen_rect` 回落 `viewport_rect`，2 条 r01 单测绿，workspace 516/516 全绿）；V-1 真机走查待执行
+- [ ] R-02 持久化原子写：config.json / trust.json / 冻结桩三处接入 `atomic_write`（V-2）——代码 + 单测已落地（2026-09-29：两 crate 各落助手并接入三处写盘，r02 三条单测 × 2 crate = 6 条绿，workspace 522/522 全绿）；V-2 真机走查待执行（其 R-17 一次性 toast 口径随批三落地后一并验证）
+- [ ] R-05 启动线程创建 `.expect` 降级：Windows 实路径 3 处 + 占位/测试桩 3 处——代码已落地（2026-09-29：grep 复核启动期线程 `.expect(` 清零，hotkey/tray/platform 各降级路径均有 `log::error!`，workspace 522/522 全绿）；五步冒烟（批一收尾）待执行
+- [ ] R-06 锁中毒恢复：websearch ×2 + sidecar ×7 改 `into_inner()` 口径——代码 + 单测已落地（2026-09-29：全部非测试 `.lock().unwrap()` 清零（含文档 :116 实为 cfg(test) 辅助函数的一并治理），`r06_websearch_poisoned_lock` / `r06_sidecar_poisoned_lock` 绿，workspace 524/524 全绿）；冒烟（正常读写路径）随批一收尾
+- [ ] R-07 剪贴板写入移出 UI 线程：常驻工作线程 + 结果 toast（V-12）——代码 + 单测已落地（2026-09-29：新增 `app/clipboard_worker.rs`（常驻线程 + `run_worker_loop` 可注入写入函数，线程创建失败走 R-05 降级口径），`SET_CLIPBOARD` 分支改为入队，`poll_clipboard_results` 于 ui 循环消费结果——成功沿用 S-07 口径、失败新增 `toast.clipboard_fail` 键（i18n 双语完备性单测绿），`r07_clipboard_worker_roundtrip` 绿，workspace 530/530 全绿）；V-12 真机走查（剪贴板占用器场景）待执行
+- [ ] R-08 es.exe 错误截断 char-boundary 修复（`chars().take(200)`）——代码 + 单测已落地（2026-09-29：抽 `truncate_chars` 纯函数，`r08_error_truncate_multibyte_safe` 绿，workspace 525/525 全绿）；es.exe 出错路径冒烟随批一收尾
+- [x] R-09 sys 测试改合成夹具 + thread_local clippy 一行修（裸机测试基线转绿）——2026-09-29：`r09_apps_enum_from_fixture`（COM 现生成根级/子目录 `.lnk` 夹具，枚举含夹具项）；原断言更名 `machine_steam_installed_shown_uninstalled_filtered_root_lnk_shown` + `#[ignore]`（本机复验确红：无 Flowframes，与 §2.2 基线一致）；枚举递归最小参数化为 `collect_lnk_fallback_from_root(root, …)`（逐字搬移，生产行为不变）；thread_local 告警为 clippy 1.96 误报（已是 `const {}` 初始化，三写法均触发）→ 定点 `#[allow]` 留痕；clippy 全仓清零；裸机 `cargo test --workspace` 连续两次 **526/526 全绿**
+- [ ] R-25 panic 取证落盘：`panic::set_hook` 写 `%APPDATA%\dd-run\logs\panic.log` + 格式化纯函数单测（V-16）——代码 + 单测已落地（2026-09-29：新增 `dd-gui::crashlog`，`take_hook` 保留默认流程，hook 内失败静默放弃；`manifest::logs_dir()` 复用 `%APPDATA%\dd-run` 口径；r25 单测 3 条绿；chrono 复用依赖树既有包，Cargo.lock 仅 +1 行依赖声明、包集合零变化）；V-16 真机走查（注入 panic 验证 panic.log）待执行
+
+**批二 安全补强**
+
+- [x] R-10 shell 多段命令确认门：`&&`/`&`/`|`/换行切段逐段判定（≥4 单测）——2026-09-29：新增 `is_dangerous_query`（字符级切段，`&&` 产生的空段判定恒 false；引号内分隔符也切段属保守方向），`shell.run.query` 确认门接入；r10 六条单测（4 正例各含「首段无害次段危险」+ 2 负例不误报）全绿，S-06 既有单段判定测试零改动全绿；workspace 536/536 全绿
+- [x] R-11 `.url` 读盘限幅：metadata 前置 + 64 KiB 上限（两处）——2026-09-29：抽共享 `read_url_limited`（metadata 非普通文件或 >64 KiB → `None`），`url_target` / `url_icon_file` 两处接入；r11 三条单测（超限拒含合法 URL= 行 / 正常小文件照常解析 / 目录拒）全绿，既有 `url_target_parses_ascii_and_utf16` 回归零改动；workspace 541/541 全绿
+- [ ] R-12 首方 sidecar 首跑钉扎：三态单测（首钉/同版篡改/升版重钉；V-9）——代码 + 单测已落地（2026-09-29：`assess` 白名单短路废除（S-05 既有测试同步更名锚定新语义），新增 `assess_sidecar(_with_ledger)`（可注入台账，不触真实 trust.json）+ `TrustEntry.origin/pinned_host_version` 字段（serde default，兼容旧台账）+ `Assessment.sidecar_tampered` 告警位；`TrustLedger::load()` 后聚合与 spawn 双门路由；设置页 `set.ext.tamper_warn` 告警行（zh/en 完备性绿）；r12 四条单测（三态 + Deny 优先不被钉扎覆盖）绿；workspace 546/546 全绿）；V-9 真机走查（同版替换 / 正常升级两场景）待执行
+- [x] R-13 calc 递归深度上限 256（`EvalError::Domain`）——2026-09-29：`Parser` 加 `depth` 字段 + `enter()` 守卫（括号嵌套与一元符号链各计一层，**实现期发现 `parse_unary` 的 `'+'/'-'` 自递归同样是源无界向量**，一并纳入）；`r13_depth_over_limit_rejected`（257 层括号 / 257 个负号 → Domain）/ `r13_depth_at_limit_ok`（256 层内正常求值 + 括号符号混合合法用例）绿，calc 既有用例零改动全绿；workspace 538/538 全绿
+- [x] R-14 清单 / config.json 读盘限幅 1 MiB——2026-09-29：`load_manifest` 读入前 metadata 检查（超限记 `ParseError` 跳过）；`Settings::load` 最小参数化为 `load_from(path)` 并接入限幅（超限记日志回落默认）；r14 两条单测（超限清单跳过且同目录其余扩展正常加载 / 超限 config 回默认 + 限内正常解析）绿；workspace 543/543 全绿
+
+**批三 可用性与反馈**
+
+- [ ] R-15 启动热键失败可见：错误 toast + 热键卡「未注册」徽标 + GetMessageW 死亡同口径（V-3）
+- [ ] R-16 `open_url` 失败 toast：`toast.open_fail` 键 zh/en 同批（V-4）
+- [ ] R-17 设置保存失败一次性 toast（与 R-02 同落点；V-2）
+- [ ] R-18 热键 toast 入 i18n：`toast.hotkey_updated` / `toast.hotkey_failed`
+- [ ] R-19 托盘热键标签动态化：tooltip 与菜单尾缀随改绑（V-5）
+- [ ] R-20 扩展卡 skipped 警告行（路径 + 原因，复用 Failed 行样式；V-6）
+- [ ] R-21 热键危险组合确认提示（Alt+Space 等黑名单；V-8）
+- [ ] R-22 IME 组词期 Enter 守卫（V-7）
+- [ ] R-23 查询 clamp 256 字符（`set_query` 入口）
+- [ ] R-24 sidecar 过期 `f ` 前缀自述更正
+
+**批四 资源与挂死（改造型）**
+
+- [ ] R-03 入站队列定容 + 截断提示（帧队列 128 / host 请求 32；V-10）
+- [ ] R-04 in-process 调用超时 + apps 负缓存（V-11）
+- [ ] R-26 单实例互斥：`CreateMutexW` + 已运行 `MessageBoxW` 提示退出（V-15）
+- [ ] V-13 内存基线记录并回写 implementation.md §3.1 台账（批四收尾动作）
+
+### 6.5 验收通用口径（v1.4 增补）
+
+§3–§5 各项「验收」统一按**单测 / 真机 / 回归**三口径书写；本节定义三者共用的执行与记录规则，避免逐项重复。任一项只有三口径全部满足（或按注明的评审 / 冒烟替代口径执行并留痕）方可勾选。
+
+| 口径 | 规则 |
+|---|---|
+| 单测 | 命名 `r<两位编号>_<行为>`（可 grep 定位所属 R 项）；覆盖该项「验收」声明的正例 + 边界 + 负例组合；与既有测试同模块放置，随批次一并合入 |
+| 真机 | 仅执行 §6.2 对应 V 项；无独立 V 项的，按该项「验收」注明的冒烟 / 评审替代口径执行并留痕 |
+| 回归 | 每项声明**不得改变**的既有行为面；通用回归门 = `cargo fmt --check` 零差异 + `cargo clippy --workspace --all-targets` 零告警 + `cargo test --workspace` 全绿 + 五步冒烟（启动 → 热键唤起 → 查询 → 执行无害命令 → Esc 隐藏） |
+| 记录 | 每条已执行的 V 项登记：日期、实测 OS 版本 / 构建号（§2.2 口径）、实测数值；未达标在 §6.4 行内注记，不得勾选 |
+| 阈值 | 实施时调整本方案预设数值（如 R-04 超时初值 5 s、V-13 内存阈值、R-03/R-14 限幅值）须在 §10 版本演进留痕 |
+
+---
+
+## 7. 明确不做与缓办
+
+| 事项 | 处置 | 理由 |
+|---|---|---|
+| 哈希→spawn 毫秒级 TOCTOU（`aggregator.rs` 约 :490/:505） | **记录为已接受残余** | 同用户攻击者、窗口毫秒级；彻底封堵需 `FILE_SHARE_READ` 句柄建进程的 Win32 改造，收益不成比例 |
+| 扫描期与 spawn 期 origin 判定口径不一（junction 场景） | **缓办**（前置：任何新增 `spawn_and_initialize_with_info` 调用点时必须先做） | 当前无可达利用路径（Pending 项不进面板、无点击入口）；修复涉及 aggregator 核心携带链 |
+| `dd-run-cli` 绕过信任门 spawn（`main.rs` 约 :284、:695） | **缓办**（dev-only 工具） | 仅显式运行 CLI 场景可达，无特权增益；下轮触碰 CLI 时顺手加 `trust::assess` |
+| 图标磁盘缓存 / sidecar ICON_CACHE 无淘汰 | **缓办**（观察项） | 条目小、增长慢、可手动清；等真实占用数据再定 |
+| framing.rs 逐行重扫 O(n²)（CPU DoS 面） | **缓办** | 需流氓扩展高频小消息才可达，且 R-03 定容后影响面进一步收窄 |
+| 设置窗口最小宽 460 偏挤、导航栏窄屏折叠（`main.rs` 约 :76） | **不做**（本轮） | 纯观感，走 D 系列设计渠道另行立项 |
+| 会话内 icon_cache 无淘汰（纹理堆积） | **缓办** | 已有「隐藏清空」兜底，触发依赖用户刷出海量唯一图标；V-13 内存基线建立后凭数据复核 |
+| CI 门禁（fmt / clippy / test 远程自动化） | **缓办** | 单机开发阶段以 §6.3 批间纪律为门禁；R-09 落地（裸机全绿）是任何 CI 的前置。若后续转远程协作再立项，本行为显式占位、防「门禁只活在本方案生命周期内」 |
+| 全量日志文件后端（O4 后端加文件输出 + 轮转） | **缓办** | R-25 已覆盖崩溃取证这一刚性需求；全量落盘引入磁盘增长/轮转问题，等真实排障需求再定 |
+| 依赖供应链（`cargo audit` / Cargo.lock 更新策略） | **缓办** | S 系列审计为代码级取证，当前依赖集合小且已锁定。**约定**：每次新增依赖时跑一次 `cargo audit` 并在 CHANGELOG 记录结论 |
+
+---
+
+## 8. 风险声明
+
+- **R-04（改造型）**为唯一改变并发行为的项：超时线程滞留依赖 OS 网络超时上界、apps 负缓存改变重试节奏，故压轴批四并要求注入式真机验证（V-11）；若走查发现不可接受的边角，可独立回滚该单项而不影响其余 23 项。
+- **R-12（sidecar 钉扎）**引入「升级后首启静默重钉」的信任假设（信任锚 = 分发包），已在 §4 R-12 与 §7 声明；若不接受该假设，可退化为「同版篡改 → Pending」单独落地（升级后需一次手工批准）。
+- **R-26（单实例）**为启动行为变更：双开第二实例从「行为未定义」变为「弹窗提示后退出」；若存在合法多实例诉求（便携多副本并行），可退化为「仅告警不退出」单独调整，不影响其余项。
+- 其余 24 项均为局部机械修复或纯增量反馈，不改变既有交互语义。
+
+---
+
+## 9. 与既有文档关系
+
+| 文档 | 关系 |
+|---|---|
+| [security-audit-2026-09-23.md](./security-audit-2026-09-23.md) | S-01–S-11 **全部不重复**；R-10 是 S-06 的纵深补强（同威胁模型内收口）、R-11 与 S-04 同类补漏、R-12 把 S-05 的「同意 + 变更检测」性质延伸到首方 sidecar |
+| [future-features-plan.md](./future-features-plan.md) | N1–N5 **零重叠**（功能向 vs 本文加固向）；N5「trust.json 永不导出」是 R-12 钉扎字段扩展的前提；编号空间互不侵占（N vs R） |
+| [optimization-plan.md](./optimization-plan.md) | O4 日志基建是 R-15~R-17「失败可见性」的落点依赖；R-25 在其 stderr 后端之**上**最小扩展（panic 落盘走独立 hook，不改 O4 后端与 `DDRUN_LOG` 语义），延续零依赖基调；R-04 属其「协议健壮性」方向的残余面收口；不触碰其 Phase 2 在途项 |
+| [settings-personalization-plan.md](./settings-personalization-plan.md) / [settings-keys-typography-plan.md](./settings-keys-typography-plan.md) | R-15/R-19/R-20 的 UI 复用其已落地的行块/控件/Failed 渲染口径，零排版改动、零 D 系列新决策 |
+| [search-file.md](./search-file.md) / [search.md](./search.md) | R-03/R-04/R-24 涉及 sidecar 生命周期与自述文案，**行为契约与技术口径不变**；R-23 的 256 字符上限为其 200ms debounce 链路的前置护栏 |
+| [implementation.md](./implementation.md) | 每批完成后回写 §3.1 测试基线台账；本方案不动其 ADR 与里程碑结论 |
+| [INDEX.md](./INDEX.md) §4 | 本文 v1.1 修订按其格式规约对齐（状态取值五选一 / 状态标记 ✅⚠️❌🟨 / 行号「约 :NNN」/ 文末版本演进表） |
+
+---
+
+## 10. 版本演进
+
+| 版本 | 日期 | 变更 |
+|---|---|---|
+| v1.0 | 2026-09-29 | 初稿：三路只读审查 24 项发现 + 四批实施规划 |
+| v1.1 | 2026-09-29 | **全量核对**：引用的 file:line 逐一回读源码——更正 2 处子代理误报（R-23 落点 `app/state.rs` 不存在 → 实为 `state.rs` 约 :234；R-06 search.rs 锁点位 6 → 7，补约 :116）；R-05 区分 Windows 实路径与跨平台占位/测试桩；R-01 补 Cargo.lock 实测 egui-winit 0.36.2 取证。**按 [INDEX.md](./INDEX.md) §4 格式规约对齐**：状态「待评审」→「规划中」（五选一）、级别标记改用 ✅⚠️❌🟨、行号改「约 :NNN」口径；增补 §6.1 单测预估、§6.2 真机走查总清单（V-1~V-12）、§9 与既有文档关系 |
+| v1.2 | 2026-09-29 | 补 **§6.4 任务清单**（24 项按批 `- [ ]` 勾选，对齐 [INDEX.md](./INDEX.md) §4.2 任务规约）；修复 §1 R-10 行单元格内未转义的 `\|`（GFM 切列隐患，规约「表格内竖线」条）；同步登记 [INDEX.md](./INDEX.md)（v1.35）与全仓格式修复报告 [doc-audit-2026-09-29.md](./doc-audit-2026-09-29.md) |
+| v1.3 | 2026-09-29 | **可诊断性与门禁增补**（「崩溃可诊断 + 进程级防护 + 点状修复」补全）：新增 **R-25**（panic hook 写 `logs\panic.log`，全仓复核无 `panic::set_hook`，落批一）与 **R-26**（`CreateMutexW` 单实例互斥，复核无既有实现，落批四）；§2.2 补兼容矩阵（Win10/11 x64）与走查 OS 版本登记要求；§6.2 走查清单扩至 **V-13~V-16**（24 h 挂机内存基线、多显示器/DPI/RDP、双开、panic 注入）；§6.1 批四更名「资源、挂死与进程防护」，diff/单测预估同步（+810/−215、约 32）；§7 新增三条缓办占位（CI 门禁 / 全量文件日志后端 / cargo audit 约定）；§8 补 R-26 行为变更声明；§9 补 R-25 与 O4 关系 |
+| v1.4 | 2026-09-29 | **验收标准细化**：§3–§5 全部 26 项「验收」改写为**单测（`r<编号>_` 命名 + 断言内容）/ 真机（V 项 + 特有观测点）/ 回归（不得改变的行为面）**三口径，逐条可判定通过与否；核对补上 R-24 缺失的验收条目（原方案仅 R-24 无验收）；§6.2 收紧 V-1 / V-2 / V-10 / V-11 判据为可量化口径（循环 ≥50 次、队列上界 ≤128 MiB、超时阈值初值 5 s）；新增 **§6.5 验收通用口径**（单测命名 / 回归门操作化定义 / 记录 / 阈值变更纪律）；单测预估校准 32→36（批一 9 / 批二 16）；代码锚点复核（chrome.rs :133/:177、settings.rs :944、trust.rs :232、cache.rs :79 均一致）；同步 [INDEX.md](./INDEX.md)（v1.37） |

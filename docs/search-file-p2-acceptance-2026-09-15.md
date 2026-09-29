@@ -127,7 +127,7 @@ export DDRUN_ES_PATH='C:\Users\y7398\AppData\Local\Microsoft\WindowsApps\es.exe'
 
 #### 4.1.1 阈值修订决策（2026-09-16，用户决策）
 
-**背景**：首轮实测证明原阈值（p50 < 10 ms / p95 < 30 ms）**低于本机 Everything 引擎地板** —— 耗时几乎全在 IPC 查询往返本身（11–25 ms，随查询词变化），扩展自身成本 ≲ 1 ms，故**靠优化扩展代码不可达**。该阈值是设计期估算值，从未在真机验证过；早在方案核对阶段就已指出「`p50 < 10ms`（端到端口径）不可能成立」（[`search-file-plan-review.md`](./search-file-plan-review.md) W-06，其处置是把口径收窄为「扩展进程内 IPC 查询阶段」）。
+**背景**：首轮实测证明原阈值（p50 < 10 ms / p95 < 30 ms）**低于本机 Everything 引擎地板** —— 耗时几乎全在 IPC 查询往返本身（11–25 ms，随查询词变化），扩展自身成本 ≲ 1 ms，故**靠优化扩展代码不可达**。该阈值是设计期估算值，从未在真机验证过；早在方案核对阶段就已指出「`p50 < 10ms`（端到端口径）不可能成立」（[`search-file-plan-review.md`](./archive/search-file-plan-review.md) W-06，其处置是把口径收窄为「扩展进程内 IPC 查询阶段」）。
 
 **决策**：门禁修订为 **p50 < 30 ms、p95 < 50 ms**；「相对 `run_es` 基线 p95 降 ≥ 50 %」条款保留；**p99 / max 列为观察项、不作门禁**（实测尾部波动大）。
 
@@ -203,7 +203,7 @@ export DDRUN_ES_PATH='C:\Users\y7398\AppData\Local\Microsoft\WindowsApps\es.exe'
 
 **轮次 3 的逐次轨迹（含通道，v1.3）**：
 
-```
+```text
 n=1  t= 0.02s  guide   channel=none     0.226 ms   ← IPC 探活 false + es 探活 false（两者均不可用）
 n=2  t= 2.04s  guide   channel=none     0.232 ms
 n=3  t= 4.26s  guide   channel=none   200.561 ms   ← 探活带 3 s TTL，此处发起了真实探测
@@ -216,7 +216,7 @@ n=8  t=15.16s  results channel=ipc      27.849 ms  ← 达 REBUILD_AFTER_FAILS=3
 
 **轮次 1 的定因链（通道切换日志，按到达时刻）**：
 
-```
+```text
 t= 32.739s  [dd-ext-filesearch] IPC 查询失败（query timed out），回落 es.exe
 t= 34.740s  [dd-ext-filesearch] IPC 查询失败（query timed out），回落 es.exe
 t= 36.743s  [dd-ext-filesearch] IPC 连续 3 次失败，已释放 client，下次重建

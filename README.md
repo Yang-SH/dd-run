@@ -45,7 +45,7 @@ Its architecture and extension contracts are **distilled from Microsoft PowerToy
 
 ### Non-goals (explicitly out of scope for MVP)
 
-- **No cross-platform ports of Windows-only extensions**: 9 🪟 items in the design doc §7 (registry, Windows settings, WinGet, …) have no cross-platform equivalents.
+- **No cross-platform ports of Windows-only extensions**: 9 Windows-only items in the design doc §7 (registry, Windows settings, WinGet, …) have no cross-platform equivalents.
 - **No extension store (Gallery)**: optional module, not MVP.
 - **No WASM sandbox / process-registration discovery**: advanced options; MVP takes the simplest path (ADR-1 / ADR-3).
 - **No mobile / web clients.**

@@ -1,11 +1,11 @@
 # 文件搜索 v3.3 方案核对报告（2026-09-10）
 
 > **状态**：历史归档 ｜ **版本**：v1.0（核对稿）｜ **最后更新**：2026-09-13
-> **关联**：[search-file.md](./search-file.md) · [search-file-update.md](./search-file-update.md)
+> **关联**：[search-file.md](../search-file.md) · [search-file-update.md](./search-file-update.md)
 
 ---
 
-> **本文为历史记录，内容仅代表撰写时点（P2 落地之前），权威口径以 [search-file.md](./search-file.md) 为准。**
+> **本文为历史记录，内容仅代表撰写时点（P2 落地之前），权威口径以 [search-file.md](../search-file.md) 为准。**
 > 下文所有"硬前置 / 待核实 / 缺口"仅作决策留痕；P2 现已落地，相关结论的最终处置见下方结论处置表。
 
 ## 1. 结论处置表（旧结论 → 最终处置）

@@ -1,6 +1,7 @@
 # 写一个 dd-run 扩展
 
 > **状态**：生效中 ｜ **版本**：v1.0 ｜ **最后更新**：2026-09-13 ｜ **受众**：扩展作者
+> **关联**：[protocol.md](./protocol.md) · [manifest-schema.md](./manifest-schema.md) · [INDEX.md](./INDEX.md)
 >
 > **本文件是「路径」，不是「规范」**。规范只有两份，二者都是硬契约：
 >
@@ -16,7 +17,7 @@
 
 ## 0. 30 秒心智模型
 
-```
+```text
 宿主 spawn 你的进程
         │  stdin  ← 宿主发请求（initialize / top_level_commands / invoke / …）
         ▼
@@ -218,7 +219,7 @@ json.dumps(obj, ensure_ascii=False, ...)                 # 配合上面
 见 §1 第 4 步。根因是**两个环境的 PATH 不同**：自检工具继承你**终端**的环境，
 而 GUI 从资源管理器/托盘启动时继承**系统**环境。
 
-```
+```text
 终端:  python hello.py   ✅（PATH 里有）
 GUI :  python hello.py   ✗ 'python' 不是内部或外部命令
 ```

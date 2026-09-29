@@ -44,7 +44,7 @@
 
 ### 1.2 个性化页结构（`Microsoft.CmdPal.UI/Settings/AppearancePage.xaml`，即用户截图页面）
 
-```
+```text
 个性化
 ├─ CommandPalettePreview（实时预览控件）+ [打开命令面板] [重置外观]
 ├─ 应用主题模式：ComboBox（系统默认/浅色/深色）

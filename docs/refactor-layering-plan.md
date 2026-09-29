@@ -98,7 +98,7 @@
 
 ## 3. 目标结构（方案 1，已实施）
 
-```
+```text
 crates/dd-gui/src/
 ├── lib.rs                  # 追加：pub mod app; pub mod ui; pub mod platform; pub mod text;
 ├── main.rs                 # 5123 → ~150 行：仅 main()（字体 / 视口选项 / eframe 启动）

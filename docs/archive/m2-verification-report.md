@@ -1,5 +1,6 @@
 # M2 验证报告 — 命令执行与结果状态机
 
+> **状态**：历史归档（时点验证记录；权威口径见 [implementation.md](../implementation.md)） ｜ **版本**：v1.0 ｜ **最后更新**：2026-09-02 ｜ **关联**：[implementation.md](../implementation.md) · [INDEX.md](../INDEX.md)
 > 验证日期：2026-09-02
 > 验证方法：实际运行 `cargo build` / `cargo test` / `cargo clippy -D warnings` / `cargo fmt --check`（本机 `CARGO_INCREMENTAL=0`），并逐文件核对实现与 `docs/implementation.md` §M2 完成判据（A4/A5/A9）及 `cmdpal-platform-agnostic-design.md` 语义。
 > 参照技能：`@skill:tdd`（测试应经由公共接口验证**行为**，而非实现细节；本报告据此指出 UI 接线层缺少行为级单测）。

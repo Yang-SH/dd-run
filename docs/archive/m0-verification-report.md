@@ -1,5 +1,6 @@
 # M0 里程碑验证报告
 
+> **状态**：历史归档（时点验证记录；权威口径见 [implementation.md](../implementation.md)） ｜ **版本**：v1.0 ｜ **最后更新**：2026-09-01 ｜ **关联**：[implementation.md](../implementation.md) · [INDEX.md](../INDEX.md)
 > **验证日期**：2026-09-01
 > **验证依据**：`docs/implementation.md` §2 M0 任务表 + 完成判据（行 45–49）+ 验收映射 A12；`docs/m0-record.md` P1–P8 阶段表与验收标准
 > **验证方法（TDD 视角）**：以测试为规格——测试只经**公共接口**验证行为，不耦合内部实现。本次重跑真实构建/测试/CLI（非读取既有结论），并据此逐项判定。
@@ -59,7 +60,7 @@
 
 ## 5. 未通过 / 存在问题项
 
-### ⛔ P1（高·阻塞）— LICENSE 缺失，与风险 R4 冲突 → ✅ 已修复（2026-09-01）
+### P1（高·阻塞）— LICENSE 缺失，与风险 R4 冲突 → ✅ 已修复（2026-09-01）
 - **现象（修复前）**：仓库根目录**无 LICENSE 文件**；所有 `Cargo.toml` 的 `license` 字段**均留空**（grep 无结果）。
 - **原因**：`implementation.md` R4 明确「公开仓库前必须补 LICENSE」，但代码在补许可证前已被推送到公开 GitHub（commit c41773d）。
 - **影响**：公开仓库在无许可证下，他人**无权使用/分发**代码（默认「保留所有权利」），且 README 已声明的「MIT License」表述与仓库实际（无 LICENSE）自相矛盾。
@@ -84,7 +85,7 @@
 - **影响**：会污染「0 警告」判定。本次用 `CARGO_INCREMENTAL=0` 复验为 0 告警。
 - **判定**：✅ **通过（有条件：验收须禁用 increment）**。
 
-### 🔹 P5（极低·cosmetic）— 内置示例版本显示 `v0.0.0`
+### P5（极低·cosmetic）— 内置示例版本显示 `v0.0.0`
 - **现象**：`--list-extensions` 兜底行显示 `v0.0.0`，而 `dd-ext-sample` 清单声明 `1.0.0`。
 - **原因**：`manifest::from_executable`（兜底构造）版本字段取默认值 0.0.0，未读取真实清单。
 - **影响**：仅展示不一致；`--roundtrip` 的 initialize 取自进程自身声明，不受影响。
