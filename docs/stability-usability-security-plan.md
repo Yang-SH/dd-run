@@ -376,7 +376,7 @@ S-01–S-11 修复逐项复核与审计记录一致；manifest/exe 双哈希**�
 
 **批三 可用性与反馈**
 
-- [ ] R-15 启动热键失败可见：错误 toast + 热键卡「未注册」徽标 + GetMessageW 死亡同口径（V-3）
+- [x] R-15 启动热键失败可见：错误 toast + 热键卡「未注册」徽标 + GetMessageW 死亡同口径（V-3）——2026-09-29：`HotkeyEvent::Died` 变体（`GetMessageW` 返回 -1 线程退出即发送，原仅 `log::debug`）；`PaletteApp.hotkey_unregistered` 状态位（`ReRegistered(false)` 且 `hotkey_prev=None` 的**启动失败分支** / `Died` 置位 + `show_error_toast`，`ReRegistered(true)` 复位）；热键卡标题行「未注册」danger 徽标（失败渲染口径，与扩展卡 shadow_warn 同款）；i18n 2 键 `toast.hotkey_unregistered` / `set.hotkey.unregistered`（zh/en，完备性单测自动覆盖）；`r15_hotkey_failed_state_flags`（三段流转各一断言 + toast 存在性）绿；`test_support::make_app_with` 夹具（注入热键事件通道，不触真实 `RegisterHotKey`）；正常注册路径零新增 toast（不误报）；V-3 真机走查（PowerToys Run 占用场景：启动即见 toast + 徽标）待执行
 - [ ] R-16 `open_url` 失败 toast：`toast.open_fail` 键 zh/en 同批（V-4）
 - [ ] R-17 设置保存失败一次性 toast（与 R-02 同落点；V-2）
 - [ ] R-18 热键 toast 入 i18n：`toast.hotkey_updated` / `toast.hotkey_failed`

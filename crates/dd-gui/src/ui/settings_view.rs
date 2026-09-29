@@ -921,6 +921,11 @@ impl PaletteApp {
         // 按钮宽度预算在闭包外计算（闭包内 `text_width(ui,…)` 借外层 ui，
         // 与闭包同时持 `card` 的可变借用冲突——E0502）。
         let capturing = self.hotkey_capturing;
+        // R-15：热键未注册（启动注册失败 / 热键线程死亡）→ 标题行「未注册」徽标。
+        let hotkey_unregistered = self.hotkey_unregistered;
+        // 捕获回落（LL 钩子未装成功 = egui 基础捕获）：提示文案切降级口径
+        // （Win / Alt+Space 等系统组合不可录），2026-09-29 真机诊断洞补。
+        let capture_fallback = self.hotkey_capturing && self.capture_hook.is_none();
         let mods_label = dd_gui::settings::hotkey_mods_label(self.settings.hotkey_mods);
         let vk_label = dd_gui::settings::hotkey_vk_label(self.settings.hotkey_vk);
         let mut caps: Vec<&str> = mods_label.split('+').collect();
@@ -960,13 +965,28 @@ impl PaletteApp {
                 ui.add_space(12.0);
                 ui.vertical(|ui| {
                     ui.set_min_height(36.0);
-                    ui.label(
-                        dd_gui::theme::semibold_title(
-                            crate::text::t(lang, "set.hotkey.name"),
-                            14.0,
-                        )
-                        .color(p.text),
-                    );
+                    ui.horizontal(|ui| {
+                        ui.label(
+                            dd_gui::theme::semibold_title(
+                                crate::text::t(lang, "set.hotkey.name"),
+                                14.0,
+                            )
+                            .color(p.text),
+                        );
+                        // R-15：失败渲染口径（与扩展卡 shadow_warn 同款 danger 色），
+                        // 提示当前组合键帽仅是「设置值」，实际并未注册生效。
+                        if hotkey_unregistered {
+                            ui.add_space(8.0);
+                            ui.label(
+                                egui::RichText::new(crate::text::t(
+                                    lang,
+                                    "set.hotkey.unregistered",
+                                ))
+                                .size(11.0)
+                                .color(p.danger),
+                            );
+                        }
+                    });
                     ui.add(
                         egui::Label::new(
                             egui::RichText::new(crate::text::t(lang, "set.hotkey.desc"))
@@ -995,10 +1015,15 @@ impl PaletteApp {
                         );
                         ui.add_space(12.0);
                         if capturing {
+                            let prompt_key = if capture_fallback {
+                                "set.hotkey.capturing_fallback"
+                            } else {
+                                "set.hotkey.capturing"
+                            };
                             ui.label(
-                                egui::RichText::new(crate::text::t(lang, "set.hotkey.capturing"))
+                                egui::RichText::new(crate::text::t(lang, prompt_key))
                                     .size(14.0)
-                                    .color(p.accent),
+                                    .color(if capture_fallback { p.danger } else { p.accent }),
                             );
                         } else {
                             for (i, cap) in caps.iter().enumerate() {
@@ -1024,8 +1049,8 @@ impl PaletteApp {
                     // item_spacing.x=0 且被本子 ui 继承，按钮间需显式 8px
                     // （buttons_total_w 预算里已含此 8）。
                     ui.add_space(8.0);
-                    // Win 修饰不在可捕获集（egui Windows 不暴露 Win 键 modifiers），
-                    // 默认组合 Win+Alt+Space 经此按钮一键还原。
+                    // 2026-09-29 B 方案后 Win 修饰可经 LL 钩子捕获（Win+X 组合
+                    // 可录）；本按钮仍保留——一键还原默认组合 Win+Alt+Space。
                     if !capturing && fluent_button(ui, reset_text_btn, p) {
                         default_clicked = true;
                     }

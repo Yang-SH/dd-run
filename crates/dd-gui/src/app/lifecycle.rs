@@ -106,6 +106,10 @@ impl PaletteApp {
                                    // 右键菜单随窗口隐藏一并关闭（浮层不跨隐藏周期存活）
         self.ctx_menu = None;
         self.want_ctx_menu_for_selected = false;
+        // 热键捕获是模态交互，不跨隐藏周期存活（真机 bug 2026-09-29：捕获期
+        // 按 Win 弹开始菜单 → 失焦 hide → 再唤起仍卡在捕获态）。`capture_hook`
+        // 置 None 同时卸载 LL 钩子（守卫 Drop）——失焦隐藏是钩子的逃生出口。
+        self.end_hotkey_capture();
         ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
     }
 
@@ -188,14 +192,50 @@ impl PaletteApp {
                     //（组合键被占用）→ 还原设置为旧键 + 命令线程回滚旧热键。
                     if ok {
                         self.hotkey_prev = None;
-                        self.show_toast("全局热键已更新", None);
+                        // R-15：重注册成功 → 复位「未注册」状态位（徽标消失）
+                        self.hotkey_unregistered = false;
+                        // R-18（2026-09-29 落地）：toast 入 i18n + 带新组合名 +
+                        // 点明「按它可显隐面板」（真机反馈：录完按新键面板关闭
+                        // 被误认为 bug——那是热键本来的 Toggle 行为）。
+                        let combo = format!(
+                            "{}+{}",
+                            dd_gui::settings::hotkey_mods_label(self.settings.hotkey_mods),
+                            dd_gui::settings::hotkey_vk_label(self.settings.hotkey_vk),
+                        );
+                        self.show_toast(
+                            crate::text::t(self.lang_effective, "toast.hotkey_updated")
+                                .replace("{combo}", &combo),
+                            None,
+                        );
                     } else if let Some(old) = self.hotkey_prev.take() {
                         self.settings.hotkey_mods = old.0;
                         self.settings.hotkey_vk = old.1;
                         self.settings.save();
                         self.hotkey.re_register(old.0, old.1);
-                        self.show_toast("新热键注册失败（可能被占用），已恢复原热键", None);
+                        self.show_toast(
+                            crate::text::t(self.lang_effective, "toast.hotkey_failed").to_string(),
+                            None,
+                        );
+                    } else {
+                        // R-15：**启动**注册失败（hotkey_prev 为 None，此前仅
+                        // log::debug 完全无提示）——置「未注册」状态位（设置页
+                        // 热键卡徽标）+ 错误 toast（面板打开时可见；隐藏期间
+                        // toast 不过期，打开即见）。
+                        self.hotkey_unregistered = true;
+                        self.show_error_toast(
+                            crate::text::t(self.lang_effective, "toast.hotkey_unregistered")
+                                .to_string(),
+                        );
                     }
+                }
+                HotkeyEvent::Died => {
+                    // R-15：热键线程异常死亡（GetMessageW 返回 -1）——置同一
+                    // 「未注册」状态位 + 错误提示。
+                    self.hotkey_unregistered = true;
+                    self.show_error_toast(
+                        crate::text::t(self.lang_effective, "toast.hotkey_unregistered")
+                            .to_string(),
+                    );
                 }
             }
         }
@@ -271,5 +311,56 @@ impl PaletteApp {
     fn hidden_by_recent_focus_loss(&self) -> bool {
         self.last_focus_loss_hide
             .is_some_and(|t| t.elapsed() < std::time::Duration::from_millis(300))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::test_support::{ctx, make_app, make_app_with};
+    use std::sync::mpsc;
+    use std::time::Instant;
+
+    /// R-15 验收单测（plan §5 R-15）：三段流转各一断言——
+    /// ① 启动注册失败（`ReRegistered(false)` 且 `hotkey_prev=None`）→ 置「未注册」位 + 错误 toast；
+    /// ② 热键线程死亡（`Died`，GetMessageW 返回 -1）→ 置同一状态位；
+    /// ③ 重注册成功（`ReRegistered(true)`）→ 复位（徽标消失）。
+    #[test]
+    fn r15_hotkey_failed_state_flags() {
+        // ① 启动注册失败：hotkey_prev 为 None（构造即 None）走 else 分支。
+        let (tx, rx) = mpsc::channel();
+        let mut app = make_app_with(rx);
+        assert!(!app.hotkey_unregistered);
+        tx.send(HotkeyEvent::ReRegistered(false)).unwrap();
+        app.poll_hotkey(&ctx());
+        assert!(app.hotkey_unregistered, "启动注册失败应置「未注册」位");
+        assert!(app.toast.is_some(), "启动注册失败应出现错误 toast");
+
+        // ② 热键线程死亡：同一状态位（不区分失败来源，提示口径一致）。
+        tx.send(HotkeyEvent::Died).unwrap();
+        app.poll_hotkey(&ctx());
+        assert!(app.hotkey_unregistered, "线程死亡应置同一「未注册」位");
+
+        // ③ 重注册成功：复位（设置页徽标消失）。
+        tx.send(HotkeyEvent::ReRegistered(true)).unwrap();
+        app.poll_hotkey(&ctx());
+        assert!(!app.hotkey_unregistered, "重注册成功应复位「未注册」位");
+    }
+
+    /// B 方案小修（2026-09-29）：捕获态不跨隐藏周期存活——`hide()` 复位捕获
+    /// 标志并清钩子字段（真机 bug：捕获期按 Win → 开始菜单抢焦点 → 失焦
+    /// hide → 再唤起仍卡在捕获提示态；hide 同时是 LL 钩子的逃生出口）。
+    /// 注：不调用 `start_hotkey_capture`（会在 Windows 装真钩子），直接置场。
+    #[test]
+    fn hide_resets_hotkey_capture_state() {
+        let mut app = make_app();
+        app.hotkey_capturing = true;
+        app.capture_started = Some(Instant::now());
+        app.hide(&ctx());
+        assert!(!app.hotkey_capturing, "hide 应复位捕获标志");
+        assert!(
+            app.capture_hook.is_none() && app.capture_rx.is_none() && app.capture_started.is_none(),
+            "hide 应清空钩子守卫 / 事件端 / 超时基准"
+        );
     }
 }

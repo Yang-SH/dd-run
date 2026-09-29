@@ -35,6 +35,9 @@ pub enum HotkeyEvent {
     Toggle,
     /// 重注册结果：true = 新热键已生效；false = 失败并已回滚旧键。
     ReRegistered(bool),
+    /// R-15：热键线程异常死亡（`GetMessageW` 返回 -1 等）——全局热键失效，
+    /// 宿主置「未注册」状态位并提示（面板打开时可见）。
+    Died,
 }
 
 /// 热键重注册请求（UI → 热键线程，经 PostThreadMessageW）。
@@ -131,6 +134,16 @@ impl HotkeyThread {
             thread_id: 0,
         }
     }
+
+    /// R-15 测试注入：外部持有发送端的事件通道（`make_app_with` 用）。
+    #[cfg(test)]
+    pub(crate) fn for_events(rx: mpsc::Receiver<HotkeyEvent>) -> Self {
+        Self {
+            events: rx,
+            _handle: dummy_handle("dd-hotkey-test"),
+            thread_id: 0,
+        }
+    }
 }
 
 /// 占位/测试桩的保活线程（R-05：创建失败仅记日志降级，不 panic）。
@@ -195,7 +208,10 @@ fn message_loop(
                 break;
             }
             if r == -1 {
-                log::debug!("GetMessage failed");
+                // R-15：线程即将静默死亡 → 通知宿主置「未注册」位（原先仅
+                // log::debug，全局热键失效用户无从知晓）。
+                log::error!("[dd-gui] GetMessageW 失败——热键线程退出，全局热键失效");
+                let _ = tx.send(HotkeyEvent::Died);
                 break;
             }
             if msg.message == WM_HOTKEY {
@@ -208,6 +224,14 @@ fn message_loop(
                 if RegisterHotKey(std::ptr::null_mut(), HOTKEY_ID, new.0 | MOD_NOREPEAT, new.1) != 0
                 {
                     current = new;
+                    // 诊断日志（发行版 stderr 无控制台，开发期可见）：区分
+                    // 「注册成功但 IME 层抢占按键」与「注册失败回滚」两类
+                    // 「改绑不生效」真机反馈。
+                    log::info!(
+                        "[dd-gui] 全局热键注册成功：{}+{}",
+                        dd_gui::settings::hotkey_mods_label(new.0),
+                        dd_gui::settings::hotkey_vk_label(new.1)
+                    );
                     let _ = tx.send(HotkeyEvent::ReRegistered(true));
                 } else {
                     log::warn!("[dd-gui] 新热键注册失败（{}+{}），回滚旧键", new.0, new.1);

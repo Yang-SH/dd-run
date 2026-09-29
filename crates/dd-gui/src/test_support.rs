@@ -102,6 +102,23 @@ pub(crate) fn make_app() -> PaletteApp {
     )
 }
 
+/// 指定热键事件通道的 PaletteApp（R-15：外部注入 `ReRegistered` / `Died`
+/// 驱动 `poll_hotkey` 状态位流转，不触真实 `RegisterHotKey`）。
+pub(crate) fn make_app_with(hotkey_rx: mpsc::Receiver<dd_gui::hotkey::HotkeyEvent>) -> PaletteApp {
+    let (_ttx, tray_rx) = mpsc::channel::<TrayEvent>();
+    let (_atx, agg_rx) = mpsc::channel::<AggregatePayload>();
+    PaletteApp::new(
+        dd_gui::hotkey::HotkeyThread::for_events(hotkey_rx),
+        tray_rx,
+        Arc::new(AtomicBool::new(false)),
+        agg_rx,
+        ColdStartTimer::new(),
+        None,
+        dd_gui::settings::Settings::default(),
+        Arc::new(AtomicBool::new(false)),
+    )
+}
+
 /// headless egui Context（无窗口/渲染后端，仅供 request_repaint 等无副作用调用）。
 pub(crate) fn ctx() -> egui::Context {
     egui::Context::default()

@@ -159,6 +159,35 @@ const I18N: &[(&str, &str, &str)] = &[
         "扩展 {id} 剪贴板写入失败：{e}",
         "Extension {id} failed to write the clipboard: {e}",
     ),
+    // R-15：全局热键未注册（启动注册失败 / 热键线程死亡 → 错误 toast + 热键卡徽标）
+    (
+        "toast.hotkey_unregistered",
+        "全局热键注册失败，可能被其他程序占用——请到设置更换组合键",
+        "Global hotkey registration failed — it may be taken by another app. Pick a different combo in Settings",
+    ),
+    (
+        "set.hotkey.unregistered",
+        "未注册",
+        "Not registered",
+    ),
+    // R-18：热键改绑结果 toast（原先硬编码中文，全 UI 仅有的两处绕过 t()）
+    (
+        "toast.hotkey_updated",
+        "全局热键已更新为 {combo}——按它可显示/隐藏面板",
+        "Global hotkey updated to {combo} — press it to show/hide the panel",
+    ),
+    (
+        "toast.hotkey_failed",
+        "新热键注册失败（可能被其他程序或输入法占用），已恢复原热键",
+        "New hotkey registration failed (may be taken by another app or the IME) — the previous hotkey was restored",
+    ),
+    // 热键捕获回落（LL 钩子安装失败）：Alt+Space 等系统组合会弹系统菜单，
+    // Win 键不可录——必须让用户知道当前处于降级捕获。
+    (
+        "set.hotkey.capture_fallback",
+        "系统级捕获不可用（可能被安全软件拦截），已回落基础捕获——Win 键与系统组合键（如 Alt+Space）无法录入",
+        "System-level capture unavailable (possibly blocked by security software); fell back to basic capture — Win and system combos like Alt+Space cannot be captured",
+    ),
     // ── Toast（invoke / page / health / refresh / keys）──
     (
         "toast.ext_busy",
@@ -361,7 +390,8 @@ const I18N: &[(&str, &str, &str)] = &[
     ("set.hotkey.name", "全局热键", "Global hotkey"),
     ("set.hotkey.desc", "自定义唤起/隐藏面板的组合键", "Customize the combo that shows/hides the panel"),
     ("set.hotkey.current", "当前组合", "Current combo"),
-    ("set.hotkey.capturing", "请按下新的组合键（Esc 取消）…", "Press the new key combo (Esc to cancel)…"),
+    ("set.hotkey.capturing", "请按下新的组合键（支持 Win，Esc 取消）…", "Press the new key combo (Win supported, Esc to cancel)…"),
+    ("set.hotkey.capturing_fallback", "请按下新的组合键（基础捕获：不支持 Win / Alt+Space，Esc 取消）…", "Press the new key combo (basic capture: Win / Alt+Space unsupported, Esc to cancel)…"),
     ("set.hotkey.capturing_btn", "捕获中…", "Capturing…"),
     ("set.hotkey.change", "更改", "Change"),
     ("set.hotkey.reset", "恢复默认", "Reset to default"),

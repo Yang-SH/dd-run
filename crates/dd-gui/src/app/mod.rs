@@ -192,6 +192,16 @@ pub struct PaletteApp {
     pub(crate) hotkey_prev: Option<(u32, u32)>,
     /// 热键捕获模式（设置页「更改」后开启：下一组合键被拦截为新热键）。
     pub(crate) hotkey_capturing: bool,
+    /// B 方案（2026-09-29）：捕获期的 LL 键盘钩子守卫（Drop 卸载）。
+    pub(crate) capture_hook: Option<crate::platform::capture_hook::CaptureHookGuard>,
+    /// 捕获钩子事件端（`Combo` / `Cancel`）；`None` = 钩子未装（回落 egui 路径）。
+    pub(crate) capture_rx:
+        Option<std::sync::mpsc::Receiver<crate::platform::capture_hook::CaptureEvent>>,
+    /// 捕获开始时刻（`CAPTURE_TIMEOUT` 超时兜底）。
+    pub(crate) capture_started: Option<std::time::Instant>,
+    /// R-15：全局热键**未注册**（启动注册失败 / 热键线程死亡）——设置页
+    /// 热键卡「未注册」徽标与错误 toast 的依据；重注册成功后复位。
+    pub(crate) hotkey_unregistered: bool,
     /// 扩展启停脏标记：离开设置页时与 engines_dirty 一起触发重聚合。
     pub(crate) exts_dirty: bool,
     /// 托盘事件接收端（设计稿 10C：Toggle / OpenSettings / Exit）。
@@ -431,6 +441,10 @@ impl PaletteApp {
             hotkey,
             hotkey_prev: None,
             hotkey_capturing: false,
+            capture_hook: None,
+            capture_rx: None,
+            capture_started: None,
+            hotkey_unregistered: false,
             exts_dirty: false,
             tray_events,
             tray_click_flag,

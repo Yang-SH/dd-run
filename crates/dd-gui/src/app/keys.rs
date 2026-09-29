@@ -8,6 +8,7 @@ use dd_gui::theme;
 use dd_host::trust::{Decision, TrustLedger};
 use eframe::egui;
 use std::sync::mpsc;
+use std::time::Instant;
 
 impl PaletteApp {
     // ── 键盘 ─────────────────────────────────────────────────
@@ -201,13 +202,40 @@ impl PaletteApp {
         })
     }
 
-    /// 热键捕获（M6 批次 6.3）：捕获模式下的按键裁决——Esc 取消；带 Ctrl/Alt
-    /// 修饰的候选键生效（纯 Shift/无修饰忽略，避免误捕获单键）；其余键吞掉。
+    /// 热键捕获（M6 批次 6.3；2026-09-29 B 方案改造）：
+    /// **Windows 走 LL 键盘钩子**（系统级捕获——egui 应用层收不到 Win 键，
+    /// 按下即弹开始菜单 + 失焦隐藏，真机 bug 见 `platform::capture_hook`
+    /// 模块注释）；钩子安装失败回落 egui 应用层事件路径（Win 不可录）。
+    /// Esc 取消；含 Ctrl/Alt/Win 的候选键生效（纯 Shift/无修饰忽略）。
     ///
-    /// **逐事件检查**（v4.7 真机反馈修订）：组合键的按下/释放常在同一事件批次
-    /// 内完成，`i.modifiers` 快照已是释放后的状态（合成注入必现、极快击键
-    /// 同样可能）——改读 `Event::Key` 自带的按下时刻 modifiers，精确可靠。
+    /// egui 回落路径保留逐事件检查（v4.7 真机反馈修订）：组合键的按下/释放
+    /// 常在同一事件批次内完成，`i.modifiers` 快照已是释放后的状态——读
+    /// `Event::Key` 自带的按下时刻 modifiers，精确可靠。
     fn handle_hotkey_capture(&mut self, ctx: &egui::Context) {
+        // 超时兜底：钩子是全局模态（吞全键盘），超时自动取消防用户键盘
+        // 「失灵」（Esc 始终可取消，本值为双保险）。
+        if let Some(t) = self.capture_started {
+            if t.elapsed() > crate::platform::capture_hook::CAPTURE_TIMEOUT {
+                log::debug!("[dd-gui] 热键捕获超时（30s），自动取消");
+                self.end_hotkey_capture();
+                return;
+            }
+        }
+        // 钩子事件优先（Windows 主路径）。每帧处理至多一个事件（捕获期
+        // 击键速率远低于帧率，无需批量排空）。
+        if let Some(rx) = self.capture_rx.as_ref() {
+            let resolved = rx.try_recv().ok().map(|ev| match ev {
+                crate::platform::capture_hook::CaptureEvent::Cancel => None,
+                crate::platform::capture_hook::CaptureEvent::Combo { mods, vk } => Some((mods, vk)),
+            });
+            match resolved {
+                Some(None) => self.end_hotkey_capture(),
+                Some(Some((mods, vk))) => self.apply_captured_hotkey(mods, vk),
+                None => {} // 本帧无捕获事件
+            }
+            return;
+        }
+        // egui 应用层回落路径（钩子安装失败 / 非 Windows）。
         let events: Vec<egui::Event> = ctx.input(|i| i.events.clone());
         for ev in &events {
             let egui::Event::Key {
@@ -221,7 +249,7 @@ impl PaletteApp {
                 continue;
             };
             if *key == egui::Key::Escape {
-                self.hotkey_capturing = false;
+                self.end_hotkey_capture();
                 return;
             }
             let Some(vk) = Self::capture_vk(*key) else {
@@ -233,19 +261,64 @@ impl PaletteApp {
             if mods & 0b0011 == 0 {
                 continue; // 需含 Ctrl/Alt：忽略本次按键，继续等待
             }
-            self.hotkey_prev = Some((self.settings.hotkey_mods, self.settings.hotkey_vk));
-            self.settings.hotkey_mods = mods;
-            self.settings.hotkey_vk = vk;
-            self.settings.save();
-            self.hotkey.re_register(mods, vk);
-            self.hotkey_capturing = false;
+            self.apply_captured_hotkey(mods, vk);
             return;
         }
     }
 
+    /// 组合键落位（两路径共用）：快照回滚备份 → 写设置 → 重注册 → 退出捕获。
+    /// 注册结果由热键线程经 `ReRegistered` 事件异步回发（R-15 状态位流转）。
+    fn apply_captured_hotkey(&mut self, mods: u32, vk: u32) {
+        self.hotkey_prev = Some((self.settings.hotkey_mods, self.settings.hotkey_vk));
+        self.settings.hotkey_mods = mods;
+        self.settings.hotkey_vk = vk;
+        self.settings.save();
+        self.hotkey.re_register(mods, vk);
+        self.end_hotkey_capture();
+    }
+
+    /// 退出捕获模式并卸载钩子（Esc / 完成 / 超时 / 隐藏共用出口）。
+    pub(crate) fn end_hotkey_capture(&mut self) {
+        self.hotkey_capturing = false;
+        // Guard Drop = 卸载 LL 钩子（清发送端 + WM_QUIT → 钩子线程自行 unhook）。
+        self.capture_hook = None;
+        self.capture_rx = None;
+        self.capture_started = None;
+    }
+
     /// 设置页「更改热键」：进入捕获模式（下一组合键生效，Esc 取消）。
+    /// **重入 = 取消**（捕获中按钮文本为「捕获中…」，再点即退出捕获态，
+    /// 同时防重复装钩子——重复装会先卸旧钩子线程再装新钩子，浪费且抖动）。
     pub(crate) fn start_hotkey_capture(&mut self) {
+        if self.hotkey_capturing {
+            self.end_hotkey_capture();
+            return;
+        }
         self.hotkey_capturing = true;
+        self.capture_started = Some(Instant::now());
+        // B 方案：Windows 主路径 = LL 键盘钩子（Win 键可录、开始菜单不弹）。
+        #[cfg(windows)]
+        {
+            let (tx, rx) = mpsc::channel();
+            match crate::platform::capture_hook::start(tx) {
+                Ok(guard) => {
+                    self.capture_hook = Some(guard);
+                    self.capture_rx = Some(rx);
+                    log::info!("[dd-gui] 热键捕获：LL 钩子已安装（系统级，Win 键可录）");
+                }
+                Err(e) => {
+                    // 回落 egui 应用层路径（handle_hotkey_capture 的 capture_rx
+                    // == None 分支）：非 Win 组合仍可录，Win 键按下会弹开始菜单。
+                    // **可见反馈**（2026-09-29 真机：Alt+Space 系统菜单弹开 =
+                    // 钩子未生效而用户无从知晓——静默回落是诊断黑洞）。
+                    log::error!("[dd-gui] 捕获钩子安装失败：{e} —— 回落 egui 应用层捕获");
+                    self.show_error_toast(
+                        crate::text::t(self.lang_effective, "set.hotkey.capture_fallback")
+                            .to_string(),
+                    );
+                }
+            }
+        }
     }
 
     /// 设置页「恢复默认热键」（M6 批次 6.3）：捕获 UI 不支持 Win 修饰

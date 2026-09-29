@@ -2,6 +2,9 @@
 //!
 //! 拆分自原 main.rs（docs/refactor-layering-plan.md 方案 1），方法体逐字未改。
 
+/// 热键捕获的低级键盘钩子（2026-09-29 B 方案：Win 键可录 + 开始菜单不弹）。
+pub mod capture_hook;
+
 use crate::app::PaletteApp;
 use eframe::egui;
 
