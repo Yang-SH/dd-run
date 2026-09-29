@@ -470,6 +470,7 @@ name = "dd-gui"
 version = "0.1.1"
 dependencies = [
  "arboard",
+ "chrono",
  "dd-ext",
  "dd-host",
  "dd-protocol",

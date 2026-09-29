@@ -19,6 +19,10 @@ dd-ext = { path = "../dd-ext" }
 serde_json = "1"
 # O4 可观测性：`log` 仅为 facade（零传递依赖），后端由 dd-protocol::logging 提供。
 log = "0.4"
+# R-25 崩溃取证：panic 记录的本地时间戳。chrono 0.4 已在依赖树内（dd-host /
+# dd-ext）——Cargo.lock 零变更、供应链面零新增（方案 §7 audit 约定的结论记录
+# 见 CHANGELOG R-25 条目）。
+chrono = "0.4"
 eframe = { version = "0.36", default-features = false, features = [
     "glow",
     "default_fonts",

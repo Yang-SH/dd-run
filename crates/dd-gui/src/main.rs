@@ -37,6 +37,7 @@ use std::sync::Arc;
 use eframe::egui;
 
 use dd_gui::app::{spawn_aggregation, PaletteApp, APP_H, APP_W, OFFSCREEN_X, OFFSCREEN_Y};
+use dd_gui::crashlog;
 use dd_gui::hotkey::HotkeyThread;
 use dd_gui::platform::setup_cjk_fonts;
 use dd_gui::theme;
@@ -45,6 +46,11 @@ use dd_host::cache::{ColdStartTimer, FrozenCache};
 use dd_host::manifest;
 
 fn main() -> eframe::Result {
+    // R-25：panic 取证 hook（进程入口最早挂上——后续任何阶段的未知崩溃都
+    // 追加写 `%APPDATA%\dd-run\logs\panic.log`；hook 内失败静默放弃，默认
+    // panic 流程不变，见 crashlog 模块文档）。
+    crashlog::install();
+
     // O4：装配日志后端（级别取环境变量 `DDRUN_LOG`，未设时 = debug，与接入前
     // 「所有 eprintln! 都输出」等价）。后端恒写 stderr——GUI 子系统无控制台，
     // 真机排障请从终端启动，或重定向：`dd-run.exe 2> dd-run.log`。

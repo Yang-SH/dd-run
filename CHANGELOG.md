@@ -4,6 +4,121 @@
 
 ## [Unreleased]
 
+### 安全（R-12：首方 sidecar 首跑钉扎，2026-09-29）
+
+- **背景**：[stability-usability-security-plan.md](docs/stability-usability-security-plan.md) R-12（中）——`assess` 对 `id ∈ FIRST_PARTY_IDS` 的随包 sidecar 白名单短路发生在哈希**之前**：`dd-ext-search.exe` 零完整性校验、从不参与 `hashes_match`。便携 zip 分发下 `extensions.d\` 在用户可写位置——同用户程序替换 sidecar exe（或加一份指向自己的 `com.ddrun.filesearch.json`）→ 每次启动（含开机自启）**静默拉起，零审批、台账零痕迹**。
+- **修复（`dd-host/trust.rs` + `dd-gui/aggregator.rs` + `ui/settings_view.rs`）**：
+  - **白名单短路废除**：`assess` 的 Sidecar 特判移除（S-05 既有测试 `first_party_sidecar_is_auto_trusted` 同步更名锚定新语义：无台账 → Pending）；
+  - **新增 `assess_sidecar`（含可注入台账核心 `assess_sidecar_with_ledger`，单测不触真实 trust.json）**：① 首跑钉扎（双哈希 + `Decision::Allow` + `origin="sidecar"` + `pinned_host_version` 入账 → AutoTrusted）；② 钉扎有效（每次 spawn 重验双哈希）→ AutoTrusted；③ **同版篡改**（哈希不符且钉扎版本 == 当前宿主版本）→ `Pending` + `sidecar_tampered` 告警位，**绝不自动重钉**；④ **升级重钉**（哈希不符且钉扎版本 ≠ 当前宿主版本）→ 静默重钉新哈希，零摩擦升级（信任锚 = 应用分发包本身）；⑤ 用户 Deny 记录始终优先（哈希不符 → Pending，不静默覆盖拒绝）；
+  - `TrustEntry` 增 `origin` / `pinned_host_version` 字段（serde default，旧台账文件零兼容负担；trust.json 非冻结契约、永不导出，N5 已定）；
+  - 聚合（第一道）与 spawn 门（第二道、所有子进程 spawn 唯一入口）双路由接入；
+  - 设置页扩展行新增篡改告警行（i18n 键 `set.ext.tamper_warn` zh/en，双语完备性单测绿）。
+- **回归测试（+4）**：`r12_sidecar_pin_on_first_sight` / `r12_same_version_tamper_pending`（断言台账不被改写）/ `r12_upgrade_repin_silent` / `r12_deny_entry_overrides_pinning`（超出方案三项的 Deny 优先用例）；S-05 既有 18 项信任门测试全绿（第三方扩展信任行为零变化）。
+- **验证**：`cargo fmt --check` 无差异 / `cargo clippy --workspace --all-targets` 零告警 / `cargo test --workspace` **546 passed / 0 failed**。V-9 真机走查（同版替换 `extensions.d\dd-ext-search.exe` → 设置页 Pending 告警 + Ctrl+F 明确提示；正常升级 → 静默重钉零摩擦）待执行。
+
+### 安全（R-14：清单 / config.json 读盘限幅，2026-09-29）
+
+- **背景**：[stability-usability-security-plan.md](docs/stability-usability-security-plan.md) R-14（低）——`load_manifest`（对 `extensions.d` 下每个 `.json`）与 `Settings::load`（config.json）的 JSON/schema 校验都发生在**读入之后**：4 GB 外形合法的 JSON → 每次启动整读+解析 → 启动期 OOM/长挂。
+- **修复**：两处读入前 `fs::metadata` 限幅 **1 MiB**——`dd-host/manifest.rs` 超限记 `ParseError` 跳过（含 R-14 标记，不整读不解析）；`dd-gui/settings.rs` 的 `load` 最小参数化为 `load_from(path)`（对齐 R-09 参数化纪律）并接入限幅，超限记日志回落默认。
+- **回归测试（+2）**：`r14_manifest_over_limit_skipped`（2 MiB 清单 → `ParseError` 跳过，**同目录其余扩展正常加载**，跳过项路径精确断言）/ `r14_config_over_limit_defaults`（2 MiB config.json → 回默认不 panic；限内正常文件照常解析）。
+- **验证**：`cargo fmt --check` 无差异 / `cargo clippy --workspace --all-targets` 零告警 / `cargo test --workspace` **543 passed / 0 failed**。批二冒烟（放置一次超限清单后正常启动）随批二收尾。
+
+### 安全（R-11：Start Menu `.url` 读盘限幅，2026-09-29）
+
+- **背景**：[stability-usability-security-plan.md](docs/stability-usability-security-plan.md) R-11（中）——`url_target` / `url_icon_file` 对 `.url` 直接 `std::fs::read`，无 metadata 限幅。Start Menu 内容不受信（审计信任假设 C）；本扩展 M9 起 in-process，数 GB `.url`（恶意安装包放置）→ 每次启动首屏聚合整读 → OOM/挂死，无需扩展批准、持久复现（S-04 同类漏网）。
+- **修复（`builtins/apps.rs`）**：抽共享 `read_url_limited(path)`——先 `fs::metadata`，**非普通文件或 `len > 64 KiB` 直接 `None`**；`url_target` / `url_icon_file` 两处接入。正常 `.url`（INI 文本，通常 <1 KiB）远小于上限，行为不变。
+- **回归测试（+3）**：`r11_url_over_limit_rejected`（70 KiB 含合法 `URL=` 行 → 两个函数均 `None`）/ `r11_url_normal_parsed`（正常小文件照常解析出协议目标）/ `r11_url_directory_rejected`（目录 → `None`）；既有 `url_target_parses_ascii_and_utf16` 回归零改动。
+- **验证**：`cargo fmt --check` 无差异 / `cargo clippy --workspace --all-targets` 零告警 / `cargo test --workspace` **541 passed / 0 failed**。批二冒烟（正常 `.url` 应用不受影响）随批二收尾。
+
+### 安全（R-13：calc 求值器递归深度上限，2026-09-29）
+
+- **背景**：[stability-usability-security-plan.md](docs/stability-usability-security-plan.md) R-13（低）——`parse_atom` 的 `'('` 分支递归回 `parse_expr`，深度 ∝ 输入长度；calc 在宿主进程内执行，**栈溢出是 abort（`catch_unwind` 拦不住）**。入口：粘贴 ~10^5 个 `(` 后选中 `= …` 兜底项。
+- **修复（`builtins/calc.rs`）**：`Parser` 加 `depth: u32` + `enter()` 守卫——括号嵌套与一元符号链各计一层，超 **256** 回 `EvalError::Domain`（递归在展开前拒绝）。**实现期加固**：`parse_unary` 的 `'+'/'-'` 自递归是方案未列出的同源无界向量（`-----1` 一类），一并纳入守卫。
+- **回归测试（+2）**：`r13_depth_over_limit_rejected`（257 层括号 / 257 个负号 → `Domain`）/ `r13_depth_at_limit_ok`（256 层内正常求值 + 括号符号混合合法用例）；calc 既有求值/错误/格式化用例零改动全绿。
+- **验证**：`cargo fmt --check` 无差异 / `cargo clippy --workspace --all-targets` 零告警 / `cargo test --workspace` **538 passed / 0 failed**。真机冒烟（粘贴超深表达式选 calc 兜底项，宿主不崩）随批二收尾。
+
+### 安全（R-10：S-06 确认门多段命令绕过封堵，2026-09-29）
+
+- **背景**：[stability-usability-security-plan.md](docs/stability-usability-security-plan.md) R-10（中）——`is_dangerous_command` 只取**首段**首词比对，`echo hi & rd /s /q C:\…\Documents` 首词无害即**不弹确认直接执行破坏段**。S-06 的威胁模型（粘贴误触/社工）恰恰最常以一行多段命令出现。
+- **修复（`builtins/shell.rs`）**：新增纯函数 `is_dangerous_query`——按 `&`（含 `&&`）/ `|` / 换行字符级切段后**每段**各自过既有 `is_dangerous_command`，任一段命中即 `Confirm{is_critical:true}`；`shell.run.query` 确认门改接此判定。零协议改动（沿用 §8.3 确认重发机制）；引号内分隔符也切段，属保守方向（宁可多问一次）；`&&` 产生的空段判定恒 false，不误报。
+- **回归测试（+6）**：`r10_dangerous_seg_amp` / `r10_dangerous_seg_double_amp` / `r10_dangerous_seg_pipe` / `r10_dangerous_seg_newline`（各含「首段无害、次段危险」正例）+ `r10_safe_multiseg_no_confirm` / `r10_safe_single_no_confirm`（全无害多段与普通单段不误报）；S-06 既有单段判定正/负例测试零改动全绿。
+- **验证**：`cargo fmt --check` 无差异 / `cargo clippy --workspace --all-targets` 零告警 / `cargo test --workspace` **536 passed / 0 failed**。
+
+### 稳定性（R-07：剪贴板写入移出 UI 线程，2026-09-29）
+
+- **背景**：[stability-usability-security-plan.md](docs/stability-usability-security-plan.md) R-07（P2）——`host/set_clipboard` 在 UI 线程 `thread::spawn(...).join()`：arboard 打开 Win32 剪贴板（与剪贴板管理器争 `OpenClipboard`）期间整个面板冻结，spawn 毫无收益。
+- **改造（新增 `app/clipboard_worker.rs`）**：常驻工作线程 + mpsc——`SET_CLIPBOARD` 分支校验（S-07 长度上限前置不变）后**入队**即返回；工作线程逐条写入（每次新建 arboard 实例，与改前持锁窗口一致），结果回传 UI 线程经 `poll_clipboard_results`（ui 循环同帧消费）反馈：成功沿用 S-07 既有口径（info 日志 + 轻量 toast），失败走 `show_error_toast`（与 R-16 同一套失败提示基建，新增 i18n 键 `toast.clipboard_fail` zh/en）；工作线程创建失败走 R-05 降级口径（`log::error!` + 提示失败，面板其余功能不受影响）。
+- **回归测试（+1）**：`r07_clipboard_worker_roundtrip`（假写入注入：请求入队 → 工作线程消费 → 成功/失败结果回传 UI 线程，断言 ext_id/字节数/错误信息；请求端 drop 后工作线程自然退出）。
+- **验证**：`cargo fmt --check` 无差异 / `cargo clippy --workspace --all-targets` 零告警 / `cargo test --workspace` **530 passed / 0 failed**（含 i18n 双语完备性单测）。V-12 真机走查（剪贴板占用器场景：面板无卡顿 + 结果 toast）待执行。
+
+### 稳定性（R-25：崩溃取证落盘 panic.log，2026-09-29）
+
+- **背景**：[stability-usability-security-plan.md](docs/stability-usability-security-plan.md) R-25（P1）——全仓无 `panic::set_hook`，O4 日志恒写 stderr 且 release 无控制台（`windows_subsystem = "windows"`）：R-01 这类未知崩溃修复后，未来任何同级崩溃用户手里无痕迹可报、开发者无从诊断。
+- **新增 `dd-gui::crashlog`**：进程入口（O4 init 之前最早）挂 `panic::set_hook`——panic 记录（时间戳 + message + location + 线程名）**追加写入** `%APPDATA%\dd-run\logs\panic.log`。纪律：hook 内目录创建/写盘/时间获取任何失败一律静默放弃（不二次 panic）；落盘后调用 `take_hook()` 取回的原默认 hook——**默认 panic 流程不变**。格式化抽纯函数 `format_panic_entry`（多行 message 原样保留，缺 location/线程名显式占位）。
+- **配套**：`dd-host::manifest::logs_dir()`（复用 `%APPDATA%\dd-run` 数据根口径）；dd-gui 声明 `chrono = "0.4"`——**Cargo.lock 仅 +1 行依赖声明，包集合与版本零变化**（chrono 已在依赖树内，供应链面零新增；§7 audit 约定结论：无新包引入，本地未装 cargo-audit，待 CI 化时补跑）。
+- **回归测试（+3）**：`r25_panic_log_format_states`（含 location / 多行 message / 缺 location 三态 + 线程名与时间戳断言）/ `r25_append_unwritable_path_degrades`（父级是文件 → `append_entry` 返回 `Err` 不 panic）/ `r25_append_is_append`（两次写入同文件均为追加非覆盖）。
+- **验证**：`cargo fmt --check` 无差异 / `cargo clippy --workspace --all-targets` **零告警** / `cargo test --workspace` **529 passed / 0 failed**。V-16 真机走查（注入 panic → panic.log 追加一条、正常退出不新增）待执行。
+
+### 稳定性（R-09：测试基线脱机化 + clippy 基线清零，2026-09-29）
+
+- **背景**：[stability-usability-security-plan.md](docs/stability-usability-security-plan.md) R-09（P2）——`builtins/apps.rs` sys 测试断言本机开始菜单含 Flowframes，任何其他机器/CI 必失败（本机复验确红：枚举列表无 Flowframes，与方案 §2.2 基线一致）。
+- **修复（`builtins/apps.rs` / `bin/search.rs`）**：
+  - 开始菜单递归枚举自 `app_list` 最小参数化为 `collect_lnk_fallback_from_root(root, …)`（逐字搬移，生产行为不变）；
+  - **新增 `r09_apps_enum_from_fixture`**：临时目录经 COM `IShellLinkW::SetPath`（槽 20）+ `IPersistFile::Save`（槽 6）现生成根级/子目录真实 `.lnk` 夹具（目标 `System32\notepad.exe`/`cmd.exe`）→ 枚举结果含两夹具项（根级收录 = Flowframes 回归；递归；目标 exe 过滤走真实链路）；
+  - 机器相关断言更名 `machine_steam_installed_shown_uninstalled_filtered_root_lnk_shown` + `#[ignore]`（注明前提与 `--ignored` 复验方法）；
+  - thread_local clippy 告警排查：clippy 1.96 `missing_const_for_thread_local` **误报**（初始化式已是 `const {}`，关联常量/结构体字面量/直接调用三种写法均仍触发）→ 定点 `#[allow]` 注明理由，初始化式保持 const 形式。
+- **验收**：clippy 全仓 **零告警**（基线清零）/ `cargo fmt --check` 无差异 / 裸机 `cargo test --workspace --no-fail-fast` **连续两次 526 passed / 0 failed 全绿**（即本项验收门）。
+
+### 稳定性（R-08：es.exe 错误信息截断字节边界 panic 修复，2026-09-29）
+
+- **背景**：[stability-usability-security-plan.md](docs/stability-usability-security-plan.md) R-08（P2）——`parse_response` 的错误信息按**字节**截断（`&t[..t.len().min(200)]`），本地化/中文路径下 200 字节可落在多字节字符内 → `not a char boundary` panic（sidecar 进程内，进程退出由宿主熔断兜底，故低危）。
+- **修复（`dd-ext/src/bin/search.rs`）**：抽出 `truncate_chars(s, max)` 纯函数——`s.chars().take(max).collect()` 按整字符截断；`parse_response` 错误路径接入。
+- **回归测试（+1）**：`r08_error_truncate_multibyte_safe`——CJK（300×3 字节，字节边界 200 落在第 67 字符内）与 emoji（60×4 字节）各一：整字符截断、字符数 ≤200、端到端解析失败路径不 panic；ASCII 截断行为不变（回归）。
+- **验证**：`cargo fmt --check` 无差异 / `cargo clippy --workspace --all-targets` 仅既有基线告警（thread_local，属 R-09）/ `cargo test --workspace` **525 passed / 0 failed**。es.exe 出错路径冒烟随批一收尾。
+
+### 稳定性（R-06：锁中毒级联 panic 修复，2026-09-29）
+
+- **背景**：[stability-usability-security-plan.md](docs/stability-usability-security-plan.md) R-06（P2）——任何持锁 panic 后锁中毒，`websearch.rs` 的 `.expect("引擎配置锁未中毒")` 使 websearch 整会话失效（被 `catch_unwind` 接住变 `-32603`，功能报废至重启）；sidecar `search.rs` 的非测试 `.lock().unwrap()` 中毒即进程退出。
+- **修复**：统一改 `lock().unwrap_or_else(|e| e.into_inner())`（`PoisonError` 取回内层数据）——`websearch.rs` 读/写 2 处；`search.rs` 全部非测试 `.lock().unwrap()`（:76/:89/:133/:139/:509/:520 六处生产路径，文档 :116 实为 `#[cfg(test)]` 辅助函数、一并治理）。这些锁保护的都是可整体重建的配置/索引缓存，中毒续用安全。
+- **回归测试（+2）**：`r06_websearch_poisoned_lock`（持锁线程 panic 制造中毒 → 读路径取回预置内容完整、写路径仍可注入生效）/ `r06_sidecar_poisoned_lock`（`PATH_INDEX` 中毒后 lookup 仍命中既有条目、register 新条目成功）。
+- **验证**：`cargo fmt --check` 无差异 / `cargo clippy --workspace --all-targets` 仅既有基线告警（thread_local，属 R-09）/ `cargo test --workspace` **524 passed / 0 failed**。
+
+### 稳定性（R-05：启动期线程创建 `.expect` 降级，2026-09-29）
+
+- **背景**：[stability-usability-security-plan.md](docs/stability-usability-security-plan.md) R-05（P2）——启动期线程创建失败即 `.expect` panic 整个启动器，是 panic 面清点后仅存的 fail-fast 残留。
+- **修复（`hotkey.rs` / `tray.rs` / `platform.rs`）**：6 处全部对齐托盘既有降级口径（失败 `log::error!` + 继续运行）——① Windows 热键线程（降级为无全局热键，回发 `ReRegistered(false)` 事件与注册失败同语义，`HotkeyThread._handle` 改 `Option`）；② 非 Windows 热键占位线程 + ③ 测试桩 dummy（共用 `dummy_handle` 助手）；④ Windows 托盘线程（降级为无托盘，`TrayThread._handle` 改 `Option`）；⑤ 非 Windows 托盘占位线程；⑥ CJK 字体加载线程（降级为默认字体，中文可能显示为方块）。
+- **验收（代码评审口径）**：grep 复核 6 处启动期线程 `.expect(` 清零（platform.rs 余 3 处均为测试夹具，非本项范围）；各降级路径均有 `log::error!`；单测不可达（线程创建失败无法稳定注入），无独立 V 项。
+- **验证**：`cargo fmt --check` 无差异 / `cargo clippy --workspace --all-targets` 仅既有基线告警（thread_local，属 R-09）/ `cargo test --workspace` **522 passed / 0 failed**。五步冒烟随批一收尾执行。
+
+### 稳定性（R-02：持久化非原子写盘修复，2026-09-29）
+
+- **背景**：[stability-usability-security-plan.md](docs/stability-usability-security-plan.md) R-02（P0）——config.json / trust.json / 冻结缓存三处直接 `std::fs::write`，写盘中途崩溃/断电即半截文件：config 丢全部设置；trust.json 解析失败 → `LedgerState::Corrupt` fail-closed，**所有已批准扩展回 Pending 需重新审批**。写盘频率高（每次设置切换、每次隐藏面板 `persist_panel_size`）。
+- **修复**：两 crate 各落一个 `atomic_write(path, bytes)` 助手（方案口径：同目录写 `.tmp` → `std::fs::rename` 覆盖，Windows 侧 std 已走 `MOVEFILE_REPLACE_EXISTING`；失败尽力清理 `.tmp` 残留；目录缺失自动创建；刻意不做 fsync，崩溃窗口从「整个写入时长」缩到「一次 rename」）——`dd-host`（`lib.rs`，`trust.rs` 台账与 `cache.rs` 冻结桩两处接入）与 `dd-gui`（`settings.rs`，config.json 接入）。
+- **回归测试（+6）**：`r02_atomic_write_replaces_existing` / `r02_atomic_write_missing_dir` / `r02_atomic_write_failure_keeps_old` 各 crate × 3——失败注入为 Windows `share_mode(0)` 独占打开目标使 rename 共享冲突失败（Unix 目录置只读），断言原文件完整、无 `.tmp` 残留；零新增依赖（沿用 `std::env::temp_dir` 测试约定）。
+- **验证**：`cargo fmt --check` 无差异 / `cargo clippy --workspace --all-targets` 仅既有基线告警（thread_local，属 R-09）/ `cargo test --workspace` **522 passed / 0 failed**。V-2 真机走查（切换设置 ≥20 次无 `.tmp` 残留、只读目录一次 toast）待执行——其 toast 口径（R-17）随批三落地后一并验证。
+
+### 稳定性（R-01：修复最小化窗口触发 `screen_rect` unwrap 崩溃，2026-09-29）
+
+- **背景**：[stability-usability-security-plan.md](docs/stability-usability-security-plan.md) R-01（P0）——egui-winit 0.36 在 Windows 窗口最小化时将 `raw.screen_rect` 置 `None`，`ui/chrome.rs` 两处 `unwrap()` 使可见路径（1 Hz 看门狗重绘与 OS 态瞬时错位即可触达）panic 整个启动器，为运行路径上唯一确认的全应用崩溃向量。
+- **修复（`chrome.rs` 单文件）**：新增辅助函数 `current_screen_rect`——优先取本帧 `raw.screen_rect`，缺失时回落 egui 已解析的 `viewport_rect`（`begin_pass` 中由上一帧 screen_rect 续接）；`chrome_begin` / `chrome_end` 两处接入，不引入新分支语义。
+- **回归测试（+2）**：`r01_screen_rect_prefers_raw`（`raw` 有值优先取 `raw`，防语义漂移）/ `r01_screen_rect_fallback_raw_none`（最小化帧 `raw` 为 `None` → 回落上一帧已解析矩形，不 panic）。
+- **验证**：`cargo fmt --check` 无差异 / `cargo clippy --workspace --all-targets` 仅既有基线告警（`dd-ext` thread_local，属 R-09 顺手修）+ 并行构建锁文件噪音 / `cargo test --workspace` **516 passed / 0 failed**。V-1 真机走查（Win+D / 最小化期间唤起-隐藏 ≥50 次）待执行。
+
+### 文档（全仓格式规约审计与补强，2026-09-29）
+
+- **新增** [`docs/doc-audit-2026-09-29.md`](docs/doc-audit-2026-09-29.md)（v1.0，生效中）：按 [INDEX] §4 格式规约的全仓文档审计与补强——状态取值归一（2 处非法 + 里程碑 8 份历史格式，均保留原描述）；元信息块补全 14 份（版本/最后更新取 git 实测）；规约外 emoji → 纯文字 12 文件 62 处（优先级/平台图例连动改写，1 处引文豁免加注）；INDEX 行数字段按 `wc -l` 实测回填 17 行；裸代码围栏补 `text` 标注 7 处；368 个相对链接全部可达。建议项（11 份历史文档版本演进补建等）留档其 §4。登记于 `docs/INDEX.md`（v1.35）。零代码改动。
+
+### 文档（稳定性·可用性·安全性加固方案 R1–R24，2026-09-29）
+
+- **新增** [`docs/stability-usability-security-plan.md`](docs/stability-usability-security-plan.md)（v1.2，**规划中**）：S-01–S-11 审计闭环后的新一轮加固规划——三路只读代码审查（安全/稳定/可用独立取证）+ 全量 file:line 回读源码核对。24 项发现：稳定 R1–R9（❌ `screen_rect` 最小化崩溃 / 非原子写盘丢设置与审批态 / 无界入站队列 / in-process 无超时 / 测试基线红等）、安全 R10–R14（S-06 确认门 `&`/`|` 多段绕过 / `.url` 无限读 / 首方 sidecar 零校验 / calc 栈溢出）、可用 R15–R24（启动热键失败静默 / `open_url` 与设置保存失败静默 / 硬编码中文 toast / IME 误触发等）。全部**零冻结契约改动、零新增依赖**；四批实施顺序（崩溃收敛→安全→可用→改造型）+ §6.4 任务勾选清单 + 真机走查总清单 V-1~V-12 + 不做与缓办清单 + 风险声明。v1.1 按格式规约对齐（状态取值 / 标记 emoji / 行号「约 :NNN」）并更正 2 处子代理误报（R-23 落点、R-06 计数）；v1.2 补任务勾选清单并修 §1 表格内竖线转义。登记于 `docs/INDEX.md`（v1.35）。零代码改动。
+
+### 设置（外观：滑杆百分比移至滑杆同一行，v4.20，2026-09-29）
+
+- **背景**：真机截图反馈——外观页「不透明度」百分比 `40%` 挂在行头描述行右缘，与下方滑杆分离，拖动时读值需跨行；同款还有自定义着色「着色强度」。
+- **修复（`settings_view.rs` 单文件）**：新增 `draw_slider_row_with_pct`——滑杆占满除百分比预留宽（最宽 `"100%"`）外的整行，百分比右对齐与滑钮垂直居中**同一行**；取值在滑杆绘制之后，拖动当帧即显新值；预留宽固定，值位数变化不引起行宽抖动。「不透明度」与「着色强度」两处同款接入；`draw_opacity_slider` 增 `width` 参数改由调用方预算轨宽；描述行恢复占满整行（行头锁宽修法随之退役）。
+- **文档**：`docs/implementation.md` P2 落点行补 v4.20 注记。
+- **验证**：`cargo fmt` 无差异 / `clippy -p dd-gui` 无告警 / `dd-gui --lib` 236 passed / 0 failed；重新打包 `dist/dd-run-0.1.1.exe`（8.7M）。
+
 ### 文档（后续功能规划 N1–N5，2026-09-28）
 
 - **新增** [`docs/future-features-plan.md`](docs/future-features-plan.md)（v1.0，规划中）：v0.1.1 后的功能向增量规划——立项判据「可行 × 无冲突」（零冻结契约改动 / 既有惯例可复用 / 零新增依赖 / 信任边界相容）+ 编号空间核查（取 **N 系列**，不预占 D43+）+ 现状底座五惯例取证。五项提案：**N1 自定义直达命令**（URL/路径，刻意规避 `f ` 前缀带参形态）/ **N2 内置扩展配置通道**（泛化 `DD_WEBSEARCH_ENGINES` 惯例，试点 apps 屏蔽名单）/ **N3 浏览器书签搜索**（新内置 in-process 扩展，Chromium 系，零网络）/ **N4 LRU 预热容量可配置**（承接 optimization-plan §2.7.1 转功能项）/ **N5 设置导入导出**（`trust.json` 永不导出）。附不做与缓办边界（扩展商店 / 剪贴板历史 / manifest v1.1 schema / 带参前缀直达等）。零代码改动；登记于 `docs/INDEX.md`（v1.33）。
@@ -210,7 +325,7 @@
 
 ### 文档（文档 ↔ 代码差异清单修复：71 条差异经三路复核验真后逐条落实，2026-09-13）
 
-- **核对与修复记录**：新增 [`docs/doc-code-diff-2026-09-13.md`](./docs/doc-code-diff-2026-09-13.md)（v1.1，已登记 INDEX.md）——P/M/E/I/D/R/S 七系列 71 条差异，三路独立复核验真（修正清单自身 9 处）后按「文档对齐代码」落实约 84 处修复。规范类文档未实现契约**保留条文**、加「⚠️ 实现现状」注记；含 3 处纯注释代码修正（search.rs 超时注释、builtin.rs / aggregator.rs 陈旧注册注释），无行为变更。
+- **核对与修复记录**：新增 [`docs/doc-code-diff-2026-09-13.md`](./docs/archive/doc-code-diff-2026-09-13.md)（v1.1，已登记 INDEX.md）——P/M/E/I/D/R/S 七系列 71 条差异，三路独立复核验真（修正清单自身 9 处）后按「文档对齐代码」落实约 84 处修复。规范类文档未实现契约**保留条文**、加「⚠️ 实现现状」注记；含 3 处纯注释代码修正（search.rs 超时注释、builtin.rs / aggregator.rs 陈旧注册注释），无行为变更。
 - **要点**：`search.md` 移除与 A-33 红线冲突的「无需 es.exe」承诺（高严重度 S-01）；`protocol.md` §9.2 `-32002` 归因更正（兜底在各扩展 handler，Python 示例确实回该码）；`extensions.md` Python 示例补 `stdin.reconfigure(utf-8)`（中文 query 乱码隐患）；README 双语 M7–M9 关账同步；release.yml 「内嵌」表述改「in-process」。
 - **遗留待人工确认**：超限消息「回 `-32600` + 关连接」是否补实现（P-01）、方法名常量层（P-18）等，见 INDEX.md §5。
 

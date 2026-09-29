@@ -50,8 +50,9 @@ pub struct HotkeyCommand {
 pub struct HotkeyThread {
     /// 供 eframe 线程消费的事件接收端。
     pub events: Receiver<HotkeyEvent>,
-    /// join 句柄（drop 时不等待，进程退出即回收）。
-    _handle: thread::JoinHandle<()>,
+    /// join 句柄（drop 时不等待，进程退出即回收）；线程创建失败时为
+    /// `None`（R-05：降级为无热键运行，不 panic）。
+    _handle: Option<thread::JoinHandle<()>>,
     /// 热键线程 id（PostThreadMessageW 目标；非 Windows = 0）。
     thread_id: u32,
 }
@@ -64,20 +65,35 @@ impl HotkeyThread {
     ///
     /// **启动注册失败不 panic**（旧快速失败已废除）：降级为无热键运行并
     /// 发 [`HotkeyEvent::ReRegistered`](false)，可在设置页换键修复。
+    /// 线程创建失败同口径（R-05）：`log::error!` + 回发失败事件后继续。
     #[cfg(windows)]
     pub fn spawn(ctx: eframe::egui::Context, mods: u32, vk: u32) -> Self {
         let (tx, rx) = mpsc::channel::<HotkeyEvent>();
         let (id_tx, id_rx) = mpsc::channel::<u32>();
-        let handle = thread::Builder::new()
+        // 失败通知用克隆（tx 随闭包移交线程，创建失败时闭包被丢弃）
+        let fail_tx = tx.clone();
+        match thread::Builder::new()
             .name("dd-hotkey".into())
             .spawn(move || message_loop(tx, ctx, id_tx, mods, vk))
-            .expect("failed to spawn hotkey thread");
-        // 线程启动即回发自身 id（阻塞等待，微秒级）
-        let thread_id = id_rx.recv().unwrap_or(0);
-        Self {
-            events: rx,
-            _handle: handle,
-            thread_id,
+        {
+            Ok(handle) => {
+                // 线程启动即回发自身 id（阻塞等待，微秒级）
+                let thread_id = id_rx.recv().unwrap_or(0);
+                Self {
+                    events: rx,
+                    _handle: Some(handle),
+                    thread_id,
+                }
+            }
+            Err(e) => {
+                log::error!("[dd-gui] 热键线程创建失败：{e} —— 降级为无全局热键运行");
+                let _ = fail_tx.send(HotkeyEvent::ReRegistered(false));
+                Self {
+                    events: rx,
+                    _handle: None,
+                    thread_id: 0,
+                }
+            }
         }
     }
 
@@ -97,10 +113,7 @@ impl HotkeyThread {
         let (_tx, rx) = mpsc::channel::<HotkeyEvent>();
         Self {
             events: rx,
-            _handle: thread::Builder::new()
-                .name("dd-hotkey-dummy".into())
-                .spawn(|| std::thread::sleep(std::time::Duration::MAX))
-                .expect("failed to spawn dummy hotkey thread"),
+            _handle: dummy_handle("dd-hotkey-dummy"),
             thread_id: 0,
         }
     }
@@ -114,11 +127,22 @@ impl HotkeyThread {
         let (_tx, rx) = mpsc::channel::<HotkeyEvent>();
         Self {
             events: rx,
-            _handle: thread::Builder::new()
-                .name("dd-hotkey-dummy".into())
-                .spawn(|| std::thread::sleep(std::time::Duration::MAX))
-                .expect("failed to spawn dummy hotkey thread"),
+            _handle: dummy_handle("dd-hotkey-dummy"),
             thread_id: 0,
+        }
+    }
+}
+
+/// 占位/测试桩的保活线程（R-05：创建失败仅记日志降级，不 panic）。
+fn dummy_handle(name: &str) -> Option<thread::JoinHandle<()>> {
+    match thread::Builder::new()
+        .name(name.into())
+        .spawn(|| std::thread::sleep(std::time::Duration::MAX))
+    {
+        Ok(h) => Some(h),
+        Err(e) => {
+            log::error!("[dd-gui] {name} 占位线程创建失败：{e}（占位桩降级继续）");
+            None
         }
     }
 }

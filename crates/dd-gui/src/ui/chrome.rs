@@ -82,6 +82,15 @@ fn edge_zone(
     }
 }
 
+/// 当前窗口屏幕矩形（R-01）：优先取本帧 `raw.screen_rect`，缺失时回落
+/// egui 已解析的 `viewport_rect`（`begin_pass` 中由上一帧 screen_rect 续接，
+/// egui-winit 0.36 在 Windows 窗口最小化时刻意将 `raw.screen_rect` 置
+/// `None`——直接 `unwrap` 会 panic 整个启动器）。首帧即缺失时为 egui
+/// 默认视口矩形；热区判定用矩形此时失真但无崩溃风险，恢复窗口后自愈。
+fn current_screen_rect(ctx: &egui::Context) -> egui::Rect {
+    ctx.input(|i| i.raw.screen_rect.unwrap_or_else(|| i.viewport_rect()))
+}
+
 /// 帧首调用（本帧任何控件注册之前）：清原生缩放旗标 + 判定空白区拖拽候选。
 ///
 /// v4.11 修正：此前用 `Order::Background` 全屏 `allocate_rect(screen,
@@ -129,8 +138,9 @@ pub(crate) fn chrome_begin(app: &mut PaletteApp, ctx: &egui::Context) {
         return;
     }
     // 窗口屏幕矩形：egui 0.36 无 `Context::screen_rect()`，取本帧视口矩形
-    // （与视口命令同一坐标系）。`raw.screen_rect` 为 `Option<Rect>`。
-    let screen = ctx.input(|i| i.raw.screen_rect).unwrap();
+    // （与视口命令同一坐标系）。`raw.screen_rect` 为 `Option<Rect>`，
+    // 最小化时为 `None` → 回落本帧已解析矩形（R-01，不可 unwrap）。
+    let screen = current_screen_rect(ctx);
     let pointer = ctx.input(|i| i.pointer.clone());
 
     // 上一帧所有 click/drag 交互控件矩形（空白拖拽判定基准）。
@@ -174,7 +184,7 @@ pub(crate) fn chrome_end(app: &mut PaletteApp, ctx: &egui::Context) {
     if app.native_resize {
         return;
     }
-    let screen = ctx.input(|i| i.raw.screen_rect).unwrap();
+    let screen = current_screen_rect(ctx);
     let Some(pos) = ctx.input(|i| i.pointer.interact_pos()) else {
         return;
     };
@@ -192,8 +202,8 @@ pub(crate) fn chrome_end(app: &mut PaletteApp, ctx: &egui::Context) {
 
 #[cfg(test)]
 mod tests {
-    use super::edge_zone;
-    use eframe::egui::{pos2, vec2, CursorIcon, Rect, ResizeDirection as D};
+    use super::{current_screen_rect, edge_zone};
+    use eframe::egui::{pos2, vec2, Context, CursorIcon, RawInput, Rect, ResizeDirection as D};
 
     fn screen() -> Rect {
         Rect::from_min_size(pos2(0.0, 0.0), vec2(560.0, 460.0))
@@ -255,5 +265,38 @@ mod tests {
             edge_zone(r, pos2(557.0, 3.0)).unwrap().1,
             CursorIcon::ResizeNorthEast
         );
+    }
+
+    /// R-01：`raw.screen_rect` 有值时辅助函数优先取 `raw`（防语义漂移）。
+    #[test]
+    fn r01_screen_rect_prefers_raw() {
+        let ctx = Context::default();
+        let rect = Rect::from_min_size(pos2(0.0, 0.0), vec2(560.0, 460.0));
+        ctx.begin_pass(RawInput {
+            screen_rect: Some(rect),
+            ..Default::default()
+        });
+        assert_eq!(current_screen_rect(&ctx), rect);
+    }
+
+    /// R-01：最小化帧 egui-winit 将 `raw.screen_rect` 置 `None` →
+    /// 回落本帧已解析矩形（上一帧值），不 panic。
+    #[test]
+    fn r01_screen_rect_fallback_raw_none() {
+        let ctx = Context::default();
+        let rect = Rect::from_min_size(pos2(0.0, 0.0), vec2(560.0, 460.0));
+        // 正常帧：screen_rect 有值
+        ctx.begin_pass(RawInput {
+            screen_rect: Some(rect),
+            ..Default::default()
+        });
+        // 测试上下文无渲染器，帧输出（纹理增量）显式丢弃
+        ctx.end_pass().textures_delta.clear();
+        // 最小化帧：screen_rect = None → 回落上一帧已解析矩形
+        ctx.begin_pass(RawInput {
+            screen_rect: None,
+            ..Default::default()
+        });
+        assert_eq!(current_screen_rect(&ctx), rect);
     }
 }

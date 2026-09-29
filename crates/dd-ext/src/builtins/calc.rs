@@ -200,7 +200,11 @@ pub fn eval_expr(input: &str) -> Result<f64, EvalError> {
     if src.is_empty() {
         return Err(EvalError::Empty);
     }
-    let mut p = Parser { src: &src, pos: 0 };
+    let mut p = Parser {
+        src: &src,
+        pos: 0,
+        depth: 0,
+    };
     let value = p.parse_expr()?;
     if p.pos != src.len() {
         return Err(EvalError::MissingOperator(p.pos));
@@ -208,12 +212,29 @@ pub fn eval_expr(input: &str) -> Result<f64, EvalError> {
     Ok(value)
 }
 
+/// R-13（2026-09-29）：递归深度上限。calc 在宿主进程内执行，**栈溢出是
+/// abort（`catch_unwind` 拦不住）**，必须在递归展开前拒绝。粘贴 ~10^5 个
+/// `(`（或一元正负号链）此前可致宿主进程崩溃，现超限回 `EvalError::Domain`。
+const MAX_RECURSION_DEPTH: u32 = 256;
+
 struct Parser<'a> {
     src: &'a [char],
     pos: usize,
+    /// R-13：当前递归深度——括号嵌套（`parse_atom` 的 `'('` 分支）与一元
+    /// 符号链（`parse_unary` 的 `'+'/'-'` 自递归）各计一层，共用同一上限。
+    depth: u32,
 }
 
 impl<'a> Parser<'a> {
+    /// R-13：进入一层递归前调用；超限返回 `Domain`。
+    fn enter(&mut self) -> Result<(), EvalError> {
+        self.depth += 1;
+        if self.depth > MAX_RECURSION_DEPTH {
+            return Err(EvalError::Domain);
+        }
+        Ok(())
+    }
+
     fn peek(&self) -> Option<char> {
         self.src.get(self.pos).copied()
     }
@@ -290,12 +311,19 @@ impl<'a> Parser<'a> {
         self.skip_ws();
         match self.peek() {
             Some('+') => {
+                // R-13：一元符号链自递归同样无界，纳入深度守卫
+                self.enter()?;
                 self.bump();
-                self.parse_unary()
+                let v = self.parse_unary();
+                self.depth -= 1;
+                v
             }
             Some('-') => {
+                self.enter()?;
                 self.bump();
-                Ok(-self.parse_unary()?)
+                let v = -self.parse_unary()?;
+                self.depth -= 1;
+                Ok(v)
             }
             _ => self.parse_power(),
         }
@@ -323,8 +351,11 @@ impl<'a> Parser<'a> {
         self.skip_ws();
         match self.peek() {
             Some('(') => {
+                // R-13：括号嵌套是递归深度 ∝ 输入长度的主通道，进入前设限
+                self.enter()?;
                 self.bump();
                 let v = self.parse_expr()?;
+                self.depth -= 1;
                 self.skip_ws();
                 if self.bump() != Some(')') {
                     return Err(EvalError::UnterminatedGroup);
@@ -451,6 +482,34 @@ mod tests {
             eval_expr("(-1)^0.5"),
             Err(EvalError::Domain),
             "非整数幂开负根 → 非有限"
+        );
+    }
+
+    /// R-13：257 层括号嵌套（以及 257 个一元符号链）→ `EvalError::Domain`
+    /// ——递归在展开前被拒，宿主进程不再有栈溢出（abort）风险。
+    #[test]
+    fn r13_depth_over_limit_rejected() {
+        let deep = format!("{}1{}", "(".repeat(257), ")".repeat(257));
+        assert_eq!(eval_expr(&deep), Err(EvalError::Domain));
+        // 一元符号链同机制守卫（实现期发现的同源无界递归向量）
+        let signs = "-".repeat(257);
+        assert_eq!(eval_expr(&format!("{signs}1")), Err(EvalError::Domain));
+    }
+
+    /// R-13：256 层内正常求值（合法深嵌套不误拒）。
+    #[test]
+    fn r13_depth_at_limit_ok() {
+        let deep = format!("{}1{}", "(".repeat(256), ")".repeat(256));
+        assert_eq!(eval_expr(&deep), Ok(1.0));
+        // 混合合法用例：括号 + 一元符号均在限内（100 个负号 = 偶次取负 → +1）
+        assert_eq!(
+            eval_expr(&format!(
+                "{}{}1{}",
+                "(".repeat(100),
+                "-".repeat(100),
+                ")".repeat(100)
+            )),
+            Ok(1.0)
         );
     }
 

@@ -5,6 +5,8 @@
 //! [`crate::platform`]，纯函数在 [`crate::text`]。
 
 pub(crate) mod aggregate;
+/// R-07：剪贴板写入常驻工作线程（`host/set_clipboard` 不再阻塞 UI 线程）。
+pub(crate) mod clipboard_worker;
 pub(crate) mod ctx_menu;
 pub(crate) mod e2e;
 pub(crate) mod fallback_flow;
@@ -302,6 +304,11 @@ pub struct PaletteApp {
     pub(crate) icon_failed: HashSet<String>,
     /// M5 批次 4.0：宿主本地设置（当前仅主题偏好；启动加载、设置页改选即存）。
     pub(crate) settings: dd_gui::settings::Settings,
+    /// R-07：剪贴板常驻工作线程——请求发送端（线程创建失败时 `None`，
+    /// `host/set_clipboard` 降级不可用）与结果接收端（`poll_clipboard_results`
+    /// 消费 → toast 反馈）。
+    pub(crate) clipboard_tx: Option<std::sync::mpsc::Sender<clipboard_worker::ClipboardRequest>>,
+    pub(crate) clipboard_rx: Receiver<clipboard_worker::ClipboardOutcome>,
     /// 磁盘桩缓存（聚合用；设置页搜索引擎变更触发重聚合时复用）。
     pub(crate) cache: Option<FrozenCache>,
     /// 搜索引擎配置脏标记：设置页改动置位，**离开设置页**时消费并全量重聚合
@@ -417,6 +424,8 @@ impl PaletteApp {
     ) -> Self {
         // FollowSystem 在此一次性解析为具体语言（每帧取用零探测开销）。
         let lang_effective = Self::resolve_lang(&settings);
+        // R-07：剪贴板常驻工作线程（随 app 生命周期；创建失败降级见模块文档）
+        let (clipboard_tx, clipboard_rx) = clipboard_worker::spawn();
         Self {
             stack: PageStack::new(PageState::root(Vec::new())),
             hotkey,
@@ -464,6 +473,8 @@ impl PaletteApp {
             icon_cache: HashMap::new(),
             icon_failed: HashSet::new(),
             settings,
+            clipboard_tx,
+            clipboard_rx,
             cache,
             engines_dirty: false,
             lang_dirty: false,
@@ -666,6 +677,7 @@ impl eframe::App for PaletteApp {
         self.poll_page();
         self.poll_notifications();
         self.poll_host_requests(); // M4 P2：host/* 副作用（Toast/剪贴板/开 URL）
+        self.poll_clipboard_results(); // R-07：剪贴板写入结果 → toast 反馈
         self.poll_fallback(&ctx); // M4 宿主 fallback：兜底模板拉取结果
         self.tick_refresh();
 

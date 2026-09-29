@@ -72,11 +72,11 @@ impl FrozenCache {
         read_verified(&bytes, ext_id)
     }
 
-    /// 写入快照；目录不存在时自动创建。
+    /// 写入快照；目录不存在时自动创建。R-02：经 [`crate::atomic_write`]
+    /// 原子落盘，写盘中途崩溃不产生半截桩文件。
     pub fn save(&self, snap: &FrozenSnapshot) -> std::io::Result<()> {
-        std::fs::create_dir_all(&self.dir)?;
         let json = serde_json::to_vec(snap)?;
-        std::fs::write(self.path(&snap.ext_id, &snap.version), json)
+        crate::atomic_write(&self.path(&snap.ext_id, &snap.version), &json)
     }
 
     /// 若已存在同 id 但**不同 version** 的桩，删除之（返回是否删除）。

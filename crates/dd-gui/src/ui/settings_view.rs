@@ -33,6 +33,8 @@ pub(crate) struct ExtRow {
     pub(crate) origin: ExtOrigin,
     /// S-05：与随包首方扩展同 id 但来自用户目录（D4 告警）。
     pub(crate) shadow: bool,
+    /// R-12：随包 sidecar 同版篡改嫌疑（哈希与钉扎不符且宿主版本未变）。
+    pub(crate) sidecar_tampered: bool,
     /// 清单路径（展示 + 溯源）。
     pub(crate) manifest_path: String,
     /// 可执行文件路径（内置为名义路径，渲染时改用文案替代）。
@@ -100,6 +102,7 @@ fn extension_rows(
                 trust: a.map(|x| x.trust).unwrap_or(Trust::Pending),
                 origin: a.map(|x| x.origin).unwrap_or(ExtOrigin::UserDir),
                 shadow: a.map(|x| x.shadows_first_party()).unwrap_or(false),
+                sidecar_tampered: a.map(|x| x.sidecar_tampered).unwrap_or(false),
                 manifest_path: e.path.display().to_string(),
                 exe_path: e.command.display().to_string(),
             }
@@ -590,26 +593,17 @@ impl PaletteApp {
                     });
                 });
                 card.add_space(6.0);
-                card.horizontal(|ui| {
-                    ui.label(
-                        egui::RichText::new(crate::text::t(lang, "set.color.intensity"))
-                            .size(12.0)
-                            .color(p.text3),
-                    );
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        ui.label(
-                            egui::RichText::new(format!("{}%", intensity_tmp))
-                                .size(12.0)
-                                .color(if material_active { p.text2 } else { p.text3 }),
-                        );
-                    });
-                });
+                card.label(
+                    egui::RichText::new(crate::text::t(lang, "set.color.intensity"))
+                        .size(12.0)
+                        .color(p.text3),
+                );
                 card.add_space(6.0);
                 // 独立 id 作用域：`draw_opacity_slider` 内部按名取 id，
-                // 与上方材质不透明度滑杆同卡相邻，必须隔开避免 id 冲突。
+                // 与下方材质不透明度滑杆同卡相邻，必须隔开避免 id 冲突。
                 let (changed, released) = card
                     .push_id("tint_intensity", |ui| {
-                        draw_opacity_slider(ui, material_active, &mut intensity_tmp, p)
+                        draw_slider_row_with_pct(ui, material_active, &mut intensity_tmp, p)
                     })
                     .inner;
                 if changed {
@@ -623,44 +617,27 @@ impl PaletteApp {
             // v6（2026-09-13 设计风格对齐）：egui 默认 Slider（细灰轨 + 行内
             // 百分比后缀）与整套 Fluent 控件（pill/开关）脱节，改自绘规格：
             // 轨 4px 圆角 2（未选 `--border` / 已选 accent_stroke）+ 16px 白钮
-            // border-strong 描边（悬停/拖动加粗到 2px）；百分比值右对齐在行头。
+            // border-strong 描边（悬停/拖动加粗到 2px）。
+            // v4.20（2026-09-29）：百分比从行头描述行移到滑杆同一行右缘——
+            // 描述行恢复占满整行，拖动时读值不再跨行找。
             card.add_space(8.0);
-            card.horizontal(|ui| {
-                ui.spacing_mut().item_spacing.x = 0.0;
-                // 右侧百分比预留固定宽（最宽 "100%"），左列 allocate_ui 锁宽
-                // ——长描述在左列范围内换行，不再占满整行把百分比顶到右缘
-                // 叠画在首行行尾（同语言卡 v4.15 修法）。
-                let pct_w = text_width(ui, "100%", egui::FontId::proportional(12.0));
-                let left_w = (ui.available_width() - pct_w).max(160.0);
-                ui.allocate_ui(egui::vec2(left_w, 36.0), |ui| {
-                    ui.vertical(|ui| {
-                        ui.label(
-                            egui::RichText::new(crate::text::t(lang, "set.opacity.name"))
-                                .size(14.0)
-                                .color(p.text),
-                        );
-                        ui.add_space(2.0);
-                        ui.add(
-                            egui::Label::new(
-                                egui::RichText::new(crate::text::t(lang, "set.opacity.desc"))
-                                    .size(12.0)
-                                    .color(p.text3),
-                            )
-                            .wrap(),
-                        );
-                    });
-                });
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    ui.label(
-                        egui::RichText::new(format!("{}%", opacity_tmp))
-                            .size(12.0)
-                            .color(if material_active { p.text2 } else { p.text3 }),
-                    );
-                });
-            });
+            card.label(
+                egui::RichText::new(crate::text::t(lang, "set.opacity.name"))
+                    .size(14.0)
+                    .color(p.text),
+            );
+            card.add_space(2.0);
+            card.add(
+                egui::Label::new(
+                    egui::RichText::new(crate::text::t(lang, "set.opacity.desc"))
+                        .size(12.0)
+                        .color(p.text3),
+                )
+                .wrap(),
+            );
             card.add_space(6.0);
             let (slider_changed, slider_released) =
-                draw_opacity_slider(card, material_active, &mut opacity_tmp, p);
+                draw_slider_row_with_pct(card, material_active, &mut opacity_tmp, p);
             if slider_changed {
                 opacity_changed = true;
             }
@@ -1965,6 +1942,21 @@ impl PaletteApp {
                                 .truncate(),
                             );
                         }
+                        // R-12 告警行：随包 sidecar 同版篡改嫌疑（已 fail-closed 拦下）
+                        if row.sidecar_tampered {
+                            ui.add_space(2.0);
+                            ui.add(
+                                egui::Label::new(
+                                    egui::RichText::new(crate::text::t(
+                                        lang,
+                                        "set.ext.tamper_warn",
+                                    ))
+                                    .size(11.0)
+                                    .color(p.danger),
+                                )
+                                .truncate(),
+                            );
+                        }
                         // 失败原因行（既有）：仅失败时
                         if let Some(reason) = &row.failed_reason {
                             ui.add_space(2.0);
@@ -2341,23 +2333,48 @@ pub(crate) fn draw_density_pill(
     resp.clicked()
 }
 
+/// 滑杆行（v4.20，2026-09-29）：自绘滑杆 + 同行右缘百分比。滑杆占满除
+/// 百分比预留宽（最宽 "100%"）外的整行，百分比与滑钮垂直居中同排；取值在
+/// 滑杆绘制之后——拖动当帧即显示新值，且预留宽固定、值变化不引起行宽抖动。
+fn draw_slider_row_with_pct(
+    ui: &mut egui::Ui,
+    enabled: bool,
+    value: &mut u8,
+    p: &theme::Palette,
+) -> (bool, bool) {
+    let mut out = (false, false);
+    ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = 8.0;
+        let pct_w = text_width(ui, "100%", egui::FontId::proportional(12.0));
+        let slider_w = (ui.available_width() - pct_w - 8.0).max(120.0);
+        out = draw_opacity_slider(ui, enabled, value, slider_w, p);
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            ui.label(
+                egui::RichText::new(format!("{}%", *value))
+                    .size(12.0)
+                    .color(if enabled { p.text2 } else { p.text3 }),
+            );
+        });
+    });
+    out
+}
+
 /// 不透明度滑杆（P2 v6，2026-09-13 设计风格对齐）：egui 默认 Slider 的细灰
 /// 轨 + 行内百分比后缀与整套 Fluent 控件（pill/开关）风格脱节，按设计 token
 /// 自绘——轨 4px 圆角 2（未选段 `--border` / 已选段 accent_stroke，与搜索框
 /// 聚焦下划线同源的小面积强调口径）、钮 16px 白底 border-strong 描边（悬停
 /// /拖动加粗 2px）；禁用态（材质关/未生效）置灰且不响应。返回 (changed,
 /// released)：拖动中 changed 即时生效不落盘，released（松手/单击跳值）落盘。
+/// `width`：轨占宽，由调用方预算（同行放百分比时扣除其预留宽）。
 fn draw_opacity_slider(
     ui: &mut egui::Ui,
     enabled: bool,
     value: &mut u8,
+    width: f32,
     p: &theme::Palette,
 ) -> (bool, bool) {
     let height = 20.0;
-    let (rect, _) = ui.allocate_exact_size(
-        egui::vec2(ui.available_width(), height),
-        egui::Sense::hover(),
-    );
+    let (rect, _) = ui.allocate_exact_size(egui::vec2(width, height), egui::Sense::hover());
     let id = ui.id().with("opacity_slider");
     let resp = ui.interact(rect, id, egui::Sense::click_and_drag());
     let mut changed = false;
@@ -2870,6 +2887,7 @@ mod tests {
                 id: "com.example.p".to_string(),
                 trust: Trust::Blocked,
                 origin: ExtOrigin::UserDir,
+                sidecar_tampered: false,
             },
         );
         trust.insert(
@@ -2878,6 +2896,7 @@ mod tests {
                 id: "com.ddrun.filesearch".to_string(),
                 trust: Trust::AutoTrusted,
                 origin: ExtOrigin::Builtin,
+                sidecar_tampered: false,
             },
         );
 

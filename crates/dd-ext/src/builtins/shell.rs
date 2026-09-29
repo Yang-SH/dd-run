@@ -137,8 +137,8 @@ mod sys {
     /// 危险命令判定（纯函数，便于单测）：见 [`DANGEROUS_COMMANDS`] / [`DANGEROUS_SUBCOMMANDS`]。
     ///
     /// 取首个词作为命令名，按 `\` / `/` 去路径、按 `.` 去扩展名后比对；`reg delete`
-    /// 一类需看第二个词。刻意**不做**复杂 shell 解析（多段 `&` / `|` 里的危险命令不追查）
-    /// —— 此处是「降低误触代价」的护栏，**不是沙箱边界**。
+    /// 一类需看第二个词。单段判定——多段命令由 [`is_dangerous_query`] 切段后
+    /// 逐段调用本函数。
     fn is_dangerous_command(query: &str) -> bool {
         let lower = query.trim_start().to_ascii_lowercase();
         let mut words = lower.split_whitespace();
@@ -155,6 +155,20 @@ mod sys {
         DANGEROUS_SUBCOMMANDS
             .iter()
             .any(|(cmd, subcmd)| *cmd == name && *subcmd == sub)
+    }
+
+    /// R-10（2026-09-29）：多段命令判定——S-06 确认门此前只查**首段**首词，
+    /// `echo hi & rd /s /q C:\…` 首词无害即绕过（粘贴型社工恰恰最常以一行
+    /// 多段命令出现）。按 `&`（含 `&&`）/ `|` / 换行切段后**每段**各自过
+    /// [`is_dangerous_command`]，任一段命中即拦截。
+    ///
+    /// 切段刻意字符级（`&&` 会产生空段，空段判定恒 false）——不引入 shell
+    /// 解析复杂度；引号内的 `&`/`|` 也会切段，属保守方向（宁可多问一次，
+    /// 仍是「降低误触代价的护栏」而非沙箱边界的既定定位）。
+    fn is_dangerous_query(query: &str) -> bool {
+        query
+            .split(['&', '|', '\r', '\n'])
+            .any(is_dangerous_command)
     }
 
     pub fn handle_invoke(params: &InvokeParams) -> (CommandResult, Vec<Effect>) {
@@ -209,12 +223,14 @@ mod sys {
                 // Confirm 门禁，而破坏力相当的 `format` / `del /s` / `rd /s` 此前无任何确认
                 // ——防护强度与危险度不匹配。确认后宿主带 `context.confirmed = true` 重发
                 // （§8.3 既有机制，零协议改动）。
+                // R-10（2026-09-29）：判定改 [`is_dangerous_query`]——多段命令
+                // 逐段过门，堵 `&`/`|`/换行绕过。
                 let confirmed = params
                     .context
                     .as_ref()
                     .and_then(|c| c.confirmed)
                     .unwrap_or(false);
-                if !confirmed && is_dangerous_command(query) {
+                if !confirmed && is_dangerous_query(query) {
                     return (
                         CommandResult::Confirm {
                             title: tr("确认执行危险命令？", "Run this dangerous command?")
@@ -473,6 +489,58 @@ mod sys {
             ] {
                 assert!(!is_dangerous_command(ok), "不应判危险：{ok}");
             }
+        }
+
+        /// R-10：多段命令逐段判定——首段无害、次段危险的组合必须被确认门拦截。
+        /// S-06 原实现只查首段首词，`echo hi & rd /s /q …` 可绕过。
+        #[test]
+        fn r10_dangerous_seg_amp() {
+            assert!(
+                is_dangerous_query("echo hi & rd /s /q C:\\Users\\me\\Documents"),
+                "单 & 次段危险应拦截"
+            );
+        }
+
+        #[test]
+        fn r10_dangerous_seg_double_amp() {
+            assert!(
+                is_dangerous_query("echo hi && del /q C:\\tmp\\a.txt"),
+                "双 && 次段危险应拦截"
+            );
+        }
+
+        #[test]
+        fn r10_dangerous_seg_pipe() {
+            assert!(
+                is_dangerous_query("echo x | format q: /fs:ntfs"),
+                "管道次段危险应拦截"
+            );
+        }
+
+        #[test]
+        fn r10_dangerous_seg_newline() {
+            assert!(
+                is_dangerous_query("echo hi\ndel /q C:\\tmp\\a.txt"),
+                "换行次段危险应拦截"
+            );
+        }
+
+        /// R-10 负例：全无害的多段命令不得误报（否则日常组合处处弹窗）。
+        #[test]
+        fn r10_safe_multiseg_no_confirm() {
+            assert!(
+                !is_dangerous_query("echo hi & dir & ipconfig | findstr IPv4"),
+                "全无害多段不应误拦"
+            );
+            assert!(!is_dangerous_query("echo a && echo b && echo c"));
+            assert!(!is_dangerous_query("dir\r\ndel被拆在词中间\r\nipconfig"));
+        }
+
+        /// R-10 负例：普通单段命令照常直接执行（S-06 既有行为零变化）。
+        #[test]
+        fn r10_safe_single_no_confirm() {
+            assert!(!is_dangerous_query("ipconfig /all"));
+            assert!(!is_dangerous_query("git status && cargo test"));
         }
 
         #[test]

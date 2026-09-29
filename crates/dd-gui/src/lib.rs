@@ -35,6 +35,8 @@ extern crate self as dd_gui;
 
 pub mod aggregator;
 pub mod app;
+/// R-25：崩溃取证——panic hook 追加写 `%APPDATA%\dd-run\logs\panic.log`。
+pub mod crashlog;
 pub mod embedded;
 /// M9 B3：扩展客户端统一抽象（内置 in-process / 第三方·sidecar 子进程）。
 pub mod ext_client;

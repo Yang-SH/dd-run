@@ -70,7 +70,8 @@ pub fn setup_cjk_fonts(ctx: &egui::Context) {
     ctx.set_fonts(fonts);
 
     let ctx = ctx.clone();
-    std::thread::Builder::new()
+    // R-05：线程创建失败降级为默认字体（中文可能显示为方块），不 panic。
+    if let Err(e) = std::thread::Builder::new()
         .name("cjk-fonts".into())
         .spawn(move || {
             let started = std::time::Instant::now();
@@ -86,7 +87,11 @@ pub fn setup_cjk_fonts(ctx: &egui::Context) {
                 None => log::debug!("[dd-gui] 未找到任何 CJK 字体，中文可能显示为方块"),
             }
         })
-        .expect("spawn cjk-fonts thread");
+    {
+        log::error!(
+            "[dd-gui] CJK 字体加载线程创建失败：{e} —— 以默认字体继续（中文可能显示为方块）"
+        );
+    }
 }
 
 /// 读单个字体文件为 egui 字体数据（内存优化 M2，docs/memory-optimization-plan.md

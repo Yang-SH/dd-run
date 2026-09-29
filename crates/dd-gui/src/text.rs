@@ -153,6 +153,12 @@ const I18N: &[(&str, &str, &str)] = &[
         "已拒绝扩展 {id} 的剪贴板写入（内容超过 1 MiB 上限）",
         "Rejected clipboard write from extension {id} (content exceeds the 1 MiB limit)",
     ),
+    // R-07：剪贴板异步写入失败（工作线程结果回传 → 错误 toast，{e} = 失败原因摘要）
+    (
+        "toast.clipboard_fail",
+        "扩展 {id} 剪贴板写入失败：{e}",
+        "Extension {id} failed to write the clipboard: {e}",
+    ),
     // ── Toast（invoke / page / health / refresh / keys）──
     (
         "toast.ext_busy",
@@ -429,6 +435,12 @@ const I18N: &[(&str, &str, &str)] = &[
         "set.ext.shadow_warn",
         "与随包扩展同 id，但来自用户目录（会顶掉随包版本）",
         "Same id as a bundled extension, but installed in the user directory",
+    ),
+    // R-12：随包 sidecar 同版篡改嫌疑（哈希与首跑钉扎不符、宿主版本未变）
+    (
+        "set.ext.tamper_warn",
+        "随包扩展文件与首次记录不符（宿主版本未变），疑似被替换，已暂停该扩展",
+        "Bundled extension files no longer match their first-run record (host version unchanged); possibly replaced — paused",
     ),
     (
         "set.ext.ledger_corrupt",

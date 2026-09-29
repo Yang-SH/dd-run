@@ -909,10 +909,29 @@ impl Settings {
 
     /// 从 [`config_file`] 读配置；文件缺失/读盘失败/解析失败 → 默认。
     pub fn load() -> Self {
-        let Some(path) = config_file() else {
-            return Self::default();
-        };
-        match std::fs::read_to_string(&path) {
+        match config_file() {
+            Some(path) => Self::load_from(&path),
+            None => Self::default(),
+        }
+    }
+
+    /// R-14（2026-09-29）：config.json 读盘体积上限。校验此前发生在**读入
+    /// 之后**——超限 JSON 会先整读再解析失败 → 启动期 OOM/长挂。超限视为
+    /// 损坏：记日志后回落默认（`load_from` 参数化便于单测注入路径）。
+    const CONFIG_MAX_BYTES: u64 = 1024 * 1024;
+
+    fn load_from(path: &std::path::Path) -> Self {
+        if let Ok(meta) = std::fs::metadata(path) {
+            if meta.len() > Self::CONFIG_MAX_BYTES {
+                log::warn!(
+                    "[dd-gui] config.json {} 字节超过 {} 字节上限，视为损坏回落默认（R-14 限幅）",
+                    meta.len(),
+                    Self::CONFIG_MAX_BYTES
+                );
+                return Self::default();
+            }
+        }
+        match std::fs::read_to_string(path) {
             Ok(text) => Self::parse_json(&text),
             Err(e) => {
                 // 不存在属首次运行的常态，不算错误；其他读盘失败记日志后回落默认。
@@ -929,21 +948,48 @@ impl Settings {
 
     /// 写回 [`config_file`]（best-effort：目录不存在则创建；失败仅记日志，
     /// 不阻断 UI——下次启动回落上次成功落盘的值或默认）。
+    /// R-02：经 [`atomic_write`] 原子落盘，写盘中途崩溃不再丢全部设置。
     pub fn save(&self) {
         let Some(path) = config_file() else {
             log::debug!("[dd-gui] 配置目录不可定位，设置未持久化");
             return;
         };
-        let dir = path.parent().map(std::path::Path::to_path_buf);
-        if let Some(dir) = dir {
-            if let Err(e) = std::fs::create_dir_all(&dir) {
-                log::warn!("[dd-gui] 配置目录创建失败（{}）：{e}", dir.display());
-                return;
-            }
-        }
-        match std::fs::write(&path, self.to_json_string()) {
+        match atomic_write(&path, self.to_json_string().as_bytes()) {
             Ok(()) => log::info!("[dd-gui] 设置已保存：{}", path.display()),
             Err(e) => log::warn!("[dd-gui] 配置写入失败（{}）：{e}", path.display()),
+        }
+    }
+}
+
+/// 原子写盘（R-02）：同目录写 `.tmp` 临时文件后 `rename` 覆盖目标。
+///
+/// 写盘中途崩溃/断电只丢 `.tmp`，目标文件要么保持完整旧内容、要么已整体
+/// 换成完整新内容。`std::fs::rename` 在 Windows 走
+/// `MoveFileExW(MOVEFILE_REPLACE_EXISTING)`，可直接覆盖既有目标。失败时尽力
+/// 删除 `.tmp` 残留。刻意不做 fsync：调用方（`persist_panel_size` 每次隐藏
+/// 面板都写盘）优先低延迟，崩溃窗口从「整个写入时长」缩到「一次 rename」。
+/// 与 `dd-host` 的同款助手各落一份（方案 R-02 口径：两 crate 各一）。
+fn atomic_write(path: &std::path::Path, bytes: &[u8]) -> std::io::Result<()> {
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir)?;
+    }
+    let mut tmp_name = path
+        .file_name()
+        .map(std::ffi::OsStr::to_os_string)
+        .unwrap_or_default();
+    tmp_name.push(".tmp");
+    let tmp = path.with_file_name(tmp_name);
+    match std::fs::write(&tmp, bytes) {
+        Ok(()) => match std::fs::rename(&tmp, path) {
+            Ok(()) => Ok(()),
+            Err(e) => {
+                let _ = std::fs::remove_file(&tmp);
+                Err(e)
+            }
+        },
+        Err(e) => {
+            let _ = std::fs::remove_file(&tmp);
+            Err(e)
         }
     }
 }
@@ -1532,5 +1578,97 @@ mod tests {
                 .contains("\"panel_size\":null"),
             "None 序列化为 null"
         );
+    }
+
+    /// 与仓库既有测试同口径的临时目录（进程级唯一，测试负责清理）。
+    fn r02_temp_dir(tag: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "dd-gui-r02-{tag}-{}-{}",
+            std::process::id(),
+            std::time::Instant::now().elapsed().as_nanos()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        dir
+    }
+
+    /// R-02：目标已存在时整体替换，不留旧内容片段。
+    #[test]
+    fn r02_atomic_write_replaces_existing() {
+        let dir = r02_temp_dir("replace");
+        std::fs::create_dir_all(&dir).unwrap();
+        let target = dir.join("config.json");
+        std::fs::write(&target, b"{\"old\": 1}").unwrap();
+        atomic_write(&target, b"{\"new\": 2}").unwrap();
+        assert_eq!(std::fs::read(&target).unwrap(), b"{\"new\": 2}");
+        assert!(!dir.join("config.json.tmp").exists(), "无 .tmp 残留");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// R-02：目标目录缺失时先创建再写入（对齐 `save` 原有 create_dir_all 口径）。
+    #[test]
+    fn r02_atomic_write_missing_dir() {
+        let dir = r02_temp_dir("missing");
+        let target = dir.join("a/b/config.json");
+        atomic_write(&target, b"ok").unwrap();
+        assert_eq!(std::fs::read(&target).unwrap(), b"ok");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// R-14：>1 MiB config.json → 视为损坏回落默认设置，不 panic、不整读。
+    #[test]
+    fn r14_config_over_limit_defaults() {
+        let dir = r02_temp_dir("r14");
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("config.json");
+        // 外形是 JSON 开头 + 2 MiB 填充（校验在读入前，内容不参与）
+        std::fs::write(
+            &path,
+            format!(
+                "{{\"theme\":0,{}\"}}",
+                "\"x\":\"".to_string() + &"y".repeat(2 * 1024 * 1024)
+            ),
+        )
+        .unwrap();
+        assert!(std::fs::metadata(&path).unwrap().len() > Settings::CONFIG_MAX_BYTES);
+        assert_eq!(Settings::load_from(&path), Settings::default());
+        // 限内正常文件照常解析（theme 为字符串枚举）
+        let ok = dir.join("ok.json");
+        std::fs::write(&ok, "{\"theme\":\"light\"}").unwrap();
+        assert_eq!(Settings::load_from(&ok).theme, ThemePref::Light);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// R-02：写入失败 → 返回 `Err`、原文件保持完整旧内容、无 `.tmp` 残留。
+    ///
+    /// 失败注入：Windows 下以 `share_mode(0)` 独占打开目标文件，使
+    /// `MoveFileExW(REPLACE_EXISTING)` 因共享冲突失败；Unix 下把目录置只读。
+    #[test]
+    fn r02_atomic_write_failure_keeps_old() {
+        let dir = r02_temp_dir("failure");
+        std::fs::create_dir_all(&dir).unwrap();
+        let target = dir.join("config.json");
+        std::fs::write(&target, b"original").unwrap();
+
+        #[cfg(windows)]
+        {
+            use std::os::windows::fs::OpenOptionsExt;
+            let _lock = std::fs::OpenOptions::new()
+                .read(true)
+                .share_mode(0)
+                .open(&target)
+                .unwrap();
+            assert!(atomic_write(&target, b"new").is_err());
+        }
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o555)).unwrap();
+            assert!(atomic_write(&target, b"new").is_err());
+            std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+
+        assert_eq!(std::fs::read(&target).unwrap(), b"original");
+        assert!(!dir.join("config.json.tmp").exists(), "无 .tmp 残留");
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 }

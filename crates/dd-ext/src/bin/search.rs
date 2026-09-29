@@ -73,7 +73,7 @@ static PATH_NEXT: AtomicU64 = AtomicU64::new(1);
 
 fn register_path(path: &str) -> u64 {
     let id = PATH_NEXT.fetch_add(1, Ordering::Relaxed);
-    let mut idx = PATH_INDEX.lock().unwrap();
+    let mut idx = PATH_INDEX.lock().unwrap_or_else(|e| e.into_inner());
     if idx.len() >= PATH_INDEX_CAP {
         // 淘汰最旧的若干项，使容量回落到 PATH_INDEX_CAP - 1（为本次 insert 留位）。
         // id 单调递增 → 直接按阈值清除旧 id 即可，无需收集全键排序（O(n log n) → O(n)）；
@@ -86,7 +86,11 @@ fn register_path(path: &str) -> u64 {
 }
 
 fn lookup_path(id: u64) -> Option<String> {
-    PATH_INDEX.lock().unwrap().get(&id).cloned()
+    PATH_INDEX
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .get(&id)
+        .cloned()
 }
 
 /// 本地路径 → `file://` URL（v3.3 P2 §9.6 缺陷 3：支持 UNC）。
@@ -113,7 +117,7 @@ fn path_to_file_url(path: &str) -> String {
 /// 当前索引条目数（仅测试用，用于断言容量上限生效）。
 #[cfg(test)]
 fn path_index_len() -> usize {
-    PATH_INDEX.lock().unwrap().len()
+    PATH_INDEX.lock().unwrap_or_else(|e| e.into_inner()).len()
 }
 
 // ─── availability 探测缓存（TTL）────────────────────────────────────
@@ -130,13 +134,13 @@ static AVAIL: Mutex<Option<AvailCache>> = Mutex::new(None);
 /// （Everything 未运行时 es 以非 0 退出码失败，8 = 无 IPC 窗口）。
 fn everything_available() -> bool {
     let now = Instant::now();
-    if let Some(c) = AVAIL.lock().unwrap().as_ref() {
+    if let Some(c) = AVAIL.lock().unwrap_or_else(|e| e.into_inner()).as_ref() {
         if now.duration_since(c.at) < AVAIL_TTL {
             return c.ok;
         }
     }
     let ok = probe_available();
-    *AVAIL.lock().unwrap() = Some(AvailCache { ok, at: now });
+    *AVAIL.lock().unwrap_or_else(|e| e.into_inner()) = Some(AvailCache { ok, at: now });
     ok
 }
 
@@ -446,6 +450,13 @@ fn guess_is_dir(name: &str, size: u64, type_field: &str) -> bool {
     !name.contains('.') && size == 0
 }
 
+/// 错误原始输出截断（R-08）：**按字符**取前 `max` 个——字节切片在本地化/
+/// 中文路径下 200 字节可落在多字节字符内（`not a char boundary` panic，
+/// sidecar 进程直接退出）。
+fn truncate_chars(s: &str, max: usize) -> String {
+    s.chars().take(max).collect()
+}
+
 /// 解析 es.exe 的 JSON 输出 → `FileEntry` 列表。
 ///
 /// **纯函数（与传输解耦）**：可用 fixture 字符串离线单测（§8.4.2 第 2 条）。
@@ -456,7 +467,7 @@ fn parse_response(body: &str) -> anyhow::Result<Vec<FileEntry>> {
         return Ok(Vec::new());
     }
     let entries: Vec<EsEntry> = serde_json::from_str(t)
-        .map_err(|e| anyhow::anyhow!("es 输出解析失败：{e}（原始：{}）", &t[..t.len().min(200)]))?;
+        .map_err(|e| anyhow::anyhow!("es 输出解析失败：{e}（原始：{}）", truncate_chars(t, 200)))?;
     Ok(entries
         .into_iter()
         .map(|e| {
@@ -506,7 +517,7 @@ mod ipc {
 
     /// 取缓存的共享 client；无则经 `shared()` 创建（Everything 未运行 → `Err`）。
     fn shared_client() -> Result<Arc<EverythingClient>, IpcError> {
-        let mut guard = CLIENT.lock().unwrap();
+        let mut guard = CLIENT.lock().unwrap_or_else(|e| e.into_inner());
         if let Some(client) = guard.as_ref() {
             return Ok(Arc::clone(client));
         }
@@ -517,7 +528,7 @@ mod ipc {
 
     /// 释放缓存 client 并清零失败计数：下次查询经 `shared()` 重新连接（IPC 恢复）。
     fn reset_client() {
-        *CLIENT.lock().unwrap() = None;
+        *CLIENT.lock().unwrap_or_else(|e| e.into_inner()) = None;
         FAILS.store(0, Ordering::SeqCst);
     }
 
@@ -614,8 +625,13 @@ impl QueryTiming {
 thread_local! {
     /// 扩展对 `get_items` 是单线程处理（stdin 循环 + 同步查询 + 同步评分），
     /// 故用线程局部即可；查询应答窗口线程不触碰该槽。
-    static LAST_TIMING: std::cell::Cell<QueryTiming> =
-        const { std::cell::Cell::new(QueryTiming::NONE) };
+    // clippy 1.96 误报：初始化式已是 `const {}` 块（实测关联常量/结构体字面量/
+    // 直接调用三种写法均仍触发该 lint，疑似不识别 thread_local! 宏内的 const 块），
+    // 定点豁免并留痕——初始化式保持 const 形式。
+    #[allow(clippy::missing_const_for_thread_local)]
+    static LAST_TIMING: std::cell::Cell<QueryTiming> = const {
+        std::cell::Cell::new(QueryTiming::NONE)
+    };
 }
 
 fn elapsed_ms(since: Instant) -> f64 {
@@ -1582,6 +1598,54 @@ mod tests {
             .unwrap_or_else(|e| e.into_inner())
     }
 
+    /// R-06：持锁线程 panic 制造中毒后，`PATH_INDEX` 主路径经 `into_inner()`
+    /// 取回数据仍可读写（sidecar 不因锁中毒级联 panic 退出）。
+    #[test]
+    fn r06_sidecar_poisoned_lock() {
+        let _g = path_index_guard();
+        let pre_id = register_path("pre");
+        // 持锁线程内 panic → Mutex 中毒
+        let joined = std::thread::spawn(|| {
+            let _guard = PATH_INDEX.lock().unwrap_or_else(|e| e.into_inner());
+            panic!("poison the path index");
+        })
+        .join();
+        assert!(joined.is_err(), "注入 panic 应失败返回（制造中毒）");
+
+        // 读路径：中毒后 lookup 仍取回既有数据，不 panic
+        assert_eq!(lookup_path(pre_id).as_deref(), Some("pre"));
+        // 写路径：注册新条目仍成功
+        let id = register_path("post");
+        assert_eq!(lookup_path(id).as_deref(), Some("post"));
+    }
+
+    /// R-08：错误信息截断按字符执行——200 字节边界落在多字节字符内
+    /// （CJK / emoji 各一）时返回合法 `String`、字符数 ≤ 200、不 panic。
+    #[test]
+    fn r08_error_truncate_multibyte_safe() {
+        // CJK：300 个「中」（900 字节），旧实现 `&t[..200]` 必 panic
+        let cjk = "中".repeat(300);
+        assert!(cjk.len() > 200);
+        let truncated = truncate_chars(&cjk, 200);
+        assert_eq!(truncated.chars().count(), 200);
+        assert_eq!(truncated, "中".repeat(200), "按整字符截断");
+        // emoji：60 个 4 字节 emoji（240 字节 >200，字节边界 200 落在字符内；
+        // 字符数仅 60——断言「全部整字符保留、≤200、不 panic」）
+        let emoji = "🙂".repeat(60);
+        assert_eq!(emoji.len(), 240);
+        let truncated = truncate_chars(&emoji, 200);
+        assert_eq!(truncated.chars().count(), 60);
+        assert_eq!(truncated, emoji, "字符数未达 200 时全量保留");
+        // 端到端：解析失败路径（含截断进错误信息）不 panic
+        let Err(e) = parse_response(&cjk) else {
+            panic!("非法 JSON 应解析失败")
+        };
+        assert!(e.to_string().contains("es 输出解析失败"));
+        assert!(parse_response(&emoji).is_err());
+        // ASCII 错误信息截断展示不变（回归）
+        assert_eq!(truncate_chars("abcdef", 3), "abc");
+    }
+
     #[test]
     fn filetime_to_unix_converts_and_guards() {
         // 1970-01-01 的 FILETIME 基准 → 0；每 10^7 为 1 秒
@@ -2538,18 +2602,36 @@ mod tests {
     #[test]
     fn icon_job_dedup_keeps_single_inflight() {
         let key = format!(r"path:c:\__ddrun_dedup_test__\{}.exe", std::process::id());
-        let inflight = ICON_INFLIGHT.lock().unwrap();
+        let inflight = ICON_INFLIGHT.lock().unwrap_or_else(|e| e.into_inner());
         let before = inflight.len();
         drop(inflight);
-        ICON_INFLIGHT.lock().unwrap().insert(key.clone());
-        ICON_INFLIGHT.lock().unwrap().insert(key.clone());
+        ICON_INFLIGHT
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .insert(key.clone());
+        ICON_INFLIGHT
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .insert(key.clone());
         assert_eq!(
-            ICON_INFLIGHT.lock().unwrap().len(),
+            ICON_INFLIGHT
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .len(),
             before + 1,
             "同键二次插入不得增长（HashSet 去重语义 = 在飞去重）"
         );
-        ICON_INFLIGHT.lock().unwrap().remove(&key);
-        assert_eq!(ICON_INFLIGHT.lock().unwrap().len(), before);
+        ICON_INFLIGHT
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .remove(&key);
+        assert_eq!(
+            ICON_INFLIGHT
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .len(),
+            before
+        );
     }
 
     /// 缓存键分级（纯函数）：目录共图 / 普通类型按扩展名共图 /

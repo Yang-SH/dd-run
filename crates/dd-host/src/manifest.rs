@@ -233,6 +233,12 @@ pub fn cache_dir() -> Option<PathBuf> {
     dd_run_dir().map(|d| d.join("cache"))
 }
 
+/// R-25：崩溃取证日志目录 = 数据根目录下 `logs`
+///（panic hook 追加写 `logs\panic.log`，见 `dd-gui::crashlog`）。
+pub fn logs_dir() -> Option<PathBuf> {
+    dd_run_dir().map(|d| d.join("logs"))
+}
+
 /// M5 批次 4.0：宿主本地配置文件 = 数据根目录下 `config.json`
 /// （GUI 主题偏好等用户设置，见 `dd-gui::settings`）。
 pub fn config_file() -> Option<PathBuf> {
@@ -318,8 +324,23 @@ pub fn parse_semver(s: &str) -> Option<(u64, u64, u64)> {
     Some((major, minor, patch))
 }
 
+/// R-14（2026-09-29）：清单读盘体积上限。此前的 JSON/schema 校验都发生在
+/// **读入之后**——4 GB 外形合法的清单会先整读+解析再失败 → 启动期 OOM/长挂。
+/// 清单是纯文本，实际远小于该值，1 MiB 余量充足。
+const MANIFEST_MAX_BYTES: u64 = 1024 * 1024;
+
 /// 加载并校验单个清单文件（§7 规则 1–6、8、9；规则 7 的 id 唯一性在 [`scan_dir`] 层做）。
 pub fn load_manifest(path: &Path, opts: &ScanOptions) -> Result<LoadedExtension, SkipReason> {
+    // R-14：读入前先限幅——超限记 ParseError 跳过（不整读、不解析）
+    if let Ok(meta) = fs::metadata(path) {
+        if meta.len() > MANIFEST_MAX_BYTES {
+            return Err(SkipReason::ParseError(format!(
+                "清单 {} 字节超过 {} 字节上限（R-14 限幅）",
+                meta.len(),
+                MANIFEST_MAX_BYTES
+            )));
+        }
+    }
     // 规则 1：文件可读且是合法 JSON
     let text = fs::read_to_string(path).map_err(|e| SkipReason::ParseError(e.to_string()))?;
     let value: serde_json::Value =
@@ -667,6 +688,47 @@ mod tests {
         assert!(ext.manifest.frozen, "frozen 缺省应为 true（§3）");
         assert_eq!(ext.cwd, tmp.path(), "cwd 缺省为清单所在目录");
         assert_eq!(ext.command, tmp.path().join("bin").join("ext"));
+    }
+
+    /// R-14：>1 MiB 清单记 `ParseError` 跳过，**同目录其余扩展正常加载**。
+    #[test]
+    fn r14_manifest_over_limit_skipped() {
+        let tmp = TempDir::new("r14");
+        tmp.write("bin/ext", "#!/bin/sh\n");
+        // 超限文件：外形是 JSON 开头，但体积 >1 MiB（校验在读入前，内容不参与）
+        let mut huge = minimal_manifest("com.example.huge", "bin/ext");
+        huge.push_str(&" ".repeat(2 * 1024 * 1024));
+        tmp.write("huge.json", &huge);
+        tmp.write("ok.json", &minimal_manifest("com.example.ok", "bin/ext"));
+
+        let outcome = scan_dir(tmp.path(), &opts(current_platform(), "0.1.0"));
+        assert_eq!(
+            outcome.loaded.len(),
+            1,
+            "同目录其余扩展应正常加载：{:?}",
+            outcome
+                .loaded
+                .iter()
+                .map(|e| &e.manifest.id)
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(outcome.loaded[0].manifest.id, "com.example.ok");
+        assert_eq!(
+            outcome.skipped.len(),
+            1,
+            "仅超限清单被跳过：{:?}",
+            outcome.skipped
+        );
+        assert!(
+            outcome.skipped[0].path.ends_with("huge.json"),
+            "跳过的是超限文件：{:?}",
+            outcome.skipped[0].path
+        );
+        assert!(
+            matches!(&outcome.skipped[0].reason, SkipReason::ParseError(m) if m.contains("R-14")),
+            "超限原因记 ParseError：{:?}",
+            outcome.skipped[0].reason
+        );
     }
 
     #[test]

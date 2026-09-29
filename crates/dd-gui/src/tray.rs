@@ -115,8 +115,9 @@ const fn menu_event(id: u32) -> Option<TrayEvent> {
 pub struct TrayThread {
     /// 供 eframe 线程消费的事件接收端。
     pub events: Receiver<TrayEvent>,
-    /// 线程 join 句柄（进程退出即回收）。
-    _handle: thread::JoinHandle<()>,
+    /// 线程 join 句柄（进程退出即回收）；线程创建失败时为 `None`
+    /// （R-05：降级为无托盘运行，不 panic）。
+    _handle: Option<thread::JoinHandle<()>>,
 }
 
 impl TrayThread {
@@ -126,19 +127,30 @@ impl TrayThread {
     /// `Toggle` 前置位，主线程消费该事件后复位。用途：面板可见时点击托盘，
     /// 任务栏会先夺走焦点触发失焦自动隐藏（`handle_focus_loss`），随后
     /// Toggle 到达时 `visible` 已是 false → 又 show → 「闪黑又展示」竞态
-    /// （真机 2026-09-05 反馈）。失焦隐藏遇旗标跳过一次，让 Toggle 完成唯一
-    /// 一次干净的 hide。旗标与 Toggle 事件严格成对（置位后必 send，消费即清），
-    /// 无陈旧风险。
+    /// （真机 2026-09-05 反馈）。失焦隐藏遇旗标跳过一次，让 Toggle 完成
+    /// 唯一一次干净的 hide。旗标与 Toggle 事件严格成对（置位后必 send，
+    /// 消费即清），无陈旧风险。
+    ///
+    /// 线程创建失败降级（R-05）：`log::error!` 后无托盘继续运行（面板仍可
+    /// 经热键使用），不 panic。
     #[cfg(windows)]
     pub fn spawn(ctx: eframe::egui::Context, click_flag: Arc<AtomicBool>) -> Self {
         let (tx, rx) = mpsc::channel::<TrayEvent>();
-        let handle = thread::Builder::new()
+        match thread::Builder::new()
             .name("dd-tray".into())
             .spawn(move || message_loop(tx, ctx, click_flag))
-            .expect("failed to spawn tray thread");
-        Self {
-            events: rx,
-            _handle: handle,
+        {
+            Ok(handle) => Self {
+                events: rx,
+                _handle: Some(handle),
+            },
+            Err(e) => {
+                log::error!("[dd-gui] 托盘线程创建失败：{e} —— 降级为无托盘运行");
+                Self {
+                    events: rx,
+                    _handle: None,
+                }
+            }
         }
     }
 
@@ -149,10 +161,22 @@ impl TrayThread {
         let (_tx, rx) = mpsc::channel::<TrayEvent>();
         Self {
             events: rx,
-            _handle: thread::Builder::new()
-                .name("dd-tray-dummy".into())
-                .spawn(|| std::thread::sleep(std::time::Duration::MAX))
-                .expect("failed to spawn dummy tray thread"),
+            _handle: dummy_handle("dd-tray-dummy"),
+        }
+    }
+}
+
+/// 非 Windows 占位的保活线程（R-05：创建失败仅记日志降级，不 panic）。
+#[cfg(not(windows))]
+fn dummy_handle(name: &str) -> Option<thread::JoinHandle<()>> {
+    match thread::Builder::new()
+        .name(name.into())
+        .spawn(|| std::thread::sleep(std::time::Duration::MAX))
+    {
+        Ok(h) => Some(h),
+        Err(e) => {
+            log::error!("[dd-gui] {name} 占位线程创建失败：{e}（占位桩降级继续）");
+            None
         }
     }
 }

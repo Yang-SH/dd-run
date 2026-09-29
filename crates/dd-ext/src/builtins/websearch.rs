@@ -110,15 +110,19 @@ static CONFIGURED_ENGINES_JSON: std::sync::RwLock<Option<String>> = std::sync::R
 
 /// 宿主注入/清除引擎配置（in-process 专用；`None` = 清除，回落环境变量/内置表）。
 /// 聚合前调用即可，后续 `top_level_commands`/`fallback_commands`/`invoke` 现读。
+/// R-06：锁保护的是可整体重建的配置缓存，中毒经 `into_inner()` 续用安全，
+/// 不因任何持锁 panic 使 websearch 整会话失效。
 pub fn set_configured_engines_json(text: Option<String>) {
-    *CONFIGURED_ENGINES_JSON.write().expect("引擎配置锁未中毒") = text;
+    *CONFIGURED_ENGINES_JSON
+        .write()
+        .unwrap_or_else(|e| e.into_inner()) = text;
 }
 
 /// 读取当前内存注入的引擎配置快照。
 fn configured_engines_json() -> Option<String> {
     CONFIGURED_ENGINES_JSON
         .read()
-        .expect("引擎配置锁未中毒")
+        .unwrap_or_else(|e| e.into_inner())
         .clone()
 }
 
@@ -346,6 +350,40 @@ pub fn encode_query_component(input: &str) -> String {
 mod tests {
     use super::*;
     use dd_protocol::model::Sender;
+
+    /// R-06：持锁线程 panic 制造中毒后，主路径经 `into_inner()` 取回数据
+    /// 仍可读写且内容完整（任何持锁 panic 不再使 websearch 整会话失效）。
+    #[test]
+    fn r06_websearch_poisoned_lock() {
+        // 预置一份配置，供中毒后读回
+        set_configured_engines_json(Some(
+            r#"[{"name":"Pre","template":"https://pre.example/?q={query}"}]"#.to_string(),
+        ));
+        // 持锁线程内 panic → RwLock 中毒
+        let joined = std::thread::spawn(|| {
+            let _guard = CONFIGURED_ENGINES_JSON
+                .write()
+                .unwrap_or_else(|e| e.into_inner());
+            panic!("poison the engines lock");
+        })
+        .join();
+        assert!(joined.is_err(), "注入 panic 应失败返回（制造中毒）");
+
+        // 读路径：中毒锁经 into_inner() 取回预置内容，不 panic
+        let read_back = configured_engines_json();
+        assert!(read_back.is_some(), "中毒后读路径仍取回数据");
+        assert!(read_back.unwrap().contains("pre.example"), "内容完整");
+
+        // 写路径：中毒后仍可注入并现读生效
+        set_configured_engines_json(Some(
+            r#"[{"name":"Post","template":"https://post.example/?q={query}"}]"#.to_string(),
+        ));
+        assert!(
+            configured_engines_json().unwrap().contains("post.example"),
+            "中毒后写路径生效"
+        );
+        set_configured_engines_json(None); // 清理，防影响并行用例
+    }
 
     fn invoke(id: &str, query: &str) -> InvokeParams {
         InvokeParams {

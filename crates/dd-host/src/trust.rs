@@ -19,13 +19,14 @@
 //! | 条件 | 结果 |
 //! |---|---|
 //! | `origin == Builtin`（in-process，`command` 为名义路径、从不 spawn） | `AutoTrusted` |
-//! | `origin == Sidecar` **且** `id ∈ FIRST_PARTY_IDS` | `AutoTrusted` |
+//! | ~~`origin == Sidecar` 且 `id ∈ FIRST_PARTY_IDS`~~ **R-12 起废除**：随包首方 sidecar 改走 [`assess_sidecar`] **首跑钉扎**（首钉 / 每次 spawn 重验双哈希 / 同版篡改 → `Pending`+告警 / 升版静默重钉）——白名单短路在哈希之前 = 零完整性校验，S-05 的性质对其不成立 | — |
 //! | 台账该 id 记录 `decision == Allow` 且**两枚哈希与当前文件一致** | `AutoTrusted` |
 //! | 台账该 id 记录 `decision == Deny` 且**两枚哈希与当前文件一致** | `Blocked` |
 //! | 其余（无记录 / 哈希变化 / 台账损坏 / 文件不可读） | `Pending`（**fail-closed**） |
 //!
-//! 哈希只在「台账里确有该 id 的记录」时才计算——首方与内置扩展走短路，故**常见
-//! 情形零额外 I/O**（启动开销≈0）；只有用户手动安装过的扩展才有两次数 MB 内的读盘。
+//! 哈希只在「台账里确有该 id 的记录」时才计算——内置扩展走短路，故常见
+//! 情形零额外 I/O（启动开销≈0）；只有用户手动安装过的扩展才有两次数 MB 内的读盘。
+//! 首方 sidecar 每次判定重验双哈希（R-12 钉扎语义，见 [`assess_sidecar`]）。
 //!
 //! ## 哈希实现（D2）
 //!
@@ -73,6 +74,9 @@ pub struct Assessment {
     pub id: String,
     pub trust: Trust,
     pub origin: ExtOrigin,
+    /// R-12：随包首方 sidecar **同版篡改嫌疑**（哈希与钉扎不符且钉扎版本 ==
+    /// 当前宿主版本）——判定 fail-closed 为 `Pending`，此位供设置页显式告警。
+    pub sidecar_tampered: bool,
 }
 
 impl Assessment {
@@ -137,6 +141,14 @@ pub struct TrustEntry {
     /// 决策时的清单路径（便于用户事后追溯"我当时批的是什么"）。
     #[serde(default)]
     pub manifest_path: String,
+    /// R-12：决策来源标记——`"sidecar"` = 首跑钉扎自动写入；空串 = 用户决策。
+    /// 仅审计展示用。
+    #[serde(default)]
+    pub origin: String,
+    /// R-12：钉扎时的宿主版本——同版篡改（Pending + 告警）与升级重钉（静默）
+    /// 的分流依据。用户决策记录为空串。
+    #[serde(default)]
+    pub pinned_host_version: String,
 }
 
 /// 台账读取状态（供设置页给出**可操作**提示，而不是静默失效）。
@@ -217,6 +229,8 @@ impl TrustLedger {
     }
 
     /// 写回台账（best-effort：目录不存在则创建；调用方决定失败时是否提示）。
+    /// R-02：经 [`crate::atomic_write`] 原子落盘——半截 trust.json 会被判
+    /// `Corrupt` fail-closed（全部已批准扩展回 Pending），不可接受。
     pub fn save(&self) -> std::io::Result<()> {
         let Some(path) = trust_file() else {
             return Err(std::io::Error::new(
@@ -224,12 +238,9 @@ impl TrustLedger {
                 "无法定位数据根目录（home 环境变量缺失）",
             ));
         };
-        if let Some(dir) = path.parent() {
-            std::fs::create_dir_all(dir)?;
-        }
         let text = serde_json::to_string_pretty(self)
             .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
-        std::fs::write(&path, text)
+        crate::atomic_write(&path, text.as_bytes())
     }
 
     /// 查某 id 的记录。
@@ -249,6 +260,9 @@ impl TrustLedger {
             decision,
             decided_at: now_rfc3339(),
             manifest_path: ext.path.display().to_string(),
+            // 用户决策：origin 空标记、无钉扎版本（R-12）
+            origin: String::new(),
+            pinned_host_version: String::new(),
         };
         self.entries.retain(|e| e.id != entry.id);
         self.entries.push(entry);
@@ -266,6 +280,8 @@ impl TrustLedger {
 /// 判定某扩展的信任状态（规则见模块文档）。
 ///
 /// `origin` 由调用方给出（宿主知道它从哪个目录扫到的；内置由 `specs` 命中判定）。
+/// 随包首方 sidecar 不经本函数（R-12 起改走 [`assess_sidecar`] 首跑钉扎，
+/// 不再有白名单短路）。
 pub fn assess(ext: &LoadedExtension, origin: ExtOrigin, ledger: &TrustLedger) -> Assessment {
     let id = ext.manifest.id.clone();
     let trust = if !hash_available() {
@@ -274,7 +290,6 @@ pub fn assess(ext: &LoadedExtension, origin: ExtOrigin, ledger: &TrustLedger) ->
     } else {
         match origin {
             ExtOrigin::Builtin => Trust::AutoTrusted,
-            ExtOrigin::Sidecar if FIRST_PARTY_IDS.contains(&id.as_str()) => Trust::AutoTrusted,
             _ => match ledger.entry(&id) {
                 Some(e) if e.decision == Decision::Allow && hashes_match(ext, e) => {
                     Trust::AutoTrusted
@@ -285,7 +300,159 @@ pub fn assess(ext: &LoadedExtension, origin: ExtOrigin, ledger: &TrustLedger) ->
             },
         }
     };
-    Assessment { id, trust, origin }
+    Assessment {
+        id,
+        trust,
+        origin,
+        sidecar_tampered: false,
+    }
+}
+
+/// R-12（2026-09-29）：随包首方 sidecar **首跑钉扎**三态判定。
+///
+/// 此前 `assess` 对 `id ∈ FIRST_PARTY_IDS` 的 sidecar 白名单短路在哈希**之前**
+/// ——`dd-ext-search.exe` 零完整性校验，同用户程序替换 sidecar exe（或加一份
+/// 指向自己的 `com.ddrun.filesearch.json`）即可每次启动静默拉起，零审批、
+/// 台账零痕迹。便携 zip 分发下 `extensions.d\` 在用户可写位置，S-05 的
+/// 性质对首方 sidecar **不成立**。现改为：
+///
+/// 1. **首跑钉扎**：台账无记录 → 计算清单+exe 双哈希写入 trust.json
+///    （`Decision::Allow`、`origin="sidecar"`、附 `pinned_host_version`）→ `AutoTrusted`；
+/// 2. **钉扎有效**：每次调用重验双哈希；一致且钉扎版本 == 当前宿主版本 → `AutoTrusted`；
+/// 3. **同版篡改**：哈希不符且钉扎版本 == 当前宿主版本 → `Pending` +
+///    `sidecar_tampered` 告警位（设置页显式告警）——**绝不自动重钉**；
+/// 4. **升级重钉**：哈希不符且钉扎版本 ≠ 当前宿主版本（随应用升级的正常变更）
+///    → 静默重钉新哈希与新版本，保持零摩擦升级（信任锚 = 应用分发包本身）；
+/// 5. 用户 **Deny** 记录始终优先：哈希一致维持 `Blocked`，不一致 → `Pending`
+///    （不静默重钉覆盖用户的拒绝决策）。
+///
+/// 台账变更（首钉/重钉/补版本）由本函数直接落盘；trust.json **非冻结契约、
+/// 永不导出**（N5 已定），格式扩展零兼容负担。落盘失败仅记日志（判定继续，
+/// 下次启动重试钉扎）。
+pub fn assess_sidecar(ext: &LoadedExtension, host_version: &str) -> Assessment {
+    let mut ledger = TrustLedger::load();
+    let (assessment, changed) = assess_sidecar_with_ledger(ext, host_version, &mut ledger);
+    if changed {
+        save_ledger_quiet(&ledger);
+    }
+    assessment
+}
+
+/// [`assess_sidecar`] 的可注入核心（单测用内存台账，不触真实 trust.json）。
+/// 返回 (判定, 台账是否发生变更——调用方据此落盘)。
+pub fn assess_sidecar_with_ledger(
+    ext: &LoadedExtension,
+    host_version: &str,
+    ledger: &mut TrustLedger,
+) -> (Assessment, bool) {
+    let id = ext.manifest.id.clone();
+    let mut assessment = Assessment {
+        id,
+        trust: Trust::AutoTrusted,
+        origin: ExtOrigin::Sidecar,
+        sidecar_tampered: false,
+    };
+    if !hash_available() {
+        // D2 缺口（非 Windows）：与 `assess` 同口径放行
+        return (assessment, false);
+    }
+    match ledger.entry(&ext.manifest.id).cloned() {
+        None => {
+            // ① 首跑钉扎
+            match pin_sidecar(ext, ledger, host_version) {
+                Ok(()) => (assessment, true),
+                Err(e) => {
+                    log::warn!("[dd-host] 首方 sidecar 首跑钉扎失败（fail-closed）：{e}");
+                    assessment.trust = Trust::Pending;
+                    (assessment, false)
+                }
+            }
+        }
+        Some(entry) => {
+            let same = hashes_match(ext, &entry);
+            if entry.decision == Decision::Deny {
+                // ⑤ 用户拒绝优先，不被钉扎逻辑覆盖
+                assessment.trust = if same { Trust::Blocked } else { Trust::Pending };
+                return (assessment, false);
+            }
+            if same {
+                if entry.pinned_host_version == host_version {
+                    // ② 钉扎有效（正常路径，零写盘）
+                    (assessment, false)
+                } else {
+                    // 文件与钉扎一致、仅版本标记过期（跨版本携带 trust.json）
+                    // → 静默补版本
+                    let mut updated = entry.clone();
+                    updated.pinned_host_version = host_version.to_string();
+                    replace_entry(ledger, updated);
+                    (assessment, true)
+                }
+            } else if entry.pinned_host_version == host_version {
+                // ③ 同版篡改：拦下 + 告警，不自动重钉
+                log::warn!(
+                    "[dd-host] 首方 sidecar {} 与钉扎哈希不符且宿主版本未变——疑似被替换",
+                    ext.manifest.id
+                );
+                assessment.trust = Trust::Pending;
+                assessment.sidecar_tampered = true;
+                (assessment, false)
+            } else {
+                // ④ 升级：宿主版本已变 → 静默重钉新哈希
+                log::info!(
+                    "[dd-host] 首方 sidecar {} 宿主升级（{} → {host_version}）→ 静默重钉",
+                    ext.manifest.id,
+                    entry.pinned_host_version
+                );
+                match pin_sidecar(ext, ledger, host_version) {
+                    Ok(()) => (assessment, true),
+                    Err(_) => {
+                        assessment.trust = Trust::Pending;
+                        (assessment, false)
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// R-12：计算双哈希写入钉扎记录（覆盖同 id 旧记录）。文件不可读 → `Err`
+///（不写入半截记录）。
+fn pin_sidecar(
+    ext: &LoadedExtension,
+    ledger: &mut TrustLedger,
+    host_version: &str,
+) -> Result<(), String> {
+    let entry = TrustEntry {
+        id: ext.manifest.id.clone(),
+        manifest_sha256: sha256_file(&ext.path)?,
+        exe_sha256: sha256_file(&ext.command)?,
+        decision: Decision::Allow,
+        decided_at: now_rfc3339(),
+        manifest_path: ext.path.display().to_string(),
+        origin: "sidecar".to_string(),
+        pinned_host_version: host_version.to_string(),
+    };
+    ledger.entries.retain(|e| e.id != entry.id);
+    ledger.entries.push(entry);
+    Ok(())
+}
+
+/// R-12：按 id 覆盖一条记录。
+fn replace_entry(ledger: &mut TrustLedger, entry: TrustEntry) {
+    ledger.entries.retain(|e| e.id != entry.id);
+    ledger.entries.push(entry);
+}
+
+/// R-12：台账落盘（失败仅记日志——钉扎在下次启动重试，不阻断判定）。
+fn save_ledger_quiet(ledger: &TrustLedger) {
+    if let Err(e) = ledger.save() {
+        log::warn!("[dd-host] trust.json 保存失败（钉扎下次启动重试）：{e}");
+    }
+}
+
+/// R-12：id 是否属于随包首方白名单（调用方据此路由到 [`assess_sidecar`]）。
+pub fn is_first_party_id(id: &str) -> bool {
+    FIRST_PARTY_IDS.contains(&id)
 }
 
 /// 台账记录的两枚哈希是否与**当前文件**一致。任一不可读 → 不一致（fail-closed）。
@@ -496,14 +663,103 @@ mod tests {
         let _ = std::fs::remove_dir_all(&d);
     }
 
-    /// 随包 sidecar + 首方白名单 → 自动信任（**T1′ 的零摩擦路径**，A6）。
+    /// 随包 sidecar + 首方白名单：**R-12 起不再白名单短路**——`assess` 对
+    /// 无台账记录者 fail-closed `Pending`；零摩擦改由 [`assess_sidecar`]
+    /// 首跑钉扎承担（见 `r12_sidecar_pin_on_first_sight`）。
     #[test]
-    fn first_party_sidecar_is_auto_trusted() {
+    fn first_party_sidecar_without_ledger_is_pending_in_assess() {
         let d = tmp_dir("fp-sidecar");
         let ext = disk_ext(&d, "com.ddrun.filesearch", b"{\"a\":1}", b"BIN");
         let a = assess(&ext, ExtOrigin::Sidecar, &TrustLedger::default());
-        assert_eq!(a.trust, Trust::AutoTrusted);
+        assert_eq!(a.trust, Trust::Pending, "白名单短路已废除（R-12）");
         assert!(!a.shadows_first_party());
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    /// **R-12 ①**：首跑钉扎——台账无记录 → 双哈希写入、`Allow`、来源标
+    /// sidecar、附钉扎版本，判定 `AutoTrusted`（零摩擦路径保留）。
+    #[test]
+    fn r12_sidecar_pin_on_first_sight() {
+        let d = tmp_dir("r12-pin");
+        let ext = disk_ext(&d, "com.ddrun.filesearch", b"{\"a\":1}", b"BIN");
+        let mut ledger = TrustLedger::default();
+        let (a, changed) = assess_sidecar_with_ledger(&ext, "0.1.1", &mut ledger);
+        assert_eq!(a.trust, Trust::AutoTrusted, "首跑钉扎保持零摩擦");
+        assert!(!a.sidecar_tampered);
+        assert!(changed, "首钉应标记台账变更（落盘）");
+        let entry = ledger
+            .entry("com.ddrun.filesearch")
+            .expect("钉扎记录应存在");
+        assert_eq!(entry.decision, Decision::Allow);
+        assert_eq!(entry.origin, "sidecar", "来源标记 sidecar");
+        assert_eq!(entry.pinned_host_version, "0.1.1");
+        assert_eq!(
+            entry.manifest_sha256,
+            sha256_file(&ext.path).unwrap(),
+            "清单哈希入账"
+        );
+        assert_eq!(
+            entry.exe_sha256,
+            sha256_file(&ext.command).unwrap(),
+            "exe 哈希入账"
+        );
+        // 记录可序列化（trust.json 格式扩展无兼容负担的反向验证）
+        assert!(serde_json::to_string(&ledger).is_ok());
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    /// **R-12 ②**：同版篡改——哈希与钉扎不符且钉扎版本 == 当前宿主版本
+    /// → `Pending` + 告警位，**绝不自动重钉**。
+    #[test]
+    fn r12_same_version_tamper_pending() {
+        let d = tmp_dir("r12-tamper");
+        let ext = disk_ext(&d, "com.ddrun.filesearch", b"{\"a\":1}", b"BIN");
+        let mut ledger = TrustLedger::default();
+        let (a, _) = assess_sidecar_with_ledger(&ext, "0.1.1", &mut ledger);
+        assert_eq!(a.trust, Trust::AutoTrusted);
+
+        // 同宿主版本下替换 exe 内容（篡改）
+        let tampered = disk_ext(&d, "com.ddrun.filesearch", b"{\"a\":1}", b"EVIL");
+        let (a2, changed) = assess_sidecar_with_ledger(&tampered, "0.1.1", &mut ledger);
+        assert_eq!(a2.trust, Trust::Pending, "同版篡改必须拦下");
+        assert!(a2.sidecar_tampered, "告警位应置位（设置页显式告警）");
+        assert!(!changed, "篡改判定不得改写台账（不静默重钉）");
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    /// **R-12 ④**：升级重钉——哈希不符但钉扎版本 ≠ 当前宿主版本（随应用
+    /// 升级的正常变更）→ 静默重钉新哈希，保持零摩擦升级。
+    #[test]
+    fn r12_upgrade_repin_silent() {
+        let d = tmp_dir("r12-upgrade");
+        let ext = disk_ext(&d, "com.ddrun.filesearch", b"{\"a\":1}", b"BIN");
+        let mut ledger = TrustLedger::default();
+        let (a, _) = assess_sidecar_with_ledger(&ext, "0.1.0", &mut ledger);
+        assert_eq!(a.trust, Trust::AutoTrusted, "旧版本首钉");
+
+        // 新版本分发的新 sidecar（内容合法变更）
+        let upgraded = disk_ext(&d, "com.ddrun.filesearch", b"{\"a\":1}", b"BIN-v2");
+        let (a2, changed) = assess_sidecar_with_ledger(&upgraded, "0.1.1", &mut ledger);
+        assert_eq!(a2.trust, Trust::AutoTrusted, "升级重钉零摩擦");
+        assert!(!a2.sidecar_tampered, "升级不是篡改");
+        assert!(changed, "重钉应落盘");
+        let entry = ledger.entry("com.ddrun.filesearch").unwrap();
+        assert_eq!(entry.pinned_host_version, "0.1.1", "钉扎版本已更新");
+        assert_eq!(entry.exe_sha256, sha256_file(&upgraded.command).unwrap());
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    /// **R-12 ⑤**：用户 Deny 优先——哈希一致维持 `Blocked`；不一致回
+    /// `Pending`（不静默重钉覆盖用户的拒绝决策）。
+    #[test]
+    fn r12_deny_entry_overrides_pinning() {
+        let d = tmp_dir("r12-deny");
+        let ext = disk_ext(&d, "com.ddrun.filesearch", b"{\"a\":1}", b"BIN");
+        let mut ledger = TrustLedger::default();
+        ledger.record(&ext, Decision::Deny).expect("造 Deny 记录");
+        let (a, changed) = assess_sidecar_with_ledger(&ext, "0.1.1", &mut ledger);
+        assert_eq!(a.trust, Trust::Blocked, "用户拒绝维持有效");
+        assert!(!changed, "拒绝记录不被钉扎改写");
         let _ = std::fs::remove_dir_all(&d);
     }
 

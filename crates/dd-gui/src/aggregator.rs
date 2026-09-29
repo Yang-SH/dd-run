@@ -263,13 +263,25 @@ pub fn load_extension_sources(lang: Lang) -> ExtensionSources {
                 .copied()
                 .unwrap_or(ExtOrigin::UserDir)
         };
-        let a = trust::assess(ext, origin, &ledger);
+        let a = if origin == ExtOrigin::Sidecar && trust::is_first_party_id(&ext.manifest.id) {
+            // R-12：随包首方 sidecar 走首跑钉扎三态（不再白名单短路）——
+            // 首钉 / 每次 spawn 重验双哈希 / 同版篡改 → Pending+告警 / 升版静默重钉
+            trust::assess_sidecar(ext, HOST_VERSION)
+        } else {
+            trust::assess(ext, origin, &ledger)
+        };
         if !a.is_trusted() {
             log::info!(
                 "[dd-gui] 扩展 {} 未获信任（trust={:?}, origin={:?}）→ 不拉起；设置页「扩展」可批准",
                 a.id,
                 a.trust,
                 a.origin
+            );
+        }
+        if a.sidecar_tampered {
+            log::warn!(
+                "[dd-gui] 随包扩展 {} 与钉扎哈希不符（宿主版本未变）——疑似被替换，已拦下；设置页已告警",
+                a.id
             );
         }
         if a.shadows_first_party() {
@@ -485,9 +497,14 @@ pub fn spawn_and_initialize_with_info(
     // 不拉起。第一道在 `load_extension_sources` 的 `active` 过滤（决定"谁进集合"）；
     // 此处兜底覆盖桩复热等一切路径——即使上游漏判也拦得住。
     //
-    // 成本：仅对**用户批准过的**扩展重复一次读盘哈希（首方 sidecar 与内置走短路，
-    // 不做哈希），且仅在 spawn 时发生，冷启动热路径无额外开销。
-    let a = trust::assess(ext, origin_of(ext), &trust::TrustLedger::load());
+    // R-12：随包首方 sidecar 在此**每次 spawn 重验双哈希**（首跑钉扎语义，
+    // 见 `trust::assess_sidecar`）；成本为两次数 MB 内的读盘，仅在 spawn 时发生。
+    let origin = origin_of(ext);
+    let a = if origin == ExtOrigin::Sidecar && trust::is_first_party_id(&ext.manifest.id) {
+        trust::assess_sidecar(ext, HOST_VERSION)
+    } else {
+        trust::assess(ext, origin, &trust::TrustLedger::load())
+    };
     if !a.is_trusted() {
         let label = match a.trust {
             Trust::Pending => "待批准",
@@ -978,6 +995,7 @@ mod tests {
                 id: "a".to_string(),
                 trust: Trust::Pending,
                 origin: ExtOrigin::UserDir,
+                sidecar_tampered: false,
             },
         );
         trust.insert(
@@ -986,6 +1004,7 @@ mod tests {
                 id: "b".to_string(),
                 trust: Trust::Blocked,
                 origin: ExtOrigin::UserDir,
+                sidecar_tampered: false,
             },
         );
         trust.insert(
@@ -994,6 +1013,7 @@ mod tests {
                 id: "c".to_string(),
                 trust: Trust::AutoTrusted,
                 origin: ExtOrigin::Sidecar,
+                sidecar_tampered: false,
             },
         );
         assert_eq!(pending_count(&trust), 1);

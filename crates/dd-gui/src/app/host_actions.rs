@@ -81,24 +81,28 @@ impl PaletteApp {
                     return;
                 }
                 let len = params.text.len();
-                let result = std::thread::spawn(move || {
-                    let mut cb = arboard::Clipboard::new()?;
-                    cb.set_text(params.text)?;
-                    Ok::<(), Box<dyn std::error::Error + Send + Sync>>(())
-                })
-                .join();
-                match result {
-                    Ok(Ok(())) => {
-                        // S-07：不再静默——info 落**扩展 id + 长度**（可溯源），
-                        // 并给一次轻量 toast（覆盖用户复制中的账号/地址前可见）。
-                        log::info!("[dd-gui] host/set_clipboard（ext={ext_id}）成功：{len} 字节");
-                        let msg = self.tr("toast.clipboard_written").replace("{id}", ext_id);
-                        self.show_toast(msg, Some(2_000));
+                // R-07：移交常驻工作线程——UI 线程不再 `spawn().join()` 等待
+                // 写入（arboard 打开 Win32 剪贴板与剪贴板管理器争用时面板冻结）。
+                // 结果由 [`Self::poll_clipboard_results`] 消费并 toast 反馈。
+                match self.clipboard_tx.as_ref() {
+                    Some(tx) => {
+                        let _ = tx.send(crate::app::clipboard_worker::ClipboardRequest {
+                            ext_id: ext_id.to_string(),
+                            text: params.text,
+                        });
+                        log::debug!("[dd-gui] host/set_clipboard（ext={ext_id}）入队：{len} 字节");
                     }
-                    Ok(Err(e)) => {
-                        log::warn!("[dd-gui] host/set_clipboard（ext={ext_id}）失败：{e}")
+                    None => {
+                        // 工作线程创建失败（R-05 降级口径）——不静默，提示失败
+                        log::warn!(
+                            "[dd-gui] 剪贴板工作线程不可用，host/set_clipboard（ext={ext_id}）被丢弃"
+                        );
+                        let msg = self
+                            .tr("toast.clipboard_fail")
+                            .replace("{id}", ext_id)
+                            .replace("{e}", "clipboard worker unavailable");
+                        self.show_error_toast(msg);
                     }
-                    Err(_) => log::warn!("[dd-gui] host/set_clipboard 线程异常（ext={ext_id}）"),
                 }
             }
             METHOD_HOST_OPEN_URL => {
@@ -188,6 +192,34 @@ impl PaletteApp {
                     is_critical,
                     pending,
                 });
+            }
+        }
+    }
+}
+
+impl PaletteApp {
+    /// R-07：消费剪贴板工作线程的写入结果——成功沿用 S-07 既有口径
+    ///（info 日志 + 轻量 toast），失败经 `show_error_toast` 反馈（与 R-16
+    /// 同一套失败提示基建，i18n 键 `toast.clipboard_fail`）。
+    /// 在 `poll_host_requests` 同帧调用（ui 循环，见 app/mod.rs）。
+    pub(crate) fn poll_clipboard_results(&mut self) {
+        while let Ok(outcome) = self.clipboard_rx.try_recv() {
+            match outcome {
+                crate::app::clipboard_worker::ClipboardOutcome::Written { ext_id, len } => {
+                    // S-07：不再静默——info 落**扩展 id + 长度**（可溯源），
+                    // 并给一次轻量 toast（覆盖用户复制中的账号/地址前可见）。
+                    log::info!("[dd-gui] host/set_clipboard（ext={ext_id}）成功：{len} 字节");
+                    let msg = self.tr("toast.clipboard_written").replace("{id}", &ext_id);
+                    self.show_toast(msg, Some(2_000));
+                }
+                crate::app::clipboard_worker::ClipboardOutcome::Failed { ext_id, error } => {
+                    log::warn!("[dd-gui] host/set_clipboard（ext={ext_id}）失败：{error}");
+                    let msg = self
+                        .tr("toast.clipboard_fail")
+                        .replace("{id}", &ext_id)
+                        .replace("{e}", &error);
+                    self.show_error_toast(msg);
+                }
             }
         }
     }
