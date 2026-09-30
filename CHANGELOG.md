@@ -4,6 +4,17 @@
 
 ## [Unreleased]
 
+### 可用性（R-19：托盘热键标签动态化——tooltip 与菜单尾缀跟随改绑，2026-09-30）
+
+- **背景**（R 系列加固批三）：托盘 tooltip 静态「dd-run — Win+Alt+Space」（D25/D38 静态妥协）、菜单「显示/隐藏面板\tWin+Alt+Space」尾缀硬编码——用户改绑热键后托盘持续展示错误组合。
+- **修复**：
+  - **`tray.rs`**：静态 `TOOLTIP` 改为共享标签 `TRAY_HOTKEY_LABEL`（`Mutex<String>`，跨线程语义同既有 `TRAY_LANG` 原子量口径，R-06 `into_inner` 中毒纪律）；tooltip 纯函数 `tray_tooltip(label)`。NIM_ADD 取当前值；**`show_menu` 每次右键在托盘线程本机做 NIM_MODIFY 懒刷新**——无跨线程推送机制，D38「NIM_MODIFY 跨线程复杂度不成比例」结论维持，改绑后无需重启、下次交互即同步。
+  - **`text.rs`**：`tray.toggle` 键去掉内嵌 `\tWin+Alt+Space` 尾缀（zh/en），尾缀由 `show_menu` 按当前组合名动态拼接。
+  - **`settings.rs`**：新增 `hotkey_combo_label(mods, vk)` 纯函数（复用既有 `hotkey_mods_label`/`hotkey_vk_label`）。
+  - **同步点**：启动初值在 `main.rs`（托盘线程 spawn 前）写入；改绑注册成功经 `poll_hotkey` 唯一写点（「保存」与「恢复默认」共用）`sync_tray_hotkey_label()` 同步。未写入（空串）回落默认组合。
+- **回归测试**：`r19_tray_hotkey_label_dynamic`（① 空串回落默认 + 默认组合展示 = D38 静态口径回归锚「dd-run — Win+Alt+Space」；② 写入 `Ctrl+Shift+P` → tooltip = 「dd-run — Ctrl+Shift+P」（V-5）；③ 跨线程写读）；既有 `tooltip_fits_sztip_buffer` 重写为参数化 szTip 128 单元上限守卫（默认 + 最长合理组合）。
+- **验证**：`cargo fmt --check` 零差异 · clippy 全仓零告警 · `cargo test --workspace` **563 passed / 0 failed**。真机走查 V-5（改绑非默认组合 → tooltip / 菜单尾缀显示新组合；右键即时 + 重启后两路径）待执行。
+
 ### 可用性（R-18：热键 toast 入 i18n——收口锚定，2026-09-30）
 
 - **说明**：核心改动已随 seq 确认协议批（`1a20c8f`）先行落地——`toast.hotkey_updated` / `toast.hotkey_failed` 两键入表（zh/en），两处调用点改走 `t(self.lang_effective, …)`，成功 toast 带动态 `{combo}` 组合名。本批做收口核对与锚定：

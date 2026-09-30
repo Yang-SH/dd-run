@@ -698,6 +698,12 @@ pub fn hotkey_vk_label(vk: u32) -> String {
     }
 }
 
+/// R-19（2026-09-30）：按当前热键设置拼装**完整组合名**（如 `Ctrl+Shift+P`）
+/// ——托盘 tooltip 与菜单尾缀动态化共用（D38 静态口径的后续）。纯函数。
+pub fn hotkey_combo_label(mods: u32, vk: u32) -> String {
+    format!("{}+{}", hotkey_mods_label(mods), hotkey_vk_label(vk))
+}
+
 impl Settings {
     /// 从 JSON 文本解析；空/损坏/字段未知 → 默认（防御性，永不失败）。
     pub fn parse_json(text: &str) -> Self {

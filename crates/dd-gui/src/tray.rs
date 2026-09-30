@@ -6,7 +6,8 @@
 //! - 左键单击 = 切换面板（D23，与全局热键 `Win+Alt+Space` 同一语义）；
 //! - 右键 = 系统原生菜单（D24，`TrackPopupMenu`；固定 4 项见 [`menu_event`]），
 //!   弹出前 `SetForegroundWindow`（官方要求，否则点击菜单外不关闭）；
-//! - Tooltip 静态「dd-run — Win+Alt+Space 呼出」（D25）。
+//! - Tooltip / 菜单尾缀跟随当前热键组合（R-19，2026-09-30；原 D25 静态
+//!   `Win+Alt+Space`——改绑后展示错误组合）。
 //!
 //! 实现（对齐 [`hotkey`] 的线程模型）：独立线程创建隐藏窗口 → 注册托盘 →
 //! `GetMessage` 消息循环；事件经 channel 发回主线程并 `request_repaint()`
@@ -22,7 +23,7 @@
 
 use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::thread;
 
 /// 托盘菜单语言（v4.13 D38）：原子量跨线程共享生效语言——菜单**每次右键
@@ -59,12 +60,36 @@ pub enum TrayEvent {
     Exit,
 }
 
-/// 托盘 Tooltip（D25：静态字符串，热键可配置化后跟随拼接）。
-/// v4.13 D38：改为**语言中立**文案（去掉中文动词）——Tooltip 在 NIM_ADD 时
-/// 一次写入，随语言切换需跨线程 NIM_MODIFY，复杂度不成比例；菜单文案已随
-/// 语言，Tooltip 中立化后整体无残留。
-#[cfg(windows)]
-const TOOLTIP: &str = "dd-run — Win+Alt+Space";
+/// 托盘 Tooltip 组合名（R-19，2026-09-30）：**跟随当前热键设置**。主线程在
+/// 启动与改绑注册成功时经 [`set_tray_hotkey_label`] 写入（跨线程共享语义同
+/// [`TRAY_LANG`]：原子量换 `Mutex<String>`）；托盘线程在 NIM_ADD 与每次右键
+/// （`show_menu`，托盘线程本机 NIM_MODIFY，无跨线程推送）取当前值——改绑后
+/// 无需重启即随下次交互可见，D38「NIM_MODIFY 跨线程复杂度不成比例」结论维持
+/// （本方案仅取当前值，不做主动推送）。空串 = 主线程尚未写入 → 回落默认组合。
+static TRAY_HOTKEY_LABEL: Mutex<String> = Mutex::new(String::new());
+
+/// 默认组合名（D38 静态口径的回归锚：未改绑时展示与原静态文案一致）。
+const DEFAULT_HOTKEY_LABEL: &str = "Win+Alt+Space";
+
+/// 主线程写入当前热键组合名（启动 / 改绑注册成功时调用）。
+pub fn set_tray_hotkey_label(label: String) {
+    *TRAY_HOTKEY_LABEL.lock().unwrap_or_else(|e| e.into_inner()) = label;
+}
+
+/// 托盘线程侧读取当前组合名（空 = 未写入 → 默认）。
+fn tray_hotkey_label() -> String {
+    let guard = TRAY_HOTKEY_LABEL.lock().unwrap_or_else(|e| e.into_inner());
+    if guard.is_empty() {
+        DEFAULT_HOTKEY_LABEL.to_string()
+    } else {
+        guard.clone()
+    }
+}
+
+/// Tooltip 文案（纯函数，单测锚点）：`dd-run — {组合名}`。
+fn tray_tooltip(label: &str) -> String {
+    format!("dd-run — {label}")
+}
 
 /// 托盘逻辑尺寸（D22：逻辑 16×16，物理随 DPI 取档）。
 #[cfg(windows)]
@@ -320,7 +345,8 @@ fn message_loop(tx: Sender<TrayEvent>, ctx: eframe::egui::Context, click_flag: A
         nid.uFlags = NIF_MESSAGE | NIF_ICON | NIF_TIP;
         nid.uCallbackMessage = TRAY_MSG;
         nid.hIcon = hicon;
-        let tip = to_wide(TOOLTIP);
+        // R-19：组合名取当前热键设置（主线程在 spawn 前已写入；未写入回落默认）。
+        let tip = to_wide(&tray_tooltip(&tray_hotkey_label()));
         nid.szTip[..tip.len()].copy_from_slice(&tip); // 长度 ≤128 由测试守卫
         if Shell_NotifyIconW(NIM_ADD, &nid) == 0 {
             log::debug!(
@@ -396,20 +422,38 @@ unsafe extern "system" fn tray_wndproc(
 #[cfg(windows)]
 unsafe fn show_menu(hwnd: windows_sys::Win32::Foundation::HWND, state: &TrayState) {
     use windows_sys::Win32::Foundation::POINT;
+    use windows_sys::Win32::UI::Shell::{Shell_NotifyIconW, NIF_TIP, NIM_MODIFY, NOTIFYICONDATAW};
     use windows_sys::Win32::UI::WindowsAndMessaging::{
         AppendMenuW, CreatePopupMenu, DestroyMenu, GetCursorPos, PostMessageW, SetForegroundWindow,
         TrackPopupMenu, MF_SEPARATOR, MF_STRING, TPM_BOTTOMALIGN, TPM_LEFTALIGN, TPM_RETURNCMD,
         WM_NULL,
     };
     unsafe {
+        // R-19：tooltip 懒刷新——右键时（托盘线程本机 NIM_MODIFY，无跨线程
+        // 推送）取当前组合名写回，改绑后无需重启、下次交互即同步。
+        {
+            let mut nid: NOTIFYICONDATAW = std::mem::zeroed();
+            nid.cbSize = std::mem::size_of::<NOTIFYICONDATAW>() as u32;
+            nid.hWnd = hwnd;
+            nid.uID = 1;
+            nid.uFlags = NIF_TIP;
+            let tip = to_wide(&tray_tooltip(&tray_hotkey_label()));
+            nid.szTip[..tip.len()].copy_from_slice(&tip); // 长度 ≤128 由测试守卫
+            Shell_NotifyIconW(NIM_MODIFY, &nid);
+        }
         SetForegroundWindow(hwnd);
         let menu = CreatePopupMenu();
         if menu.is_null() {
             return;
         }
-        // accel 列经 `\t` 呈现（原生菜单惯例）；文案按当前生效语言（D38）。
+        // accel 列经 `\t` 呈现（原生菜单惯例）；文案按当前生效语言（D38），
+        // 组合名尾缀动态跟随当前热键设置（R-19；`tray.toggle` 键已不含尾缀）。
         let lang = tray_lang();
-        let toggle = to_wide(crate::text::t(lang, "tray.toggle"));
+        let toggle = to_wide(&format!(
+            "{}\t{}",
+            crate::text::t(lang, "tray.toggle"),
+            tray_hotkey_label()
+        ));
         let settings = to_wide(crate::text::t(lang, "tray.settings"));
         let exit = to_wide(crate::text::t(lang, "tray.exit"));
         AppendMenuW(menu, MF_STRING, menu_id::TOGGLE as usize, toggle.as_ptr());
@@ -461,10 +505,39 @@ mod tests {
     #[cfg(windows)]
     #[test]
     fn tooltip_fits_sztip_buffer() {
-        // NOTIFYICONDATAW.szTip = [u16; 128]（含 NUL）。
-        let units = TOOLTIP.encode_utf16().count();
-        assert!(units < 128, "tooltip 过长：{units}");
-        assert!(TOOLTIP.contains("Win+Alt+Space"));
+        // NOTIFYICONDATAW.szTip = [u16; 128]（含 NUL）。默认组合与最长合理
+        // 改绑组合（Ctrl+Alt+Shift+Win + F12 类）都不得越界。
+        for label in [DEFAULT_HOTKEY_LABEL, "Ctrl+Alt+Shift+Win+F12"] {
+            let tip = tray_tooltip(label);
+            let units = tip.encode_utf16().count();
+            assert!(units < 128, "tooltip 过长：{units}（label={label}）");
+        }
+    }
+
+    /// R-19：tooltip / 组合名动态化——① 默认组合展示与 D38 静态口径一致
+    /// （回归锚）；② 自定义改绑（Ctrl+Shift+P）进入 tooltip 与组合名；
+    /// ③ 主线程未写入时空串回落默认；④ `set_tray_hotkey_label` 跨线程写读。
+    #[cfg(windows)]
+    #[test]
+    fn r19_tray_hotkey_label_dynamic() {
+        // ③ 空串回落默认（主线程尚未写入的启动窗口期）。
+        set_tray_hotkey_label(String::new());
+        assert_eq!(tray_hotkey_label(), DEFAULT_HOTKEY_LABEL);
+        assert_eq!(
+            tray_tooltip(&tray_hotkey_label()),
+            "dd-run — Win+Alt+Space",
+            "默认组合展示必须与 D38 静态口径一致"
+        );
+        // ② 改绑：主线程写入新组合 → tooltip 与菜单尾缀取到新值。
+        set_tray_hotkey_label("Ctrl+Shift+P".to_string());
+        assert_eq!(tray_hotkey_label(), "Ctrl+Shift+P");
+        assert_eq!(
+            tray_tooltip(&tray_hotkey_label()),
+            "dd-run — Ctrl+Shift+P",
+            "tooltip 应显示改绑后的新组合（V-5）"
+        );
+        // 复位默认（不影响其他测试）。
+        set_tray_hotkey_label(String::new());
     }
 
     #[cfg(windows)]

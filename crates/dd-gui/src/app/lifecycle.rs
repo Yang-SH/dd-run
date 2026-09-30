@@ -241,11 +241,9 @@ impl PaletteApp {
                         self.save_settings_with_feedback();
                         self.hotkey_confirm = None;
                         self.hotkey_unregistered = false;
-                        let combo = format!(
-                            "{}+{}",
-                            dd_gui::settings::hotkey_mods_label(c.mods),
-                            dd_gui::settings::hotkey_vk_label(c.vk),
-                        );
+                        // R-19：托盘 tooltip / 菜单尾缀随改绑同步（下次右键可见）。
+                        self.sync_tray_hotkey_label();
+                        let combo = dd_gui::settings::hotkey_combo_label(c.mods, c.vk);
                         // R-18：toast 入 i18n + 带新组合名 + 点明「按它可显隐
                         // 面板」（按新热键面板隐藏是 Toggle 设计行为非 bug）。
                         self.show_toast(

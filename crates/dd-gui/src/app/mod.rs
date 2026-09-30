@@ -594,6 +594,16 @@ impl PaletteApp {
         self.show_error_toast(msg);
     }
 
+    /// R-19：把当前热键设置同步给托盘（tooltip / 菜单尾缀动态化）。改绑注册
+    /// 成功后（`poll_hotkey` 成功分支，save+reset 共用该唯一写点）调用；
+    /// 启动初值在 `main.rs`（托盘线程 spawn 前）写入。
+    pub(crate) fn sync_tray_hotkey_label(&self) {
+        crate::tray::set_tray_hotkey_label(dd_gui::settings::hotkey_combo_label(
+            self.settings.hotkey_mods,
+            self.settings.hotkey_vk,
+        ));
+    }
+
     /// 文件搜索「一键直达」（2026-09-19，`Ctrl+F`）：面板内**任意页**进入文件搜索页。
     ///
     /// 语义（方案 `docs/search-file-ctrl-f-icons-plan.md` §3.2 状态转移表）：
