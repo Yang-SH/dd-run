@@ -57,6 +57,21 @@ impl PaletteApp {
                 i.consume_key(egui::Modifiers::SHIFT, egui::Key::Tab),
             )
         });
+        // R-22（2026-09-30）：IME 组词期回车守卫——组词中回车 = 「上屏」手势，
+        // 上屏 Commit 与 Enter 键事件常**同帧到达**；不设防会把选中项直接执行
+        // （危险命令有确认门，普通命令没有）。本帧收到过组词系事件（Preedit
+        // 组词中 / Commit 上屏）则跳过一次激活：该 Enter 已被上方消费（吞掉，
+        // 文本经 Commit 事件入框、与键事件无关），下一帧恢复正常。IME 开启但
+        // 非组词（英文直输）无 Ime 事件，不受影响。
+        let ime_composing = ctx.input(|i| {
+            i.events.iter().any(|e| {
+                matches!(
+                    e,
+                    egui::Event::Ime(egui::ImeEvent::Preedit { .. } | egui::ImeEvent::Commit(_))
+                )
+            })
+        });
+        let enter = enter && !ime_composing;
         // 批次 4.0：Ctrl+, 打开设置（§6.1 快捷键；设置入口的键盘可达手段
         // ——Tab 保持列表导航语义不变，见 implementation.md 批次 4.0 决策）。
         // 在确认对话框分支之后处理：对话框活跃时该键被吞掉不穿透。
@@ -935,5 +950,105 @@ mod tests {
             "Ctrl+Alt+P"
         );
         assert!(!PaletteApp::is_system_reserved_combo(0x1, 0x45), "Alt+E");
+    }
+
+    /// R-22：IME 组词期回车守卫——① 同帧 Ime(Preedit/Commit) + Enter → 不激活
+    /// 且 Enter 被吞；② 无 Ime 帧 Enter → 正常激活（负例，回归锚）；③ 下一帧恢复。
+    #[test]
+    fn r22_ime_frame_skips_activate() {
+        // 夹具：Root 页一个 Page 命令项——激活 = 推入嵌套页（栈深 1 → 2），
+        // 纯状态断言、不依赖扩展进程。
+        let make_app_with_item = || {
+            let mut app = crate::test_support::make_app();
+            let item = crate::test_support::item_with(
+                "com.example.a",
+                dd_protocol::model::CommandRef::Page {
+                    page_id: "sub".to_string(),
+                },
+            );
+            *app.stack.root_mut() = dd_gui::navigation::PageState::root(vec![item]);
+            app.stack.current_mut().list.move_down(); // 选中唯一项
+            app
+        };
+        // ① 同帧 Preedit + Enter：不激活（栈深不变）。
+        let mut app = make_app_with_item();
+        let ctx = crate::test_support::ctx();
+        ctx.input_mut(|i| {
+            i.events.push(egui::Event::Ime(egui::ImeEvent::Preedit {
+                text: "ipconfig".to_string(),
+                active_range_chars: None,
+            }));
+        });
+        press_enter(&ctx);
+        app.handle_keys(&ctx);
+        assert_eq!(app.stack.depth(), 1, "组词帧回车不得激活选中项");
+        assert!(
+            !key_enter_in_queue(&ctx),
+            "该 Enter 应被吞掉（不留给输入框重复上屏）"
+        );
+
+        // ①' 同帧 Commit + Enter：同口径。
+        let mut app = make_app_with_item();
+        let ctx = crate::test_support::ctx();
+        ctx.input_mut(|i| {
+            i.events.push(egui::Event::Ime(egui::ImeEvent::Commit(
+                "ipconfig".to_string(),
+            )));
+        });
+        press_enter(&ctx);
+        app.handle_keys(&ctx);
+        assert_eq!(app.stack.depth(), 1, "上屏帧回车不得激活选中项");
+
+        // ② 无 Ime 帧 Enter：正常激活（回归锚——非 IME 环境行为不变）。
+        let mut app = make_app_with_item();
+        let ctx = crate::test_support::ctx();
+        press_enter(&ctx);
+        app.handle_keys(&ctx);
+        assert_eq!(app.stack.depth(), 2, "无组词帧回车应正常激活（推入嵌套页）");
+
+        // ③ 下一帧恢复：组词帧吞掉一次后，后续无 Ime 帧 Enter 正常激活。
+        // （headless 队列无真实帧边界——手动清空事件模拟「下一帧」，生产中
+        // egui begin_pass 会整帧重建事件表。）
+        let mut app = make_app_with_item();
+        let ctx = crate::test_support::ctx();
+        ctx.input_mut(|i| {
+            i.events
+                .push(egui::Event::Ime(egui::ImeEvent::Commit("上".to_string())));
+        });
+        press_enter(&ctx);
+        app.handle_keys(&ctx);
+        ctx.input_mut(|i| i.events.clear()); // 帧边界
+        press_enter(&ctx);
+        app.handle_keys(&ctx);
+        assert_eq!(app.stack.depth(), 2, "下一帧恢复正常激活");
+    }
+
+    /// headless 注入 Enter 按下事件（同 `press_key`）。
+    fn press_enter(ctx: &egui::Context) {
+        ctx.input_mut(|i| {
+            i.events.push(egui::Event::Key {
+                key: egui::Key::Enter,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers: egui::Modifiers::NONE,
+            })
+        });
+    }
+
+    /// 该帧事件队列是否仍含未消费的 Enter 按下事件。
+    fn key_enter_in_queue(ctx: &egui::Context) -> bool {
+        ctx.input(|i| {
+            i.events.iter().any(|e| {
+                matches!(
+                    e,
+                    egui::Event::Key {
+                        key: egui::Key::Enter,
+                        pressed: true,
+                        ..
+                    }
+                )
+            })
+        })
     }
 }
