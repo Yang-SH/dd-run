@@ -4,6 +4,16 @@
 
 ## [Unreleased]
 
+### 可用性（R-17：设置保存失败可见——每会话一次性错误 toast，2026-09-30）
+
+- **背景**（R 系列加固批三）：`Settings::save` 写盘失败仅 `log::warn!`——不可写目录（OneDrive 占位 / AV 锁 / 策略）下所有修改「看似成功」，重启即回滚且无解释（V-2）。
+- **修复**：
+  - **`settings.rs`**：`save()` 改返回**是否持久化成功**（`()` → `bool`，22 处调用点返回值本就未被使用，零破坏）；抽出可注入核心 `save_to(path)`（单测不触真实 config.json）。原子写落点（R-02 `atomic_write`）不变。
+  - **`app/mod.rs`**：全仓 22 处 `settings.save()` 调用点（`keys.rs` ×17 / `settings_view.rs` ×3 / `lifecycle.rs` ×2）统一改走 `save_settings_with_feedback()`——失败且未提醒过 → 置位 `settings_save_warned` + 错误 toast；**每会话至多一次**（flag 不复位，恢复可写后的修改本就会成功，不重复轰炸）；成功路径静默（无 toast）。
+  - **i18n**：新增 `toast.settings_save_fail`（zh：「设置保存失败——本次修改可能未保存，请检查配置目录是否可写」/ en 对应），双向完备性单测自动覆盖。
+- **回归测试**：`r17_save_to_reports_persisted_and_failure`（可写目录 `true`；Windows `share_mode(0)` 独占锁注入失败 `false`，与 r02 同款注入）+ `r17_settings_save_failure_toasts_once_per_session`（首次失败 toast + 置位 / 过期后再失败不重复 / 成功静默三段）。R-02 既有原子写单测零改动全绿（同一落点）。
+- **验证**：`cargo fmt --check` 零差异 · clippy 全仓零告警 · `cargo test --workspace` **561 passed / 0 failed**。真机走查 V-2（配置目录置只读 → 失败 toast 恰一次、恢复可写后不再出现；含 R-02 判据）待执行。
+
 ### 可用性（R-16：`host/open_url` 失败可见性 + spawn 门禁测试密闭化，2026-09-30）
 
 - **背景**（R 系列加固批三）：`host/open_url` 两处失败路径此前仅记日志（`file://` ShellExecute 失败 `log::debug!`、`webbrowser::open` 失败 `log::warn!`）——websearch 选中后面板已 Dismiss，浏览器/关联程序启动失败即「应用把命令吃了」，用户无从感知（V-4）。

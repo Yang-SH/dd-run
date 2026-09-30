@@ -949,14 +949,29 @@ impl Settings {
     /// 写回 [`config_file`]（best-effort：目录不存在则创建；失败仅记日志，
     /// 不阻断 UI——下次启动回落上次成功落盘的值或默认）。
     /// R-02：经 [`atomic_write`] 原子落盘，写盘中途崩溃不再丢全部设置。
-    pub fn save(&self) {
-        let Some(path) = config_file() else {
-            log::debug!("[dd-gui] 配置目录不可定位，设置未持久化");
-            return;
-        };
-        match atomic_write(&path, self.to_json_string().as_bytes()) {
-            Ok(()) => log::info!("[dd-gui] 设置已保存：{}", path.display()),
-            Err(e) => log::warn!("[dd-gui] 配置写入失败（{}）：{e}", path.display()),
+    /// R-17：返回是否成功持久化（false = 目录不可定位或写盘失败），供调用方
+    /// 做「每会话首次失败」的用户可见反馈（静默会「看似成功」、重启回滚）。
+    pub fn save(&self) -> bool {
+        match config_file() {
+            Some(path) => self.save_to(&path),
+            None => {
+                log::debug!("[dd-gui] 配置目录不可定位，设置未持久化");
+                false
+            }
+        }
+    }
+
+    /// [`save`] 的可注入核心（单测不触真实 config.json）。
+    fn save_to(&self, path: &std::path::Path) -> bool {
+        match atomic_write(path, self.to_json_string().as_bytes()) {
+            Ok(()) => {
+                log::info!("[dd-gui] 设置已保存：{}", path.display());
+                true
+            }
+            Err(e) => {
+                log::warn!("[dd-gui] 配置写入失败（{}）：{e}", path.display());
+                false
+            }
         }
     }
 }
@@ -1669,6 +1684,40 @@ mod tests {
 
         assert_eq!(std::fs::read(&target).unwrap(), b"original");
         assert!(!dir.join("config.json.tmp").exists(), "无 .tmp 残留");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// R-17：`save` 返回**是否持久化成功**——可写目录 `true`（成功路径零变化，
+    /// 回归锚定）；写盘失败 `false`（Windows 用 `share_mode(0)` 独占锁注入，
+    /// 与 r02 同款）。调用方据此做「每会话首次失败」一次性反馈。
+    #[test]
+    fn r17_save_to_reports_persisted_and_failure() {
+        let dir = r02_temp_dir("r17");
+        std::fs::create_dir_all(&dir).unwrap();
+        let target = dir.join("config.json");
+        assert!(Settings::default().save_to(&target), "可写目录应返回 true");
+        assert!(target.exists(), "写盘真实发生");
+
+        #[cfg(windows)]
+        {
+            use std::os::windows::fs::OpenOptionsExt;
+            let _lock = std::fs::OpenOptions::new()
+                .read(true)
+                .share_mode(0)
+                .open(&target)
+                .unwrap();
+            assert!(
+                !Settings::default().save_to(&target),
+                "写盘失败应返回 false（而非静默「看似成功」）"
+            );
+        }
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o555)).unwrap();
+            assert!(!Settings::default().save_to(&target));
+            std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
         std::fs::remove_dir_all(&dir).unwrap();
     }
 }

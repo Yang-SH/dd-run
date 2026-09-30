@@ -235,6 +235,10 @@ pub struct PaletteApp {
     /// R-15：全局热键**未注册**（启动注册失败 / 热键线程死亡）——设置页
     /// 热键卡「未注册」徽标与错误 toast 的依据；重注册成功后复位。
     pub(crate) hotkey_unregistered: bool,
+    /// R-17：设置保存失败已提醒过（**每会话至多一次**）——不可写目录下所有
+    /// 修改「看似成功」、重启回滚，首次失败弹一次错误 toast 后不再重复轰炸；
+    /// 会话内不复位（恢复可写后的修改本就会成功，无需再提示）。
+    pub(crate) settings_save_warned: bool,
     /// 扩展启停脏标记：离开设置页时与 engines_dirty 一起触发重聚合。
     pub(crate) exts_dirty: bool,
     /// 托盘事件接收端（设计稿 10C：Toggle / OpenSettings / Exit）。
@@ -482,6 +486,7 @@ impl PaletteApp {
             capture_started: None,
             capture_failed: false,
             hotkey_unregistered: false,
+            settings_save_warned: false,
             exts_dirty: false,
             tray_events,
             tray_click_flag,
@@ -569,6 +574,24 @@ impl PaletteApp {
     /// （`Lang: Copy`），线程内直接 `t(lang, key)`。
     pub(crate) fn tr(&self, key: &'static str) -> &'static str {
         crate::text::t(self.lang_effective, key)
+    }
+
+    /// R-17：设置保存 + 用户可见反馈——保存失败时**每会话至多弹一次**错误
+    /// toast（不可写目录下所有修改「看似成功」、重启回滚且无解释，V-2 判据
+    /// 「恰出现一次，不重复轰炸」）。全部 `settings.save()` 调用点统一走本方法。
+    pub(crate) fn save_settings_with_feedback(&mut self) {
+        self.report_settings_save_failure(self.settings.save());
+    }
+
+    /// [`Self::save_settings_with_feedback`] 的可注入核心（单测不触真实
+    /// config.json）：失败且未提醒过 → 置位并弹错误 toast；成功或已提醒 → 静默。
+    pub(crate) fn report_settings_save_failure(&mut self, ok: bool) {
+        if ok || self.settings_save_warned {
+            return;
+        }
+        self.settings_save_warned = true;
+        let msg = self.tr("toast.settings_save_fail").to_string();
+        self.show_error_toast(msg);
     }
 
     /// 文件搜索「一键直达」（2026-09-19，`Ctrl+F`）：面板内**任意页**进入文件搜索页。
@@ -1247,5 +1270,37 @@ mod size_tests {
         assert_eq!(q(false, "报告"), None, "非 Root 不带入");
         assert_eq!(q(true, ""), None);
         assert_eq!(q(true, "   "), None);
+    }
+
+    /// R-17：设置保存失败**每会话只提醒一次**——① 首次失败弹错误 toast + 置位；
+    /// ② toast 过期后再次失败不重复弹（V-2「恰出现一次、不重复轰炸」）；
+    /// ③ 成功路径静默（正常保存无 toast，回归锚定）；flag 会话内不复位。
+    #[test]
+    fn r17_settings_save_failure_toasts_once_per_session() {
+        let mut app = crate::test_support::make_app();
+        assert!(!app.settings_save_warned);
+
+        // ① 首次失败：错误 toast（settings_save_fail 键文案）+ 置位
+        app.report_settings_save_failure(false);
+        assert!(app.settings_save_warned, "首次失败应置一次性提醒位");
+        {
+            let t = app.toast.as_ref().expect("首次失败应有错误 toast");
+            assert_eq!(t.kind, toast::ToastKind::Error, "失败口径 = Error");
+            assert!(
+                t.message.contains("设置保存失败") || t.message.contains("Failed to save settings"),
+                "文案应取 toast.settings_save_fail（zh/en），实得：{}",
+                t.message
+            );
+        }
+
+        // ② toast 过期清掉后再失败：不重复弹
+        app.toast = None;
+        app.report_settings_save_failure(false);
+        assert!(app.toast.is_none(), "已提醒过不得重复轰炸");
+
+        // ③ 成功：静默，flag 不动
+        app.report_settings_save_failure(true);
+        assert!(app.toast.is_none(), "成功路径不应有 toast");
+        assert!(app.settings_save_warned, "flag 每会话不复位");
     }
 }

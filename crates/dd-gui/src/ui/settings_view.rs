@@ -996,7 +996,7 @@ impl PaletteApp {
             self.apply_material_opacity(ctx, opacity_tmp);
         }
         if opacity_released {
-            self.settings.save();
+            self.save_settings_with_feedback();
         }
         // T6（2026-09-20）：着色变更即时生效（强度松手落盘、自定义色在指针
         // 松开时落盘——见 `apply_custom_tint_color`）
@@ -1010,7 +1010,7 @@ impl PaletteApp {
             self.apply_custom_tint_intensity(ctx, intensity_tmp);
         }
         if intensity_released {
-            self.settings.save();
+            self.save_settings_with_feedback();
         }
         if let Some(pref) = picked_corner {
             self.apply_corner_pref(pref);
@@ -1107,7 +1107,7 @@ impl PaletteApp {
         });
         if let Some(density) = pick {
             self.settings.density = density;
-            self.settings.save();
+            self.save_settings_with_feedback();
         }
     }
     /// 常规栏（v4.8 功能态 + v4.9 Fluent 控件化）：「打开面板时显示」+

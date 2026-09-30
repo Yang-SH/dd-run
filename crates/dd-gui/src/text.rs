@@ -169,6 +169,13 @@ const I18N: &[(&str, &str, &str)] = &[
         "全局热键注册失败，可能被其他程序占用——请到设置更换组合键",
         "Global hotkey registration failed — it may be taken by another app. Pick a different combo in Settings",
     ),
+    // R-17：设置保存失败（每会话首次失败 → 一次性错误 toast，不重复轰炸；
+    // 「本次修改可能未保存」口径）
+    (
+        "toast.settings_save_fail",
+        "设置保存失败——本次修改可能未保存，请检查配置目录是否可写",
+        "Failed to save settings — your changes may not be persisted. Check that the config directory is writable",
+    ),
     (
         "set.hotkey.unregistered",
         "未注册",

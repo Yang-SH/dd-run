@@ -393,7 +393,7 @@ impl PaletteApp {
         match crate::platform::set_autostart(on) {
             Ok(()) => {
                 self.settings.autostart = on;
-                self.settings.save();
+                self.save_settings_with_feedback();
             }
             Err(e) => self.show_toast(self.tr("toast.autostart_fail").replace("{e}", &e), None),
         }
@@ -408,7 +408,7 @@ impl PaletteApp {
         }
         self.settings.lang = lang;
         self.lang_effective = Self::resolve_lang(&self.settings);
-        self.settings.save();
+        self.save_settings_with_feedback();
         crate::tray::set_tray_lang(self.lang_effective);
         // 扩展进程须以新 DDRUN_LANG 重启才生效；离开设置页时重聚合消费。
         self.lang_dirty = true;
@@ -466,7 +466,7 @@ impl PaletteApp {
             return; // 幂等
         }
         self.settings.disabled_extensions = next;
-        self.settings.save();
+        self.save_settings_with_feedback();
         self.exts_dirty = true;
     }
 
@@ -504,7 +504,7 @@ impl PaletteApp {
                 crate::platform::set_window_border(hwnd, self.border_color(dark));
             }
         }
-        self.settings.save();
+        self.save_settings_with_feedback();
     }
 
     /// 设置页材质开关（v4.7 D30/D31）：更新设置 → 落盘 → 立即应用。
@@ -520,15 +520,15 @@ impl PaletteApp {
         }
         log::debug!("[dd-gui] 窗口材质：{} → 立即生效并保存", backdrop.label());
         self.settings.backdrop = backdrop;
-        self.settings.save();
+        self.save_settings_with_feedback();
         self.refresh_backdrop(ctx);
     }
 
     /// 设置页「不透明度」滑杆（P2 v2，2026-09-13）：即时重算 egui 浓淡层
     /// （`alpha = cap × pct/100`，0 = 纯材质、100 = 面板最实），**不落盘**——
     /// 拖动中每帧触发，写盘由 UI 层在松手（`drag_stopped`）时调
-    /// `settings.save()`，避免拖动期间逐帧写盘。材质未生效时无视觉可调，
-    /// 仅更新内存值（UI 层此时置灰，正常路径不会进来）。
+    /// `save_settings_with_feedback()`，避免拖动期间逐帧写盘。材质未生效时无
+    /// 视觉可调，仅更新内存值（UI 层此时置灰，正常路径不会进来）。
     pub(crate) fn apply_material_opacity(&mut self, ctx: &egui::Context, pct: u8) {
         let pct = pct.clamp(0, 100);
         if self.settings.material_opacity == pct {
@@ -554,7 +554,7 @@ impl PaletteApp {
         }
         log::debug!("[dd-gui] 窗口圆角：{} → 立即生效并保存", pref.label());
         self.settings.corner_pref = pref;
-        self.settings.save();
+        self.save_settings_with_feedback();
         if let Some(hwnd) = self.hwnd {
             crate::platform::apply_window_chrome(hwnd, pref);
         }
@@ -572,7 +572,7 @@ impl PaletteApp {
         }
         log::info!("[dd-gui] 面板边框：{} → 立即生效并保存", mode.label());
         self.settings.border_mode = mode;
-        self.settings.save();
+        self.save_settings_with_feedback();
         if self.backdrop_active {
             if let Some(hwnd) = self.hwnd {
                 let dark = ctx.theme() == egui::Theme::Dark;
@@ -678,7 +678,7 @@ impl PaletteApp {
         }
         log::debug!("[dd-gui] Esc 键行为：{} → 立即生效并保存", b.label());
         self.settings.esc_behavior = b;
-        self.settings.save();
+        self.save_settings_with_feedback();
     }
 
     /// T7（2026-09-20）：单击激活开关（默认开 = 既有行为）。纯设置项：
@@ -696,7 +696,7 @@ impl PaletteApp {
             }
         );
         self.settings.single_click_activation = on;
-        self.settings.save();
+        self.save_settings_with_feedback();
     }
 
     /// T8（2026-09-20）：界面动效开关（默认开 = 既有行为）。纯设置项：
@@ -710,7 +710,7 @@ impl PaletteApp {
             if on { "开" } else { "关" }
         );
         self.settings.ui_animations = on;
-        self.settings.save();
+        self.save_settings_with_feedback();
     }
 
     /// T6（2026-09-20）：着色配置投影（设置 → `theme::Colorization`）——
@@ -730,7 +730,7 @@ impl PaletteApp {
         }
         log::debug!("[dd-gui] 着色模式：{} → 立即生效并保存", mode.label());
         self.settings.colorization = mode;
-        self.settings.save();
+        self.save_settings_with_feedback();
         self.repaint_panel_tint(ctx);
     }
 
@@ -744,7 +744,7 @@ impl PaletteApp {
         self.repaint_panel_tint(ctx);
         // 指钟未按下才落盘（色盘拖动期逐帧触发，避免频繁写盘）
         if !ctx.input(|i| i.pointer.any_down()) {
-            self.settings.save();
+            self.save_settings_with_feedback();
         }
     }
 
@@ -783,7 +783,7 @@ impl PaletteApp {
             if on { "开" } else { "关" }
         );
         self.settings.backspace_go_back = on;
-        self.settings.save();
+        self.save_settings_with_feedback();
     }
 
     /// B1：Esc「先清除搜索内容」档——清空当前页搜索框。嵌套页的过滤由扩展侧
@@ -811,7 +811,7 @@ impl PaletteApp {
         if self.settings.density != d.density {
             self.settings.density = d.density;
         }
-        self.settings.save();
+        self.save_settings_with_feedback();
         log::info!("[dd-gui] 外观已恢复默认（主题/材质/浓淡/圆角/边框/密度）");
         self.show_toast(self.tr("set.reset.toast"), Some(1_500));
     }
@@ -833,7 +833,7 @@ impl PaletteApp {
         } else {
             dd_gui::state::EmptyQueryView::WithoutApps
         });
-        self.settings.save();
+        self.save_settings_with_feedback();
         ctx.request_repaint();
     }
 
@@ -846,7 +846,7 @@ impl PaletteApp {
         log::debug!("[dd-gui] 搜索应用：{on}");
         self.settings.search_apps = on;
         self.stack.root_mut().list.set_apps_hidden(!on);
-        self.settings.save();
+        self.save_settings_with_feedback();
         ctx.request_repaint();
     }
 
@@ -859,7 +859,7 @@ impl PaletteApp {
             self.settings.search_engines.len()
         );
         self.engines_dirty = true;
-        self.settings.save();
+        self.save_settings_with_feedback();
         ctx.request_repaint();
     }
 

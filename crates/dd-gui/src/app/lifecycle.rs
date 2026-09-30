@@ -156,7 +156,7 @@ impl PaletteApp {
                 }
             );
             self.settings.panel_size = next;
-            self.settings.save();
+            self.save_settings_with_feedback();
         }
     }
 
@@ -238,7 +238,7 @@ impl PaletteApp {
                         // 复位「未注册」位 + 退出捕获（对话框随 capture 态关闭）。
                         self.settings.hotkey_mods = c.mods;
                         self.settings.hotkey_vk = c.vk;
-                        self.settings.save();
+                        self.save_settings_with_feedback();
                         self.hotkey_confirm = None;
                         self.hotkey_unregistered = false;
                         let combo = format!(
