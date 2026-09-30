@@ -178,60 +178,114 @@ impl PaletteApp {
     }
 
     pub(crate) fn poll_hotkey(&mut self, ctx: &egui::Context) {
+        // 确认超时兜底：正常回发毫秒级；线程死亡（Died 分支也会清）或消息
+        // 丢失时不至于永久「应用中」。超时 = 视同失败（设置未写，无需回滚）。
+        if let Some(c) = &self.hotkey_confirm {
+            if c.started.elapsed() > super::HOTKEY_CONFIRM_TIMEOUT {
+                log::warn!("[dd-gui] 热键改绑确认超时（seq={}）——视同失败", c.seq);
+                self.hotkey_confirm = None;
+                self.hotkey_apply_failed = true;
+            }
+        }
         while let Ok(ev) = self.hotkey.events.try_recv() {
             match ev {
                 HotkeyEvent::Toggle => {
+                    // 捕获期守卫（2026-09-30 真机）：回落（egui）捕获模式下按
+                    // 键不被系统级吞掉，按下**当前已注册**的组合键仍会送达
+                    // WM_HOTKEY → 面板即时切换隐藏 → hide() 复位捕获态 → 对
+                    // 话框销毁（「按键后界面隐藏，不能正常进行设置」）。钩子
+                    // 模式下全键盘被吞、WM_HOTKEY 不会产生，本守卫对钩子模
+                    // 式零行为变化。捕获结束后新热键照常切换。
+                    if self.hotkey_capturing {
+                        log::debug!("[dd-gui] 捕获期忽略热键 Toggle（回落捕获下旧热键仍存活）");
+                        continue;
+                    }
                     if self.visible {
                         self.hide(ctx);
                     } else {
                         self.show(ctx);
                     }
                 }
-                HotkeyEvent::ReRegistered(ok) => {
-                    // M6 批次 6.3：重注册结果。成功 → 提示并清回滚备份；失败
-                    //（组合键被占用）→ 还原设置为旧键 + 命令线程回滚旧热键。
+                HotkeyEvent::ReRegistered {
+                    seq,
+                    ok,
+                    rolled_back,
+                } => {
+                    // seq 配对（2026-09-30 协议化）：事件只对「同 seq 的在途
+                    // 确认」生效；过期/未知事件一律忽略（旧实现按到达顺序
+                    // 盲配 + 单槽快照，重试场景错位——真机「冲突第二次假
+                    // 成功」根因，本分支为根治后的唯一裁决点）。
+                    if seq == dd_gui::hotkey::HOTKEY_SEQ_STARTUP {
+                        // 启动注册结果（线程 spawn 失败 / 启动注册失败）。
+                        // R-15：置「未注册」状态位（设置页徽标）+ 错误 toast。
+                        if !ok {
+                            self.hotkey_unregistered = true;
+                            self.show_error_toast(
+                                crate::text::t(self.lang_effective, "toast.hotkey_unregistered")
+                                    .to_string(),
+                            );
+                        }
+                        continue;
+                    }
+                    let Some(c) = self.hotkey_confirm.filter(|c| c.seq == seq) else {
+                        log::debug!(
+                            "[dd-gui] 忽略过期/未知热键事件（seq={seq}，ok={ok}，rolled_back={rolled_back}）"
+                        );
+                        continue;
+                    };
                     if ok {
-                        self.hotkey_prev = None;
-                        // R-15：重注册成功 → 复位「未注册」状态位（徽标消失）
+                        // 注册成功 → 此时才写设置（唯一写点）+ 成功 toast +
+                        // 复位「未注册」位 + 退出捕获（对话框随 capture 态关闭）。
+                        self.settings.hotkey_mods = c.mods;
+                        self.settings.hotkey_vk = c.vk;
+                        self.settings.save();
+                        self.hotkey_confirm = None;
                         self.hotkey_unregistered = false;
-                        // R-18（2026-09-29 落地）：toast 入 i18n + 带新组合名 +
-                        // 点明「按它可显隐面板」（真机反馈：录完按新键面板关闭
-                        // 被误认为 bug——那是热键本来的 Toggle 行为）。
                         let combo = format!(
                             "{}+{}",
-                            dd_gui::settings::hotkey_mods_label(self.settings.hotkey_mods),
-                            dd_gui::settings::hotkey_vk_label(self.settings.hotkey_vk),
+                            dd_gui::settings::hotkey_mods_label(c.mods),
+                            dd_gui::settings::hotkey_vk_label(c.vk),
                         );
+                        // R-18：toast 入 i18n + 带新组合名 + 点明「按它可显隐
+                        // 面板」（按新热键面板隐藏是 Toggle 设计行为非 bug）。
                         self.show_toast(
                             crate::text::t(self.lang_effective, "toast.hotkey_updated")
                                 .replace("{combo}", &combo),
                             None,
                         );
-                    } else if let Some(old) = self.hotkey_prev.take() {
-                        self.settings.hotkey_mods = old.0;
-                        self.settings.hotkey_vk = old.1;
-                        self.settings.save();
-                        self.hotkey.re_register(old.0, old.1);
-                        self.show_toast(
-                            crate::text::t(self.lang_effective, "toast.hotkey_failed").to_string(),
-                            None,
-                        );
+                        self.end_hotkey_capture();
                     } else {
-                        // R-15：**启动**注册失败（hotkey_prev 为 None，此前仅
-                        // log::debug 完全无提示）——置「未注册」状态位（设置页
-                        // 热键卡徽标）+ 错误 toast（面板打开时可见；隐藏期间
-                        // toast 不过期，打开即见）。
-                        self.hotkey_unregistered = true;
-                        self.show_error_toast(
-                            crate::text::t(self.lang_effective, "toast.hotkey_unregistered")
-                                .to_string(),
-                        );
+                        // 注册失败（设置未动）。rolled_back=true = 线程已自动
+                        // 回滚旧键：对话框开着 → 行内红色占用提示（候选保留
+                        // 可重试）；已关 → toast 兜底（「恢复默认」路径）。
+                        // rolled_back=false = 旧键回滚**也**失败（旧键刚被第
+                        // 三方抢占等）——当前实际**无生效热键**，除改绑失败外
+                        // 还须置 R-15「未注册」位（徽标可见），否则设置页声
+                        // 称旧键生效而实际为空（核查识别的死角 #2）。
+                        self.hotkey_confirm = None;
+                        self.hotkey_apply_failed = true;
+                        if !rolled_back {
+                            self.hotkey_unregistered = true;
+                        }
+                        if !self.hotkey_capturing {
+                            self.show_toast(
+                                crate::text::t(self.lang_effective, "toast.hotkey_failed")
+                                    .to_string(),
+                                None,
+                            );
+                        }
                     }
                 }
                 HotkeyEvent::Died => {
-                    // R-15：热键线程异常死亡（GetMessageW 返回 -1）——置同一
-                    // 「未注册」状态位 + 错误提示。
+                    // R-15：热键线程异常死亡（GetMessageW 返回 -1）——置「未
+                    // 注册」状态位 + **恒有**错误 toast（对话框开着时行内占
+                    // 用提示由 apply_failed 承担，但 toast 兜底「对话框已关
+                    // / 面板隐藏」路径——核查识别的盲点 #3：确认在途时原先
+                    // 完全无感知）。在途确认一并作废。
                     self.hotkey_unregistered = true;
+                    if self.hotkey_confirm.take().is_some() {
+                        self.hotkey_apply_failed = true;
+                    }
                     self.show_error_toast(
                         crate::text::t(self.lang_effective, "toast.hotkey_unregistered")
                             .to_string(),
@@ -292,6 +346,14 @@ impl PaletteApp {
             self.ever_focused = true;
         }
         if self.ever_focused && !focused {
+            // 捕获期守卫（2026-09-30 真机）：回落捕获模式下按 Win / Alt+Space
+            // 会拉起开始菜单/系统菜单抢焦点 → 失焦自动隐藏 → hide() 复位捕获
+            // 态、对话框销毁。捕获是模态操作，焦点抢占不应销毁它——捕获期
+            // 不自动隐藏（结束后恢复标准失焦语义；点击面板控件本身会带回焦
+            // 点，正常路径无残留影响）。
+            if self.hotkey_capturing {
+                return;
+            }
             // 托盘 Toggle 点击在途：本次失焦由用户点击托盘引起，隐藏交给
             // poll_tray 的 Toggle 完成一次干净 hide——否则失焦先 hide、Toggle
             // 再 show = 「闪黑又展示」竞态（真机 2026-09-05 反馈，10C D23）。
@@ -321,30 +383,226 @@ mod tests {
     use std::sync::mpsc;
     use std::time::Instant;
 
-    /// R-15 验收单测（plan §5 R-15）：三段流转各一断言——
-    /// ① 启动注册失败（`ReRegistered(false)` 且 `hotkey_prev=None`）→ 置「未注册」位 + 错误 toast；
-    /// ② 热键线程死亡（`Died`，GetMessageW 返回 -1）→ 置同一状态位；
-    /// ③ 重注册成功（`ReRegistered(true)`）→ 复位（徽标消失）。
+    /// R-15 验收单测（plan §5 R-15；2026-09-30 seq 协议后重写）：
+    /// ① 启动注册失败（`ReRegistered{seq:0, false}`）→ 置「未注册」位 + 错误 toast；
+    /// ② 热键线程死亡（`Died`）→ 置同一状态位；
+    /// ③ 改绑确认成功（`ReRegistered{seq:1, true}`）→ 此时才写设置 + 复位（徽标消失）。
     #[test]
     fn r15_hotkey_failed_state_flags() {
-        // ① 启动注册失败：hotkey_prev 为 None（构造即 None）走 else 分支。
+        // ① 启动注册失败：seq=0 走启动分支。
         let (tx, rx) = mpsc::channel();
         let mut app = make_app_with(rx);
         assert!(!app.hotkey_unregistered);
-        tx.send(HotkeyEvent::ReRegistered(false)).unwrap();
+        tx.send(HotkeyEvent::ReRegistered {
+            seq: 0,
+            ok: false,
+            rolled_back: false,
+        })
+        .unwrap();
         app.poll_hotkey(&ctx());
         assert!(app.hotkey_unregistered, "启动注册失败应置「未注册」位");
         assert!(app.toast.is_some(), "启动注册失败应出现错误 toast");
 
-        // ② 热键线程死亡：同一状态位（不区分失败来源，提示口径一致）。
+        // ② 热键线程死亡：同一状态位（无在途确认 → toast 提示口径）。
         tx.send(HotkeyEvent::Died).unwrap();
         app.poll_hotkey(&ctx());
         assert!(app.hotkey_unregistered, "线程死亡应置同一「未注册」位");
 
-        // ③ 重注册成功：复位（设置页徽标消失）。
-        tx.send(HotkeyEvent::ReRegistered(true)).unwrap();
+        // ③ 改绑确认成功：设置在此刻才写入（此前保持旧值），徽标复位。
+        app.apply_captured_hotkey(0b0010, 0x20); // 候选 Ctrl+Space（seq=1）
+        assert!(app.hotkey_confirm.is_some());
+        tx.send(HotkeyEvent::ReRegistered {
+            seq: 1,
+            ok: true,
+            rolled_back: true,
+        })
+        .unwrap();
         app.poll_hotkey(&ctx());
+        assert_eq!(app.settings.hotkey_mods, 0b0010, "确认成功才写设置");
+        assert_eq!(app.settings.hotkey_vk, 0x20);
+        assert!(app.hotkey_confirm.is_none(), "确认完成应清在途态");
         assert!(!app.hotkey_unregistered, "重注册成功应复位「未注册」位");
+    }
+
+    /// seq 配对回归（真机「冲突只拦截一次、第二次假成功」根治锚定，2026-09-30）：
+    /// ① 过期/未知 seq 事件一律忽略（旧实现盲配的等价场景）；
+    /// ② 在途确认收到**不匹配 seq** 的失败事件 → 忽略，设置不动、确认仍在途；
+    /// ③ 匹配失败 → 行内失败态，设置不动（永不回滚写盘）；
+    /// ④ 失败后重试同款候选 → 正常成功写设置（重试路径不腐蚀状态机）。
+    #[test]
+    fn hotkey_confirm_seq_pairing_rejects_stale_and_mismatched() {
+        let (tx, rx) = mpsc::channel();
+        let mut app = make_app_with(rx);
+        let (old_mods, old_vk) = (app.settings.hotkey_mods, app.settings.hotkey_vk);
+
+        // ① 未知 seq 的「假成功」：无在途确认 → 忽略，无任何状态变化。
+        tx.send(HotkeyEvent::ReRegistered {
+            seq: 9,
+            ok: true,
+            rolled_back: true,
+        })
+        .unwrap();
+        app.poll_hotkey(&ctx());
+        assert_eq!(app.settings.hotkey_mods, old_mods);
+        assert!(app.hotkey_confirm.is_none());
+
+        // ② 在途 seq=1，先到不匹配的 seq=2 失败事件（旧实现此处错位清快照）。
+        app.apply_captured_hotkey(0b0010, 0x20);
+        tx.send(HotkeyEvent::ReRegistered {
+            seq: 2,
+            ok: false,
+            rolled_back: true,
+        })
+        .unwrap();
+        app.poll_hotkey(&ctx());
+        assert!(app.hotkey_confirm.is_some(), "不匹配事件不得清在途确认");
+        assert!(!app.hotkey_apply_failed, "不匹配事件不得置失败态");
+        assert_eq!(app.settings.hotkey_mods, old_mods, "设置不得提前变动");
+
+        // ③ 匹配的失败事件：行内失败态（对话框开与否由 capturing 决定），
+        //    设置不动——冲突组合永不落盘。
+        tx.send(HotkeyEvent::ReRegistered {
+            seq: 1,
+            ok: false,
+            rolled_back: true,
+        })
+        .unwrap();
+        app.poll_hotkey(&ctx());
+        assert!(app.hotkey_confirm.is_none());
+        assert!(app.hotkey_apply_failed, "匹配失败应置行内失败态");
+        assert_eq!(app.settings.hotkey_mods, old_mods, "失败后设置保持旧值");
+        assert_eq!(app.settings.hotkey_vk, old_vk);
+
+        // ④ 重试（发号新 seq）→ 成功 → 写设置。
+        app.apply_captured_hotkey(0b0010, 0x20);
+        let retry_seq = app.hotkey_seq;
+        tx.send(HotkeyEvent::ReRegistered {
+            seq: retry_seq,
+            ok: true,
+            rolled_back: true,
+        })
+        .unwrap();
+        app.poll_hotkey(&ctx());
+        assert_eq!(app.settings.hotkey_mods, 0b0010, "重试成功应写设置");
+        assert!(!app.hotkey_apply_failed);
+    }
+
+    /// 确认超时兜底：结果 2s 未回发（线程死亡且 Died 丢失等）→ 视同失败，
+    /// 设置不动、失败态可见，可重新发起。
+    #[test]
+    fn hotkey_confirm_timeout_fails_without_touching_settings() {
+        let (_tx, rx) = mpsc::channel();
+        let mut app = make_app_with(rx);
+        let old_mods = app.settings.hotkey_mods;
+        app.apply_captured_hotkey(0b0010, 0x20);
+        // 回拨发起时刻，绕过真实 2s 等待。
+        let confirm = app.hotkey_confirm.as_mut().unwrap();
+        confirm.started = Instant::now() - super::super::HOTKEY_CONFIRM_TIMEOUT;
+        app.poll_hotkey(&ctx());
+        assert!(app.hotkey_confirm.is_none(), "超时应清在途确认");
+        assert!(app.hotkey_apply_failed, "超时应置失败态");
+        assert_eq!(app.settings.hotkey_mods, old_mods, "超时不得写设置");
+    }
+
+    /// 双失败死角（2026-09-30 核查 #2）：改绑失败**且**旧键回滚也失败
+    ///（`rolled_back=false`）→ 除改绑失败态外还须置 R-15「未注册」位——
+    /// 此时实际无任何生效热键，设置页不得声称旧键仍生效。对照：回滚成功
+    ///（`rolled_back=true`）不得误置「未注册」位。
+    #[test]
+    fn hotkey_failed_rollback_status_drives_unregistered_flag() {
+        // 回滚也失败：改绑失败 + 未注册双置位，设置保持旧值。
+        let (tx, rx) = mpsc::channel();
+        let mut app = make_app_with(rx);
+        let old_mods = app.settings.hotkey_mods;
+        app.apply_captured_hotkey(0b0010, 0x20);
+        tx.send(HotkeyEvent::ReRegistered {
+            seq: 1,
+            ok: false,
+            rolled_back: false,
+        })
+        .unwrap();
+        app.poll_hotkey(&ctx());
+        assert!(app.hotkey_apply_failed, "改绑失败应置行内失败态");
+        assert!(
+            app.hotkey_unregistered,
+            "回滚也失败应置「未注册」位（当前无生效热键）"
+        );
+        assert_eq!(app.settings.hotkey_mods, old_mods, "设置保持旧值不变形");
+
+        // 对照：回滚成功（常规冲突场景）不得误置「未注册」位。
+        let (tx, rx) = mpsc::channel();
+        let mut app = make_app_with(rx);
+        app.apply_captured_hotkey(0b0010, 0x20);
+        tx.send(HotkeyEvent::ReRegistered {
+            seq: 1,
+            ok: false,
+            rolled_back: true,
+        })
+        .unwrap();
+        app.poll_hotkey(&ctx());
+        assert!(app.hotkey_apply_failed);
+        assert!(
+            !app.hotkey_unregistered,
+            "旧键回滚成功 ≠ 无热键，不得置「未注册」位"
+        );
+    }
+
+    /// Died 盲点（2026-09-30 核查 #3）：确认在途且对话框已关（如「恢复默认」
+    /// 路径）时热键线程死亡 → 除作废在途确认 + 失败态外**恒有**错误 toast
+    ///（原实现此场景完全无感知）。
+    #[test]
+    fn hotkey_died_with_pending_confirm_still_toasts() {
+        let (tx, rx) = mpsc::channel();
+        let mut app = make_app_with(rx);
+        app.apply_captured_hotkey(0b0010, 0x20); // 捕获未开启 = 对话框已关
+        assert!(app.hotkey_confirm.is_some());
+        assert!(app.toast.is_none());
+        tx.send(HotkeyEvent::Died).unwrap();
+        app.poll_hotkey(&ctx());
+        assert!(app.hotkey_confirm.is_none(), "线程死亡应作废在途确认");
+        assert!(app.hotkey_apply_failed, "在途确认应转行内失败态");
+        assert!(app.hotkey_unregistered, "线程死亡应置「未注册」位");
+        assert!(app.toast.is_some(), "对话框已关场景 toast 必须兜底");
+    }
+
+    /// 捕获期守卫（2026-09-30 真机「按键后界面隐藏」）：回落捕获模式下按
+    /// 当前已注册组合键送达 Toggle → 捕获期必须忽略，不得切换面板；对照：
+    /// 非捕获态 Toggle 照常切换。
+    #[test]
+    fn toggle_ignored_while_hotkey_capturing() {
+        let (tx, rx) = mpsc::channel();
+        let mut app = make_app_with(rx);
+        app.visible = true;
+        app.hotkey_capturing = true; // 对话框打开中（回落模式等价场景）
+        tx.send(HotkeyEvent::Toggle).unwrap();
+        app.poll_hotkey(&ctx());
+        assert!(app.visible, "捕获期 Toggle 不得隐藏面板");
+        assert!(app.hotkey_capturing, "捕获态必须存活（对话框不被销毁）");
+
+        // 对照：非捕获态 Toggle 正常切换（隐藏）。
+        app.hotkey_capturing = false;
+        tx.send(HotkeyEvent::Toggle).unwrap();
+        app.poll_hotkey(&ctx());
+        assert!(!app.visible, "非捕获态 Toggle 应照常隐藏面板");
+    }
+
+    /// 捕获期守卫（2026-09-30 真机）：回落捕获下 Win/Alt+Space 拉起系统 UI
+    /// 抢焦点 → 失焦自动隐藏必须豁免捕获期，不得销毁捕获态；对照：非捕获
+    /// 期失焦照常隐藏。headless ctx 的 viewport().focused 恒 None = 未聚焦。
+    #[test]
+    fn focus_loss_hidden_while_hotkey_capturing() {
+        let mut app = make_app();
+        app.visible = true;
+        app.ever_focused = true;
+        app.hotkey_capturing = true;
+        app.handle_focus_loss(&ctx());
+        assert!(app.visible, "捕获期失焦不得自动隐藏面板");
+        assert!(app.hotkey_capturing, "捕获态必须存活");
+
+        // 对照：非捕获期失焦照常隐藏。
+        app.hotkey_capturing = false;
+        app.handle_focus_loss(&ctx());
+        assert!(!app.visible, "非捕获期失焦应照常隐藏面板");
     }
 
     /// B 方案小修（2026-09-29）：捕获态不跨隐藏周期存活——`hide()` 复位捕获

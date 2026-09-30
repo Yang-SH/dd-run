@@ -4,6 +4,38 @@
 
 ## [Unreleased]
 
+### 可用性（设置页尺寸优化：基准 650×640 → 780×700 + 最小尺寸动态化，2026-09-30）
+
+- **背景**（真机反馈）：设置页在基准 650×640 下内容列仅 ~454px——主题三卡贴边、材质四键/着色三键紧凑、滑杆顶满，且全局最小尺寸 460×400 允许把设置页拉到布局崩坏（内容列 ~280px）。
+- **修复（`app/mod.rs`）**：
+  - **基准提升**：`SETTINGS_W/H` 650×640 → **780×700**——内容列 ~584px，主题三卡/材质四键/滑杆宽松化，外观首屏多显 ~1.5 卡；幅度对齐 PowerToys CmdPal 设置窗（~896 宽）保守一档，保持 launcher 内嵌设置页语境；
+  - **最小尺寸动态切换**：进/出设置页帧间 diff 收口点（与 `InnerSize` 同帧）发送 `ViewportCommand::MinInnerSize`——进设置页 = 本页 clamp 后有效尺寸（面板拉不小；小屏等比收缩后 min 随之收缩，恒 ≤ 实际尺寸、不反向撑大窗口），返回根页恢复全局下限 460×400（根页行为不变）。egui-winit 0.36 运行时真实应用该命令（`window.set_min_inner_size`，自动 DPI 换算，源码实证）。
+- **回归测试**：`settings_size_is_max_of_baseline_and_root` 断言更新（780×700 基准 / 584×~524 小屏收缩；(900,700) 记忆值与 (460,400) 触底两例语义不变）；根页 `root_panel_size` 系列测试零改动（`APP_W` 未动）。
+- **验证**：`cargo fmt --check` 无差异 / clippy 零告警 / dd-gui 256 passed（1 项既有机器环境批除外）· release + dist 重打包（sha256 与 release 一致）。真机走查待做：进设置页 780×700 且拖拽拉不小；返回根页恢复原尺寸与 460×400 下限；768p 小屏 780×700 原样放得下（工作区 clamp 数学已验证）。
+
+### 可用性（热键捕获对话框对齐项目 Fluent 规格 + 捕获期双守卫，2026-09-30）
+
+- **背景**（真机复测三项反馈）：① 对话框用裸 `egui::Window` 渲染，与项目设计风格不符（大白框、按钮无主次）；② 捕获期按键后面板隐藏、无法完成设置；③ 重复按键可"强制设置"被拦截的热键。
+- **根因（代码核对实证）**：②②' 两个缺口**均只在基础捕获（LL 钩子自验证失败回落 egui）模式下发生**（真机截图红色降级提示佐证）：`poll_hotkey` 的 `Toggle` 分支无条件切换面板——回落模式下按键不被系统级吞掉，按下**当前已注册**的组合键仍送达 `WM_HOTKEY` → 面板即时隐藏 → `hide()` 复位捕获态、对话框销毁；`handle_focus_loss` 无捕获豁免——按 Win/Alt+Space 拉起开始菜单/系统菜单抢焦点 → 失焦自动隐藏，同样打断捕获。③ 核实**无自动应用路径**（钩子/egui 两路 Combo 均只写 `hotkey_pending`，保存是唯一注册入口）——现象即 ② 的切换/失焦循环销毁捕获态后反复重入完成保存；若 OS 层 `RegisterHotKey` 成功则热键真实生效（Ctrl+Space 类键通常只被 IME/第三方钩子在上游吃掉，不占用 Win32 热键表），属系统行为。
+- **修复**：
+  - **捕获期 Toggle 守卫**（`poll_hotkey`）：`hotkey_capturing` 时忽略 `Toggle`（钩子模式下 WM_HOTKEY 本就不会产生，守卫对钩子模式零行为变化；捕获结束恢复标准切换语义）；
+  - **捕获期失焦豁免**（`handle_focus_loss`）：捕获是模态操作，系统 UI 抢焦点不销毁捕获；捕获结束恢复标准失焦隐藏（点击面板控件本身会带回焦点，正常路径无残留影响）；
+  - **对话框重写为 `ui/confirm.rs` 同构 Fluent Dialog 规格**：Tooltip 层面板（panel 底 + 1px border + 圆角 8 + `dialog_shadow` + padding 20/20/16，内容显式定高消除大空框）+ Foreground 层 `theme::overlay` 遮罩（**点击遮罩 = 取消**，面板内点击不算，§10.1 语义）+ 高 32 按钮行（保存 = **accent 底白字主按钮**、禁用 = card 底灰字；重置/取消 = secondary；复用 `confirm::draw_dialog_button`）。
+- **回归测试（+2）**：`toggle_ignored_while_hotkey_capturing`（捕获期 Toggle 不隐藏面板、捕获态存活；非捕获期照常切换）/ `focus_loss_hidden_while_hotkey_capturing`（捕获期失焦不隐藏；非捕获期照常隐藏；headless ctx 的 `viewport().focused` 恒 None = 未聚焦）。
+- **验证**：`cargo fmt --check` 无差异 / clippy 零告警 / dd-gui 256 passed（1 项既有机器环境批除外）· release + dist 重打包 9,239,552 B。真机走查待做：回落模式下按当前热键/Win/Alt+Space——对话框保持打开、捕获态存活；对话框视觉与二次确认框一致。
+
+### 可用性（热键改绑 seq 确认协议 + PowerToys 式捕获对话框，2026-09-30）
+
+- **背景**（真机）：冲突组合（如被 PowerToys 占用的 Ctrl+Space）首次录入被正确拦截，但**同键再次录入显示「设置成功」而全局热键实际未注册**——旧链路「先写设置再异步注册 + 单槽 `hotkey_prev` 按到达顺序盲配回滚」：回滚分支多余补发的 `re_register(old)` 产生一次与用户操作无法区分的「假成功」`ReRegistered(true)`，与下一次尝试的失败事件错位配对后，失败事件落入「启动失败」分支（不还原设置），设置停留为冲突组合。
+- **修复（`hotkey.rs` + `app/{mod,keys,lifecycle}.rs` + `ui/settings_view.rs`）**：
+  - **seq 协议**：`HotkeyCommand{seq, mods, vk}`（`PostThreadMessageW` wParam=seq、lParam=mods<<32|vk）+ `ReRegistered{seq, ok}`——事件按 seq 配对，过期/未知事件一律忽略（roundtrip 单测锚定）；启动注册结果 seq=0（R-15 语义不变）；
+  - **确认流**：捕获与「恢复默认」**只发请求不写设置**——`ReRegistered` 成功回发才是设置唯一写点；失败 → 对话框开着行内红色占用提示（候选保留可重试）/ 已关则 toast；2s 确认超时兜底（线程死亡/消息丢失不永久「应用中」）；UI 侧多余回滚命令删除，热键线程自动回滚保留；`hotkey_prev` 回滚状态机整体删除；
+  - **PowerToys 式模态对话框**：全屏遮罩 + 居中窗（实时修饰键徽章 `GetAsyncKeyState` 每帧轮询 / 候选键帽 / 有效性提示行 / 占用红行 / [保存][重置][取消]，保存禁用态 = 无候选·未改动·应用中）；
+  - **R-21 警示口径顺路落地**：Alt+Space 等系统保留组合保存前黄线警示、不阻止（对齐 PowerToys「可能错误触发检测」文案语义）。
+- **回归测试（+6，`r15_hotkey_failed_state_flags` 按 seq 协议重写）**：`hotkey_confirm_seq_pairing_rejects_stale_and_mismatched`（假成功/错配事件不得清在途确认、不得动设置，失败后重试正常）/ `hotkey_confirm_timeout_fails_without_touching_settings` / `hotkey_command_pack_roundtrip`（含 u32::MAX 边界）/ `hotkey_failed_rollback_status_drives_unregistered_flag`（回滚也失败 → 「未注册」位；回滚成功 → 不误置）/ `hotkey_died_with_pending_confirm_still_toasts`（线程死亡恒有 toast）/ r15 三段流转。
+- **核查收尾（同日代码核查识别的 2 个死角）**：① `ReRegistered` 增 `rolled_back` 字段——旧键回滚**也**失败时（新键与旧键同被抢占的极端边界）UI 置 R-15「未注册」位，设置页不再声称旧键生效；② `Died` 恒发错误 toast（原先「确认在途 + 对话框已关」场景完全无感知）。
+- **验证**：`cargo fmt --check` 无差异 / `cargo clippy --workspace` 零告警 / `cargo test --workspace` 全绿（除 1 项既有机器环境批）· release + dist 重打包 9,277,952 B。**真机走查已完成（2026-09-30，本机无 PowerToys，以 `RegisterHotKey` 助手进程等价占用）**：候选录入（Ctrl+Alt+J）后助手注册同键，连续两次保存均行内红色占用提示 + 日志 `seq=3/4` 双失败回滚、对话框保持、设置零变形；另完成 V-3（启动冲突错误 toast + 热键卡「未注册」徽标）、正常路径零误报、重注册后徽标复位。环境记档：本机 LL 键盘钩子被安全软件拦截（自回声验证失败）→ 被占用组合键对 egui 捕获层不可见，故以「录入后占用再保存」等价「与 PowerToys 同开连续录入」场景（详见 stability-usability-security-plan.md 批三 R-15 条）。
+
 ### 安全（R-12：首方 sidecar 首跑钉扎，2026-09-29）
 
 - **背景**：[stability-usability-security-plan.md](docs/stability-usability-security-plan.md) R-12（中）——`assess` 对 `id ∈ FIRST_PARTY_IDS` 的随包 sidecar 白名单短路发生在哈希**之前**：`dd-ext-search.exe` 零完整性校验、从不参与 `hashes_match`。便携 zip 分发下 `extensions.d\` 在用户可写位置——同用户程序替换 sidecar exe（或加一份指向自己的 `com.ddrun.filesearch.json`）→ 每次启动（含开机自启）**静默拉起，零审批、台账零痕迹**。

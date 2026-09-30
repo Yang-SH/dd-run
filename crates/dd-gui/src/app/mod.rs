@@ -64,13 +64,16 @@ pub const APP_W: f32 = 650.0;
 
 pub const APP_H: f32 = 440.0;
 
-/// 设置页窗口尺寸**基准**（§08 v4.12 D37 修订：650×640——宽度与根页基准
-/// 对齐，高度沿用 D28 论证的 640；原 640×640 作废）。有效尺寸 =
-/// max(基准, 根页有效尺寸) 逐轴取大再按工作区 clamp（[`settings_panel_size`]）；
-/// 进/出设置页仍按栈顶帧间 diff 放大/缩回。
-pub(crate) const SETTINGS_W: f32 = 650.0;
+/// 设置页窗口尺寸**基准**（§08 v4.12 D37 定 650×640；2026-09-30 真机反馈
+/// "设置页宽高需优化"修订为 **780×700**——表单型界面比根页列表需要更宽，
+/// 内容列 450→584px，主题三卡/材质四键/滑杆不再贴边，外观首屏多显 ~1.5 卡；
+/// 幅度对齐 PowerToys CmdPal 设置窗（~896 宽）保守一档，保持 launcher 内嵌
+/// 设置页语境）。有效尺寸 = max(基准, 根页有效尺寸) 逐轴取大再按工作区
+/// clamp（[`settings_panel_size`]）；进/出设置页仍按栈顶帧间 diff 放大/缩回，
+/// 并同步抬高/恢复 `MinInnerSize`（设置页内拉不小、根页语义不变）。
+pub(crate) const SETTINGS_W: f32 = 780.0;
 
-pub(crate) const SETTINGS_H: f32 = 640.0;
+pub(crate) const SETTINGS_H: f32 = 700.0;
 
 /// 启动期窗口的屏幕外坐标（远离所有显示器的负象限）——实现"物理不可见"：
 /// eframe 0.36 首帧渲染后**无条件** `set_visible(true)`（egui PR #2279"画完才
@@ -182,23 +185,53 @@ pub(crate) fn file_search_source_query(at_root: bool, root_query: &str) -> Optio
     }
 }
 
+/// 改绑确认在途记录（「保存」/「恢复默认」发出注册请求到结果回发之间挂起）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct HotkeyConfirm {
+    /// 请求序号（与 [`crate::hotkey::HotkeyEvent::ReRegistered`] 的 seq 配对）。
+    pub(crate) seq: u32,
+    /// 候选组合（成功后才写入 settings）。
+    pub(crate) mods: u32,
+    /// 候选主键。
+    pub(crate) vk: u32,
+    /// 发起时刻（确认超时兜底：线程死亡/消息丢失时不至于永久「应用中」）。
+    pub(crate) started: std::time::Instant,
+}
+
+/// 确认超时：正常回发为毫秒级；超过即视同失败（含热键线程死亡场景）。
+pub(crate) const HOTKEY_CONFIRM_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(2);
+
 pub struct PaletteApp {
     /// 页面栈：栈底为 Root（首屏聚合），其上为嵌套页。
     pub(crate) stack: PageStack,
     /// 热键事件接收端。
     /// 热键线程句柄（M6 批次 6.3：事件接收 + 设置页更改热键后经它重注册）。
     pub(crate) hotkey: HotkeyThread,
-    /// 重注册失败回滚用的旧组合（Ok 时清空；Err 时还原设置并回滚热键）。
-    pub(crate) hotkey_prev: Option<(u32, u32)>,
+    /// 热键捕获候选（PowerToys 式对话框，2026-09-30）：捕获期录到的组合键，
+    /// **仅预览**——点「保存」走确认流成功后才写设置（真机 bug 修复：旧实现
+    /// 先写设置靠单槽快照异步回滚，重试场景错位配对致「冲突第二次假成功」）。
+    pub(crate) hotkey_pending: Option<(u32, u32)>,
+    /// 改绑确认在途（「保存」/「恢复默认」已发出注册请求、结果未达）。
+    /// `ReRegistered{seq}` 按 seq 配对：成功 → 写设置 + toast；失败/超时 →
+    /// 行内报错（对话框开着）或 toast（对话框已关），**设置永不提前写入**。
+    pub(crate) hotkey_confirm: Option<HotkeyConfirm>,
+    /// 改绑请求序号计数器（发号器；0 保留给启动注册结果）。
+    pub(crate) hotkey_seq: u32,
+    /// 最近一次改绑确认失败（对话框内红色占用提示行依据；发起新确认时清除）。
+    pub(crate) hotkey_apply_failed: bool,
     /// 热键捕获模式（设置页「更改」后开启：下一组合键被拦截为新热键）。
     pub(crate) hotkey_capturing: bool,
     /// B 方案（2026-09-29）：捕获期的 LL 键盘钩子守卫（Drop 卸载）。
     pub(crate) capture_hook: Option<crate::platform::capture_hook::CaptureHookGuard>,
-    /// 捕获钩子事件端（`Combo` / `Cancel`）；`None` = 钩子未装（回落 egui 路径）。
+    /// 捕获钩子事件端（`Ready` / `Failed` / `Combo` / `Cancel`）；
+    /// `None` = 钩子不可用（回落 egui 基础捕获路径）。
     pub(crate) capture_rx:
         Option<std::sync::mpsc::Receiver<crate::platform::capture_hook::CaptureEvent>>,
     /// 捕获开始时刻（`CAPTURE_TIMEOUT` 超时兜底）。
     pub(crate) capture_started: Option<std::time::Instant>,
+    /// v3：钩子 Failed 后置位——设置页捕获提示切红色降级口径
+    /// （基础捕获不支持 Win / Alt+Space 等系统组合）。
+    pub(crate) capture_failed: bool,
     /// R-15：全局热键**未注册**（启动注册失败 / 热键线程死亡）——设置页
     /// 热键卡「未注册」徽标与错误 toast 的依据；重注册成功后复位。
     pub(crate) hotkey_unregistered: bool,
@@ -439,11 +472,15 @@ impl PaletteApp {
         Self {
             stack: PageStack::new(PageState::root(Vec::new())),
             hotkey,
-            hotkey_prev: None,
+            hotkey_pending: None,
+            hotkey_confirm: None,
+            hotkey_seq: 0,
+            hotkey_apply_failed: false,
             hotkey_capturing: false,
             capture_hook: None,
             capture_rx: None,
             capture_started: None,
+            capture_failed: false,
             hotkey_unregistered: false,
             exts_dirty: false,
             tray_events,
@@ -729,6 +766,19 @@ impl eframe::App for PaletteApp {
                 )
             };
             ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(egui::vec2(w, h)));
+            // 设置页最小尺寸动态切换（2026-09-30 真机反馈"设置页拉小即布局
+            // 崩坏"）：进设置页抬高到**本页 clamp 后有效尺寸**（面板拉不小；
+            // 小屏等比收缩后 min 随之收缩，min 恒 ≤ 实际尺寸，不会反向撑大
+            // 窗口）；返回根页恢复全局下限 460×400。egui-winit 运行时真实
+            // 应用该命令（window.set_min_inner_size，自动 DPI 换算），与启动
+            // 期 `with_min_inner_size` 同字段；隐藏态下应用无害。所有进/出
+            // 路径都经本帧间 diff 收口，与 InnerSize 同帧同步，无遗漏面。
+            let min_size = if want_settings {
+                egui::vec2(w, h)
+            } else {
+                egui::vec2(PANEL_MIN_W, PANEL_MIN_H)
+            };
+            ctx.send_viewport_cmd(egui::ViewportCommand::MinInnerSize(min_size));
             // v4.15 真机反馈修（2026-09-06）：程序性尺寸变化（进/出设置页）
             // 同时**重新居中**——否则移动过的窗口按原左上角缩放，移动设置页
             // 后退回再进，面板出现在移动后的位置而非默认居中位置。隐藏态
@@ -901,12 +951,12 @@ mod size_tests {
 
     #[test]
     fn settings_size_is_max_of_baseline_and_root() {
-        // G4：未拉伸 → 设置页 = 650×640
+        // G4：未拉伸 → 设置页 = 780×700（2026-09-30 尺寸优化后基准）
         assert_close(
             settings_panel_size(Some((2560.0, 1440.0)), None),
-            (650.0, 640.0),
+            (780.0, 700.0),
         );
-        // 根页拉伸 (900,700) → max(650×640, 900×700) = 900×700（不缩小）
+        // 根页拉伸 (900,700) → max(780×700, 900×700) = 900×700（不缩小）
         assert_close(
             settings_panel_size(Some((2560.0, 1440.0)), Some((900, 700))),
             (900.0, 700.0),
@@ -914,7 +964,7 @@ mod size_tests {
         // 设置页超屏等比收缩 + 下限成立
         assert_close(
             settings_panel_size(Some((600.0, 700.0)), None),
-            (584.0, 640.0 * 584.0 / 650.0),
+            (584.0, 700.0 * 584.0 / 780.0),
         );
         assert_close(
             settings_panel_size(Some((100.0, 100.0)), None),

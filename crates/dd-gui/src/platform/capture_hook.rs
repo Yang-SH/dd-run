@@ -1,26 +1,32 @@
-//! 热键捕获的低级键盘钩子（WH_KEYBOARD_LL，2026-09-29 B 方案）。
+//! 热键捕获的低级键盘钩子（WH_KEYBOARD_LL，2026-09-29 B 方案 v3 异步化）。
 //!
 //! **为什么需要**：捕获模式原实现走 egui 应用层事件拦截——egui/winit 在
 //! Windows 不暴露 Win 键 modifiers（keys.rs / settings_view.rs 两处注释自认），
 //! 按下 Win 键被系统解释为「打开开始菜单」→ 前台焦点被抢 → 触发失焦自动
 //! 隐藏，面板直接消失且组合无法录入（真机 bug 2026-09-29）。
 //!
-//! **本模块的职责**：捕获模式期间安装系统级 LL 钩子——
-//! - **吞掉全部键盘输入**（模态捕获语义，对齐 PowerToys Run 热键编辑器）；
-//! - **Win 键恒吞**（keydown + keyup）→ 开始菜单不弹 → 焦点不丢 → 面板存活；
-//! - 非修饰键按下时按 `GetAsyncKeyState` 现场读修饰状态，含 Ctrl/Alt/Win
-//!   任一即回发 [`CaptureEvent::Combo`]（mods = MOD_* 位，含 WIN=0x8，与
-//!   `settings.hotkey_mods` 编码一致）；
-//! - Esc（无修饰）→ [`CaptureEvent::Cancel`]。
+//! **v3 关键演进（真机「任何按键都录不到」根因修复）**：v1/v2 在 UI 线程
+//! `recv_timeout(1s)` 同步等安装结果——本机内存高压下线程调度 + 安全软件
+//! 介入可使 `SetWindowsHookExW` 超过 1s → UI 判超时 → 自卸钩子 → 静默回落。
+//! **零依赖探针实证本机 LL 钩子模式完全可用**（同款 static channel + 独立
+//! 线程 pump，8/8 事件全通）→ 分叉点即「UI 侧同步等待」。v3 改为：
+//! - `start()` **立即返回**（零阻塞）：安装全部在后台线程；
+//! - **自回声验证**：安装成功后线程自动注入一次 `F15`（F15 不在捕获
+//!   白名单、无任何系统副作用），验证钩子真的收到本注入——收到才报
+//!   [`CaptureEvent::Ready`]，否则 [`CaptureEvent::Failed`]；杜绝
+//!   「SetWindowsHookExW 成功但钩子永不触发」（安全软件剥离）的假成功；
+//! - **双路径接力**：安装期间/失败后 egui 基础路径持续可用（Ctrl/Alt 组合
+//!   永远可录，M6 行为）；`Ready` 后钩子路径接管（Win 也可录）；
+//! - **取消安全**：`Guard::drop` 清发送端 + `WM_QUIT`；泵循环每轮检测
+//!   发送端已被清（被取消）即自行 unhook 退出——双保险杜绝钩子泄漏
+//!   （钩子泄漏 = 模态吞键 = 全系统键盘失灵，绝不可发生）。
 //!
 //! **安全约束**（钩子回调拖慢会卡顿全系统）：
-//! - 回调只做「读修饰位 + channel try 投递 + 返回 1」，无 IO / 无锁竞争
-//!   （`CAPTURE_TX` 为无竞争单写 static，锁持纳亚秒）；
+//! - 回调只做「读修饰位 + channel 投递 + 返回 1」，无 IO / 无锁竞争；
 //! - 捕获生命周期由 `CaptureHookGuard` 的 Drop 严格兜底（hide / Esc / 完成 /
-//!   30s 超时四条路径全部触发卸载，见 keys.rs）；
-//! - 钩子线程独立 pump 消息（LL 钩子要求），Drop 经 `WM_QUIT` 结束后自行
-//!   `UnhookWindowsHookExW`。
+//!   30s 超时 / Failed 五条路径全部触发卸载，见 keys.rs）。
 
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
 use std::sync::Mutex;
 
@@ -28,18 +34,36 @@ use std::sync::Mutex;
 /// Esc 始终可取消，本值为双保险兜底。
 pub const CAPTURE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
 
+/// 自回声验证主键：VK_F15（0x7E）。不在捕获白名单（0x70..=0x7B）→ 即使
+/// `GetAsyncKeyState` 读到 Alt 修饰也**不会**产生 `Combo` 事件，对 UI 零副作用；
+/// 无任何系统绑定，注入完全无害。
+const SELFTEST_VK: u32 = 0x7E;
+
+/// 钩子发送端（static 存放，供回调读取；同一时刻至多一个捕获钩子）。
+/// **被清空（None）= 已取消/已卸载**——泵循环每轮检测，据此自行退出。
+static CAPTURE_TX: Mutex<Option<mpsc::Sender<CaptureEvent>>> = Mutex::new(None);
+
+/// 自回声命中旗标：hook_proc 看到 `SELFTEST_VK` keydown 即置位。
+static SELFTEST_HIT: AtomicBool = AtomicBool::new(false);
+
+/// 钩子线程 id（安装线程回发后由 [`CaptureHookGuard`].drop 用于投递 WM_QUIT）。
+/// 同一时刻至多一个捕获钩子，单槽 Mutex 足够。
+static THREAD_ID: Mutex<u32> = Mutex::new(0);
+
 /// 捕获钩子 → 宿主 UI 的捕获事件。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CaptureEvent {
+    /// 钩子**安装并自回声验证通过**——此后 `Combo` / `Cancel` 才有意义。
+    /// 载荷 = 钩子线程 id（UI 已持 [`CaptureHookGuard`]，此 id 仅日志用）。
+    Ready,
+    /// 安装 / 自回声验证失败（已含重试）。UI 应回落 egui 基础捕获路径。
+    Failed(&'static str),
     /// 组合键成立（含 ≥1 个 Ctrl/Alt/Win 修饰）。`mods` = MOD_* 位
     /// （ALT=1 / CONTROL=2 / SHIFT=4 / WIN=8），`vk` = 原生虚拟键码。
     Combo { mods: u32, vk: u32 },
     /// Esc（无修饰）→ 取消捕获。
     Cancel,
 }
-
-/// 钩子发送端（static 存放，供回调读取；同一时刻至多一个捕获钩子）。
-static CAPTURE_TX: Mutex<Option<mpsc::Sender<CaptureEvent>>> = Mutex::new(None);
 
 /// 修饰键组合 → settings/MOD_* 编码（纯函数，单测锚定）。
 /// ALT=1 / CONTROL=2 / SHIFT=4 / WIN=8；与 `settings::HOTKEY_MODS_MASK`（0b1111）一致。
@@ -76,11 +100,11 @@ unsafe fn unhook_windows_hook(hook: *mut core::ffi::c_void) {
     use windows_sys::Win32::System::LibraryLoader::{GetModuleHandleA, GetProcAddress};
 
     // SAFETY：模块名 / 过程名常量串；句柄来自本进程已加载的 user32。
-    let user32 = unsafe { GetModuleHandleA(b"user32\0".as_ptr().cast()) };
+    let user32 = unsafe { GetModuleHandleA(c"user32".as_ptr().cast()) };
     if user32.is_null() {
         return;
     }
-    let proc_addr = unsafe { GetProcAddress(user32, b"UnhookWindowsHookExW\0".as_ptr().cast()) };
+    let proc_addr = unsafe { GetProcAddress(user32, c"UnhookWindowsHookExW".as_ptr().cast()) };
     let Some(proc_addr) = proc_addr else {
         // 理论不可达（user32.dll 自 XP 起导出该函数）：捕获钩子残留至进程
         // 退出由系统回收，进程退出本身会卸载全部钩子，无长期泄漏。
@@ -93,32 +117,6 @@ unsafe fn unhook_windows_hook(hook: *mut core::ffi::c_void) {
     unsafe { f(hook) };
 }
 
-/// 捕获钩子守卫：Drop = 卸载（清发送端 + 令钩子线程退出并自行 unhook）。
-pub struct CaptureHookGuard {
-    thread_id: u32,
-    _handle: Option<std::thread::JoinHandle<()>>,
-}
-
-impl Drop for CaptureHookGuard {
-    fn drop(&mut self) {
-        // 先清发送端再令线程退出：竞态窗口内的按键会穿透而非误吞（安全向）。
-        if let Ok(mut tx) = CAPTURE_TX.lock() {
-            *tx = None;
-        }
-        #[cfg(windows)]
-        if self.thread_id != 0 {
-            // SAFETY：线程 id 由安装线程回发，WM_QUIT 结束其消息循环。
-            use windows_sys::Win32::UI::WindowsAndMessaging::PostThreadMessageW;
-            use windows_sys::Win32::UI::WindowsAndMessaging::WM_QUIT;
-            unsafe {
-                PostThreadMessageW(self.thread_id, WM_QUIT, 0, 0);
-            }
-        }
-        // 不 join：卸载路径在 UI 线程（Esc / hide / 超时），钩子线程 unhook
-        // 是纯系统调用级收尾，残留线程毫秒级消亡，无需阻塞 UI 等待。
-    }
-}
-
 /// `GetAsyncKeyState` 高位 = 物理按下（钩子回调内调用，µs 级）。
 #[cfg(windows)]
 fn async_down(vk: u16) -> bool {
@@ -127,7 +125,7 @@ fn async_down(vk: u16) -> bool {
     unsafe { GetAsyncKeyState(vk as i32) & 0x8000u16 as i16 != 0 }
 }
 
-/// LL 钩子回调（系统在安装线程 pump 消息期间同步调用——必须快）。
+/// LL 钩子回调（系统在安装线程泵消息期间同步调用——必须快）。
 #[cfg(windows)]
 unsafe extern "system" fn hook_proc(code: i32, wparam: usize, lparam: isize) -> isize {
     use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
@@ -141,17 +139,16 @@ unsafe extern "system" fn hook_proc(code: i32, wparam: usize, lparam: isize) -> 
     if code < 0 {
         return CallNextHookEx(std::ptr::null_mut(), code, wparam, lparam);
     }
-    let Ok(tx) = CAPTURE_TX.lock() else {
-        return 1; // Mutex 中毒（理论上不可能）：宁可吞键不可穿透
-    };
-    let Some(tx) = tx.as_ref() else {
-        return CallNextHookEx(std::ptr::null_mut(), code, wparam, lparam);
-    };
-
     let down = wparam == WM_KEYDOWN as usize || wparam == WM_SYSKEYDOWN as usize;
     // SAFETY：lparam 指向系统提供的 KBDLLHOOKSTRUCT（回调期有效）。
     let kb = &*(lparam as *const KBDLLHOOKSTRUCT);
     let vk = kb.vkCode;
+
+    // 自回声主键（仅 keydown 置位）：无论修饰如何都不产生 Combo（F15 不在
+    // 白名单），对 UI 零副作用——只作为「钩子真的在收事件」的实证。
+    if vk == SELFTEST_VK && down {
+        SELFTEST_HIT.store(true, Ordering::Relaxed);
+    }
 
     // Win 键恒吞（keydown + keyup）：根因修复——开始菜单不弹、焦点不丢。
     if vk == VK_LWIN as u32 || vk == VK_RWIN as u32 {
@@ -167,7 +164,11 @@ unsafe extern "system" fn hook_proc(code: i32, wparam: usize, lparam: isize) -> 
 
     // Esc（无修饰）= 取消。
     if vk == VK_ESCAPE as u32 && !(ctrl || alt || shift || win) {
-        let _ = tx.send(CaptureEvent::Cancel);
+        if let Ok(g) = CAPTURE_TX.lock() {
+            if let Some(tx) = g.as_ref() {
+                let _ = tx.send(CaptureEvent::Cancel);
+            }
+        }
         return 1;
     }
     // 修饰键自身按下：只更新状态（上方 GetAsyncKeyState 已覆盖），吞掉等待主键。
@@ -183,32 +184,66 @@ unsafe extern "system" fn hook_proc(code: i32, wparam: usize, lparam: isize) -> 
     if !capture_vk_allowed(vk) {
         return 1;
     }
-    let _ = tx.send(CaptureEvent::Combo { mods, vk });
+    if let Ok(g) = CAPTURE_TX.lock() {
+        if let Some(tx) = g.as_ref() {
+            let _ = tx.send(CaptureEvent::Combo { mods, vk });
+        }
+    }
     1
 }
 
-/// 安装捕获钩子：返回守卫（Drop 卸载）；事件接收端由调用方持有。
-/// `Err` = 线程创建 / 钩子安装失败 / **1s 超时**（安全软件可能延迟钩子安装——
-/// 绝不允许阻塞 UI 线程），调用方回落 egui 应用层捕获。
+/// 捕获钩子守卫：Drop = 卸载（清发送端 + WM_QUIT；泵循环检测到发送端已清
+/// 也会自行 unhook 退出——双保险）。`start()` 立即返回守卫（安装异步进行）。
+pub struct CaptureHookGuard;
+
+impl Drop for CaptureHookGuard {
+    fn drop(&mut self) {
+        // 先清发送端再令线程退出：竞态窗口内的按键会穿透而非误吞（安全向）；
+        // 泵循环每轮检测「发送端已清」自行 unhook（不依赖 WM_QUIT 必达）。
+        if let Ok(mut tx) = CAPTURE_TX.lock() {
+            *tx = None;
+        }
+        let thread_id = THREAD_ID.lock().map(|g| *g).unwrap_or(0);
+        #[cfg(windows)]
+        if thread_id != 0 {
+            // SAFETY：线程 id 由安装线程回发，WM_QUIT 结束其消息循环。
+            use windows_sys::Win32::UI::WindowsAndMessaging::{PostThreadMessageW, WM_QUIT};
+            unsafe {
+                PostThreadMessageW(thread_id, WM_QUIT, 0, 0);
+            }
+        }
+        // 不 join：卸载路径在 UI 线程（Esc / hide / 超时），钩子线程 unhook
+        // 是纯系统调用级收尾，残留线程毫秒级消亡，无需阻塞 UI 等待。
+    }
+}
+
+/// 安装捕获钩子（**异步，立即返回**）：
+/// - 线程创建失败（spawn Err）→ Err（极罕见）；其余结果经 `tx` 异步回发：
+///   `Ready`（安装 + 自回声通过）/ `Failed(摘要)`；
+/// - 宿主侧在 `Ready` 前保持 egui 基础捕获（Ctrl/Alt 组合永远可录）；
+/// - 宿主 drop 返回的 [`CaptureHookGuard`] 即取消安装/卸载钩子（任何时候）。
 #[cfg(windows)]
 pub fn start(tx: mpsc::Sender<CaptureEvent>) -> Result<CaptureHookGuard, String> {
     use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
     use windows_sys::Win32::System::Threading::GetCurrentThreadId;
+    use windows_sys::Win32::UI::Input::KeyboardAndMouse::keybd_event;
     use windows_sys::Win32::UI::WindowsAndMessaging::{
-        GetMessageW, PostThreadMessageW, SetWindowsHookExW, MSG, WH_KEYBOARD_LL, WM_QUIT,
+        PeekMessageW, SetWindowsHookExW, MSG, PM_REMOVE, WH_KEYBOARD_LL, WM_QUIT,
     };
 
-    let (id_tx, id_rx) = mpsc::channel::<u32>();
-    let handle = std::thread::Builder::new()
+    std::thread::Builder::new()
         .name("dd-capture-hook".into())
         .spawn(move || {
-            // ① **先报线程 id 再装钩子**（立即）：调用方由此始终能对慢安装
-            //    的线程发 WM_QUIT 兜底（v2 协议：0=安装失败，1=安装成功）。
-            let _ = id_tx.send(unsafe { GetCurrentThreadId() });
-            // 先注册发送端再装钩子（回调随时可能被触发）。
+            // ① 记录线程 id（CaptureHookGuard::drop 投递 WM_QUIT 用）。
+            let tid = unsafe { GetCurrentThreadId() };
+            if let Ok(mut g) = THREAD_ID.lock() {
+                *g = tid;
+            }
+            // ② 先注册发送端再装钩子（回调随时可能被触发）。
             if let Ok(mut g) = CAPTURE_TX.lock() {
                 *g = Some(tx);
             }
+            // ③ 安装（失败重试一次：安全软件拦截常为瞬时）。
             // SAFETY：hmod = 主模块句柄（LL 钩子仅要求可定位回调所在模块）。
             let mut hook = unsafe {
                 SetWindowsHookExW(
@@ -218,8 +253,6 @@ pub fn start(tx: mpsc::Sender<CaptureEvent>) -> Result<CaptureHookGuard, String>
                     0,
                 )
             };
-            // 安装失败重试一次（2026-09-29 真机：Alt+Space 系统菜单弹开证明
-            // 钩子未生效——安全软件拦截 LL 钩子安装常为瞬时，第二次放行）。
             if hook.is_null() {
                 std::thread::sleep(std::time::Duration::from_millis(200));
                 // SAFETY：同上。
@@ -233,63 +266,116 @@ pub fn start(tx: mpsc::Sender<CaptureEvent>) -> Result<CaptureHookGuard, String>
                 };
             }
             if hook.is_null() {
+                let err = unsafe { windows_sys::Win32::Foundation::GetLastError() };
+                // 先发 Failed **再**清发送端（顺序反了会静默丢失）。
+                if let Ok(g) = CAPTURE_TX.lock() {
+                    if let Some(tx) = g.as_ref() {
+                        let _ = tx.send(CaptureEvent::Failed("SetWindowsHookExW 两连失败"));
+                    }
+                }
                 if let Ok(mut g) = CAPTURE_TX.lock() {
                     *g = None;
                 }
-                let _ = id_tx.send(0);
+                log::error!("[dd-gui] 捕获钩子安装失败（GetLastError={err}）——回落 egui 捕获");
                 return;
             }
-            let _ = id_tx.send(1);
-            // LL 钩子要求安装线程 pump 消息；WM_QUIT（Drop）→ GetMessageW = 0。
+            // ④ **自回声验证**：注入一次 F15，验证钩子真的收到注入
+            //    （SetWindowsHookExW 成功 ≠ 钩子真的在收事件——安全软件可能
+            //    剥离）。F15 不在捕获白名单 → 对 UI 零副作用；**不带 Alt 等
+            //    修饰注入**——验证旗标只看 F15 keydown，修饰注入是纯风险
+            //    （这几毫秒内用户按任意键都会带上幽灵 Alt 修饰，可能触发
+            //    前台应用菜单模式）。
+            SELFTEST_HIT.store(false, Ordering::Relaxed);
+            // SAFETY：注入合成按键（dwFlags 0=down / 2=KEYEVENTF_KEYUP）。
+            unsafe {
+                keybd_event(SELFTEST_VK as u8, 0, 0, 0); // F15 down
+                keybd_event(SELFTEST_VK as u8, 0, 2, 0); // F15 up
+            }
+            let deadline = std::time::Instant::now() + std::time::Duration::from_millis(1200);
+            // ⚠️ 等待窗口**必须持续泵消息**：LL 钩子回调仅在安装线程泵消息
+            // 期间被系统调用——v3 初版在此窗口只 sleep 不泵 → hook_proc 永不
+            // 触发 → 自回声必败 → 必然回落（真机「Alt+Space 弹系统菜单 +
+            // Ctrl+Space 无反应」的直接根因，2026-09-30 探针对照实锤：
+            // 探针等待期在阻塞泵里所以能过）。
+            let mut hit = false;
+            let mut quit = false;
             loop {
-                let mut msg: MSG = unsafe { std::mem::zeroed() };
-                let r = unsafe { GetMessageW(&mut msg, std::ptr::null_mut(), 0, 0) };
-                if r == 0 || r == -1 {
+                // 单轮泵：排空队列；WM_QUIT（Drop/取消）→ 退出。
+                loop {
+                    let mut msg: MSG = unsafe { std::mem::zeroed() };
+                    // SAFETY：peek 移除本线程队列消息。
+                    let has =
+                        unsafe { PeekMessageW(&mut msg, std::ptr::null_mut(), 0, 0, PM_REMOVE) };
+                    if has == 0 {
+                        break;
+                    }
+                    if msg.message == WM_QUIT {
+                        quit = true;
+                        break;
+                    }
+                }
+                if quit {
                     break;
                 }
+                if SELFTEST_HIT.load(Ordering::Relaxed) {
+                    hit = true;
+                    break;
+                }
+                if std::time::Instant::now() >= deadline {
+                    break;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(5));
             }
-            // 运行时动态解析（导入库缺符号，见 unhook_windows_hook 注释）。
-            unsafe { unhook_windows_hook(hook) };
-            if let Ok(mut g) = CAPTURE_TX.lock() {
-                *g = None;
+            // 先发 Failed **再**清发送端（v3 初版先清后发 → Failed 静默丢失，
+            // UI 提示永远停留在安装中状态——连带 bug，同日修复）。
+            if !hit || quit {
+                if let Ok(g) = CAPTURE_TX.lock() {
+                    if let Some(tx) = g.as_ref() {
+                        let _ = tx.send(CaptureEvent::Failed("钩子自回声验证失败（事件未达）"));
+                    }
+                }
+                unsafe { unhook_windows_hook(hook) };
+                if let Ok(mut g) = CAPTURE_TX.lock() {
+                    *g = None;
+                }
+                log::error!("[dd-gui] 捕获钩子自回声验证失败——回落 egui 捕获");
+                return;
+            }
+            if let Ok(g) = CAPTURE_TX.lock() {
+                if let Some(tx) = g.as_ref() {
+                    let _ = tx.send(CaptureEvent::Ready);
+                }
+            }
+            log::info!("[dd-gui] 热键捕获：LL 钩子已安装并自验证通过（系统级，Win 键可录）");
+            // ⑤ 常驻泵循环：PeekMessage 轮询式泵（5ms）——每轮检测发送端已清
+            //    （被取消）即自行 unhook 退出，与 Guard::drop 的 WM_QUIT 双保险。
+            loop {
+                loop {
+                    let mut msg: MSG = unsafe { std::mem::zeroed() };
+                    // SAFETY：peek 移除本线程队列消息；WM_QUIT → 退出。
+                    let has =
+                        unsafe { PeekMessageW(&mut msg, std::ptr::null_mut(), 0, 0, PM_REMOVE) };
+                    if has == 0 {
+                        break;
+                    }
+                    if msg.message == WM_QUIT {
+                        unsafe { unhook_windows_hook(hook) };
+                        if let Ok(mut g) = CAPTURE_TX.lock() {
+                            *g = None;
+                        }
+                        return;
+                    }
+                }
+                let cancelled = CAPTURE_TX.lock().map(|g| g.is_none()).unwrap_or(false);
+                if cancelled {
+                    unsafe { unhook_windows_hook(hook) };
+                    return;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(5));
             }
         })
-        .map_err(|e| format!("捕获钩子线程创建失败：{e}"))?;
-
-    const INSTALL_WAIT: std::time::Duration = std::time::Duration::from_secs(1);
-    let quit = |thread_id: u32| {
-        if thread_id != 0 {
-            unsafe {
-                PostThreadMessageW(thread_id, WM_QUIT, 0, 0);
-            }
-        }
-        if let Ok(mut g) = CAPTURE_TX.lock() {
-            *g = None;
-        }
-    };
-    // 线程 id（①，应微秒级到达；超时 = 线程调度异常，兜底退出）。
-    let thread_id = match id_rx.recv_timeout(INSTALL_WAIT) {
-        Ok(id) => id,
-        Err(_) => {
-            return Err("捕获钩子线程未在 1s 内报出线程 id——兜底退出".to_string());
-        }
-    };
-    // 安装结果（②）；超时同样兜底（防安全软件延迟 SetWindowsHookExW 冻结 UI）。
-    let status = match id_rx.recv_timeout(INSTALL_WAIT) {
-        Ok(s) => s,
-        Err(_) => {
-            quit(thread_id);
-            return Err("捕获钩子安装超时（1s，可能被安全软件延迟）——回落 egui 捕获".to_string());
-        }
-    };
-    if status == 0 {
-        quit(thread_id);
-        return Err("SetWindowsHookExW(WH_KEYBOARD_LL) 失败".to_string());
-    }
-    Ok(CaptureHookGuard {
-        thread_id,
-        _handle: Some(handle),
-    })
+        .map(|_| CaptureHookGuard)
+        .map_err(|e| format!("捕获钩子线程创建失败：{e}"))
 }
 
 /// 非 Windows 平台：无 LL 钩子，恒 Err（调用方回落 egui 应用层捕获）。
@@ -320,7 +406,8 @@ mod tests {
         for vk in [0x20, 0x30, 0x39, 0x41, 0x5A, 0x70, 0x7B] {
             assert!(capture_vk_allowed(vk), "白名单内被误拒：{vk:#x}");
         }
-        for vk in [0x11, 0x12, 0x5B, 0x5C, 0xA0, 0x25, 0x2D, 0x14, 0x6A] {
+        // F15（自回声键）必须在白名单**外**——保证自回声注入对 UI 零副作用。
+        for vk in [0x11, 0x12, 0x5B, 0x5C, 0xA0, 0x25, 0x2D, 0x14, 0x6A, 0x7E] {
             assert!(!capture_vk_allowed(vk), "白名单外被误放：{vk:#x}");
         }
     }

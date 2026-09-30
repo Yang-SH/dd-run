@@ -395,6 +395,16 @@ const I18N: &[(&str, &str, &str)] = &[
     ("set.hotkey.capturing_btn", "捕获中…", "Capturing…"),
     ("set.hotkey.change", "更改", "Change"),
     ("set.hotkey.reset", "恢复默认", "Reset to default"),
+    // PowerToys 式捕获对话框（2026-09-30 seq 确认流配套）：标题/副题/提示行/
+    // 占用报错（行内红字）/应用中/系统保留组合警示（R-21 警示口径）/按钮。
+    ("set.hotkey.dialog_title", "激活快捷键", "Activation shortcut"),
+    ("set.hotkey.dialog_sub", "按组合键以更改此快捷键", "Press a key combo to change this shortcut"),
+    ("set.hotkey.hint", "只有以 Windows 键、Ctrl、Alt 或 Shift 开头的组合才会生效。", "Only combos starting with the Windows key, Ctrl, Alt or Shift take effect."),
+    ("set.hotkey.occupied", "组合键已被其他程序占用，请更换后重试。", "This combo is taken by another app — pick a different one and retry."),
+    ("set.hotkey.applying", "应用中…", "Applying…"),
+    ("set.hotkey.warn_reserved", "该组合为系统保留（会打开窗口菜单），建议更换。", "Reserved by the system (opens the window menu) — consider a different combo."),
+    ("set.hotkey.save", "保存", "Save"),
+    ("set.hotkey.dialog_reset", "重置", "Reset"),
     ("set.autostart.name", "开机自启", "Launch at startup"),
     (
         "set.autostart.desc",
