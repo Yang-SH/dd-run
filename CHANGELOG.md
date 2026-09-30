@@ -4,6 +4,15 @@
 
 ## [Unreleased]
 
+### 可用性（R-23：查询长度 clamp 256 字符，2026-09-30）
+
+- **背景**（R 系列加固批三）：`set_query` 入口无任何 clamp——超大粘贴直入模糊匹配（nucleo 打分），文件搜索页还会经 200ms debounce 把查询送进 es.exe argv，超长输入只会离谱失败。
+- **修复**：
+  - **`state.rs`**：新增 `PanelState::MAX_QUERY_CHARS = 256`（**字符数**，多字节字符不产生半字符）；`set_query` 入口静默截断，返回**是否发生截断**（早退与普通调用点零破坏——返回值此前为 `()`、无调用方消费）。
+  - **`ui/panel.rs`**：截断发生时把输入框光标**置尾**（`TextEdit::load_state/store_state` + `TextCursorState::set_char_range`，光标 = 截断后文本末尾，续接输入语义自然）。
+- **回归测试**：`r23_query_clamp_boundary`——恰 256 不截断（返回 false）/ 257、300 截为前 256（返回 true）/ 300 个汉字按字符数截（256 字符 = 768 字节，无半字符）/ 同值重喂走早退返回 false / 空串恢复。200ms debounce 链路消费的是 clamp 后的查询，行为不变。
+- **验证**：`cargo fmt --check` 零差异 · clippy 全仓零告警 · `cargo test --workspace` **567 passed / 0 failed**。真机冒烟（粘贴一次超长文本，文件搜索页不向 es.exe 传离谱参数）随批三收尾执行。
+
 ### 可用性（R-22：IME 组词期回车守卫——上屏不再误执行选中项，2026-09-30）
 
 - **背景**（R 系列加固批三）：中文输入组词中回车 =「上屏」手势，但 IME 的 Commit 与 Enter 键事件常**同帧到达**；`handle_keys` 无条件消费 Enter 并激活 → 上屏那一帧可能直接执行选中行（危险命令有确认门，普通命令没有）。

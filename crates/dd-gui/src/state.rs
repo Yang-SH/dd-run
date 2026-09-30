@@ -145,6 +145,11 @@ pub struct PanelState {
 }
 
 impl PanelState {
+    /// R-23：查询长度上限（**字符数**，2026-09-30）。`set_query` 入口静默
+    /// 截断——超大粘贴直入模糊匹配、文件搜索页经 200ms debounce 进入
+    /// es.exe argv，超长输入只会离谱失败。
+    pub const MAX_QUERY_CHARS: usize = 256;
+
     pub fn new(items: Vec<PanelItem>) -> Self {
         Self::with_empty_view(items, EmptyQueryView::All)
     }
@@ -231,14 +236,26 @@ impl PanelState {
     ///
     /// 性能（A3）：`draw_panel` **每帧**以当前输入框文本调用本方法，
     /// 查询未变化时直接早退——匹配/排序成本只发生在真正按键的帧。
-    pub fn set_query(&mut self, q: impl Into<String>) {
+    ///
+    /// R-23（2026-09-30）：入口 clamp 至 [`PanelState::MAX_QUERY_CHARS`]
+    /// 字符（静默截断）——超大粘贴直入模糊匹配，文件搜索页还会把查询
+    /// 送进 es.exe argv。返回**是否发生截断**（调用方据此把输入框光标
+    /// 置尾；未截断恒 `false`，早退路径也 `false`）。
+    pub fn set_query(&mut self, q: impl Into<String>) -> bool {
         let q = q.into();
+        let truncated = q.chars().count() > Self::MAX_QUERY_CHARS;
+        let q = if truncated {
+            q.chars().take(Self::MAX_QUERY_CHARS).collect::<String>()
+        } else {
+            q
+        };
         if q == self.query {
-            return;
+            return false;
         }
         self.query = q;
         self.recompute_visible();
         self.clamp_selection();
+        truncated
     }
 
     /// 当前查询下可见项个数（fallback 模式时 = fallback 长度）。
@@ -880,5 +897,32 @@ mod tests {
         s.clear_fallback();
         assert_eq!(s.visible_count(), 0, "清空兜底后回到常规空态");
         assert_eq!(s.selected(), Selected::None);
+    }
+
+    /// R-23：查询 clamp 边界——300 字符截为前 256（返回 true = 发生截断）；
+    /// 恰 256 不截断；257 截断且保留前 256；再喂同值不重复触发（早退语义不变）。
+    /// 多字节字符按**字符数**截（CJK 半截字符不可能出现）。
+    #[test]
+    fn r23_query_clamp_boundary() {
+        let mut s = PanelState::new(sample_items());
+        // 恰 256：不截断（返回 false）。
+        assert!(!s.set_query("a".repeat(256)));
+        assert_eq!(s.query().chars().count(), 256);
+        // 257：截断（返回 true），保留前 256。
+        assert!(s.set_query("b".repeat(257)));
+        assert_eq!(s.query().chars().count(), 256, "超限应截为前 256 字符");
+        assert_eq!(s.query(), "b".repeat(256), "保留的应是前 256 个字符");
+        // 300：同口径。
+        assert!(s.set_query("c".repeat(300)));
+        assert_eq!(s.query().chars().count(), 256);
+        // 多字节：300 个汉字按字符数截（字节 900 → 256 字符 768 字节，无半字符）。
+        assert!(s.set_query("账".repeat(300)));
+        assert_eq!(s.query().chars().count(), 256);
+        assert_eq!(s.query().len(), 768, "CJK 按 UTF-8 3 字节/字符计");
+        // 同值重喂：早退路径返回 false（不视为截断）。
+        assert!(!s.set_query("账".repeat(256)));
+        // 空串恢复。
+        assert!(!s.set_query(""));
+        assert_eq!(s.query(), "");
     }
 }

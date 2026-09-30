@@ -155,7 +155,18 @@ impl PaletteApp {
                 let query_changed = query != prev_query; // v3.3：渲染后变化检测（set_query 会 move query）
                 {
                     let page = self.stack.current_mut();
-                    page.list.set_query(query);
+                    // R-23：截断发生时把输入框光标置尾（粘贴 300 字符 → 显示
+                    // 前 256、光标落在文本末，续接输入语义自然）。
+                    let truncated = page.list.set_query(query);
+                    if truncated {
+                        if let Some(mut st) = egui::TextEdit::load_state(ui.ctx(), resp.id) {
+                            let tail = egui::text::CCursor::new(page.list.query().chars().count());
+                            st.cursor.set_char_range(Some(
+                                egui::text_selection::CCursorRange::one(tail),
+                            ));
+                            egui::TextEdit::store_state(ui.ctx(), resp.id, st);
+                        }
+                    }
                     if self.want_focus {
                         resp.request_focus();
                         self.want_focus = false;
