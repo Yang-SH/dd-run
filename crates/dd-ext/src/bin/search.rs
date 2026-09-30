@@ -1198,14 +1198,21 @@ fn error_item(msg: &str) -> CommandItem {
 }
 
 // ─── ExtensionSpec ─────────────────────────────────────────────────
+
+// R-24（2026-09-30）：`f ` 前缀直达 2026-09-19 已移除（search.md §2 ⚠），
+// 自述与 top_level 副标题同步更正为 Ctrl+F 口径——描述一旦上屏即误导。
+// 双语文案提为常量：r24 单测对 zh/en 四条同时锚定（进程级语言一次只取其一）。
+const EXT_DESC_ZH: &str = "基于 Everything 的本地文件搜索（Ctrl+F 一键直达）";
+const EXT_DESC_EN: &str = "Local file search powered by Everything (Ctrl+F to jump in)";
+const TOP_LEVEL_SUBTITLE_ZH: &str = "输入关键词搜索本地文件（或按 Ctrl+F 直达）";
+const TOP_LEVEL_SUBTITLE_EN: &str =
+    "Type a query to search local files (or press Ctrl+F to jump in)";
+
 fn spec() -> ExtensionSpec {
     ExtensionSpec {
         id: EXT_ID,
         display_name: tr("文件搜索", "File Search"),
-        description: tr(
-            "基于 Everything 的本地文件搜索（输入 f 后空格直接进入）",
-            "Local file search powered by Everything (type 'f ' to jump in)",
-        ),
+        description: tr(EXT_DESC_ZH, EXT_DESC_EN),
         frozen: false, // 结果随 query 变化，不可冻结缓存
         has_fallback: true,
         // v3.3 P1：复制路径动作需要剪贴板能力——依据能力前置规则（§7.4），
@@ -1228,13 +1235,7 @@ fn top_level_commands() -> Vec<CommandItem> {
     vec![CommandItem {
         id: "files.search".into(),
         title: tr("文件搜索", "File Search").into(),
-        subtitle: Some(
-            tr(
-                "输入关键词搜索本地文件（或输入 f 后空格直接进入）",
-                "Type a query to search local files (or type 'f ' to jump in)",
-            )
-            .into(),
-        ),
+        subtitle: Some(tr(TOP_LEVEL_SUBTITLE_ZH, TOP_LEVEL_SUBTITLE_EN).into()),
         icon: Some(Icon {
             kind: IconKind::Glyph,
             value: GLYPH_SEARCH.to_string(),
@@ -2372,6 +2373,45 @@ mod tests {
             "fallback 入口必须指向 files.results 子页"
         );
         assert!(fb[0].title.contains("{query}"), "入口标题应含 query 占位符");
+    }
+
+    /// R-24：sidecar 自述不再引用已移除的 `f ` 前缀直达（search.md §2，2026-09-19 移除），
+    /// 且含 Ctrl+F 口径关键短语——描述一旦上屏即误导。zh/en 四条常量同时锚定
+    /// （进程级 `tr()` 一次只返回一种语言，逐条断言常量才能双语全覆盖），
+    /// 并核对 spec.description / top_level 副标题与常量同源（防内联漂移）。
+    #[test]
+    fn r24_sidecar_description_matches_spec() {
+        for (what, text) in [
+            ("spec.description zh", EXT_DESC_ZH),
+            ("spec.description en", EXT_DESC_EN),
+            ("top_level 副标题 zh", TOP_LEVEL_SUBTITLE_ZH),
+            ("top_level 副标题 en", TOP_LEVEL_SUBTITLE_EN),
+        ] {
+            assert!(
+                !text.contains("f "),
+                "{what} 不得再引用已移除的 `f ` 前缀直达字样：{text}"
+            );
+            assert!(
+                text.contains("Ctrl+F"),
+                "{what} 应含 Ctrl+F 直达口径（与 search.md §2 一致）：{text}"
+            );
+        }
+
+        // 实际上屏字段必须取自上述常量（经 tr 按语言选择）——若有人绕开常量
+        // 内联新文案，这里会因指针/值不等而失败。
+        let s = spec();
+        assert!(
+            s.description == tr(EXT_DESC_ZH, EXT_DESC_EN),
+            "spec.description 必须取自 EXT_DESC 常量（经 tr 选语言）：{:?}",
+            s.description
+        );
+        let top = top_level_commands();
+        let subtitle = top[0].subtitle.as_deref().expect("顶层入口应有副标题");
+        assert_eq!(
+            subtitle,
+            tr(TOP_LEVEL_SUBTITLE_ZH, TOP_LEVEL_SUBTITLE_EN),
+            "顶层副标题必须取自 TOP_LEVEL_SUBTITLE 常量（经 tr 选语言）"
+        );
     }
 
     // ─── 文件类型图标（v0.1.1：扩展名 → Segoe glyph 分类映射）──────────

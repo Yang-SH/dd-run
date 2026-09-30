@@ -4,6 +4,13 @@
 
 ## [Unreleased]
 
+### 可用性（R-24：sidecar 自述更正——移除已废弃的 `f ` 前缀入口描述，2026-09-30）
+
+- **背景**（R 系列加固批三）：`f ` 前缀直达入口 2026-09-19 已移除（search.md §2 ⚠），但 `dd-ext-search` 的 spec 自述与顶层入口副标题仍写「输入 f 后空格直接进入」——该字段当前未上屏，属潜伏误导，描述一旦展示即穿帮。
+- **修复**（`dd-ext/src/bin/search.rs`）：两处文案更正为 Ctrl+F 口径（zh：「Ctrl+F 一键直达」/「或按 Ctrl+F 直达」；en：「Ctrl+F to jump in」/「press Ctrl+F to jump in」），与 search.md §2 一致；双语文案提为四条常量（`EXT_DESC_*` / `TOP_LEVEL_SUBTITLE_*`）供单测双语锚定。
+- **回归测试**：`r24_sidecar_description_matches_spec`——zh/en 四条常量逐一断言不含 `f ` 前缀字样、含 Ctrl+F 关键短语；spec.description 与顶层副标题经 `tr` 与常量同源（防绕开常量内联漂移）。
+- **验证**：`cargo fmt --check` 零差异 · clippy 全仓零告警 · `r24_sidecar_description_matches_spec` 及 dd-ext-search 54 条全绿；分目标实测 dd-protocol 30 / websearch 4 / dd-host lib 73 / dd-ext lib 118 / dd-gui lib 260 全绿。全量 `cargo test --workspace`（预期 568/568）被 `Os error 231` 环境批（第二次，spawn 依赖用例挂起/失败，与本改动无关）暂时阻塞，环境自愈后补跑确认。无独立真机 V 项（该字段当前未上屏），文案随批三代码评审核对。
+
 ### 可用性（R-23：查询长度 clamp 256 字符，2026-09-30）
 
 - **背景**（R 系列加固批三）：`set_query` 入口无任何 clamp——超大粘贴直入模糊匹配（nucleo 打分），文件搜索页还会经 200ms debounce 把查询送进 es.exe argv，超长输入只会离谱失败。
