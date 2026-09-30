@@ -413,7 +413,12 @@ const I18N: &[(&str, &str, &str)] = &[
     ("set.hotkey.hint", "只有以 Windows 键、Ctrl、Alt 或 Shift 开头的组合才会生效。", "Only combos starting with the Windows key, Ctrl, Alt or Shift take effect."),
     ("set.hotkey.occupied", "组合键已被其他程序占用，请更换后重试。", "This combo is taken by another app — pick a different one and retry."),
     ("set.hotkey.applying", "应用中…", "Applying…"),
-    ("set.hotkey.warn_reserved", "该组合为系统保留（会打开窗口菜单），建议更换。", "Reserved by the system (opens the window menu) — consider a different combo."),
+    // R-21：系统常用/保留组合警示（对话框黄线，不阻止——「保存」即确认）。
+    (
+        "set.hotkey.warn_reserved",
+        "该组合为系统常用快捷键（如打开开始菜单 / 任务管理器 / 关闭窗口），可能被系统优先响应，建议更换。",
+        "This combo is a common system shortcut (Start menu / Task Manager / closing windows) and may be handled by the system first — consider a different one.",
+    ),
     ("set.hotkey.save", "保存", "Save"),
     ("set.hotkey.dialog_reset", "重置", "Reset"),
     ("set.autostart.name", "开机自启", "Launch at startup"),

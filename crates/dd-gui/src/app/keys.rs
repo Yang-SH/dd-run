@@ -13,12 +13,24 @@ use std::time::Instant;
 impl PaletteApp {
     // ── 键盘 ─────────────────────────────────────────────────
 
-    /// R-21（警示口径，2026-09-30）：系统保留组合——Alt+Space 打开窗口菜单
-    ///（RegisterHotKey 可成功但全局劫持窗口菜单键）。对话框保存前警示、
-    /// 不阻止（与 PowerToys「可能错误触发检测」同语义）。
+    /// R-21（2026-09-30）：系统**常用/保留**组合黑名单——捕获确认时警示、
+    /// 不阻止（与 PowerToys「可能错误触发检测」同语义；对话框内的「保存」
+    /// 即用户确认动作）。命中即全局劫持系统行为：
+    /// - `Alt+Space`：打开当前窗口菜单（RegisterHotKey 可成功，劫持一切应用）；
+    /// - `Ctrl+Esc`：开始菜单；`Ctrl+Shift+Esc`：任务管理器；
+    /// - `Alt+F4`：关闭窗口。
+    ///
+    /// Win 系（Win+D/L/Tab…）不含：基础捕获本就录不进 Win 修饰（回落提示
+    /// 已另行覆盖），LL 钩子可录但系统响应优先级更高，名单随真机反馈再扩。
     pub(crate) fn is_system_reserved_combo(mods: u32, vk: u32) -> bool {
-        mods & dd_gui::settings::HOTKEY_MODS_MASK == 0x1 // 仅 Alt
-            && vk == 0x20 // + Space
+        let m = mods & dd_gui::settings::HOTKEY_MODS_MASK;
+        matches!(
+            (m, vk),
+            (0x1, 0x20) // Alt+Space —— 窗口菜单
+                | (0x2, 0x1B) // Ctrl+Esc —— 开始菜单
+                | (0x6, 0x1B) // Ctrl+Shift+Esc —— 任务管理器
+                | (0x1, 0x73) // Alt+F4 —— 关闭窗口
+        )
     }
 
     /// 应用层拦截导航键（`consume_key` 移除事件，FilterBox 的 TextEdit 收不到
@@ -883,5 +895,45 @@ impl PaletteApp {
         );
         self.aggregate_rx = Some(rx);
         self.aggregating = true;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// R-21：系统常用/保留组合黑名单——方案四组合（Alt+Space / Ctrl+Esc /
+    /// Ctrl+Shift+Esc / Alt+F4）逐一命中；非名单组合（含默认热键 Ctrl+Space
+    /// 与 Win+D 类）不误报（回归：非黑名单组合捕获流程零新增警示）。
+    #[test]
+    fn r21_hotkey_blacklist_matches() {
+        // 正例：方案黑名单四组合（修饰键掩码：0x1=Alt 0x2=Ctrl 0x4=Shift 0x8=Win）。
+        assert!(PaletteApp::is_system_reserved_combo(0x1, 0x20), "Alt+Space");
+        assert!(PaletteApp::is_system_reserved_combo(0x2, 0x1B), "Ctrl+Esc");
+        assert!(
+            PaletteApp::is_system_reserved_combo(0x6, 0x1B),
+            "Ctrl+Shift+Esc"
+        );
+        assert!(PaletteApp::is_system_reserved_combo(0x1, 0x73), "Alt+F4");
+        // 负例：Win+D（方案指名的非名单组合）。
+        assert!(!PaletteApp::is_system_reserved_combo(0x8, 0x44), "Win+D");
+        // 负例：默认热键 Ctrl+Space（捕获默认路径不得出现警示）。
+        assert!(
+            !PaletteApp::is_system_reserved_combo(
+                dd_gui::settings::HOTKEY_MODS_DEFAULT,
+                dd_gui::settings::HOTKEY_VK_DEFAULT
+            ),
+            "Ctrl+Space 是默认热键，不应命中黑名单"
+        );
+        // 负例：修饰键子集不误报（Shift+Esc / Ctrl+Alt+P / Alt+）。
+        assert!(
+            !PaletteApp::is_system_reserved_combo(0x4, 0x1B),
+            "Shift+Esc"
+        );
+        assert!(
+            !PaletteApp::is_system_reserved_combo(0x3, 0x50),
+            "Ctrl+Alt+P"
+        );
+        assert!(!PaletteApp::is_system_reserved_combo(0x1, 0x45), "Alt+E");
     }
 }

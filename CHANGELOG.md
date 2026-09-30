@@ -4,6 +4,14 @@
 
 ## [Unreleased]
 
+### 可用性（R-21：热键危险组合警示黑名单补全，2026-09-30）
+
+- **说明**：警示**口径**（对话框黄线警示、不阻止——「保存」即用户确认动作，对齐 PowerToys「可能错误触发检测」语义）已随 2026-09-30 捕获对话框批先行落地，但黑名单当时仅覆盖 Alt+Space。本批补全方案要求的**名单广度**：
+  - **`app/keys.rs`**：`is_system_reserved_combo` 由仅 Alt+Space 扩为四组合——`Alt+Space`（窗口菜单，RegisterHotKey 可成功但劫持一切应用）/ `Ctrl+Esc`（开始菜单）/ `Ctrl+Shift+Esc`（任务管理器）/ `Alt+F4`（关闭窗口）。Win 系组合（Win+D/L…）不在名单：基础捕获本就录不进 Win 修饰（回落提示另行覆盖），LL 钩子可录但系统响应优先级更高——名单随真机反馈再扩。
+  - **`text.rs`**：`set.hotkey.warn_reserved` 文案由「会打开窗口菜单」（Alt+Space 专属）泛化为「系统常用快捷键……可能被系统优先响应」。
+  - **回归测试**：`r21_hotkey_blacklist_matches`——四组合逐一命中；Win+D（方案指名负例）、默认热键 Ctrl+Space（捕获默认路径不得出现警示）、Shift+Esc / Ctrl+Alt+P / Alt+E（修饰键子集不误报）。
+- **验证**：`cargo fmt --check` 零差异 · clippy 全仓零告警 · `cargo test --workspace` **565 passed / 0 failed**。真机走查 V-8（捕获 Alt+Space / Ctrl+Shift+Esc → 黄线警示出现 → 仍保存 → 注册成功）待执行。
+
 ### 可用性（R-20：清单解析失败的扩展不再无声消失——扩展卡 skipped 警告行，2026-09-30）
 
 - **背景**（R 系列加固批三）：清单 JSON 写错一个逗号 → 扩展**无声消失**——`outcome.skipped`（manifest.rs 逐清单校验的失败原因）在聚合层被整体丢弃，用户无从排查；对比之下信任门 Pending/Blocked、Failed+Retry 都有完整呈现，唯独此面空白（V-6）。
