@@ -27,6 +27,8 @@ pub struct AggregatePayload {
     pub(crate) trust: HashMap<String, dd_host::trust::Assessment>,
     /// S-05 信任台账读取状态（`Corrupt` → 设置页提示）。
     pub(crate) ledger_state: dd_host::trust::LedgerState,
+    /// R-20：解析失败的清单（路径, 原因）——扩展卡顶部警告行的数据源。
+    pub(crate) skipped: Vec<(String, String)>,
     /// M9：内置 in-process 规格表（`id → ExtensionSpec`），供复热链路重建内置客户端。
     pub(crate) inproc_specs: HashMap<String, ExtensionSpec>,
     /// 聚合线程内从"开始 scan"到"完成 collect+flatten"耗时（ms）。
@@ -60,10 +62,12 @@ pub fn spawn_aggregation(
         });
         // note（来源备注）不再进页脚（用户决策 2026-09-04）：丢弃即可，
         // 异常细节已由 load_extension_sources 内部日志输出。
+        // R-20：skipped（解析失败清单）改走扩展卡警告行（页脚 note 语义不变）。
         let aggregator::ExtensionSources {
             exts,
             inproc_specs,
             note: _note,
+            skipped,
             trust,
             ledger_state,
         } = aggregator::load_extension_sources(lang);
@@ -119,6 +123,7 @@ pub fn spawn_aggregation(
             trust,
             ledger_state,
             inproc_specs,
+            skipped,
             agg_ms,
         });
     });
@@ -154,6 +159,7 @@ impl PaletteApp {
                 self.exts = payload.exts;
                 self.trust = payload.trust;
                 self.ledger_state = payload.ledger_state;
+                self.skipped_manifests = payload.skipped;
                 // S-05：首次出现「待批准」时给**一次** toast（不打断、不重复）。
                 // 为何需要：面板页脚只在"无选中项"时显示该提示，而实际使用时通常
                 // 总有选中项；设置页卡片头是"处理现场"，但用户未必会打开设置页。

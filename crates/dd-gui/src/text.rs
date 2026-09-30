@@ -526,6 +526,13 @@ const I18N: &[(&str, &str, &str)] = &[
     // 宿主自有 sidecar 的显示名（清单 `name` 无 i18n 字段；内置名取自 dd-ext 规格
     // 自述，见 `aggregator::apply_owned_names`）。
     ("ext.name.filesearch", "文件搜索", "File Search"),
+    // R-20：清单解析失败警告行（扩展卡顶部，只读不可 Retry；{path} = 清单
+    // 路径、{reason} = dd-host 校验失败原因摘要——原因文本为宿主侧 zh 口径）
+    (
+        "set.ext.skipped_warn",
+        "清单加载失败：{path}——{reason}",
+        "Manifest failed to load: {path} — {reason}",
+    ),
     // ── 托盘（10C.2；菜单每次右键即席创建，经 TRAY_LANG 原子量取语言）──
     // R-19：组合名尾缀由 show_menu 动态拼接（跟随当前热键设置），键内不再内嵌。
     ("tray.toggle", "显示/隐藏面板", "Show/Hide panel"),

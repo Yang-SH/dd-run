@@ -2071,6 +2071,8 @@ impl PaletteApp {
         // 卡片头汇总：待批准数（页脚另有提示，但设置页是"处理现场"）与台账损坏提示。
         let pending = dd_gui::aggregator::pending_count(&self.trust);
         let ledger_corrupt = matches!(self.ledger_state, dd_host::trust::LedgerState::Corrupt);
+        // R-20：解析失败清单（路径 + 原因），闭包外拷贝。
+        let skipped = self.skipped_manifests.clone();
 
         draw_settings_card_frame(ui, p, self.backdrop_active, |card| {
             card.horizontal(|ui| {
@@ -2121,6 +2123,23 @@ impl PaletteApp {
                     .size(11.0)
                     .color(p.accent),
                 );
+                card.add_space(4.0);
+            }
+            // R-20：清单解析失败的扩展不再无声消失——扩展卡顶部警告行
+            // （路径 + 原因；复用 Failed 行的 danger 样式）。只读、不可 Retry
+            // （无扩展行可重试；修正清单后重聚合即恢复）。失败行样式（截断 +
+            // 悬停全文）与 row.failed_reason 同款。
+            for (path, reason) in &skipped {
+                let line = crate::text::t(lang, "set.ext.skipped_warn")
+                    .replace("{path}", path)
+                    .replace("{reason}", reason);
+                let resp = card.add(
+                    egui::Label::new(egui::RichText::new(line).size(11.0).color(p.danger))
+                        .truncate(),
+                );
+                if card.rect_contains_pointer(resp.rect) {
+                    resp.show_tooltip_text(format!("{path}\n{reason}"));
+                }
                 card.add_space(4.0);
             }
             if rows.is_empty() {

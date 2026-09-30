@@ -282,6 +282,9 @@ pub struct PaletteApp {
     pub(crate) trust: HashMap<String, dd_host::trust::Assessment>,
     /// S-05 信任台账读取状态（`Corrupt` → 设置页给出可操作提示，不静默）。
     pub(crate) ledger_state: dd_host::trust::LedgerState,
+    /// R-20：解析失败的清单（路径, 原因）——扩展卡顶部警告行（只读、不可
+    /// Retry）。仅 `SkipReason::is_error()` 条目；重聚合整体替换。
+    pub(crate) skipped_manifests: Vec<(String, String)>,
     /// S-05：是否已就「待批准」提示过一次（每次运行至多一次，避免反复打扰）。
     pub(crate) pending_notified: bool,
     /// M9：内置 in-process 规格表（`id → ExtensionSpec`）——复热链路据此重建
@@ -503,6 +506,7 @@ impl PaletteApp {
             inproc_specs: HashMap::new(),
             trust: HashMap::new(),
             ledger_state: dd_host::trust::LedgerState::Missing,
+            skipped_manifests: Vec::new(),
             pending_notified: false,
             lru: LruWarmSet::new(LRU_WARM_CAPACITY),
             cold,

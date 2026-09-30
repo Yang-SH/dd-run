@@ -163,6 +163,10 @@ pub struct ExtensionSources {
     pub inproc_specs: HashMap<String, ExtensionSpec>,
     /// 异常备注（仅目录不可读等异常时非空）。
     pub note: String,
+    /// R-20：解析失败的清单（路径, 原因）——设置页扩展卡顶部警告行的数据源
+    /// （仅含 `SkipReason::is_error()` 的条目；`OtherPlatform` 类**设计上静默**
+    /// 的跳过不进此表）。此前该信息被整体丢弃，扩展「无声消失」无从排查。
+    pub skipped: Vec<(String, String)>,
     /// `id → 信任判定`（S-05）：设置页据此渲染来源标识与「待批准 / 已阻止」。
     pub trust: HashMap<String, Assessment>,
     /// 信任台账读取状态（`Corrupt` 时设置页须给出可操作提示，而非静默失效）。
@@ -226,9 +230,16 @@ pub fn load_extension_sources(lang: Lang) -> ExtensionSources {
         .collect();
 
     let mut note = String::new();
+    // R-20：解析失败清单（路径, 原因）随扫描收集（仅错误类跳过）。
+    let mut skipped: Vec<(String, String)> = Vec::new();
     // 扫描结果**携带来源**（S-05）：去重前先记下，合并后仍能判定
     // （`merge_scanned_dirs` 同 id 保留用户目录项 → 该 id 的来源即 UserDir）。
-    let scanned = merge_sidecar_scan(manifest::extensions_dir(), &mut note);
+    let scanned = merge_sidecar_scan(
+        manifest::extensions_dir(),
+        sidecar_extensions_dir(),
+        &mut note,
+        &mut skipped,
+    );
     let origin_by_id: HashMap<String, ExtOrigin> = scanned
         .iter()
         .map(|(e, o)| (e.manifest.id.clone(), *o))
@@ -297,6 +308,7 @@ pub fn load_extension_sources(lang: Lang) -> ExtensionSources {
         exts: merged,
         inproc_specs: specs,
         note,
+        skipped,
         trust: trust_map,
         ledger_state,
     }
@@ -364,18 +376,31 @@ fn merge_scanned_dirs(
     first
 }
 
-/// 扫描用户数据目录 `extensions.d` + 便携 sidecar，异常记入 `note`。
-/// 返回值携带每个扩展的[来源][ExtOrigin]（S-05）。
+/// 扫描用户数据目录 `extensions.d` + 便携 sidecar，异常记入 `note`；
+/// R-20：解析失败的清单（路径, 原因，仅 `is_error()` 条目）同步收集进
+/// `skipped`——设置页扩展卡顶部警告行的数据源。
+/// 返回值携带每个扩展的[来源][ExtOrigin]（S-05）。`sidecar_dir` 参数化便于
+/// 单测注入（生产传 [`sidecar_extensions_dir`]）。
 fn merge_sidecar_scan(
     user_dir: Option<PathBuf>,
+    sidecar_dir: Option<PathBuf>,
     note: &mut String,
+    skipped: &mut Vec<(String, String)>,
 ) -> Vec<(LoadedExtension, ExtOrigin)> {
+    let collect_skipped = |outcome: &manifest::ScanOutcome, skipped: &mut Vec<(String, String)>| {
+        for s in &outcome.skipped {
+            if s.reason.is_error() {
+                skipped.push((s.path.display().to_string(), s.reason.to_string()));
+            }
+        }
+    };
     let mut scanned: Vec<(LoadedExtension, ExtOrigin)> = match user_dir {
         Some(d) => {
             let outcome = manifest::scan_dir(&d, &ScanOptions::default());
             if let Some(err) = &outcome.dir_error {
                 push_note(note, &format!("扩展目录不可读：{err}"));
             }
+            collect_skipped(&outcome, skipped);
             outcome
                 .loaded
                 .into_iter()
@@ -389,11 +414,12 @@ fn merge_sidecar_scan(
     };
 
     // 便携 sidecar（M7 批次 7.5）：同 id 用户目录优先。
-    if let Some(dir) = sidecar_extensions_dir() {
+    if let Some(dir) = sidecar_dir {
         let outcome = manifest::scan_dir(&dir, &ScanOptions::default());
         if let Some(err) = &outcome.dir_error {
             push_note(note, &format!("扩展目录不可读：{err}"));
         }
+        collect_skipped(&outcome, skipped);
         scanned = merge_scanned_dirs(
             scanned,
             outcome
@@ -817,6 +843,51 @@ mod tests {
             command: PathBuf::from(format!(r"{tag}\ext.exe")),
             cwd: PathBuf::from(tag),
         }
+    }
+
+    /// R-20：清单解析失败的扩展不再无声消失——聚合结果 `skipped` 含
+    /// （路径, 原因）；全合法目录 → `skipped` 为空（正负例）。
+    #[test]
+    fn r20_skipped_aggregated_with_reason() {
+        let dir = std::env::temp_dir().join(format!(
+            "dd-gui-r20-{}-{}",
+            std::process::id(),
+            std::time::Instant::now().elapsed().as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        // 正例：语法错误清单 → skipped 恰含（该路径, 非空原因）。
+        std::fs::write(dir.join("broken.json"), r#"{"schema_version":"1.0","""#).unwrap();
+        let mut note = String::new();
+        let mut skipped: Vec<(String, String)> = Vec::new();
+        let scanned = merge_sidecar_scan(Some(dir.clone()), None, &mut note, &mut skipped);
+        assert!(scanned.is_empty(), "语法错误清单不得进入 loaded");
+        assert_eq!(skipped.len(), 1, "skipped 应恰含一条（路径, 原因）");
+        assert!(
+            skipped[0].0.ends_with("broken.json"),
+            "skipped 应含清单路径，实得：{}",
+            skipped[0].0
+        );
+        assert!(!skipped[0].1.is_empty(), "原因不得为空");
+
+        // 负例：**全合法目录**（移除损坏清单）补一条全合法清单（命令文件存在，
+        // 过规则 8）→ skipped 为空。
+        std::fs::remove_file(dir.join("broken.json")).unwrap();
+        std::fs::create_dir_all(dir.join("bin")).unwrap();
+        std::fs::write(dir.join("bin").join("ext"), "").unwrap();
+        std::fs::write(
+            dir.join("ok.json"),
+            r#"{"schema_version":"1.0","id":"com.example.ok","name":"OK","version":"1.0.0","entry":{"command":"bin/ext"}}"#,
+        )
+        .unwrap();
+        let mut skipped2: Vec<(String, String)> = Vec::new();
+        let scanned2 =
+            merge_sidecar_scan(Some(dir.clone()), None, &mut String::new(), &mut skipped2);
+        assert_eq!(scanned2.len(), 1, "合法清单应正常加载");
+        assert!(
+            skipped2.is_empty(),
+            "全合法目录 skipped 必须为空，实得：{skipped2:?}"
+        );
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     /// M9 修复：宿主自有扩展的显示名被本地化覆盖——**内置**取扩展自述

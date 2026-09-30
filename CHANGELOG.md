@@ -4,6 +4,17 @@
 
 ## [Unreleased]
 
+### 可用性（R-20：清单解析失败的扩展不再无声消失——扩展卡 skipped 警告行，2026-09-30）
+
+- **背景**（R 系列加固批三）：清单 JSON 写错一个逗号 → 扩展**无声消失**——`outcome.skipped`（manifest.rs 逐清单校验的失败原因）在聚合层被整体丢弃，用户无从排查；对比之下信任门 Pending/Blocked、Failed+Retry 都有完整呈现，唯独此面空白（V-6）。
+- **修复**：
+  - **`aggregator.rs`**：`merge_sidecar_scan` 收集两处扫描的 `outcome.skipped`——**仅 `SkipReason::is_error()` 条目**（`OtherPlatform` 是「设计上静默跳过」，照旧无声，不制造假警告），`Display` 直出宿主校验原因；`sidecar_dir` 参数化便于单测注入。`ExtensionSources` 增 `skipped: Vec<(路径, 原因)>`。
+  - **数据链**：`AggregatePayload.skipped` → `PaletteApp.skipped_manifests`（重聚合整体替换）。
+  - **`ui/settings_view.rs`**：扩展卡顶部渲染警告行（`set.ext.skipped_warn` 键 zh/en 框架双语；{reason} 为宿主侧 zh 口径的校验原因文本）——danger 色 11px + 截断 + 悬停全文，复用 Failed 行既有样式；**只读、不可 Retry**（无扩展行可重试，修正清单后重聚合即恢复）。
+  - **页脚 note 语义零改动**（2026-09-04 用户决策口径维持）。
+- **回归测试**：`r20_skipped_aggregated_with_reason`——正例（语法错误清单 → `skipped` 恰含（该路径，非空原因），且不进入 loaded）+ 负例（全合法目录 → `skipped` 为空、合法清单正常加载）。
+- **验证**：`cargo fmt --check` 零差异 · clippy 全仓零告警 · `cargo test --workspace` **564 passed / 0 failed**。真机走查 V-6（放置 JSON 语法错误的第三方清单 → 扩展卡顶部出现「路径 + 原因」警告行）待执行。
+
 ### 可用性（R-19：托盘热键标签动态化——tooltip 与菜单尾缀跟随改绑，2026-09-30）
 
 - **背景**（R 系列加固批三）：托盘 tooltip 静态「dd-run — Win+Alt+Space」（D25/D38 静态妥协）、菜单「显示/隐藏面板\tWin+Alt+Space」尾缀硬编码——用户改绑热键后托盘持续展示错误组合。
