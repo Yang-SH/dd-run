@@ -4,6 +4,13 @@
 
 ## [Unreleased]
 
+### 可用性（R-16：`host/open_url` 失败可见性 + spawn 门禁测试密闭化，2026-09-30）
+
+- **背景**（R 系列加固批三）：`host/open_url` 两处失败路径此前仅记日志（`file://` ShellExecute 失败 `log::debug!`、`webbrowser::open` 失败 `log::warn!`）——websearch 选中后面板已 Dismiss，浏览器/关联程序启动失败即「应用把命令吃了」，用户无从感知（V-4）。
+- **修复（`app/host_actions.rs`）**：两处失败路径接入 `show_error_toast`（与 R-07 剪贴板失败同一套基建），文案键 `toast.open_fail`（zh：「打开失败：{e}」/ en：「Failed to open: {e}」，`{e}` 为失败原因摘要）；`file://` ShellExecute 失败日志由 debug 升 warn。成功路径行为与既有日志零变化（S-03 拦截 toast 口径不变）。
+- **顺带修复（R-12 遗留，`aggregator.rs`）**：回归门执行时发现 `spawn_gate_passes_first_party_sidecar` 在本机必红——R-12 起首方 sidecar 每次 spawn 重验双哈希（fail-closed），该测试的假路径与本机真实 trust.json 钉扎状态耦合恒判 Pending。将 spawn 唯一入口的信任判定抽为可注入（新增 `spawn_and_initialize_with` + 生产判定 `assess_for_spawn` / 路由纯函数 `uses_sidecar_assessment`），测试改注入密闭化（不触真实台账），并新增路由单测 `spawn_gate_routes_first_party_sidecar_to_sidecar_assess`（首方 sidecar 走 `assess_sidecar` 分支 / 非首方不走，正负例）。生产判定逻辑零变化（R-12 三态语义不变）。
+- **验证**：`cargo fmt --check` 零差异 · clippy 全仓零告警 · `cargo test --workspace` **559 passed / 0 failed**（i18n 双向完备性单测覆盖新键）。真机走查 V-4（无默认浏览器 / 断网两失败源出 toast）待执行。
+
 ### 可用性（设置页尺寸优化：基准 650×640 → 780×700 + 最小尺寸动态化，2026-09-30）
 
 - **背景**（真机反馈）：设置页在基准 650×640 下内容列仅 ~454px——主题三卡贴边、材质四键/着色三键紧凑、滑杆顶满，且全局最小尺寸 460×400 允许把设置页拉到布局崩坏（内容列 ~280px）。

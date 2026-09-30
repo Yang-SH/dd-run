@@ -493,6 +493,30 @@ pub fn spawn_and_initialize(ext: &LoadedExtension) -> Result<ExtensionProcess, S
 pub fn spawn_and_initialize_with_info(
     ext: &LoadedExtension,
 ) -> Result<(ExtensionProcess, InitializeResult), String> {
+    spawn_and_initialize_with(ext, assess_for_spawn)
+}
+
+/// R-12 路由判定：该扩展是否走 [`trust::assess_sidecar`] 分支（随包首方 sidecar）。
+fn uses_sidecar_assessment(ext: &LoadedExtension, origin: ExtOrigin) -> bool {
+    origin == ExtOrigin::Sidecar && trust::is_first_party_id(&ext.manifest.id)
+}
+
+/// 生产信任判定（R-12）：随包首方 sidecar 走 `assess_sidecar` 首跑钉扎重验
+/// （会读/写真实 trust.json），其余扩展走台账判定。
+fn assess_for_spawn(ext: &LoadedExtension, origin: ExtOrigin) -> Assessment {
+    if uses_sidecar_assessment(ext, origin) {
+        trust::assess_sidecar(ext, HOST_VERSION)
+    } else {
+        trust::assess(ext, origin, &trust::TrustLedger::load())
+    }
+}
+
+/// 同 [`spawn_and_initialize_with_info`]，但信任判定可注入（单测密闭化——
+/// 不触真实 trust.json，见 `spawn_gate_passes_first_party_sidecar`）。
+pub(crate) fn spawn_and_initialize_with(
+    ext: &LoadedExtension,
+    assess: impl FnOnce(&LoadedExtension, ExtOrigin) -> Assessment,
+) -> Result<(ExtensionProcess, InitializeResult), String> {
     // S-05 信任门禁（**第二道，且是所有子进程 spawn 的唯一入口**）：未获信任者一律
     // 不拉起。第一道在 `load_extension_sources` 的 `active` 过滤（决定"谁进集合"）；
     // 此处兜底覆盖桩复热等一切路径——即使上游漏判也拦得住。
@@ -500,11 +524,7 @@ pub fn spawn_and_initialize_with_info(
     // R-12：随包首方 sidecar 在此**每次 spawn 重验双哈希**（首跑钉扎语义，
     // 见 `trust::assess_sidecar`）；成本为两次数 MB 内的读盘，仅在 spawn 时发生。
     let origin = origin_of(ext);
-    let a = if origin == ExtOrigin::Sidecar && trust::is_first_party_id(&ext.manifest.id) {
-        trust::assess_sidecar(ext, HOST_VERSION)
-    } else {
-        trust::assess(ext, origin, &trust::TrustLedger::load())
-    };
+    let a = assess(ext, origin);
     if !a.is_trusted() {
         let label = match a.trust {
             Trust::Pending => "待批准",
@@ -1043,14 +1063,23 @@ mod tests {
     /// 对照：**随包首方**扩展（来源 = sidecar 目录 + 白名单）自动信任，门禁放行，
     /// 于是错误信息回到"spawn 失败"这一真实原因（而非信任拒绝）——说明门禁没有
     /// 误伤零摩擦路径。
+    ///
+    /// 密闭化（2026-09-30）：信任判定注入固定 `AutoTrusted`——R-12 起生产判定
+    /// 会重验双哈希（fail-closed），测试的假路径与本机真实 trust.json 的钉扎
+    /// 状态耦合必红；门禁「尊重判定、放行后失败于真实原因」这一语义由注入覆盖，
+    /// 生产判定的三态本身由 trust.rs 的 r12 可注入单测覆盖。
     #[test]
     fn spawn_gate_passes_first_party_sidecar() {
-        let dir = sidecar_extensions_dir().expect("本机应能定位宿主 exe 目录");
         let mut ext = loaded_ext("com.ddrun.filesearch", "sidecar");
-        ext.dir = dir; // 使其被判为 Sidecar 来源
-        let err = spawn_and_initialize_with_info(&ext)
-            .map(|_| ())
-            .expect_err("exe 不存在 → 仍应失败");
+        ext.dir = sidecar_extensions_dir().expect("本机应能定位宿主 exe 目录"); // 使其被判为 Sidecar 来源
+        let err = spawn_and_initialize_with(&ext, |_ext, _origin| Assessment {
+            id: ext.manifest.id.clone(),
+            trust: Trust::AutoTrusted,
+            origin: ExtOrigin::Sidecar,
+            sidecar_tampered: false,
+        })
+        .map(|_| ())
+        .expect_err("exe 不存在 → 仍应失败");
         assert!(
             err.contains("spawn 失败") || err.contains("initialize 失败"),
             "首方扩展应通过信任门禁、失败于真实原因，实得：{err}"
@@ -1058,6 +1087,49 @@ mod tests {
         assert!(
             !err.contains("未获信任"),
             "首方 sidecar 不应被信任门禁拦下：{err}"
+        );
+    }
+
+    /// 生产判定路由（R-12）：首方 sidecar 走 `assess_sidecar`，其余走台账判定。
+    /// 仅测**路由选择**（判定函数不可达注入真实台账，三态见 trust.rs r12 单测），
+    /// 经由注入桩记录走了哪条分支——不触真实 trust.json。
+    #[test]
+    fn spawn_gate_routes_first_party_sidecar_to_sidecar_assess() {
+        let mut ext = loaded_ext("com.ddrun.filesearch", "sidecar");
+        ext.dir = sidecar_extensions_dir().expect("本机应能定位宿主 exe 目录");
+        let mut route = None;
+        let _ = spawn_and_initialize_with(&ext, |ext, origin| {
+            route = Some(uses_sidecar_assessment(ext, origin));
+            Assessment {
+                id: ext.manifest.id.clone(),
+                trust: Trust::AutoTrusted,
+                origin: ExtOrigin::Sidecar,
+                sidecar_tampered: false,
+            }
+        });
+        assert_eq!(
+            route,
+            Some(true),
+            "首方 sidecar 必须路由到 assess_sidecar 分支"
+        );
+
+        // 对照：非首方 id 即便在 sidecar 目录也不走 assess_sidecar 分支
+        let mut other = loaded_ext("com.acme.thing", "sidecar");
+        other.dir = ext.dir.clone();
+        let mut route2 = None;
+        let _ = spawn_and_initialize_with(&other, |ext, origin| {
+            route2 = Some(uses_sidecar_assessment(ext, origin));
+            Assessment {
+                id: ext.manifest.id.clone(),
+                trust: Trust::AutoTrusted,
+                origin: ExtOrigin::UserDir,
+                sidecar_tampered: false,
+            }
+        });
+        assert_eq!(
+            route2,
+            Some(false),
+            "非首方 id 不应进入 assess_sidecar 路由分支"
         );
     }
 

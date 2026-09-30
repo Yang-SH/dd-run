@@ -142,6 +142,10 @@ const I18N: &[(&str, &str, &str)] = &[
         "已拦截不安全的外部打开请求（仅允许 http / https / file）",
         "Blocked an unsafe open request (only http / https / file allowed)",
     ),
+    // R-16：open_url 执行失败（ShellExecute / webbrowser 报错 → 错误 toast，
+    // {e} = 失败原因摘要。websearch 选中后面板已 Dismiss，失败不提示即
+    // 「命令被吃了」，V-4 判据要求文案含失败原因）
+    ("toast.open_fail", "打开失败：{e}", "Failed to open: {e}"),
     // ── host/set_clipboard 执行策略（S-07，2026-09-24）──
     (
         "toast.clipboard_written",

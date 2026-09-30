@@ -139,12 +139,18 @@ impl PaletteApp {
                     // 故至少保证可溯源（EDR/日志归因）。见审计文档 §4.2。
                     log::info!("[dd-gui] host/open_url file:// 打开（ext={ext_id}, path={path}）");
                     if let Err(e) = crate::platform::open_path(&path) {
-                        log::debug!(
+                        // R-16：失败不静默——面板多已 Dismiss，无提示即「命令被吃了」。
+                        log::warn!(
                             "[dd-gui] host/open_url ShellExecute 失败（ext={ext_id}, path={path}）：{e}"
                         );
+                        let msg = self.tr("toast.open_fail").replace("{e}", &e);
+                        self.show_error_toast(msg);
                     }
                 } else if let Err(e) = webbrowser::open(&params.url) {
+                    // R-16：同上——无默认浏览器 / 启动失败必须可见。
                     log::warn!("[dd-gui] host/open_url 浏览器打开失败（ext={ext_id}）：{e}");
+                    let msg = self.tr("toast.open_fail").replace("{e}", &e.to_string());
+                    self.show_error_toast(msg);
                 }
             }
             other => log::debug!("[dd-gui] 未知 host/* 请求：{other}（ext={ext_id}，已应答忽略）"),
