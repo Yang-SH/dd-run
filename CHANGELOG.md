@@ -4,6 +4,13 @@
 
 ## [Unreleased]
 
+### 可用性（R-18：热键 toast 入 i18n——收口锚定，2026-09-30）
+
+- **说明**：核心改动已随 seq 确认协议批（`1a20c8f`）先行落地——`toast.hotkey_updated` / `toast.hotkey_failed` 两键入表（zh/en），两处调用点改走 `t(self.lang_effective, …)`，成功 toast 带动态 `{combo}` 组合名。本批做收口核对与锚定：
+  - **复核**：全仓 `show_toast` / `show_error_toast` 调用点 grep 复核，**零硬编码中文字符串残留**（R-18 所述「全 UI 仅有的两处绕过」已清零）。
+  - **回归测试**：新增 `r18_hotkey_toasts_localized`——两键 zh/en 非空 + 关键短语语义锚定（zh「全局热键已更新」/「已恢复原热键」、en 对应短语），防后续文案漂移（回归判据「zh 语义不变」）；既有 `i18n_table_complete_both_langs` 双向完备性覆盖在表键。
+- **验证**：`cargo fmt --check` 零差异 · clippy 全仓零告警 · `cargo test --workspace` **562 passed / 0 failed**。en 语言下两条热键 toast 的真机确认随 V-3 en 复跑待执行。
+
 ### 可用性（R-17：设置保存失败可见——每会话一次性错误 toast，2026-09-30）
 
 - **背景**（R 系列加固批三）：`Settings::save` 写盘失败仅 `log::warn!`——不可写目录（OneDrive 占位 / AV 锁 / 策略）下所有修改「看似成功」，重启即回滚且无解释（V-2）。

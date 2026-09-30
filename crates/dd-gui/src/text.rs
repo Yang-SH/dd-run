@@ -735,6 +735,33 @@ mod tests {
         }
     }
 
+    /// R-18：热键改绑两条 toast 必须走 i18n（原为全 UI 仅有的两处硬编码中文
+    /// 绕过 `t()`）。zh/en 均在表内且非空 + 语义锚定（文案允许超集扩展，关键
+    /// 短语不得漂移——回归判据「zh 语义不变」）。
+    #[test]
+    fn r18_hotkey_toasts_localized() {
+        for key in ["toast.hotkey_updated", "toast.hotkey_failed"] {
+            assert!(!t(Lang::ZhCn, key).is_empty(), "{key} zh 不得为空");
+            assert!(!t(Lang::EnUs, key).is_empty(), "{key} en 不得为空");
+        }
+        assert!(
+            t(Lang::ZhCn, "toast.hotkey_updated").contains("全局热键已更新"),
+            "更新成功 toast 语义锚定"
+        );
+        assert!(
+            t(Lang::ZhCn, "toast.hotkey_failed").contains("已恢复原热键"),
+            "失败回滚 toast 语义锚定"
+        );
+        assert!(
+            t(Lang::EnUs, "toast.hotkey_updated").contains("Global hotkey updated"),
+            "en 更新成功 toast 锚定"
+        );
+        assert!(
+            t(Lang::EnUs, "toast.hotkey_failed").contains("the previous hotkey was restored"),
+            "en 失败回滚 toast 锚定"
+        );
+    }
+
     #[test]
     fn t_resolves_zh_en_and_falls_back() {
         assert_eq!(t(Lang::ZhCn, "lang.follow_system"), "跟随系统");
