@@ -56,6 +56,10 @@ fn main() -> eframe::Result {
     // 真机排障请从终端启动，或重定向：`dd-run.exe 2> dd-run.log`。
     dd_protocol::logging::init();
 
+    // R-26：单实例互斥（方案：O4 init 之后、eframe 创建之前）——双开第二实例
+    // 弹「已在运行」提示后退出，见函数文档。
+    enforce_single_instance();
+
     // A2 冷启动计时起点：**进程进入 main 即开始**，覆盖 eframe 窗口创建 +
     // 聚合全过程（M6 批次 6.2 起 CJK 字体改为后台线程加载，不在主路径上——
     // 旧注释"覆盖字体加载 22MB"已随异步化失效，首帧用 egui 默认字体）。
@@ -169,3 +173,65 @@ fn main() -> eframe::Result {
         }),
     )
 }
+
+/// R-26：单实例互斥（启动早期调用——O4 init 之后、eframe 创建之前）。
+///
+/// 双开的实际危害（方案 §3 R-26）：① 第二实例热键注册失败 → R-15「可能被
+/// 其他程序占用」toast，**误导排障方向**（真凶是自己）；② 托盘双图标；
+/// ③ config.json 并发写丢设置——R-02 原子写只保证文件不损坏，不解决
+/// last-writer-wins。
+///
+/// **互斥体命名**：`Local\dd-run-single-instance`——`Local\` 前缀 = 本登录
+/// 会话命名空间，不同终端会话（不同用户）各自独立，与面板 per-user 数据
+/// 目录（`%APPDATA%\dd-run`）口径一致。
+///
+/// **句柄生命周期**：取得句柄后**有意不 CloseHandle**——命名互斥体随进程
+/// 退出由内核释放，「句柄存活 = 实例存活」正是单实例语义；提前关闭会让
+/// 后续双开误判「无实例运行」。第二实例命中 `ERROR_ALREADY_EXISTS` 后弹
+/// `MessageBoxW`（阻塞至用户确认）再 `process::exit(0)`，句柄同样随进程
+/// 释放。开机自启（HKCU Run 键执行 dd-run.exe）复启时命中的就是同一条
+/// 第二实例路径。
+///
+/// 提示语中英并列（此阶段 GUI 语言尚未解析、i18n 未装配）；创建失败（极少）
+/// 降级为不互斥照常启动——互斥是防误排障的护栏，不应成为启动失败的新单点。
+#[cfg(windows)]
+fn enforce_single_instance() {
+    use windows_sys::Win32::Foundation::{GetLastError, ERROR_ALREADY_EXISTS};
+    use windows_sys::Win32::System::Threading::CreateMutexW;
+    use windows_sys::Win32::UI::WindowsAndMessaging::{
+        MessageBoxW, MB_ICONWARNING, MB_OK, MB_SETFOREGROUND,
+    };
+
+    fn to_wide(s: &str) -> Vec<u16> {
+        s.encode_utf16().chain(std::iter::once(0)).collect()
+    }
+
+    let name = to_wide("Local\\dd-run-single-instance");
+    let handle = unsafe { CreateMutexW(std::ptr::null(), 0, name.as_ptr()) };
+    if handle.is_null() {
+        log::warn!("[dd-gui] 单实例互斥体创建失败，降级为不互斥启动（照常运行）");
+        return;
+    }
+    if unsafe { GetLastError() } == ERROR_ALREADY_EXISTS {
+        log::warn!("[dd-gui] 已有 dd-run 实例在运行（单实例互斥命中），弹窗提示后退出");
+        let text = to_wide(
+            "dd-run 已在运行（请用托盘图标或热键唤起面板），无需重复启动。\n\
+             dd-run is already running (use the tray icon or the hotkey) — no need to start it again.",
+        );
+        let caption = to_wide("dd-run");
+        unsafe {
+            MessageBoxW(
+                std::ptr::null_mut(),
+                text.as_ptr(),
+                caption.as_ptr(),
+                MB_OK | MB_ICONWARNING | MB_SETFOREGROUND,
+            );
+        }
+        std::process::exit(0);
+    }
+    // 首实例：持句柄至进程退出（不 CloseHandle，见函数文档），互斥体保持占用。
+}
+
+/// 非 Windows 占位（与 hotkey/tray 的跨平台占位同口径）：无互斥，行为不变。
+#[cfg(not(windows))]
+fn enforce_single_instance() {}
