@@ -4,6 +4,35 @@
 
 ## [Unreleased]
 
+### 稳定性（V-12 真机走查完成：R-07 剪贴板写入移出 UI 线程，2026-10-01）
+
+- **V-12 判据（Win11 25H2 build 26200.9457、debug 构建 @ `0258eb1`）**：
+  - **基线复制（成功路径）**：calc 查询 `7-3` → Enter → `host/set_clipboard` —— 日志 `入队：3 字节 → 成功`，剪贴板内容实测 `= 4`；
+  - **占用态复制（失败路径）**：独立占用器进程持隐藏窗口句柄 `OpenClipboard` 不释放（`OpenClipboard(NULL)` 在本机 200 次尝试恒失败，属环境限制——改真实窗口句柄后即成功；其他进程开启被阻塞实证）→ calc 查询 `4-1` → 日志 `入队 → 失败：The native clipboard is not accessible due to being held by another party.`，**失败 toast 可见**（「扩展 com.ddrun.calc 剪贴板写入失败：…」{e} 含原因摘要，截图留档）；
+  - **核心判据：占用期间工作线程阻塞时 UI 零冻结**——6 次显隐迁移 avg 64.2 ms / max 105 ms（与无占用基线 66 ms 无差别）；
+  - **无污染**：占用期写入失败未改变剪贴板内容（释放后实测完好），用户原剪贴板文本保存还原。
+- **走查注记**：查询含 `/` 字符时 A3 过滤 0 命中（兜底模板不在命中集），改用 `-` 触发 calc；失败 toast 截图须落在到达（~T+1s）与过期（T+4s）窗口内。
+- **文档**：stability-usability-security-plan.md v1.8（§6.4 R-07 勾选与注记、§10 演进）。零代码改动。
+
+### 稳定性（V-2 真机走查完成：R-02 原子写 + R-17 保存失败一次性 toast，2026-10-01）
+
+- **V-2 判据（R-02 + R-17 同场，Win11 25H2 build 26200.9457、debug 构建 @ `0258eb1`）**：
+  - **20 次原子写（内容各异）**：外部 `MoveWindow` 变尺寸 → 隐藏触发 `persist_panel_size → save_settings_with_feedback → atomic_write`，panel_size 逐次变化（660×540…740×600），rename 替换既有文件 20 次，零 panic、零 `.tmp` 残留；
+  - **重启设置保留**：强杀 + 重启后 config.json SHA-256 逐字节一致；
+  - **无卡顿回归判据**：连续 20 次唤起-隐藏单次迁移延迟均值 66 ms / 峰值 424 ms（轮询分辨率 40 ms）；
+  - **R-17 恰一次口径**：`config.json` 置只读（先以 MoveFileExW 独立实验证实 rename-over-readonly 失败机制）→ 变尺寸后隐藏触发保存失败 → 错误 toast「设置保存失败——本次修改可能未保存，请检查配置目录是否可写」可见（3000ms TTL 内截图留档）→ 过期 3.3 s 后第二次失败保存**无新 toast**（每会话恰一次）→ `attrib -R` 恢复可写 → 保存成功且静默；
+  - **终态还原**：尺寸回默认 → panel_size 写回 null → config.json 与基线逐值一致。
+- **环境注记**：本会话合成鼠标事件被 winit/egui 忽略（hover 像素级对照实验证实）、修饰键取真实键态（GetAsyncKeyState）——设置页开关无法经注入触达；「切换设置 20 次」以同链路（`atomic_write` 成败反馈完全同源）的变尺寸落盘替代，设置页开关路径由 r02/r17 单测覆盖。首跑时序缺陷（两次失败间隔 < toast TTL，残影误判「重复弹」）发现后以正确时序（间隔 >3 s）补跑收口。
+- **文档**：stability-usability-security-plan.md v1.7（§6.4 R-02/R-17 勾选与注记、§10 演进）。零代码改动。
+
+### 稳定性（批一真机走查首批收口：R-01 V-1 完成 + 批一冒烟 + R-24 全量补跑，2026-10-01）
+
+- **V-1（R-01 最小化 `screen_rect` 崩溃面）**：Win11 25H2 build 26200.9457、debug 构建 @ `0258eb1`——普通唤起-隐藏 30 次 + 「可见→SW_MINIMIZE→驻留 ≥1.6 s（≥1 个 1 Hz 看门狗帧落在最小化态）→最小化态下热键唤起」20 次，全程进程存活、零 panic、stderr 零错误日志、`%APPDATA%\dd-run\logs\panic.log` 零新增；基线/终态唤起位置逐位一致（635,250,1285,782 = 1920×1080 工作区居中，遮罩/缩放热区判据内含，截图留档对比一致）。**环境注记**：本会话合成键盘输入被 UIPI 拦截（GetAsyncKeyState 探针证实），唤起改用 `PostThreadMessageW(WM_HOTKEY)` 直注热键线程——与 `RegisterHotKey` 成功后系统投递的消息同源，覆盖的正是 R-01 修复的 show/hide/最小化重绘路径；真实键盘热键链路由 9-30 V-3 走查侧证。
+- **批一收尾冒烟（V-1 同场）**：R-05——启动日志确认热键 / 托盘 / CJK 字体三线程全部正常起跳、无降级 `log::error!` 触发，热键线程承载 73 对 show/hide 全程正常；R-06——启动期 websearch 引擎配置读路径正常、全程日志零锁相关异常。
+- **R-24 遗留门禁收口**：`cargo test --workspace` **568/568 全绿**补跑确认（21 目标，0 失败，`Os error 231` 环境批已自愈）；fmt 零差异、clippy 全仓零告警。
+- **R-08 注记（冒烟未达，留待后续真机会话）**：本机 Everything 运行中（IPC 主通道健康），es.exe 错误分支现场不可达；文件搜索页因会话内合成输入受限（UIPI 拦截 SendInput + winit 不消费投递 WM_CHAR / 修饰键）未能到达，测试会话中检测到用户回场操作后为免干扰主动停止注入。错误路径以 `r08_error_truncate_multibyte_safe` 单测为准。
+- **文档**：stability-usability-security-plan.md v1.6（文档头状态「规划中」→「实施中」、§6.4 勾选与注记、§10 演进），INDEX.md 同步（v1.6 / 实施中）。零代码改动。
+
 ### 可用性（R-24：sidecar 自述更正——移除已废弃的 `f ` 前缀入口描述，2026-09-30）
 
 - **背景**（R 系列加固批三）：`f ` 前缀直达入口 2026-09-19 已移除（search.md §2 ⚠），但 `dd-ext-search` 的 spec 自述与顶层入口副标题仍写「输入 f 后空格直接进入」——该字段当前未上屏，属潜伏误导，描述一旦展示即穿帮。
