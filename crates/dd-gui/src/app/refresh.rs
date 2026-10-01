@@ -32,9 +32,15 @@ impl PaletteApp {
         let current = self.stack.current().page_id.clone();
         let mut hit: Option<String> = None;
         let mut top_changed = false;
+        // R-03：本帧观察到的入站队列溢出（扩展 id, 丢弃帧数）——循环期间只借用
+        // `self.processes`，toast 留到循环结束后弹（与 items_changed 同纪律）。
+        let mut overflows: Vec<(String, u64)> = Vec::new();
         // 注意：循环期间只借用 `self.processes`，不调用 `self.show_toast`
         // （后者可变借用整个 `self`，会与此处冲突）。
-        for (_, proc) in self.processes.iter_mut() {
+        for (ext_id, proc) in self.processes.iter_mut() {
+            if let Some(n) = proc.take_inbound_overflow() {
+                overflows.push((ext_id.clone(), n));
+            }
             for changed in proc.poll_notifications() {
                 match changed {
                     // `None` = 顶层命令变了 → 进合并窗口，到期 Root 全量重聚合（A9）
@@ -74,6 +80,20 @@ impl PaletteApp {
                     ready_at: Instant::now() + REFRESH_WINDOW,
                     top: false,
                 });
+            }
+        }
+        // R-03：入站队列溢出 → 合成告警（dd-host take 时已 log::warn；此处补
+        // UI 可见的错误 toast，每扩展每会话至多一次防刷屏）。
+        for (ext_id, n) in overflows {
+            if self.overflow_warned.insert(ext_id.clone()) {
+                log::warn!(
+                    "[dd-gui] 扩展 {ext_id} 入站队列溢出（丢弃 {n} 帧）→ toast 告警（本会话首次）"
+                );
+                let msg = self
+                    .tr("toast.ext_overflow")
+                    .replace("{id}", &ext_id)
+                    .replace("{n}", &n.to_string());
+                self.show_error_toast(msg);
             }
         }
     }

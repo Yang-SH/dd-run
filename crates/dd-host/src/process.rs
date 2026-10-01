@@ -12,7 +12,8 @@ use std::collections::BTreeMap;
 use std::io::Read;
 use std::io::Write as _;
 use std::process::{Child, ChildStdin, Command, ExitStatus, Stdio};
-use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender, TryRecvError};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::mpsc::{self, Receiver, RecvTimeoutError, SyncSender, TryRecvError, TrySendError};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -59,12 +60,27 @@ const STDERR_SUMMARY_CHARS: usize = 200;
 /// 最近 [`DIAGNOSTIC_BUS_CAP`] 条。in-process 适配器（dd-gui `ext_inprocess`）同口径。
 pub const DIAGNOSTIC_BUS_CAP: usize = 64;
 
+/// R-03：入站帧队列容量。读线程把切分好的帧推入队列，消费端（`poll_notifications`
+/// / `call`）只在面板可见或有 in-flight 请求时排空——无界队列会被流氓/缺陷扩展在
+/// 面板隐藏期间刷 stdout 撑爆内存（每帧 ≤1 MiB 不触发 TooLarge）。超容**丢新帧**
+/// 并置位溢出标志（见 [`InboundGate`]），单帧上界 × 容量 = RSS 上界
+/// （1 MiB × 128 ≈ ≤128 MiB，不再随注入增长）。
+pub const INBOUND_QUEUE_CAP: usize = 128;
+
+/// R-03：`host/*` 反向请求记录容量（drop-oldest）。UI 隐藏期间不消费，溢出需
+/// **连续 32 条**未被取走的反向请求（异常扩展才可能，记日志留痕），恒保留最新
+/// [`HOST_REQUESTS_CAP`] 条。in-process 适配器同口径。
+pub const HOST_REQUESTS_CAP: usize = 32;
+
 /// 有界入队：超容丢最旧、保序保最近（诊断用途，n ≤ cap，O(cap) 可忽略）。
-fn push_capped(buf: &mut Vec<RawMessage>, msg: RawMessage) {
-    if buf.len() >= DIAGNOSTIC_BUS_CAP {
+/// 返回是否发生了「丢最旧」（调用方可据此记日志；诊断站点忽略返回值）。
+fn push_capped(buf: &mut Vec<RawMessage>, cap: usize, msg: RawMessage) -> bool {
+    let evicted = buf.len() >= cap;
+    if evicted {
         buf.remove(0);
     }
     buf.push(msg);
+    evicted
 }
 
 /// 协议层错误。
@@ -306,6 +322,11 @@ pub struct ExtensionProcess {
     pub unmatched: Vec<RawMessage>,
     /// §2.5：扩展 stderr（崩溃诊断用）
     stderr: Arc<Mutex<Vec<u8>>>,
+    /// R-03：入站帧队列溢出标志（读线程置位，[`Self::take_inbound_overflow`]
+    /// 观察并复位）
+    overflown: Arc<AtomicBool>,
+    /// R-03：本溢出 episode 累计丢弃帧数（与 `overflown` 配对复位）
+    dropped: Arc<AtomicU64>,
 }
 
 /// 清单 `entry.env` **不得覆盖**的宿主关键环境变量（S-10，2026-09-23）。
@@ -399,8 +420,23 @@ impl ExtensionProcess {
         let stdout = child.stdout.take().expect("stdout 已 piped");
         let stderr = child.stderr.take().expect("stderr 已 piped");
 
-        let (tx, rx) = mpsc::channel();
-        thread::spawn(move || read_loop(stdout, tx));
+        let (tx, rx) = mpsc::sync_channel(INBOUND_QUEUE_CAP);
+        let overflown = Arc::new(AtomicBool::new(false));
+        let dropped = Arc::new(AtomicU64::new(0));
+        thread::spawn({
+            let overflown = Arc::clone(&overflown);
+            let dropped = Arc::clone(&dropped);
+            move || {
+                read_loop(
+                    stdout,
+                    InboundGate {
+                        tx,
+                        overflown,
+                        dropped,
+                    },
+                )
+            }
+        });
 
         let sink = Arc::new(Mutex::new(Vec::new()));
         thread::spawn({
@@ -419,6 +455,8 @@ impl ExtensionProcess {
             host_requests: Vec::new(),
             unmatched: Vec::new(),
             stderr: sink,
+            overflown,
+            dropped,
         })
     }
 
@@ -629,7 +667,7 @@ impl ExtensionProcess {
                                     .and_then(|p| p.page_id);
                                 changed.push(page_id);
                             }
-                            push_capped(&mut self.notifications, msg);
+                            push_capped(&mut self.notifications, DIAGNOSTIC_BUS_CAP, msg);
                         }
                     }
                 }
@@ -649,6 +687,23 @@ impl ExtensionProcess {
     /// 取走并清空积压的 `host/*` 请求记录（M4 P2：UI 层消费并执行真实副作用）。
     pub fn drain_host_requests(&mut self) -> Vec<RawMessage> {
         std::mem::take(&mut self.host_requests)
+    }
+
+    /// R-03：观察入站帧队列是否发生过溢出（面板隐藏期间扩展刷 stdout，读线程
+    /// 丢新帧——见 [`INBOUND_QUEUE_CAP`]）。有则返回**本 episode 丢弃的帧数**
+    /// 并复位标志（下次溢出重新置位），无则 `None`。
+    ///
+    /// 消费端（dd-gui 轮询）借此**合成一条告警**：本方法的 `log::warn!` +
+    /// UI 层 toast（每扩展每会话至多一次，防连续溢出刷屏）。复位后再次溢出
+    /// 会再次置位——持续异常的扩展在日志里逐 episode 留痕，UI 不重复轰炸。
+    pub fn take_inbound_overflow(&self) -> Option<u64> {
+        let n = take_overflow_flag(&self.overflown, &self.dropped)?;
+        log::warn!(
+            "[dd-host] 扩展 {} 入站队列溢出（容量 {} 帧），本 episode 丢弃 {n} 帧（输出过快，面板不可见期间无人排空）",
+            self.id,
+            INBOUND_QUEUE_CAP
+        );
+        Some(n)
     }
 
     /// 发出一次请求并等待**属于该请求**的响应。
@@ -723,13 +778,13 @@ impl ExtensionProcess {
                 Ok(None)
             }
             MessageKind::Notification => {
-                push_capped(&mut self.notifications, msg);
+                push_capped(&mut self.notifications, DIAGNOSTIC_BUS_CAP, msg);
                 Ok(None)
             }
             MessageKind::Response(rid) => {
                 if rid != waiting_id {
                     // §3.3：未匹配到 in-flight 请求的响应，记日志并忽略
-                    push_capped(&mut self.unmatched, msg);
+                    push_capped(&mut self.unmatched, DIAGNOSTIC_BUS_CAP, msg);
                     return Ok(None);
                 }
                 match msg.error {
@@ -738,7 +793,7 @@ impl ExtensionProcess {
                 }
             }
             MessageKind::Unknown => {
-                push_capped(&mut self.unmatched, msg);
+                push_capped(&mut self.unmatched, DIAGNOSTIC_BUS_CAP, msg);
                 Ok(None)
             }
         }
@@ -752,7 +807,11 @@ impl ExtensionProcess {
             Envelope::InvalidRequest { id, reason } => (*id, Some(reason.kind())),
             _ => (None, None),
         };
-        push_capped(&mut self.unmatched, unmatched_marker(id, reason));
+        push_capped(
+            &mut self.unmatched,
+            DIAGNOSTIC_BUS_CAP,
+            unmatched_marker(id, reason),
+        );
         match result.to_error_response() {
             Some(response) => self.write_message(&response),
             None => Ok(()),
@@ -786,7 +845,15 @@ impl ExtensionProcess {
     fn answer_host_request(&mut self, msg: &RawMessage) -> Result<(), ProtocolError> {
         let method = msg.method.clone().unwrap_or_default();
         let id = msg.id.unwrap_or(0);
-        self.host_requests.push(msg.clone());
+        // R-03：drop-oldest 定容——溢出需连续 32 条未被 UI 取走的反向请求
+        //（正常扩展不可能），记日志留痕后仍应答本条（§7.4 语义不变）
+        if push_capped(&mut self.host_requests, HOST_REQUESTS_CAP, msg.clone()) {
+            log::warn!(
+                "[dd-host] 扩展 {} host/* 请求积压超 {} 条（UI 未消费），丢弃最旧一条",
+                self.id,
+                HOST_REQUESTS_CAP
+            );
+        }
 
         let declared = self.declared.contains(&method);
         let response = if declared {
@@ -826,8 +893,46 @@ impl Drop for ExtensionProcess {
     }
 }
 
+/// R-03：读线程 → 消费端的**有界**入站门（容量 [`INBOUND_QUEUE_CAP`]）。
+///
+/// 满则**丢新帧**并置位 `overflown`、累计 `dropped`（消费端经
+/// [`ExtensionProcess::take_inbound_overflow`] 观察后合成告警）。**不阻塞**
+/// 读线程——阻塞会反压子进程 stdout 管道（缺陷扩展被"冻结"且宿主读线程失去
+/// 响应性），丢帧让异常只影响该扩展自身的事件流，不殃及宿主。
+struct InboundGate {
+    tx: SyncSender<Frame>,
+    overflown: Arc<AtomicBool>,
+    dropped: Arc<AtomicU64>,
+}
+
+impl InboundGate {
+    /// 投递一帧。返回 `false` = 消费端已消失（进程被丢弃），读线程应退出；
+    /// 队列满（丢新帧）与成功均返回 `true`（继续读）。
+    fn deliver(&self, frame: Frame) -> bool {
+        match self.tx.try_send(frame) {
+            Ok(()) => true,
+            Err(TrySendError::Full(_)) => {
+                self.overflown.store(true, Ordering::Relaxed);
+                self.dropped.fetch_add(1, Ordering::Relaxed);
+                true
+            }
+            Err(TrySendError::Disconnected(_)) => false,
+        }
+    }
+}
+
+/// R-03：观察并复位溢出标志——[`ExtensionProcess::take_inbound_overflow`]
+/// 与单测夹具共用的单一事实来源（`Some` = 本 episode 丢弃帧数，取走即复位）。
+fn take_overflow_flag(overflown: &AtomicBool, dropped: &AtomicU64) -> Option<u64> {
+    if overflown.swap(false, Ordering::Relaxed) {
+        Some(dropped.swap(0, Ordering::Relaxed))
+    } else {
+        None
+    }
+}
+
 /// §2.4 读循环：一次 `read` 可能返回半条或多条消息，交给 [`Decoder`] 累积切分。
-fn read_loop(mut stdout: std::process::ChildStdout, tx: Sender<Frame>) {
+fn read_loop(mut stdout: std::process::ChildStdout, gate: InboundGate) {
     let mut decoder = Decoder::with_default_limit();
     let mut buf = [0u8; 8192];
     loop {
@@ -835,7 +940,7 @@ fn read_loop(mut stdout: std::process::ChildStdout, tx: Sender<Frame>) {
             Ok(0) => break,
             Ok(n) => {
                 for frame in decoder.push(&buf[..n]) {
-                    if tx.send(frame).is_err() {
+                    if !gate.deliver(frame) {
                         return;
                     }
                 }
@@ -944,6 +1049,94 @@ mod tests {
             result: None,
             error: None,
         }
+    }
+
+    /// R-03：入站队列定容——注入 >[`INBOUND_QUEUE_CAP`] 帧，队列长度恒为容量、
+    /// `overflown` 标志置位、丢弃数准确（drop-new：保留最早 128 帧，丢最新的）。
+    #[test]
+    fn r03_inbound_queue_bounded_flag() {
+        let (tx, rx) = mpsc::sync_channel(INBOUND_QUEUE_CAP);
+        let gate = InboundGate {
+            tx,
+            overflown: Arc::new(AtomicBool::new(false)),
+            dropped: Arc::new(AtomicU64::new(0)),
+        };
+        let excess = 72u64;
+        for _ in 0..(INBOUND_QUEUE_CAP as u64 + excess) {
+            assert!(gate.deliver(Frame::InvalidUtf8), "读线程侧投递不因满而失败");
+        }
+        assert!(gate.overflown.load(Ordering::Relaxed), "溢出标志应置位");
+        assert_eq!(
+            gate.dropped.load(Ordering::Relaxed),
+            excess,
+            "丢弃数应恰为超出量"
+        );
+        let mut received = 0;
+        while rx.try_recv().is_ok() {
+            received += 1;
+        }
+        assert_eq!(
+            received, INBOUND_QUEUE_CAP,
+            "队列长度恒为容量（无界增长已封顶）"
+        );
+        // take_inbound_overflow 观察语义：取走即复位
+        let n = take_overflow_flag(&gate.overflown, &gate.dropped).expect("溢出应可被观察");
+        assert_eq!(n, excess);
+        assert!(
+            take_overflow_flag(&gate.overflown, &gate.dropped).is_none(),
+            "复位后下一次观察应为 None（episode 语义）"
+        );
+    }
+
+    /// R-03 负例：恰达容量不置位溢出（正常流量零告警）。
+    #[test]
+    fn r03_inbound_queue_at_capacity_no_flag() {
+        let (tx, rx) = mpsc::sync_channel(INBOUND_QUEUE_CAP);
+        let gate = InboundGate {
+            tx,
+            overflown: Arc::new(AtomicBool::new(false)),
+            dropped: Arc::new(AtomicU64::new(0)),
+        };
+        for _ in 0..INBOUND_QUEUE_CAP {
+            assert!(gate.deliver(Frame::InvalidUtf8));
+        }
+        assert!(
+            !gate.overflown.load(Ordering::Relaxed),
+            "未超容不得置位（不误报）"
+        );
+        assert_eq!(gate.dropped.load(Ordering::Relaxed), 0);
+        assert!(
+            take_overflow_flag(&gate.overflown, &gate.dropped).is_none(),
+            "未超容不得置位（不误报）"
+        );
+        let mut received = 0;
+        while rx.try_recv().is_ok() {
+            received += 1;
+        }
+        assert_eq!(received, INBOUND_QUEUE_CAP);
+    }
+
+    /// R-03：`host/*` 请求记录 drop-oldest——>[`HOST_REQUESTS_CAP`] 条时恒保留
+    /// 最新 32 条、最早被丢（UI 隐藏期间积压不无界增长）。
+    #[test]
+    fn r03_host_requests_drop_oldest() {
+        let mut buf: Vec<RawMessage> = Vec::new();
+        let total = HOST_REQUESTS_CAP + 8;
+        for i in 0..total {
+            let evicted = push_capped(&mut buf, HOST_REQUESTS_CAP, request(i as u64, "host/noop"));
+            assert_eq!(evicted, i >= HOST_REQUESTS_CAP, "第 {} 条的逐出语义", i);
+        }
+        assert_eq!(buf.len(), HOST_REQUESTS_CAP, "恒保留最新 32 条");
+        assert_eq!(
+            buf[0].id,
+            Some(8),
+            "最早的 8 条已丢（首条应为第 9 条，id=8）"
+        );
+        assert_eq!(
+            buf.last().unwrap().id,
+            Some(total as u64 - 1),
+            "最新一条在尾（保序保最近）"
+        );
     }
 
     /// M9：`route_messages` 把一批消息正确切到「响应 / host 请求 / 通知 / 未匹配」。

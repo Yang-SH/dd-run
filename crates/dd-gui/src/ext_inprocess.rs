@@ -32,7 +32,9 @@ use std::panic::AssertUnwindSafe;
 
 use dd_ext::{serve_line, ExtensionSpec};
 use dd_host::manifest::{current_platform, HOST_CAPABILITIES};
-use dd_host::process::{route_messages, CloseError, ProtocolError, DIAGNOSTIC_BUS_CAP};
+use dd_host::process::{
+    route_messages, CloseError, ProtocolError, DIAGNOSTIC_BUS_CAP, HOST_REQUESTS_CAP,
+};
 use dd_protocol::framing::DEFAULT_MAX_MESSAGE_BYTES;
 use dd_protocol::messages::{
     error_codes, CommandListResult, GetCommandParams, GetCommandResult, GetItemsParams,
@@ -238,10 +240,26 @@ impl InProcessExtension {
         // 来源；M9 R1 逐字节等价由此保证）。`serve_line` 响应在前、副作用在后，故先把
         // 同批次的 host/* 与通知全部并入总线，再决定返回值。
         let routed = route_messages(id, outputs);
+        // R-03：host/* 请求总线 drop-oldest 定容（与子进程路径同口径）——UI 隐藏
+        // 期间积压不无界增长；溢出需连续 32 条未被取走的反向请求，记日志留痕。
         self.host_requests.extend(routed.host_requests);
+        if self.host_requests.len() > HOST_REQUESTS_CAP {
+            let excess = self.host_requests.len() - HOST_REQUESTS_CAP;
+            self.host_requests.drain(..excess);
+            log::warn!(
+                "[dd-gui] in-process 扩展 {} host/* 请求积压超 {} 条，丢弃最旧 {excess} 条",
+                self.spec.id,
+                HOST_REQUESTS_CAP
+            );
+        }
         self.notifications.extend(routed.notifications);
+        // 诊断总线有界化：通知 / unmatched 无消费方，超容截断保留最近
+        //（子进程路径同口径——R-03 顺带把此前缺失的通知截断补齐）
+        if self.notifications.len() > DIAGNOSTIC_BUS_CAP {
+            self.notifications
+                .drain(..self.notifications.len() - DIAGNOSTIC_BUS_CAP);
+        }
         self.unmatched.extend(routed.unmatched);
-        // 诊断总线有界化：unmatched 无消费方，超容截断保留最近（子进程路径同口径）
         if self.unmatched.len() > DIAGNOSTIC_BUS_CAP {
             self.unmatched
                 .drain(..self.unmatched.len() - DIAGNOSTIC_BUS_CAP);

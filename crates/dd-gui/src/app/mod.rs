@@ -239,6 +239,9 @@ pub struct PaletteApp {
     /// 修改「看似成功」、重启回滚，首次失败弹一次错误 toast 后不再重复轰炸；
     /// 会话内不复位（恢复可写后的修改本就会成功，无需再提示）。
     pub(crate) settings_save_warned: bool,
+    /// R-03：已对哪些扩展弹过「入站队列溢出」toast——每扩展每会话至多一次
+    ///（连续溢出只刷日志不重复轰炸；与 settings_save_warned 同口径）。
+    pub(crate) overflow_warned: HashSet<String>,
     /// 扩展启停脏标记：离开设置页时与 engines_dirty 一起触发重聚合。
     pub(crate) exts_dirty: bool,
     /// 托盘事件接收端（设计稿 10C：Toggle / OpenSettings / Exit）。
@@ -490,6 +493,7 @@ impl PaletteApp {
             capture_failed: false,
             hotkey_unregistered: false,
             settings_save_warned: false,
+            overflow_warned: HashSet::new(),
             exts_dirty: false,
             tray_events,
             tray_click_flag,

@@ -215,6 +215,11 @@ const I18N: &[(&str, &str, &str)] = &[
         "扩展 {id} 暂时不可用（连续崩溃 {n} 次），可在设置→扩展管理重试",
         "Extension {id} is temporarily unavailable ({n} consecutive crashes) — retry it under Settings → Extensions",
     ),
+    (
+        "toast.ext_overflow",
+        "扩展 {id} 输出过快，已丢弃 {n} 条消息（面板隐藏期间积压溢出）",
+        "Extension {id} is producing output too fast — {n} message(s) dropped (backlog overflowed while the panel was hidden)",
+    ),
     ("toast.ext_missing", "扩展信息缺失，无法执行", "Extension info missing; cannot run"),
     ("toast.invoke_fail", "命令执行失败：{e}", "Failed to run command: {e}"),
     ("toast.cmd_updated", "扩展命令已更新", "Extension commands updated"),

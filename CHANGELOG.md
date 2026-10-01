@@ -4,6 +4,18 @@
 
 ## [Unreleased]
 
+### 稳定性（R-03：扩展 stdout / host 请求入站队列定容 + 溢出告警，2026-10-01）
+
+- **背景**（R 系列加固批四首项）：子进程读线程把帧推入**无界** `mpsc::channel`，仅在面板可见的 `ui()` 里排空——流氓/有缺陷扩展在面板隐藏期间刷 stdout（每行 ≤1 MiB 不触发 TooLarge）→ 内存无界增长 → OOM；`host_requests.push` 同构。
+- **修复**：
+  - **入站帧队列定容 128**（`InboundGate`：`sync_channel(128)` + `try_send`）——满则**丢新帧**并置位溢出标志，不阻塞读线程（阻塞会反压子进程 stdout 管道）；RSS 上界 ≈ 128 帧 × 1 MiB，不再随注入增长；
+  - **溢出告警**：`ExtensionProcess::take_inbound_overflow()`（episode 语义，观察即复位）→ dd-host `log::warn` + 面板错误 toast `toast.ext_overflow`（zh/en 双语），**每扩展每会话至多一次**防刷屏（`overflow_warned` 集，与 R-17 同口径）；
+  - **`host_requests` 定容 32 drop-oldest**（`push_capped` 参数化，溢出记日志留痕）；
+  - **in-process 适配器同口径**：host_requests 定容 32 + 顺带补齐 notifications 的诊断总线截断（64），与子进程路径 M9 R1 终态等价纪律对齐。
+- **测试**：r03 三条单测（超容队列恒 128 + 标志置位 + episode 复位 / 恰容不误报负例 / >32 条保留最新 32 条最早丢弃）绿；`cargo test --workspace` **571/571 全绿**（+3），fmt 零差异、clippy 零告警。
+- **环境注记**：本会话裸测 GNU 工具链 `dlltool.exe` 不在 PATH（rustup 工具链 `self-contained` 目录内含），补 PATH 后门禁正常——与产品无关。
+- **待执行**：V-10 真机走查（隐藏期 ≥10 000 帧注入 → RSS 收敛至队列上界且不再增长 + 恢复可见后一次溢出告警）。
+
 ### 稳定性（V-16 真机走查完成：R-25 panic 取证落盘，2026-10-01）
 
 - **V-16 判据（Win11 25H2 build 26200.9457、debug 构建 @ `50d77c6` + 临时探针）**：

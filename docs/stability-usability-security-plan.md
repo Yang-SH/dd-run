@@ -1,6 +1,6 @@
 # dd-run 稳定性 · 可用性 · 安全性加固方案（R 系列）
 
-> **状态**：实施中 ｜ **版本**：v1.9 ｜ **最后更新**：2026-10-01
+> **状态**：实施中 ｜ **版本**：v1.10 ｜ **最后更新**：2026-10-01
 > **关联**：[security-audit-2026-09-23.md](./security-audit-2026-09-23.md)（S-01–S-11 已闭环，本文不重复）· [future-features-plan.md](./future-features-plan.md)（N1–N5 功能向，本文不重叠）· [optimization-plan.md](./optimization-plan.md) · [search-file.md](./search-file.md) · [search.md](./search.md) · [implementation.md](./implementation.md) · [protocol.md](./protocol.md) · [manifest-schema.md](./manifest-schema.md) · [INDEX.md](./INDEX.md)
 
 ---
@@ -389,7 +389,7 @@ S-01–S-11 修复逐项复核与审计记录一致；manifest/exe 双哈希**�
 
 **批四 资源与挂死（改造型）**
 
-- [ ] R-03 入站队列定容 + 截断提示（帧队列 128 / host 请求 32；V-10）
+- [x] R-03 入站队列定容 + 截断提示（帧队列 128 / host 请求 32；V-10）——2026-10-01：dd-host `process.rs` 读线程改经 `InboundGate`（`mpsc::sync_channel(128)` + `try_send`，**满则丢新帧**并置位 `overflown` / 累计 `dropped`，不阻塞读线程避免反压子进程 stdout 管道）；`ExtensionProcess::take_inbound_overflow()`（episode 语义：观察即复位）由 dd-gui `refresh::poll_notifications` 每帧观察——dd-host `log::warn!` + UI 错误 toast `toast.ext_overflow`（zh/en，完备性单测自动覆盖），**每扩展每会话至多一次**（`PaletteApp::overflow_warned`，与 R-17 `settings_save_warned` 同口径）；`host_requests` 经参数化 `push_capped`（cap 32）drop-oldest + 溢出记日志；in-process 适配器同口径定容（host_requests 32；顺带补齐 notifications 的 `DIAGNOSTIC_BUS_CAP` 截断，与子进程路径 M9 R1 终态等价对齐）；r03 三条单测（>128 帧队列恒 128 + 标志置位 + episode 复位 / 恰 128 不置位负例 / >32 条保留最新 32 条最早丢弃）绿；workspace **571/571 全绿**（+3），fmt 零差异、clippy 零告警；V-10 真机走查（隐藏期 ≥10 000 帧注入 → RSS 收敛至 ≤128 MiB 上界且不再增长 + 恢复可见后一次溢出告警）待执行
 - [ ] R-04 in-process 调用超时 + apps 负缓存（V-11）
 - [ ] R-26 单实例互斥：`CreateMutexW` + 已运行 `MessageBoxW` 提示退出（V-15）
 - [ ] V-13 内存基线记录并回写 implementation.md §3.1 台账（批四收尾动作）
@@ -462,3 +462,4 @@ S-01–S-11 修复逐项复核与审计记录一致；manifest/exe 双哈希**�
 | v1.7 | 2026-10-01 | **R-02 + R-17 V-2 完成（批一走查第二项）**：① 20 次「MoveWindow 变尺寸 → 隐藏」同链路原子写（每次内容各异，rename 替换既有文件）零 `.tmp` 残留；② 强杀重启后 config SHA-256 逐字节一致；③ 20 次唤起-隐藏延迟均值 66 ms / 峰值 424 ms 无感知卡顿；④ R-17 口径——config 置只读 → 失败 toast 可见（3000ms）→ 过期后第二次失败**无新 toast**（恰一次）→ 恢复可写保存成功且静默；终态 config 与基线逐值一致（panel_size 还原 null）。环境注记：本会话合成鼠标（hover 像素级对照证实被 winit/egui 忽略）与修饰键（GetAsyncKeyState 真实键态）双重不可用 → 设置页开关无法触达，以同链路 `persist_panel_size` 变尺寸落盘替代（atomic_write 成败反馈与设置页开关同源），设置页开关路径由 r02/r17 单测覆盖；首跑时序缺陷（两次失败间隔 < toast TTL 残影误判）发现后补跑正确时序收口 |
 | v1.8 | 2026-10-01 | **R-07 V-12 完成（批一走查第三项）**：① 基线复制（calc `7-3` → Enter）日志 `入队 → 成功`、剪贴板实测 `= 4`；② 占用器（独立进程持**真实隐藏窗口句柄** OpenClipboard 不释放；`OpenClipboard(NULL)` 本机恒失败为环境限制非产品问题）→ calc `4-1` → 日志 `入队 → 失败`，**失败 toast 可见**（{e} 含 arboard 原因摘要）；③ **核心判据**：占用期工作线程阻塞时 UI 零冻结——6 次显隐迁移 avg 64.2 ms / max 105 ms（与无占用 66 ms 无差别）；④ 占用期写入失败未污染剪贴板、用户剪贴板文本保存还原。走查时序教训两则：查询 `/` 字符 0 命中（A3 过滤语义）改用 `-`；失败 toast 截图须在到达（~T+1s）与过期（T+4s）窗口内 |
 | v1.9 | 2026-10-01 | **R-25 V-16 完成（批一走查第四项，R-25 三口径收口）**：临时环境变量门控探针（`DDRUN_V16_PROBE=1`，后台线程 `v16-probe` 4 s 后 panic；走查后移除零残留）注入一次 panic——`logs\panic.log` 恰新增一条且时间戳（RFC3339 +08:00 毫秒）/ message / location（`main.rs:62:17`）齐备；回归双证——后台线程 panic 后进程同 PID 存活、stderr 出现默认 hook 输出（标准 panic 流程未变），移除探针重建后干净实例 12 s 运行 + `WM_CLOSE` 优雅退出 `panic.log` 零新增（正常退出路径不写条目）。环境注记：winit/eframe 0.36 不消费线程级 `WM_QUIT`，优雅退出以枚举窗口 `WM_CLOSE` 达成；文档头版本补同步（v1.6→v1.9，v1.7/v1.8 两轮头部漏更正） |
+| v1.10 | 2026-10-01 | **批四动工：R-03 落地**（入站队列定容 + 截断提示）：子进程读线程 `InboundGate`（`sync_channel(128)` + `try_send` 丢新帧 + `overflown`/`dropped` 原子量）——面板隐藏期间流氓扩展刷 stdout 不再无界增长（RSS 上界 ≈128 帧 × 1 MiB，不阻塞读线程避免反压管道）；`host_requests` drop-oldest 定容 32（`push_capped` 参数化）；溢出告警 = dd-host `log::warn` + UI 错误 toast（每扩展每会话一次）；in-process 适配器同口径（host_requests 32 + notifications 64 截断补齐）。r03 ×3 单测、workspace **571/571 全绿**（+3）、fmt/clippy 零差异零告警；V-10 待执行。环境注记：本会话裸测 GNU 工具链 `dlltool.exe` 不在 PATH（rustup 工具链 self-contained 目录内含，补 PATH 后门禁正常） |

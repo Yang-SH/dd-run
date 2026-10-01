@@ -158,6 +158,16 @@ impl ExtClient {
         }
     }
 
+    /// R-03：观察入站帧队列溢出并复位（episode 语义见
+    /// [`ExtensionProcess::take_inbound_overflow`]）。in-process 无读线程队列
+    /// （`serve_line` 同步产出、即产即路由），恒 `None`。
+    pub fn take_inbound_overflow(&mut self) -> Option<u64> {
+        match self {
+            Self::Subprocess(p) => p.take_inbound_overflow(),
+            Self::InProcess(_) => None,
+        }
+    }
+
     /// 后端是否已退出。in-process 恒 `false`（无独立进程）。
     pub fn has_exited(&mut self) -> bool {
         match self {
