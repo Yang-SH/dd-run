@@ -32,7 +32,17 @@ impl PaletteApp {
 
 impl PaletteApp {
     /// 客户端归还入口（M3）：写回 warm 集 + LRU 触达；超容驱逐最久未用者（A7）。
+    /// R-04：in-process 调用**超时滞留**的客户端（扩展对象随工作线程未归还）
+    /// 拒绝归回——本会话标记 Failed（扩展卡错误行 + Retry，重试经重聚合重建
+    /// 全新客户端），避免 warm 集里存着永远答复「滞留不可用」的空壳。
     pub(crate) fn store_warm_process(&mut self, ext_id: String, proc: ExtClient) {
+        if proc.is_in_process_hung() {
+            log::warn!(
+                "[dd-gui] 扩展 {ext_id} in-process 调用超时滞留 → 本会话标记 Failed（不回 warm 集）"
+            );
+            self.mark_source_failed(&ext_id, "in-process 调用超时，扩展滞留未归还".to_string());
+            return;
+        }
         self.processes.push((ext_id.clone(), proc));
         if let Some(victim) = self.lru.access(&ext_id) {
             if victim != ext_id {
@@ -92,6 +102,17 @@ impl PaletteApp {
         }
         // M4/§11：warm = 成功恢复 → 清零连续崩溃计数（解除熔断）
         self.reset_crash(ext_id);
+    }
+
+    /// R-04：源状态标 Failed（in-process 调用超时滞留）——扩展卡错误行可见，
+    /// Retry 按钮可重试（重聚合 → `open()` 重建全新客户端）。仅当当前非 Failed
+    /// 时覆写（保留聚合期更早的失败原因）。
+    pub(crate) fn mark_source_failed(&mut self, ext_id: &str, error: String) {
+        if let Some(s) = self.sources.iter_mut().find(|s| s.id == ext_id) {
+            if !s.status.is_failed() {
+                s.status = SourceStatus::Failed { error };
+            }
+        }
     }
 }
 

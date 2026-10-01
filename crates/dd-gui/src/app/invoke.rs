@@ -245,8 +245,12 @@ impl PaletteApp {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ext_inprocess::InProcessExtension;
     use crate::test_support::{ctx, dying_client, make_app};
+    use dd_ext::ExtensionSpec;
     use dd_gui::aggregator::{SourceStatus, SourceSummary};
+    use dd_host::process::ProtocolError;
+    use dd_protocol::model::Sender;
 
     #[test]
     fn poll_invoke_on_dead_process_drops_to_stub_and_records_crash() {
@@ -286,6 +290,86 @@ mod tests {
                 .unwrap_or(0)
                 >= 1,
             "应记录一次崩溃"
+        );
+    }
+
+    /// R-04：in-process 调用超时链路——假慢扩展（invoke 300 ms）× 50 ms 注入
+    /// 超时 → 协议 `Timeout` 错误 + 扩展对象滞留（`is_in_process_hung`）；
+    /// 滞留 outcome 回归 → `inflight` 复位、**不回 warm 集**、扩展呈 Failed
+    ///（扩展卡错误行 + Retry 可重试）。
+    #[test]
+    fn r04_slow_ext_timeout_failed_reset() {
+        let c = ctx();
+
+        // ① 客户端级：慢扩展 × 短超时 → Timeout + 滞留
+        fn slow_spec() -> ExtensionSpec {
+            ExtensionSpec {
+                id: "com.ddrun.slow",
+                display_name: "Slow",
+                description: "慢扩展夹具（R-04）",
+                frozen: false,
+                has_fallback: false,
+                capabilities: &[],
+                log_tag: "dd-ext-slow",
+                top_level: || Vec::new(),
+                fallback: None,
+                invoke: |_| {
+                    std::thread::sleep(std::time::Duration::from_millis(300));
+                    (CommandResult::Dismiss, Vec::new())
+                },
+                pages: None,
+            }
+        }
+        let mut client = ExtClient::InProcess {
+            ext: Some(InProcessExtension::new(slow_spec())),
+            timeout: std::time::Duration::from_millis(50),
+        };
+        let err = client
+            .invoke(&InvokeParams {
+                id: "slow.x".into(),
+                sender: Sender::TopLevel,
+                context: None,
+            })
+            .expect_err("慢扩展应超时");
+        assert!(
+            matches!(err, ProtocolError::Timeout { .. }),
+            "应为协议 Timeout 错误，实际 {err}"
+        );
+        assert!(
+            client.is_in_process_hung(),
+            "超时后扩展对象应滞留（槽位 None）"
+        );
+
+        // ② 应用级：滞留客户端随失败 outcome 回归 → Failed（经 store_warm_process 拒绝）
+        let mut app = make_app();
+        let ext_id = "com.ddrun.slow";
+        app.sources.push(SourceSummary {
+            id: ext_id.to_string(),
+            name: "Slow".to_string(),
+            status: SourceStatus::Warm { commands: 1 },
+        });
+        let (tx, rx) = mpsc::channel();
+        let _ = tx.send(InvokeOutcome {
+            ext_id: ext_id.to_string(),
+            proc: Some(client),
+            result: Err(err.to_string()),
+            stub_reheat: false,
+        });
+        app.invoke_rx = Some(rx);
+        app.inflight.insert(ext_id.to_string());
+
+        app.poll_invoke(&c);
+
+        assert!(app.inflight.is_empty(), "inflight 应复位（不再永占）");
+        assert!(
+            app.processes.iter().all(|(id, _)| id != ext_id),
+            "滞留客户端不得回 warm 集（否则永远答复滞留不可用）"
+        );
+        let s = app.sources.iter().find(|s| s.id == ext_id).unwrap();
+        assert!(
+            s.status.is_failed(),
+            "扩展应呈 Failed（Retry 可重试），实际 {:?}",
+            s.status
         );
     }
 }

@@ -17,17 +17,35 @@
 //!   invoke）与子进程路径**同语义**，返回消息形状一致（B2 已用 parity 单测锁定）。
 
 use std::process::ExitStatus;
+use std::sync::mpsc::{self, RecvTimeoutError};
+use std::thread;
+use std::time::Duration;
 
 use dd_ext::ExtensionSpec;
 use dd_host::manifest::LoadedExtension;
 use dd_host::process::{CloseError, ExtensionProcess, ProtocolError, TIMEOUT_GET_ITEMS};
 use dd_protocol::messages::{
-    GetItemsParams, GetItemsResult, InitializeResult, InvokeParams, RawMessage,
+    error_codes, GetItemsParams, GetItemsResult, InitializeResult, InvokeParams, RawMessage,
+    RpcError,
 };
-use dd_protocol::methods::METHOD_GET_ITEMS;
+use dd_protocol::methods::{
+    METHOD_FALLBACK_COMMANDS, METHOD_GET_COMMAND, METHOD_GET_ITEMS, METHOD_INITIALIZE,
+    METHOD_INVOKE, METHOD_TOP_LEVEL_COMMANDS,
+};
 use dd_protocol::model::{CommandItem, CommandResult};
 
 use crate::ext_inprocess::InProcessExtension;
+
+/// R-04：in-process 调用统一超时（V-11 判据 T，**初值 5 s**；真机首屏实测
+/// 校准后在方案 §10 留痕）。
+///
+/// in-process 本是纯函数调用，但内置扩展的处理函数可能做**阻塞 I/O**——apps
+/// 首调枚举 ~400 应用（COM + 逐项图标提取），死 UNC 快捷方式的 `is_file()` /
+/// `GetImage` 可阻塞至网络超时：一旦挂死，聚合 `thread::scope` 的 join 即永久
+/// 等待（首屏永不落地「加载中」）或该扩展 `inflight` 永占（回复 busy 直到重启）。
+/// 故 in-process 调用与子进程路径一样包超时：超时返回协议层 `Timeout`，扩展
+/// 对象随工作线程**自然滞留**（不强行 kill），本扩展本会话呈 Failed + Retry。
+pub const INPROCESS_CALL_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// 按注册信息打开客户端（M9 分流收口）：`spec` 命中 → in-process；否则子进程 spawn。
 ///
@@ -49,7 +67,12 @@ pub enum ExtClient {
     /// 第三方 / sidecar 扩展：子进程 JSON-RPC（ADR-1 进程隔离仍对其生效）。
     Subprocess(ExtensionProcess),
     /// 内置扩展：进程内直接 `serve_line`（M9；无子进程、无 exe）。
-    InProcess(InProcessExtension),
+    /// R-04：`ext` 在调用期间移入工作线程——`None` = 上次调用超时、对象随
+    /// 线程滞留未归还（本会话不可用，呈 Failed）；`timeout` 可注入（单测缩短）。
+    InProcess {
+        ext: Option<InProcessExtension>,
+        timeout: Duration,
+    },
 }
 
 impl ExtClient {
@@ -62,19 +85,42 @@ impl ExtClient {
 
     /// 进程内后端：以运行期构造的 [`ExtensionSpec`] 建 in-process 扩展 + §5.1 握手。
     pub fn open_builtin(spec: ExtensionSpec) -> Result<(Self, InitializeResult), String> {
-        let mut ext = InProcessExtension::new(spec);
-        let init = ext
-            .initialize(
-                crate::aggregator::PROTOCOL_VERSION,
-                crate::aggregator::HOST_VERSION,
-            )
-            .map_err(|e| format!("initialize 失败：{e}"))?;
-        Ok((Self::InProcess(ext), init))
+        let ext = InProcessExtension::new(spec);
+        let id = ext.id().to_string();
+        // R-04：initialize 同口径包超时（内置握手虽轻，统一防线）——构造即超时
+        // 的扩展直接 open 失败，不会进入保活集。
+        let (returned, init) =
+            run_with_timeout(ext, METHOD_INITIALIZE, INPROCESS_CALL_TIMEOUT, |ext| {
+                ext.initialize(
+                    crate::aggregator::PROTOCOL_VERSION,
+                    crate::aggregator::HOST_VERSION,
+                )
+            });
+        let Some(ext) = returned else {
+            return Err(format!(
+                "in-process 扩展 {id} initialize 超时（{} ms）",
+                INPROCESS_CALL_TIMEOUT.as_millis()
+            ));
+        };
+        let init = init.map_err(|e| format!("initialize 失败：{e}"))?;
+        Ok((
+            Self::InProcess {
+                ext: Some(ext),
+                timeout: INPROCESS_CALL_TIMEOUT,
+            },
+            init,
+        ))
     }
 
     /// 是否内置 in-process（诊断 / 单测用）。
     pub fn is_in_process(&self) -> bool {
-        matches!(self, Self::InProcess(_))
+        matches!(self, Self::InProcess { .. })
+    }
+
+    /// R-04：in-process 扩展对象是否**滞留**（上次调用超时、随工作线程未归还）
+    /// ——`store_warm_process` 据此拒绝归回保活集并把该扩展本会话标记 Failed。
+    pub fn is_in_process_hung(&self) -> bool {
+        matches!(self, Self::InProcess { ext: None, .. })
     }
 
     /// §5.1 握手 + §5.3 版本协商（两后端同语义）。
@@ -85,7 +131,13 @@ impl ExtClient {
     ) -> Result<InitializeResult, ProtocolError> {
         match self {
             Self::Subprocess(p) => p.initialize(protocol_version, host_version),
-            Self::InProcess(p) => p.initialize(protocol_version, host_version),
+            Self::InProcess { ext, timeout } => {
+                let pv = protocol_version.to_string();
+                let hv = host_version.to_string();
+                Self::inproc_call(ext, *timeout, METHOD_INITIALIZE, move |ext| {
+                    ext.initialize(&pv, &hv)
+                })
+            }
         }
     }
 
@@ -93,7 +145,11 @@ impl ExtClient {
     pub fn top_level_commands(&mut self) -> Result<Vec<CommandItem>, ProtocolError> {
         match self {
             Self::Subprocess(p) => p.top_level_commands(),
-            Self::InProcess(p) => p.top_level_commands(),
+            Self::InProcess { ext, timeout } => {
+                Self::inproc_call(ext, *timeout, METHOD_TOP_LEVEL_COMMANDS, |ext| {
+                    ext.top_level_commands()
+                })
+            }
         }
     }
 
@@ -101,7 +157,11 @@ impl ExtClient {
     pub fn fallback_commands(&mut self) -> Result<Vec<CommandItem>, ProtocolError> {
         match self {
             Self::Subprocess(p) => p.fallback_commands(),
-            Self::InProcess(p) => p.fallback_commands(),
+            Self::InProcess { ext, timeout } => {
+                Self::inproc_call(ext, *timeout, METHOD_FALLBACK_COMMANDS, |ext| {
+                    ext.fallback_commands()
+                })
+            }
         }
     }
 
@@ -109,7 +169,12 @@ impl ExtClient {
     pub fn get_command(&mut self, id: &str) -> Result<Option<CommandItem>, ProtocolError> {
         match self {
             Self::Subprocess(p) => p.get_command(id),
-            Self::InProcess(p) => p.get_command(id),
+            Self::InProcess { ext, timeout } => {
+                let id = id.to_string();
+                Self::inproc_call(ext, *timeout, METHOD_GET_COMMAND, move |ext| {
+                    ext.get_command(&id)
+                })
+            }
         }
     }
 
@@ -117,12 +182,16 @@ impl ExtClient {
     pub fn invoke(&mut self, params: &InvokeParams) -> Result<CommandResult, ProtocolError> {
         match self {
             Self::Subprocess(p) => p.invoke(params),
-            Self::InProcess(p) => p.invoke(params),
+            Self::InProcess { ext, timeout } => {
+                let params = params.clone();
+                Self::inproc_call(ext, *timeout, METHOD_INVOKE, move |ext| ext.invoke(&params))
+            }
         }
     }
 
     /// §6.3 拉取整页项。子进程侧沿用既有 `call` + [`TIMEOUT_GET_ITEMS`] 口径；
-    /// in-process 无超时（纯函数调用）。
+    /// in-process 包 R-04 超时（此前「纯函数调用无超时」——apps 页 / 慢处理
+    /// 同样可能挂死 `inflight`）。
     pub fn get_items(
         &mut self,
         page_id: &str,
@@ -138,7 +207,12 @@ impl ExtClient {
                 let value = p.call(METHOD_GET_ITEMS, value, TIMEOUT_GET_ITEMS)?;
                 Ok(serde_json::from_value(value)?)
             }
-            Self::InProcess(p) => p.get_items(page_id, search_text.as_deref()),
+            Self::InProcess { ext, timeout } => {
+                let page_id = page_id.to_string();
+                Self::inproc_call(ext, *timeout, METHOD_GET_ITEMS, move |ext| {
+                    ext.get_items(&page_id, search_text.as_deref())
+                })
+            }
         }
     }
 
@@ -146,7 +220,10 @@ impl ExtClient {
     pub fn poll_notifications(&mut self) -> Vec<Option<String>> {
         match self {
             Self::Subprocess(p) => p.poll_notifications(),
-            Self::InProcess(p) => p.poll_notifications(),
+            Self::InProcess { ext, .. } => ext
+                .as_mut()
+                .map(|p| p.poll_notifications())
+                .unwrap_or_default(),
         }
     }
 
@@ -154,7 +231,10 @@ impl ExtClient {
     pub fn drain_host_requests(&mut self) -> Vec<RawMessage> {
         match self {
             Self::Subprocess(p) => p.drain_host_requests(),
-            Self::InProcess(p) => p.drain_host_requests(),
+            Self::InProcess { ext, .. } => ext
+                .as_mut()
+                .map(|p| p.drain_host_requests())
+                .unwrap_or_default(),
         }
     }
 
@@ -164,15 +244,16 @@ impl ExtClient {
     pub fn take_inbound_overflow(&mut self) -> Option<u64> {
         match self {
             Self::Subprocess(p) => p.take_inbound_overflow(),
-            Self::InProcess(_) => None,
+            Self::InProcess { .. } => None,
         }
     }
 
-    /// 后端是否已退出。in-process 恒 `false`（无独立进程）。
+    /// 后端是否已退出。in-process 恒 `false`（无独立进程；滞留态不走此处，
+    /// 由 [`Self::is_in_process_hung`] 先行判别）。
     pub fn has_exited(&mut self) -> bool {
         match self {
             Self::Subprocess(p) => p.has_exited(),
-            Self::InProcess(_) => false,
+            Self::InProcess { .. } => false,
         }
     }
 
@@ -180,7 +261,7 @@ impl ExtClient {
     pub fn exit_status(&mut self) -> Option<ExitStatus> {
         match self {
             Self::Subprocess(p) => p.exit_status(),
-            Self::InProcess(_) => None,
+            Self::InProcess { .. } => None,
         }
     }
 
@@ -188,16 +269,91 @@ impl ExtClient {
     pub fn failure_detail(&mut self) -> Option<String> {
         match self {
             Self::Subprocess(p) => p.failure_detail(),
-            Self::InProcess(_) => None,
+            Self::InProcess { .. } => None,
         }
     }
 
-    /// §6.6 优雅关闭。in-process 为 noop（无进程可退）。
+    /// §6.6 优雅关闭。in-process 为 noop（无进程可退；滞留态无可关闭对象，
+    /// 扩展随工作线程自然结束）。
     pub fn close(self) -> Result<(), CloseError> {
         match self {
             Self::Subprocess(p) => p.close(),
-            Self::InProcess(p) => p.close(),
+            Self::InProcess { ext, .. } => match ext {
+                Some(p) => p.close(),
+                None => Ok(()),
+            },
         }
+    }
+
+    /// R-04：in-process 调用的线程 + `recv_timeout` 包装（本枚举内的单一事实
+    /// 来源）。`ext` 在调用期间移入工作线程：按时归还 → 放回槽位；超时 →
+    /// 槽位保持 `None`（扩展对象随线程自然滞留），返回协议层 `Timeout`。
+    fn inproc_call<T, F>(
+        slot: &mut Option<InProcessExtension>,
+        timeout: Duration,
+        method: &'static str,
+        op: F,
+    ) -> Result<T, ProtocolError>
+    where
+        T: Send + 'static,
+        F: FnOnce(&mut InProcessExtension) -> Result<T, ProtocolError> + Send + 'static,
+    {
+        let ext = slot.take().ok_or_else(hung_error)?;
+        let (returned, result) = run_with_timeout(ext, method, timeout, op);
+        *slot = returned;
+        result
+    }
+}
+
+/// R-04：滞留态调用的错误——上次调用超时后扩展对象未归还，本会话不可用
+///（与熔断/复热的「暂时不可用」提示同族，UI 层已有 Failed + Retry 呈现）。
+fn hung_error() -> ProtocolError {
+    ProtocolError::Rpc(RpcError {
+        code: error_codes::PROVIDER_UNAVAILABLE,
+        message: "in-process 扩展滞留（上次调用超时，待其自然结束）".to_string(),
+        data: None,
+    })
+}
+
+/// R-04：把 in-process 扩展移入工作线程执行 `op`，`recv_timeout` 等待结果。
+///
+/// 按时归还 → `(Some(ext), result)`；超时 → `(None, Err(Timeout))`（**不阻塞
+/// 也不 kill**：滞留线程受 OS 网络超时上界约束自然结束——apps 枚举的死 UNC
+/// `is_file()` / `GetImage` 最终会返回，扩展对象随之释放）；线程消失（理论
+/// 不可达——扩展 panic 已被 M9 `catch_unwind` 挡住）按滞留口径报内部错误。
+fn run_with_timeout<T, F>(
+    ext: InProcessExtension,
+    method: &'static str,
+    timeout: Duration,
+    op: F,
+) -> (Option<InProcessExtension>, Result<T, ProtocolError>)
+where
+    T: Send + 'static,
+    F: FnOnce(&mut InProcessExtension) -> Result<T, ProtocolError> + Send + 'static,
+{
+    let (tx, rx) = mpsc::channel();
+    thread::spawn(move || {
+        let mut ext = ext;
+        let result = op(&mut ext);
+        let _ = tx.send((ext, result));
+    });
+    match rx.recv_timeout(timeout) {
+        Ok((ext, result)) => (Some(ext), result),
+        Err(RecvTimeoutError::Timeout) => (
+            None,
+            Err(ProtocolError::Timeout {
+                method: method.to_string(),
+                timeout,
+            }),
+        ),
+        Err(RecvTimeoutError::Disconnected) => (
+            None,
+            Err(ProtocolError::Rpc(RpcError {
+                code: error_codes::INTERNAL_ERROR,
+                message: "in-process 调用线程消失（panic 应已被 catch_unwind 挡住）".to_string(),
+                data: None,
+            })),
+        ),
     }
 }
 

@@ -4,6 +4,18 @@
 
 ## [Unreleased]
 
+### 稳定性（R-04：in-process 调用超时 + apps 负缓存，2026-10-01）
+
+- **背景**（R 系列加固批四第二项）：in-process 内置调用原「纯函数调用无超时」——但 apps 首调枚举 ~400 应用（COM + 逐项图标提取），死 UNC 快捷方式的 `is_file()` / `GetImage` 可阻塞至网络超时：聚合 `thread::scope` 的 join 被拖死（首屏永久「加载中」）或该扩展 `inflight` 永占（回复 busy 直到重启）。
+- **修复**：
+  - **统一超时包装**：`ExtClient::InProcess` 改持 `Option<InProcessExtension>` + 可注入 `timeout`（初值 5 s，`INPROCESS_CALL_TIMEOUT`）；全部协议方法（initialize / top_level / fallback / get_command / get_items / invoke）经 `run_with_timeout`——扩展对象移入工作线程 + `recv_timeout`，按时归还放回槽位，**超时返回协议层 `Timeout`、扩展对象随线程自然滞留**（不 kill，受 OS 网络超时上界约束），后续调用答「滞留不可用」；
+  - **滞留不回 warm 集**：`store_warm_process` 单点拒绝（invoke / page / fallback 三条归还链路共用），`mark_source_failed` 把该扩展**本会话标记 Failed**——扩展卡错误行 + Retry 按钮（重试经重聚合重建全新客户端）；
+  - **apps 负缓存**：枚举体抽 `enumerate_apps` + `negative_cached`——枚举 panic 就地接住，空列表随 `OnceLock` 落负缓存，二次聚合不再重付全量枚举（恢复口径与会话级 Failed 一致：重启宿主）；
+  - **panic 隔离面不变**：M9 `catch_unwind` 在扩展侧先行接住（in-process 调用线程消失分支仅为理论兜底）。
+- **测试**：r04 两条单测（假慢扩展 300 ms × 注入 50 ms 超时 → `Timeout` + 滞留 → `inflight` 复位 + Failed；枚举 panic → 负缓存命中、枚举体计数恰 1）绿；`cargo test --workspace` **573/573 全绿**（+2），fmt 零差异、clippy 零告警。
+- **真机冒烟**：五内置扩展全 warm（115+1+5+1+1 命令）、冷启动 867 ms 与基线一致——in-process 改走工作线程后聚合链路无回归。
+- **待执行**：V-11 真机走查（构造指向死 UNC 的 `.lnk` → 首屏降级落地、apps 呈 Failed + Retry、无永久「加载中」；超时阈值 T 初值 5 s）。
+
 ### 稳定性（R-03：扩展 stdout / host 请求入站队列定容 + 溢出告警，2026-10-01）
 
 - **背景**（R 系列加固批四首项）：子进程读线程把帧推入**无界** `mpsc::channel`，仅在面板可见的 `ui()` 里排空——流氓/有缺陷扩展在面板隐藏期间刷 stdout（每行 ≤1 MiB 不触发 TooLarge）→ 内存无界增长 → OOM；`host_requests.push` 同构。

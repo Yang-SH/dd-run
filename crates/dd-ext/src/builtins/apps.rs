@@ -297,42 +297,62 @@ mod sys {
     static APP_CACHE: OnceLock<Vec<App>> = OnceLock::new();
 
     fn app_list() -> &'static Vec<App> {
-        APP_CACHE.get_or_init(|| {
-            // Shell COM（SHCreateItem*/IShellItem）需要 COM 初始化；S_OK/S_FALSE 均可继续。
-            unsafe {
-                CoInitializeEx(std::ptr::null(), COINIT_APARTMENTTHREADED as u32);
+        APP_CACHE.get_or_init(|| negative_cached(enumerate_apps))
+    }
+
+    /// R-04：枚举 + **负缓存**核心（`enumerate` 可注入供单测）。
+    ///
+    /// 内置扩展 panic 在宿主侧本有 M9 `catch_unwind` 兜底，但那不落缓存——枚举
+    /// 体 panic 后 `OnceLock` 保持未初始化，下一次聚合会**重新支付**全量枚举
+    /// （~400 应用 COM + 图标提取，死 UNC 场景还可能再挂一次网络超时）。此处
+    /// 就地接住并落**负缓存**（空列表随 `APP_CACHE` 落定），本进程内不再重付
+    /// 枚举；恢复口径与 R-04 会话级 Failed 一致（重启宿主）。
+    fn negative_cached(enumerate: impl FnOnce() -> Vec<App>) -> Vec<App> {
+        match std::panic::catch_unwind(std::panic::AssertUnwindSafe(enumerate)) {
+            Ok(apps) => apps,
+            Err(_) => {
+                log::warn!("[dd-ext-apps] 应用枚举 panic——落负缓存（本进程内不再重付全量枚举）");
+                Vec::new()
             }
+        }
+    }
 
-            let mut seen: HashSet<String> = HashSet::new();
-            let mut seen_exe: HashSet<String> = HashSet::new();
-            let mut apps: Vec<App> = Vec::new();
+    /// 全量应用枚举（原 `app_list` 的 `get_or_init` 闭包体逐字搬移）。
+    fn enumerate_apps() -> Vec<App> {
+        // Shell COM（SHCreateItem*/IShellItem）需要 COM 初始化；S_OK/S_FALSE 均可继续。
+        unsafe {
+            CoInitializeEx(std::ptr::null(), COINIT_APARTMENTTHREADED as u32);
+        }
 
-            // ① shell:AppsFolder：应用本体（UWP + 桌面应用），对齐 PowerToys CmdPal
-            match collect_apps_folder(&mut apps, &mut seen) {
-                Ok(n) => log::debug!("[dd-ext-apps] AppsFolder 枚举到 {n} 个应用"),
-                Err(e) => {
-                    log::warn!("[dd-ext-apps] AppsFolder 枚举失败（仅用开始菜单 .lnk 兜底）：{e}")
-                }
+        let mut seen: HashSet<String> = HashSet::new();
+        let mut seen_exe: HashSet<String> = HashSet::new();
+        let mut apps: Vec<App> = Vec::new();
+
+        // ① shell:AppsFolder：应用本体（UWP + 桌面应用），对齐 PowerToys CmdPal
+        match collect_apps_folder(&mut apps, &mut seen) {
+            Ok(n) => log::debug!("[dd-ext-apps] AppsFolder 枚举到 {n} 个应用"),
+            Err(e) => {
+                log::warn!("[dd-ext-apps] AppsFolder 枚举失败（仅用开始菜单 .lnk 兜底）：{e}")
             }
+        }
 
-            // ② 开始菜单 .lnk/.url 兜底（两个根，递归；按显示名去重，仅补 AppsFolder 缺席项）
-            for root in start_menu_roots() {
-                collect_lnk_fallback_from_root(root, &mut apps, &mut seen, &mut seen_exe);
+        // ② 开始菜单 .lnk/.url 兜底（两个根，递归；按显示名去重，仅补 AppsFolder 缺席项）
+        for root in start_menu_roots() {
+            collect_lnk_fallback_from_root(root, &mut apps, &mut seen, &mut seen_exe);
+        }
+
+        // 按显示名排序（列表稳定、可预测）
+        apps.sort_by_key(|a| a.title.to_lowercase());
+        log::debug!(
+            "[dd-ext-apps] 枚举到 {} 个应用{}",
+            apps.len(),
+            if apps.len() >= MAX_APPS {
+                format!("（达到上限 {MAX_APPS}，已截断）")
+            } else {
+                String::new()
             }
-
-            // 按显示名排序（列表稳定、可预测）
-            apps.sort_by_key(|a| a.title.to_lowercase());
-            log::debug!(
-                "[dd-ext-apps] 枚举到 {} 个应用{}",
-                apps.len(),
-                if apps.len() >= MAX_APPS {
-                    format!("（达到上限 {MAX_APPS}，已截断）")
-                } else {
-                    String::new()
-                }
-            );
-            apps
-        })
+        );
+        apps
     }
 
     /// 递归枚举一个开始菜单根下的 `.lnk` / `.url` 兜底项。
@@ -1163,6 +1183,34 @@ mod sys {
     mod tests {
         use super::*;
         use dd_protocol::model::Sender;
+
+        /// R-04：枚举失败（panic）路径落**负缓存**——失败后空列表随 `OnceLock`
+        /// 落定，第二次调用不再执行枚举体（二次聚合不重付全量枚举）。
+        #[test]
+        fn r04_apps_negative_cache() {
+            use std::sync::atomic::{AtomicUsize, Ordering};
+            static CALLS: AtomicUsize = AtomicUsize::new(0);
+            static CACHE: OnceLock<Vec<App>> = OnceLock::new();
+
+            let first_enum = || {
+                CALLS.fetch_add(1, Ordering::SeqCst);
+                panic!("注入的枚举失败");
+            };
+            let first = CACHE.get_or_init(|| negative_cached(first_enum));
+            assert!(first.is_empty(), "失败路径应落空列表负缓存");
+
+            let second_enum = || {
+                CALLS.fetch_add(1, Ordering::SeqCst);
+                panic!("注入的枚举失败");
+            };
+            let second = CACHE.get_or_init(|| negative_cached(second_enum));
+            assert!(second.is_empty());
+            assert_eq!(
+                CALLS.load(Ordering::SeqCst),
+                1,
+                "枚举体只应执行一次（负缓存命中，不重付全量枚举）"
+            );
+        }
 
         /// R-09 夹具专用：`IShellLinkW` vtbl 只到 SetPath（槽 20——IDL 序
         /// GetPath=3, GetIDList=4, …, SetHotkey=18, GetHotkey=19, SetPath=20，
