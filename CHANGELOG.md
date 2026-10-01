@@ -4,6 +4,15 @@
 
 ## [Unreleased]
 
+### 稳定性（V-16 真机走查完成：R-25 panic 取证落盘，2026-10-01）
+
+- **V-16 判据（Win11 25H2 build 26200.9457、debug 构建 @ `50d77c6` + 临时探针）**：
+  - **注入 panic**：`main.rs` 挂临时环境变量门控探针（`DDRUN_V16_PROBE=1` 时后台线程 `v16-probe` 启动 4 s 后 `panic!`；走查后移除，工作树零残留）→ `%APPDATA%\dd-run\logs\panic.log` **恰新增一条**：`[2026-10-01T10:46:52.808+08:00] thread "v16-probe" panicked at crates\dd-gui\src\main.rs:62:17:` + message——时间戳（RFC3339 本地时区毫秒）/ message / location 三要素齐备（另有线程名）；
+  - **回归：默认 panic 流程不变**——panic 落在后台线程：进程同 PID 存活继续运行（ui 循环日志持续输出），stderr 同步出现默认 hook 输出（`thread 'v16-probe' panicked …` + `RUST_BACKTRACE` 提示）= 落盘后标准 panic 流程未被替换；
+  - **正常退出路径零新增**：移除探针重建后干净实例运行 12 s（冷启动完成 885 ms）→ 枚举进程顶层窗口 `PostMessageW(WM_CLOSE)` 优雅退出（进程消失）→ `panic.log` 保持 2 行（仅探针条目）不变。
+- **环境注记**：winit/eframe 0.36 事件循环不消费线程级 `PostThreadMessageW(WM_QUIT)`（投递返回 True 但进程不退出）——优雅退出改用枚举顶层窗口 `WM_CLOSE`（CloseRequested → `run_native` 正常返回），与托盘「退出」同汇于正常关机链路。
+- **文档**：stability-usability-security-plan.md v1.9（§6.4 R-25 勾选与注记、§10 演进、文档头版本补同步 v1.6→v1.9——v1.7/v1.8 两轮头部漏更正）。零代码改动（探针走查后移除）。
+
 ### 稳定性（V-12 真机走查完成：R-07 剪贴板写入移出 UI 线程，2026-10-01）
 
 - **V-12 判据（Win11 25H2 build 26200.9457、debug 构建 @ `0258eb1`）**：
