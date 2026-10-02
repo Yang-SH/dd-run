@@ -4,6 +4,13 @@
 
 ## [Unreleased]
 
+### 稳定性（V-4/V-5 真机走查完成 + V-8 注记收口，2026-10-02）
+
+- **V-4（R-16 open_url 失败 toast）**：失败腿 file:// 命令指向不存在文件 → `ShellExecuteW = 2` → 错误 toast「打开失败：ShellExecuteW = 2」可见（截图留档，文案 = `toast.open_fail`"打开失败：{e}" 含原因摘要）；成功腿（sample https 命令两腿）静默零 toast。**判据口径修正**：断网不构成 `open_url` 失败源（`webbrowser::open` 拉起默认浏览器即成功，断网失败宿主不可见）；`webbrowser::open` 失败分支（无默认浏览器关联）需摘除用户默认浏览器关联方可模拟，环境侵入不做 → 注记，与 file:// 腿共用同一 toast 单点 + r16 单测锚定。
+- **V-5（R-19 托盘热键标签动态化）**：改绑 Ctrl+Shift+P 后重启，UIAutomation 实读托盘 tooltip = 「dd-run — Ctrl+Shift+P」（NIM_ADD 携带新组合；右键 NIM_MODIFY 懒刷新后二次读数一致）；托盘菜单「显示/隐藏面板 Ctrl+Shift+P」动态尾缀可见（截图）；改绑组合下 Toggle 正常（唤起位置与基线一致）。即时腿注记：`sync_tray_hotkey_label` 唯一写点在 `poll_hotkey` seq 配对确认分支内（未知 seq 事件在 sync 前被忽略），注入不可等价触发；与重启后腿共用同一 sync 单点 + r19 单测锚定（口径同 R-08）。
+- **V-8（R-21 热键危险组合）注记口径收口**：等价腿真机——config 直写 Alt+Space（= 黄线警示「仍要保存」终态）启动：`RegisterHotKey` 成功 + 热键链路 alive（Toggle 唤起居中 (635,250)）；黄线警示腿渲染于捕获对话框，合成输入受限未视觉复核（口径同 R-08），黑名单广度由 `r21_hotkey_blacklist_matches` 锚定。
+- **环境发现**：egui 设置页对 posted 鼠标点击不响应（10-01 v9s1「设置页截图」实为根页，9-30 v2 同证；GetWindowRect 无阴影偏移、ClientToScreen 修正后仍不响应）→ 设置页视觉腿一律注记口径（R-08 先例）。V-6/V-9/V-18en 待执行（V-18en 首跑 toast 已触发但 TTL 3000 ms 内未捕获——唤起须提前至 ~2 s 重跑）。
+
 ### 稳定性（V-10 真机走查完成：R-03 入站队列上界实证，2026-10-02）
 
 - **V-10 判据（Win11 25H2 build 26200.9457、debug 构建）**：
