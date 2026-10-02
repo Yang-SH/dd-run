@@ -4,6 +4,12 @@
 
 ## [Unreleased]
 
+### 稳定性（V-9 三态完成 + R-18 en 复跑完成 + V-13 腿 A，2026-10-02）
+
+- **V-9（R-12 sidecar 首跑钉扎三态）**：首钉 pin 落痕（10-01 首跑创建）；**同版篡改**——exe 追加 1 字节后启动：日志「与钉扎哈希不符且宿主版本未变——疑似被替换」/「trust=Pending → 不拉起（fail-closed）」/「设置页已告警」三连，trust.json 保持原 pin 不重钉，warm 列表无文件搜索，页脚「有 1 个扩展待批准」提示可见（截图+台账落盘 `%TEMP%\ddrun-v13s\`）；**升级重钉**——钉扎版本改写 0.1.0 模拟旧宿主台账携带 → 静默重钉回 0.1.1（零告警）+ 文件搜索 warm 恢复。exe 走查后还原（sha 与 pin 一致）。
+- **R-18 en 复跑**：`lang=en_us`（修正后）+ 占用助手持 Ctrl+Space → 英文失败 toast「Global hotkey registration failed — …Pick a different combo in Settings」可见 + 整 UI 英文（截图）。**lang 值口径修正**：合法值 `en_us`/`zh_cn`，`"en"` 解析失败静默回落系统语言（10-01 setlang.ps1 同 bug，当时复跑 toast 实为 zh）；错误 toast TTL 3000 ms，启动期唤起须提前至 ~2 s。
+- **V-13 腿 A**：500 次 `WM_HOTKEY` 显隐循环 61.2 s 零失败，PRIV 93→105.2 MB（**+12.2 MB，门限 +50 MB 内**），终态 toggle 位置与基线逐位一致；WS 大幅回落为隐藏路径 `trim_working_set` 既有行为（增长判据以私有提交内存为准）。**腿 B 进行中**：托盘常驻 24 h（分离进程，10 min 采样 + 每小时唤起脉冲；「面板常驻」判据按失焦自动隐藏的既有设计操作化），完成后回写 implementation.md §3.1 台账收口。
+
 ### 稳定性（V-4/V-5 真机走查完成 + V-8 注记收口，2026-10-02）
 
 - **V-4（R-16 open_url 失败 toast）**：失败腿 file:// 命令指向不存在文件 → `ShellExecuteW = 2` → 错误 toast「打开失败：ShellExecuteW = 2」可见（截图留档，文案 = `toast.open_fail`"打开失败：{e}" 含原因摘要）；成功腿（sample https 命令两腿）静默零 toast。**判据口径修正**：断网不构成 `open_url` 失败源（`webbrowser::open` 拉起默认浏览器即成功，断网失败宿主不可见）；`webbrowser::open` 失败分支（无默认浏览器关联）需摘除用户默认浏览器关联方可模拟，环境侵入不做 → 注记，与 file:// 腿共用同一 toast 单点 + r16 单测锚定。
