@@ -1,6 +1,6 @@
 # dd-run 稳定性 · 可用性 · 安全性加固方案（R 系列）
 
-> **状态**：实施中 ｜ **版本**：v1.21 ｜ **最后更新**：2026-10-03
+> **状态**：实施中 ｜ **版本**：v1.22 ｜ **最后更新**：2026-10-03
 > **关联**：[security-audit-2026-09-23.md](./security-audit-2026-09-23.md)（S-01–S-11 已闭环，本文不重复）· [future-features-plan.md](./future-features-plan.md)（N1–N5 功能向，本文不重叠）· [optimization-plan.md](./optimization-plan.md) · [search-file.md](./search-file.md) · [search.md](./search.md) · [implementation.md](./implementation.md) · [protocol.md](./protocol.md) · [manifest-schema.md](./manifest-schema.md) · [INDEX.md](./INDEX.md)
 
 ---
@@ -421,7 +421,7 @@ S-01–S-11 修复逐项复核与审计记录一致；manifest/exe 双哈希**�
 | 会话内 icon_cache 无淘汰（纹理堆积） | **缓办** | 已有「隐藏清空」兜底，触发依赖用户刷出海量唯一图标；V-13 内存基线建立后凭数据复核 |
 | CI 门禁（fmt / clippy / test 远程自动化） | **缓办** | 单机开发阶段以 §6.3 批间纪律为门禁；R-09 落地（裸机全绿）是任何 CI 的前置。若后续转远程协作再立项，本行为显式占位、防「门禁只活在本方案生命周期内」 |
 | 全量日志文件后端（O4 后端加文件输出 + 轮转） | **缓办** | R-25 已覆盖崩溃取证这一刚性需求；全量落盘引入磁盘增长/轮转问题，等真实排障需求再定 |
-| 依赖供应链（`cargo audit` / Cargo.lock 更新策略） | **缓办** | S 系列审计为代码级取证，当前依赖集合小且已锁定。**约定**：每次新增依赖时跑一次 `cargo audit` 并在 CHANGELOG 记录结论 |
+| 依赖供应链（`cargo audit` / Cargo.lock 更新策略） | ~~缓办~~ **已首检（2026-10-03）**：`cargo audit` 对 Cargo.lock（339 依赖）扫描 **0 漏洞 / 0 警告**（exit 0，RustSec advisory-db 1288 条）。**约定升级**：发版前随 fmt/clippy 门禁一并执行 | S 系列审计为代码级取证，当前依赖集合小且已锁定。**约定**：每次新增依赖时跑一次 `cargo audit` 并在 CHANGELOG 记录结论 |
 
 ---
 
@@ -474,3 +474,4 @@ S-01–S-11 修复逐项复核与审计记录一致；manifest/exe 双哈希**�
 | v1.19 | 2026-10-03 | **V-6 完成（R-20 三口径收口）+ V-9 卡片行视觉实证 + dist 重建交付**：① dist 可交付重建（HEAD 全量加固，fmt/clippy 零差异零告警，release 构建通过，单文件 9,315,328 B / sidecar 832,000 B / portable zip 4,636,064 B 同步重打，release exe 冒烟通过）；② **V-6**——dist\extensions.d 放截断 JSON → 冷启动扫描 → 扩展卡顶部 danger 行「清单加载失败：…broken-ext.json——不是合法 JSON: EOF while parsing a value at line 1 column 65」（路径+原因俱全，用户实机截图）；③ **V-9 卡片行真机视觉实证**（用户截图）——真实事件触发：dist 重建的 release sidecar 哈希 ≠ debug pin 且宿主版本未变 → 规则 3 判同版篡改，tamper 行 + 「随包 | 待批准」标签 + 允许/阻止按钮 + 待批准汇总全上屏；**发版流程要点：同版本重发 sidecar 内容变化须 bump 宿主版本**（否则升级用户全量触发同版告警——fail-closed 设计行为）。V 系列进度：14/16 完成，余 V-7（真实 IME）/ V-14（真实多屏）待真实输入/硬件会话 |
 | v1.20 | 2026-10-03 | **V-7 定性收口（注入输入过滤实证）+ 环境机制修正**：SendInput API 受理 2/2 但事件**不入流**（F13 注入 → GetAsyncKeyState 回声 0；面板前台 + 查询框聚焦下注入 8 字母零到达，截图实证）——本机安全软件系统级**过滤注入输入**，v1.15/V-1 的「UIPI 拦截」表述修正为「注入过滤」（同完整性下非 UIPI）；叠加 10-02 的「posted 消息不经 IME」结论 → V-7 只能在真实键盘 + 真实 IME 会话执行（守卫逻辑 r22 单测锚定）。**V 系列余 V-7 / V-14 两项，均为真实输入/硬件会话项**；其余 14 项全部三口径（或注记口径）收口 |
 | v1.21 | 2026-10-03 | **V-14 分辨率变更腿完成（R-01 同族触发面）**：单屏三拓扑动态切换（1080p → 900p → 768p → 还原，`ChangeDisplaySettingsExW`）期间 10 次显隐零失败——每次 `WM_DISPLAYCHANGE` 后 `screen_rect` 重解析正确（工作区 1920×1032 / 1600×852 / 1366×720 逐拓扑更新）、面板自适应尺寸（650×532 → 650×452）居中落位（635,250 / 475,200 / 358,134）、还原逐位回基线；panic.log 零新增。余腿（多显示器热拔插 / DPI 缩放 / RDP 断连重连）待真实多屏会话。注：本机存在 GameViewer 虚拟显示适配器——`EnumDisplaySettings(null)` 落在伪显示器上，display API 须显式指定 `\\.\DISPLAY1` |
+| v1.22 | 2026-10-03 | **§7 cargo audit 缓办项首检转正**：`cargo audit`（RustSec advisory-db 1288 条）对 Cargo.lock 339 依赖扫描 **0 漏洞 / 0 警告**（exit 0）——约定升级为「发版前随 fmt/clippy 门禁一并执行」；implementation.md 索引行同步（§3.1.1 内存基线台账，1027 行） |
