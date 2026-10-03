@@ -1,6 +1,6 @@
 # dd-run 后续功能规划（N1–N5）
 
-> **状态**：规划中 ｜ **版本**：v1.0 ｜ **最后更新**：2026-09-28
+> **状态**：规划中 ｜ **版本**：v1.1 ｜ **最后更新**：2026-10-02
 > **关联**：[implementation.md](./implementation.md) · [optimization-plan.md](./optimization-plan.md) · [settings-personalization-plan.md](./settings-personalization-plan.md) · [protocol.md](./protocol.md) · [manifest-schema.md](./manifest-schema.md) · [security-audit-2026-09-23.md](./security-audit-2026-09-23.md) · [INDEX.md](./INDEX.md)
 
 ---
@@ -63,12 +63,12 @@
 | 惯例 | 现状 | 落点 |
 |---|---|---|
 | ① 环境变量配置通道 | 搜索引擎表经 `inject_websearch_env` 在加载期写入扩展 manifest 的 `entry.env` 内存副本，spawn 与 in-process spec 统一消费；扩展侧解析失败回落内置默认表 | `crates/dd-gui/src/aggregator.rs` 约 :139-154 |
-| ② 设置文件向前兼容 | `Settings::parse_json` 对垃圾输入回落默认值、**容忍未知字段**（有单测锁定）——新增配置字段不破坏旧版本读新配置 | `crates/dd-gui/src/settings.rs` 约 :703 起、约 :994 起 |
+| ② 设置文件向前兼容 | `Settings::parse_json` 对垃圾输入回落默认值、**容忍未知字段**（有单测锁定）——新增配置字段不破坏旧版本读新配置 | `crates/dd-gui/src/settings.rs` 约 :709 起、约 :1035 起 |
 | ③ 内置扩展注册表 | 5 个内置扩展以 `spec()` 注册（`com.ddrun.{apps,calc,system,websearch,shell}`），in-process 运行、不经 spawn、不涉信任台账；新增内置扩展 = 新模块 + 注册表加行 | `crates/dd-host/src/builtin.rs` 约 :64-100 |
 | ④ `host/open_url` 白名单 | S-03 后仅放行 `http` / `https` / `file`；`file://` 走 ShellExecute「双击等价」（含 UNC），文件搜索打开动作依赖它 | `crates/dd-gui/src/app/host_actions.rs` 约 :111-136 |
-| ⑤ 宿主级虚拟条目 | 宿主在聚合结果中直接提供「设置」等非扩展条目（`CommandRef::Invoke` 走宿主内部分发） | `crates/dd-gui/src/aggregator.rs` 约 :1066、`crates/dd-gui/src/navigation.rs` 约 :121 |
+| ⑤ 宿主级虚拟条目 | 宿主在聚合结果中直接提供「设置」等非扩展条目（`CommandRef::Invoke` 走宿主内部分发） | `crates/dd-gui/src/app/invoke.rs` :102（宿主内部分发）、`crates/dd-gui/src/navigation.rs` 约 :117-127 |
 
-另两项相关事实：信任台账（S-05）以**清单文件字节流**为哈希对象，运行时对内存副本的改写不影响信任判定；设置持久化为 `Settings::save`（约 :932）。宿主对扩展进程环境变量的注入受 S-10 关键变量保护约束（不得覆盖 `PATH` 等敏感键）。
+另两项相关事实：信任台账（S-05）以**清单文件字节流**为哈希对象，运行时对内存副本的改写不影响信任判定；设置持久化为 `Settings::save`（约 :960）。宿主对扩展进程环境变量的注入受 S-10 关键变量保护约束（不得覆盖 `PATH` 等敏感键）。
 
 ---
 
@@ -125,7 +125,7 @@
 
 **可行性依据**：惯例 ③④ 命中；JSON 解析 `serde_json` 已在依赖树内（零新增）；M9 in-process 形态即为蓝本（[m9-inprocess-builtins.md](./archive/m9-inprocess-builtins.md)）。
 
-**冲突检查**：协议 / 清单零改动；不新增 sidecar（不触发 S-05 白名单变更）；不做 Firefox（mozlz4/sqlite 解码需引依赖，列缓办 §5）；内存纪律遵守 M1–M4 口径（mtime 门控 + 条目上限，无常驻大索引）。
+**冲突检查**：协议 / 清单零改动；不新增 sidecar（不触发 S-05 信任面变更——R-12 起随包首方 sidecar 走**首跑钉扎**而非白名单自动信任，见 §5 扩展商店行）；不做 Firefox（mozlz4/sqlite 解码需引依赖，列缓办 §5）；内存纪律遵守 M1–M4 口径（mtime 门控 + 条目上限，无常驻大索引）。
 
 **范围与工作量**：估约 300 行 + 单测（书签 JSON 解析 fixture、截断、mtime 门控）；`dd-ext` / `dd-host/src/builtin.rs` / `aggregator.rs` / `text.rs`。
 
@@ -149,7 +149,7 @@
 
 **设计**：
 
-- 导出：设置页「常规」底部新增「导入 / 导出」卡（两步确认范式复用恢复默认外观卡）。导出物 = 数据目录下 `dd-settings-backup.json`：`config.json` 全量字段**减去机器态**（`autostart`——注册表状态随机器；`panel_size`——分辨率相关），并写 `exported_from` 版本号；**`trust.json` 永不导出**（S-05 fail-closed：信任判定绑定本机清单/exe 哈希，搬走即失效，导出只会制造虚假迁移预期）。
+- 导出：设置页「常规」底部新增「导入 / 导出」卡（两步确认范式复用恢复默认外观卡）。导出物 = 数据目录下 `dd-settings-backup.json`：`config.json` 全量字段**减去机器态**（`autostart`——注册表状态随机器；`panel_size`——分辨率相关），并写 `exported_from` 版本号；**`trust.json` 永不导出**（S-05 fail-closed：信任判定绑定本机清单/exe 哈希，搬走即失效，导出只会制造虚假迁移预期；R-12 起台账还含随包首方扩展的钉扎哈希与宿主版本，更无导出意义）。
 - 导入：该文件存在时「导入并覆盖」→ `parse_json` 容错解析（惯例 ②）→ 两步确认 → 落盘并应用；失败 toast（复用既有 toast 组件）。
 - 零依赖取径：不引文件对话框 crate（`rfd` 需走 O3 依赖评审），v1 固定路径 + UI 展示路径便于用户拷贝；如后续要系统对话框，单独立项评估 `rfd`。
 
@@ -167,7 +167,7 @@
 
 | 项 | 定性 | 理由与前置条件 |
 |---|---|---|
-| 扩展商店 / 远程获取扩展 | ❌ 不做（远期可复议） | README「非目标」（Gallery 为可选模块）；S-05 信任模型以「本机文件哈希」为锚，远程分发需先有签名 / 发布哈希机制，属供应链级前置 |
+| 扩展商店 / 远程获取扩展 | ❌ 不做（远期可复议） | README「非目标」（Gallery 为可选模块）；S-05 信任模型以「本机文件哈希」为锚（R-12 起随包首方 sidecar 亦走首跑钉扎——信任锚始终是本机文件），远程分发需先有签名 / 发布哈希机制，属供应链级前置 |
 | 剪贴板历史 | 缓办 | 隐私面大（S-07 已证剪贴板敏感），需独立隐私评审 + 本地加密存储设计 + 明确保留期限，未过评审不立项 |
 | 第三方扩展设置 schema（manifest v1.1） | 缓办 | 需走 [manifest-schema.md](./manifest-schema.md) §9 版本协商（MINOR 加法可行但有流程成本）；N2 的宿主声明通道已覆盖内置扩展需求，待真实第三方需求出现再启动 |
 | 带参数的关键词直达（`kw xxx` 语法） | 缓办 | 与 2026-09-19 移除的 `f ` 前缀直达同形（劫持常规搜索的用户投诉前科，[search-file.md](./search-file.md) §6.1）；如复议须先复核该决策并重新真机取证 |
@@ -207,3 +207,4 @@
 | 版本 | 日期 | 变更 |
 |---|---|---|
 | v1.0 | 2026-09-28 | 首版：筛选判据（可行 × 无冲突）+ 冲突面核查矩阵 + 现状底座五惯例取证 + N1–N5 五项提案（零冻结契约改动、零新增依赖）+ 不做与缓办边界 + 实施顺序建议 |
+| v1.1 | 2026-10-02 | 核对式体检修订：惯例 ⑤ 锚点自 `aggregator.rs` 约 :1066（已落入测试模块）改指 `app/invoke.rs` :102 + `navigation.rs` 约 :117-127；惯例 ② 与 `Settings::save` 行号实测刷新（:709 / :1035 / :960）；§4.3 / §5 / N5 补 R-12 首跑钉扎时效注记（「trust.json 永不导出」理由随之加强） |
