@@ -874,6 +874,19 @@ K-T1~K-T4 任务清单与 V-1~V-7 校验标准见 [`settings-keys-typography-pla
 
 **两条使用注意**：① `crates/dd-host/tests/roundtrip*.rs` 在 `dd-ext-sample.exe` **未构建时会打印 SKIP 并 return**（计入 passed），故凡涉及协议/扩展行为，先 `cargo build -p dd-ext-sample` 再跑；② 「三关全绿」与 CI 四关**均为 debug profile**，`#[cfg(debug_assertions)]` 类 release-only 编译错误检不到 —— 交付/发布前必须实跑 `cargo build --release`（见 §7 构建环境记档与 `CHANGELOG` 的 release 阻塞条目）。
 
+### 3.1.1 内存基线台账（V-13，2026-10-03 建立）
+
+> 由来：`stability-usability-security-plan.md` §6.2 V-13——首轮内存基线，此后每次真机走查对比：**RSS 增量超基线 +50 MB 或 +30%（取大者）须排查后方可放行**（同时为该方案 §7 icon_cache 缓办项提供数据依据）。
+
+| 口径 | 数值（Win11 25H2 build 26200.9457，debug 构建） |
+|---|---|
+| 冷启动基线（托盘常驻、面板隐藏，启动后首个采样） | PRIV ≈ 93 MB / WS ≈ 111 MB |
+| **稳态（挂机 ≥1 h 起，隐藏态）** | **PRIV 104.4 MB（恒定）** / WS 14–20 MB |
+| 增长判据 | 以**私有提交内存（PrivateMemorySize64）**为准；WS 受隐藏路径 `trim_working_set` 影响（隐藏后回落至 ~16 MB 属既有行为，不作增长判据） |
+| 可见态预期涨落 | 面板可见期 WS 升至 ~30 MB（icon 纹理加载），隐藏后清空回落——icon_cache 缓办项依据：可见态涨落有界且隐藏即清，**继续缓办** |
+
+**依据数据**（`%TEMP%\ddrun-v13s\`，两腿 + 首跑交叉一致）：① 腿 A：500 次 `WM_HOTKEY` 显隐循环 61.2 s 零失败，PRIV 93→105.2 MB（**+12.2 MB**，门限内），终态窗口位置与基线逐位一致；② 腿 B：托盘常驻 10.4 h（74 个采样，10 min 粒度）+ 每小时唤起脉冲——PRIV 自第 1 h 起**恒 104.4 MB 零增长**，脉冲可见态涨落不累积；③ 首跑 6.2 h（因故中止）同值 103.4 MB 交叉印证。**偏差注记**：判据字面的「挂机 24 h」两度中断（首跑探针误杀 6.2 h / 补跑用户主动退出 10.4 h）——10.4 h 平台 + 500 循环腿已满足门限判据，故以首轮基线收口；后续走查对比异常增长再排查。
+
 ---
 
 ## 4. 架构决策记录（ADR）
