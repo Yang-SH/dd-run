@@ -7,8 +7,9 @@
 //!   `exe_dir` 的来源见 [`ensure_builtins`] 文档：开发期为宿主 exe 同目录，
 //!   单文件分发历史上为「内嵌扩展物化目录」。**M9 起内置扩展改为 in-process**
 //!   （见 [`builtin_registrations`]，不探测 exe 路径），本函数保留给子进程测试场景。
-//! - 5 个内置扩展的元数据（id / name / frozen / capabilities）必须与
-//!   `crates/dd-ext/src/bin/*.rs` 各自的 `spec()` 保持一致（宿主编排侧登记，
+//! - 内置扩展的元数据（id / name / frozen / capabilities）必须与
+//!   `crates/dd-ext/src/bin/*.rs` 各自的 `spec()`（以及 N3 起的
+//!   `builtins::bookmarks::spec()`——该扩展无独立 bin）保持一致（宿主编排侧登记，
 //!   扩展自述侧为准——握手 `initialize` 后宿主会再次拿到真实 `ProviderInfo`）。
 //!
 //! 注册规则：
@@ -56,7 +57,8 @@ impl BuiltinSpec {
     }
 }
 
-/// MVP 5 个内置扩展（与 `crates/dd-ext/src/bin/*.rs` 的 `spec()` 对齐：
+/// MVP 5 个内置扩展 + N3 书签（第 6 个，仅 in-process；与 `crates/dd-ext/src/bin/*.rs`
+/// 的 `spec()` / `builtins::bookmarks::spec()` 对齐：
 /// `frozen` = 扩展自述；宿主落桩策略由 [`BuiltinSpec::host_frozen`] 派生）。
 pub const BUILTINS: &[BuiltinSpec] = &[
     BuiltinSpec {
@@ -93,6 +95,16 @@ pub const BUILTINS: &[BuiltinSpec] = &[
         // 含兜底能力 → host_frozen=false（§6.3 fresh）
         frozen: true,
         has_fallback: true,
+        capabilities: &[METHOD_HOST_OPEN_URL],
+    },
+    BuiltinSpec {
+        exe: "dd-ext-bookmarks",
+        id: "com.ddrun.bookmarks",
+        name: "Bookmarks",
+        // 书签文件随时可变 → 自述 frozen=false（fresh，不落桩；N3 仅 in-process，
+        // 无独立 bin 薄壳，exe 字段为名义名——注册元数据与 spec() 对齐防漂移）
+        frozen: false,
+        has_fallback: false,
         capabilities: &[METHOD_HOST_OPEN_URL],
     },
     BuiltinSpec {
@@ -220,7 +232,8 @@ mod tests {
 
     #[test]
     fn registry_matches_dd_ext_specs() {
-        // 与 crates/dd-ext/src/bin/*.rs 的 spec() 逐字段对齐（防漂移哨兵）
+        // 与 crates/dd-ext 各 spec()（bin 薄壳 + N3 起 builtins::bookmarks）
+        // 逐字段对齐（防漂移哨兵）
         let ids: Vec<&str> = BUILTINS.iter().map(|s| s.id).collect();
         assert_eq!(
             ids,
@@ -229,11 +242,12 @@ mod tests {
                 "com.ddrun.calc",
                 "com.ddrun.system",
                 "com.ddrun.websearch",
+                "com.ddrun.bookmarks",
                 "com.ddrun.shell"
             ]
         );
-        // 扩展自述 frozen 与 crates/dd-ext 各 bin 的 spec().frozen 对齐
-        //（防漂移哨兵）：Apps fresh、其余 4 个自述"顶层固定可缓存"。
+        // 扩展自述 frozen 与 crates/dd-ext 各 spec().frozen 对齐
+        //（防漂移哨兵）：Apps / Bookmarks fresh、其余 4 个自述"顶层固定可缓存"。
         let frozen_map: Vec<(&str, bool)> = BUILTINS.iter().map(|s| (s.id, s.frozen)).collect();
         assert_eq!(
             frozen_map,
@@ -242,10 +256,11 @@ mod tests {
                 ("com.ddrun.calc", true),
                 ("com.ddrun.system", true),
                 ("com.ddrun.websearch", true),
+                ("com.ddrun.bookmarks", false),
                 ("com.ddrun.shell", true),
             ]
         );
-        // 兜底能力与 crates/dd-ext 各 bin 的 spec().has_fallback 对齐
+        // 兜底能力与 crates/dd-ext 各 spec().has_fallback 对齐
         let fallback_ids: Vec<&str> = BUILTINS
             .iter()
             .filter(|s| s.has_fallback)
@@ -265,6 +280,7 @@ mod tests {
                 ("com.ddrun.calc", false),      // 含兜底 → 不落桩（fresh）
                 ("com.ddrun.system", true),     // 无兜底 → 可落桩（A6）
                 ("com.ddrun.websearch", false), // 含兜底 → fresh
+                ("com.ddrun.bookmarks", false), // 自述 fresh（书签文件随时可变）
                 ("com.ddrun.shell", false),     // 含兜底 → fresh
             ]
         );
@@ -318,8 +334,9 @@ mod tests {
         assert!(exts.is_empty(), "目录无 exe → 不注册任何内置扩展");
     }
 
-    /// M9：in-process 注册**不依赖**磁盘 exe——始终返回全部 5 个内置，
-    /// 元数据（id / frozen 策略 / capabilities）与注册表一致。
+    /// M9：in-process 注册**不依赖**磁盘 exe——始终返回全部 6 个内置
+    ///（N3 起含 bookmarks），元数据（id / frozen 策略 / capabilities）与
+    /// 注册表一致。
     #[test]
     fn builtin_registrations_needs_no_exe() {
         let exts = builtin_registrations();
@@ -331,13 +348,14 @@ mod tests {
                 "com.ddrun.calc",
                 "com.ddrun.system",
                 "com.ddrun.websearch",
+                "com.ddrun.bookmarks",
                 "com.ddrun.shell",
             ],
-            "in-process 注册恒返回全部 5 个内置（无需 exe 存在）"
+            "in-process 注册恒返回全部 6 个内置（无需 exe 存在）"
         );
         // 宿主缓存策略口径不变：含兜底者 fresh（§6.3）
         let frozen: Vec<bool> = exts.iter().map(|e| e.manifest.frozen).collect();
-        assert_eq!(frozen, vec![false, false, true, false, false]);
+        assert_eq!(frozen, vec![false, false, true, false, false, false]);
         // command 为名义路径（不会被 spawn），与 BUILTINS[*].exe 对齐
         for (ext, spec) in exts.iter().zip(BUILTINS) {
             assert_eq!(

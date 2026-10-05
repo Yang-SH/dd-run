@@ -29,7 +29,7 @@
 //!   保证进程恒 warm 可响应 `fallback_commands`；
 //! - 源状态三态：Warm（进程活）/ Stub（仅桩）/ Failed（失败），供页脚展示与 A6 观察。
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::path::PathBuf;
 use std::thread;
 
@@ -45,12 +45,18 @@ use dd_protocol::model::CommandItem;
 use crate::ext_client::ExtClient;
 use crate::state::PanelItem;
 use crate::text;
-use dd_gui::settings::Lang;
+use dd_gui::settings::{CustomCommand, Lang};
 
 /// 协议版本（protocol.md §13：`MAJOR.MINOR` 两段）。
 pub const PROTOCOL_VERSION: &str = "1.0";
 /// 宿主版本（semver，`initialize` 的 `host.version`）。
 pub const HOST_VERSION: &str = env!("CARGO_PKG_VERSION");
+
+/// N1（2026-10-04）：自定义直达命令虚拟条目的所属扩展 id——**保留 id**，
+/// 不对应任何清单扩展；`dispatch_invoke` 对它走宿主内部分发（§3 惯例 ⑤）。
+pub const HOST_CUSTOM_EXT_ID: &str = "com.ddrun.host";
+/// N1：自定义直达命令条目 id 前缀（`custom:{keyword}`）。
+pub const CUSTOM_ITEM_PREFIX: &str = "custom:";
 
 /// 单个扩展的拉取结果（**不携带进程**，便于纯逻辑单测构造）。
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -153,13 +159,69 @@ pub fn inject_websearch_env(exts: &mut [LoadedExtension], engines_json: &str) {
     }
 }
 
+/// N2（2026-10-04）：扩展用户可调配置的环境变量名前缀——`DD_EXT_CFG_<KEY>`。
+/// 前缀约定使结果名**结构性避开** S-10 保护名单（`PATH` 等宿主关键变量）。
+pub const EXT_CFG_ENV_PREFIX: &str = "DD_EXT_CFG_";
+
+/// N2：配置键 → 环境变量名（纯函数，单测锚点）。键仅接受 ASCII 字母/数字/
+/// 下划线（1–32），大写化拼接前缀；非法键 → `None`。
+fn ext_cfg_env_name(key: &str) -> Option<String> {
+    if key.is_empty()
+        || key.len() > 32
+        || !key.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+    {
+        return None;
+    }
+    Some(format!("{EXT_CFG_ENV_PREFIX}{}", key.to_ascii_uppercase()))
+}
+
+/// N2（2026-10-04）：把用户可调扩展配置合并注入各扩展 `entry.env` **内存副本**
+///（§3 惯例 ① 泛化——`inject_websearch_env` 的「多扩展 + 多键」版；运行时
+/// 内存改写不触碰 S-05 信任台账，其哈希对象是清单**文件字节流**）。
+///
+/// - `cfg` = `ext_id → (键 → 值)`（`Settings.ext_settings`）；不在表内的扩展
+///   零改动。in-process 内置对 `entry.env` 不敏感，宿主另走内存通道直接注入
+///   （websearch 引擎表先例，见 `app/aggregate.rs`）。
+/// - S-10 边界双保险：键名白名单（见 [`ext_cfg_env_name`]）+ 结果名对
+///   `dd_host::process::PROTECTED_ENV_KEYS` 复查（命中记日志跳过——纵深防御，
+///   前缀约定本身已使碰撞不可能）。
+/// - 子进程 spawn 路径仍有 `filter_env_overrides` 终检（S-10 既有第二道门）。
+pub fn inject_ext_settings(
+    exts: &mut [LoadedExtension],
+    cfg: &BTreeMap<String, BTreeMap<String, String>>,
+) {
+    for (ext_id, kv) in cfg {
+        let Some(ext) = exts.iter_mut().find(|e| &e.manifest.id == ext_id) else {
+            continue;
+        };
+        for (key, value) in kv {
+            let Some(name) = ext_cfg_env_name(key) else {
+                log::warn!(
+                    "[dd-gui] 扩展配置键 {key:?} 非法（仅限字母/数字/下划线，1–32），已跳过（ext={ext_id}）"
+                );
+                continue;
+            };
+            if dd_host::process::PROTECTED_ENV_KEYS
+                .iter()
+                .any(|p| p.eq_ignore_ascii_case(&name))
+            {
+                log::warn!(
+                    "[dd-gui] 扩展配置键 {key:?} 映射到受保护环境变量 {name}，已跳过（S-10 纵深防御，ext={ext_id}）"
+                );
+                continue;
+            }
+            ext.manifest.entry.env.insert(name, value.clone());
+        }
+    }
+}
+
 /// [`load_extension_sources`] 的返回（S-05 起由 3 元组改为具名结构：字段增至 5 个，
 /// 元组已不可读）。
 pub struct ExtensionSources {
     /// 全部已扫描扩展（内置 + 磁盘）。**含**未获信任者——设置页要展示它们并提供
     /// 「允许 / 阻止」；只进入 spawn 集合的是经 [`is_trusted`] 过滤后的子集。
     pub exts: Vec<LoadedExtension>,
-    /// 内置 in-process 规格表（`id → ExtensionSpec`），仅内置 5 个。
+    /// 内置 in-process 规格表（`id → ExtensionSpec`），仅内置 6 个。
     pub inproc_specs: HashMap<String, ExtensionSpec>,
     /// 异常备注（仅目录不可读等异常时非空）。
     pub note: String,
@@ -212,10 +274,10 @@ fn same_dir(a: &std::path::Path, b: &std::path::Path) -> bool {
 /// 扫描扩展目录并**合并内置扩展**（M4 P4 → M9 in-process）。
 ///
 /// 返回 [`ExtensionSources`]（S-05 起）：
-/// - **扩展列表**：内置 5 个（**恒注册，不依赖磁盘 exe**）+ 扩展目录中的第三方
+/// - **扩展列表**：内置 6 个（**恒注册，不依赖磁盘 exe**；N3 起含 bookmarks）+ 扩展目录中的第三方
 ///   清单（同 id 以内置优先，`merge_builtins` 去重）。列表用于 UI 展示与
 ///   id/名称查询；内置项的 `command` 为名义路径，**不会被 spawn**。
-/// - **规格表**：`id → ExtensionSpec`，仅内置 5 个。宿主据此以 in-process 方式
+/// - **规格表**：`id → ExtensionSpec`，仅内置 6 个。宿主据此以 in-process 方式
 ///   驱动内置扩展（[`crate::ext_client::ExtClient::open_builtin`]）。
 /// - **信任判定表**：每个扩展一条（内置判为 `Builtin` → 自动信任）。
 /// - **备注**：仅在异常时非空（目录不可读），供 UI 提示。M9 起内置恒可用，
@@ -316,7 +378,7 @@ pub fn load_extension_sources(lang: Lang) -> ExtensionSources {
 
 /// 覆盖**宿主自有扩展**的显示名（本地化）。
 ///
-/// - **内置 5 个**：用扩展自述的 `display_name`（`dd_ext::builtins::builtin_specs()`
+/// - **内置 6 个**：用扩展自述的 `display_name`（`dd_ext::builtins::builtin_specs()`
 ///   已按生效语言构造）——宿主不重复维护名称（单一事实来源）。
 /// - **随包 sidecar**（非内置，如文件搜索 `com.ddrun.filesearch`）：清单 `name`
 ///   无 i18n 字段（manifest-schema v1.0 冻结），故对宿主自有 id 用宿主文案表覆盖。
@@ -752,6 +814,32 @@ pub fn to_panel_item(
     }
 }
 
+/// N1（2026-10-04）：自定义直达命令配置 → 宿主虚拟条目（§3 惯例 ⑤）。
+///
+/// 每条配置一个首屏条目：`title` 进拼音索引（复用 M6 管线，`pinyin_haystack`）、
+/// `keyword` 并入 `tags`（关键词即搜）、`target` 作副标题（与「应用」行显路径
+/// 同口径）、分组与类别徽标均为「直达」（`cat.custom`）；`ext_id` = 保留 id
+/// [`HOST_CUSTOM_EXT_ID`]，`command = Invoke`（激活时宿主内部分发执行，不走扩展）。
+/// 纯函数，可单测。
+pub fn custom_command_items(cmds: &[CustomCommand], lang: Lang) -> Vec<PanelItem> {
+    let section = text::t(lang, "cat.custom").to_string();
+    cmds.iter()
+        .map(|c| PanelItem {
+            id: format!("{CUSTOM_ITEM_PREFIX}{}", c.keyword),
+            ext_id: HOST_CUSTOM_EXT_ID.to_string(),
+            title: c.title.clone(),
+            subtitle: c.target.clone(),
+            section: section.clone(),
+            icon: None,
+            tags: vec![c.keyword.clone()],
+            result_category: Some(section.clone()),
+            pinyin: crate::state::pinyin_haystack(&c.title),
+            command: dd_protocol::model::CommandRef::Invoke,
+            more_commands: Vec::new(),
+        })
+        .collect()
+}
+
 /// 按扩展清单 id 推导结果类别显示标签（设计文档 §6.2 映射表）。
 ///
 /// 内置扩展使用全限定 id，去 `com.ddrun.` 前缀后匹配；未知第三方统一回退「命令」。
@@ -762,6 +850,7 @@ fn category_label_for(ext_id: &str, lang: Lang) -> &'static str {
         "apps" => "cat.apps",
         "system" => "cat.system",
         "websearch" => "cat.websearch",
+        "bookmarks" => "cat.bookmarks",
         // calc / shell / 第三方统一归为「命令」
         _ => "cat.command",
     };
@@ -796,6 +885,35 @@ mod tests {
         }
     }
 
+    /// N1：自定义直达命令 → 宿主虚拟条目——id 前缀 `custom:`、ext_id = 保留
+    /// `com.ddrun.host`、keyword 进 tags、target 作副标题、拼音索引随 title
+    /// 生成、分组与类别徽标 =「直达」、command = Invoke（宿主内部分发）。
+    #[test]
+    fn custom_command_items_build_host_virtual_entries() {
+        use dd_gui::settings::CustomCommandKind;
+        let cmds = vec![
+            CustomCommand::new("GitHub", "GH", CustomCommandKind::Url, "https://github.com")
+                .unwrap(),
+            CustomCommand::new("周报", "rep", CustomCommandKind::Path, r"C:\doc\周报.docx")
+                .unwrap(),
+        ];
+        let items = custom_command_items(&cmds, Lang::ZhCn);
+        assert_eq!(items.len(), 2);
+        let gh = &items[0];
+        assert_eq!(gh.id, "custom:gh", "keyword 小写化进 id");
+        assert_eq!(gh.ext_id, HOST_CUSTOM_EXT_ID);
+        assert_eq!(gh.title, "GitHub");
+        assert_eq!(gh.subtitle, "https://github.com");
+        assert_eq!(gh.tags, vec!["gh".to_string()]);
+        assert_eq!(gh.section, "直达");
+        assert_eq!(gh.result_category.as_deref(), Some("直达"));
+        assert_eq!(gh.command, CommandRef::Invoke);
+        assert!(gh.more_commands.is_empty());
+        // 拼音索引：中文标题生成全拼+首字母；纯英文标题为空串（原字符即匹配域）
+        assert_eq!(items[1].pinyin, "zhoubao zb", "周报 → zhoubao zb");
+        assert_eq!(gh.pinyin, "", "纯英文标题拼音索引为空");
+    }
+
     #[test]
     fn to_panel_item_carries_more_commands() {
         // v3.3 P1：§8.1 more_commands 透传进 PanelItem（右键菜单渲染源）
@@ -811,6 +929,62 @@ mod tests {
         // None → 空表（无 more_commands 的项菜单走静态映射）
         let plain = to_panel_item(&cmd("a", "b", None), "com.ddrun.calc", "", Lang::ZhCn);
         assert!(plain.more_commands.is_empty());
+    }
+
+    /// N2：`ext_cfg_env_name` 键名守卫——合法键大写化拼前缀；空/超长/含
+    /// 非法字符拒绝。前缀 `DD_EXT_CFG_` 结构性避开 S-10 保护名单
+    ///（`DD_EXT_CFG_PATH` ≠ `PATH`），结果名复查仅作纵深防御。
+    #[test]
+    fn n2_ext_cfg_env_name_guards_key_shape() {
+        assert_eq!(
+            ext_cfg_env_name("blocklist"),
+            Some("DD_EXT_CFG_BLOCKLIST".to_string())
+        );
+        assert_eq!(
+            ext_cfg_env_name("Path"),
+            Some("DD_EXT_CFG_PATH".to_string())
+        );
+        assert!(ext_cfg_env_name("").is_none());
+        assert!(ext_cfg_env_name("foo-bar").is_none(), "连字符拒绝");
+        assert!(ext_cfg_env_name("空 格").is_none(), "非 ASCII 拒绝");
+        assert!(ext_cfg_env_name(&"a".repeat(33)).is_none(), "超长拒绝");
+        // 前缀不变式：无论键是什么，结果名都不可能等于任何受保护变量名
+        // （受保护名单无 `DD_EXT_CFG_` 前缀项——结构性豁免的锚定断言）。
+        assert!(dd_host::process::PROTECTED_ENV_KEYS
+            .iter()
+            .all(|p| !p.starts_with(EXT_CFG_ENV_PREFIX)));
+    }
+
+    /// N2：`inject_ext_settings` 注入——只触碰表内扩展；键映射正确；
+    /// 非法键跳过且不误伤同扩展其他键。
+    #[test]
+    fn n2_inject_ext_settings_targets_listed_exts_only() {
+        let mut exts = vec![
+            loaded_ext("com.ddrun.apps", "a"),
+            loaded_ext("com.ddrun.calc", "c"),
+        ];
+        let mut kv = BTreeMap::new();
+        kv.insert("blocklist".to_string(), "卸载, update".to_string());
+        kv.insert("bad-key".to_string(), "v".to_string());
+        let mut cfg = BTreeMap::new();
+        cfg.insert("com.ddrun.apps".to_string(), kv);
+        cfg.insert("com.ddrun.not-scanned".to_string(), BTreeMap::new());
+        inject_ext_settings(&mut exts, &cfg);
+        let env = &exts[0].manifest.entry.env;
+        assert_eq!(
+            env.get("DD_EXT_CFG_BLOCKLIST").map(String::as_str),
+            Some("卸载, update"),
+            "合法键注入"
+        );
+        assert!(!env.contains_key("DD_EXT_CFG_BAD-KEY"), "非法键跳过");
+        assert!(
+            !exts[1]
+                .manifest
+                .entry
+                .env
+                .contains_key("DD_EXT_CFG_BLOCKLIST"),
+            "表外扩展零改动"
+        );
     }
 
     /// 最小可加载扩展夹具：`path` 携带 `tag` 以区分「用户目录 / sidecar」来源。

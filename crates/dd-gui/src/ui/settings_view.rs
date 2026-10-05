@@ -329,6 +329,7 @@ impl PaletteApp {
             SettingsCategory::Appearance => {
                 self.draw_appearance_card(ui, &p);
                 self.draw_material_card(ui, &p, &ctx);
+                self.draw_background_image_card(ui, &p, &ctx);
                 self.draw_density_card(ui, &p);
                 ui.add_space(8.0); // 卡片间距 8px（§08.1）
                 self.draw_reset_appearance_card(ui, &p);
@@ -704,6 +705,9 @@ impl PaletteApp {
         let lang = self.lang_effective;
         let material = self.settings.backdrop;
         let material_active = self.backdrop_active;
+        // T9（2026-10-05）：背景图生效 → 材质行整体置灰（互斥语义——材质 /
+        // 着色 / 边框链路暂停生效），卡头下提示恢复条件。
+        let bg_set = self.settings.background_image_path.is_some();
         // 开关状态在闭包外读取、闭包内只收集点击结果（避免闭包内 &mut self 冲突）。
         let mut picked_material: Option<dd_gui::settings::Backdrop> = None;
         let mut picked_corner: Option<dd_gui::settings::CornerPref> = None;
@@ -753,6 +757,15 @@ impl PaletteApp {
                     );
                 });
             });
+            // T9：背景图生效提示（材质行置灰的原因与恢复条件）
+            if bg_set {
+                card.label(
+                    egui::RichText::new(crate::text::t(lang, "set.bgimg.active_hint"))
+                        .size(12.0)
+                        .color(p.text3),
+                );
+                card.add_space(2.0);
+            }
             // ── 行 1：材质三选 pill（无材质 / 云母 / 亚克力，P1）──
             card.add_space(8.0);
             card.label(
@@ -786,7 +799,7 @@ impl PaletteApp {
                         material == backdrop,
                         p,
                         dark,
-                        false,
+                        bg_set,
                     ) {
                         picked_material = Some(backdrop);
                     }
@@ -826,7 +839,7 @@ impl PaletteApp {
                         colorization == mode,
                         p,
                         dark,
-                        !material_active,
+                        !material_active || bg_set,
                     ) {
                         picked_colorization = Some(mode);
                     }
@@ -842,7 +855,7 @@ impl PaletteApp {
                             .color(p.text3),
                     );
                     ui.add_space(8.0);
-                    ui.add_enabled_ui(material_active, |ui| {
+                    ui.add_enabled_ui(material_active && !bg_set, |ui| {
                         if ui.color_edit_button_srgb(&mut color_tmp).changed() {
                             color_changed = true;
                         }
@@ -859,7 +872,12 @@ impl PaletteApp {
                 // 与下方材质不透明度滑杆同卡相邻，必须隔开避免 id 冲突。
                 let (changed, released) = card
                     .push_id("tint_intensity", |ui| {
-                        draw_slider_row_with_pct(ui, material_active, &mut intensity_tmp, p)
+                        draw_slider_row_with_pct(
+                            ui,
+                            material_active && !bg_set,
+                            &mut intensity_tmp,
+                            p,
+                        )
                     })
                     .inner;
                 if changed {
@@ -893,7 +911,7 @@ impl PaletteApp {
             );
             card.add_space(6.0);
             let (slider_changed, slider_released) =
-                draw_slider_row_with_pct(card, material_active, &mut opacity_tmp, p);
+                draw_slider_row_with_pct(card, material_active && !bg_set, &mut opacity_tmp, p);
             if slider_changed {
                 opacity_changed = true;
             }
@@ -958,7 +976,7 @@ impl PaletteApp {
             card.add_space(6.0);
             // v6 修复：三个 pill 必须包在 horizontal 里（此前直接落在垂直
             // 闭包中被逐行堆叠——真机截图「面板边框排版」问题根因）。
-            card.add_enabled_ui(material_active, |ui| {
+            card.add_enabled_ui(material_active && !bg_set, |ui| {
                 ui.horizontal(|ui| {
                     ui.spacing_mut().item_spacing.x = 0.0;
                     let avail = ui.available_width();
@@ -981,7 +999,7 @@ impl PaletteApp {
                             self.settings.border_mode == mode,
                             p,
                             dark,
-                            !material_active,
+                            !material_active || bg_set,
                         ) {
                             picked_border = Some(mode);
                         }
@@ -1017,6 +1035,230 @@ impl PaletteApp {
         }
         if let Some(mode) = picked_border {
             self.apply_border_mode(ctx, mode);
+        }
+    }
+
+    /// 外观栏：「背景图」卡（T9，2026-10-05；材质卡之后）——路径输入 +
+    /// 设为背景 / 清除 + 适应方式 pill + 不透明度 / 着色强度滑杆。一期零文件
+    /// 对话框依赖（`rfd` 未引入，方案 §3.2 判定）——路径文本输入 + 提示文案；
+    /// 校验失败（文件不存在）与运行期解码失败（负缓存命中）走 danger 错误行
+    /// （搜索引擎 / 自定义命令卡同款范式）。滑杆即时生效、松手落盘（材质
+    /// 不透明度同口径）。
+    fn draw_background_image_card(
+        &mut self,
+        ui: &mut egui::Ui,
+        p: &theme::Palette,
+        ctx: &egui::Context,
+    ) {
+        let dark = ui.visuals().dark_mode;
+        let lang = self.lang_effective;
+        let bg_set = self.settings.background_image_path.is_some();
+        // 运行期解码失败（负缓存命中且路径与当前设置一致）→ 错误行提示
+        let decode_failed = self
+            .backdrop_cache
+            .load_failed(self.settings.background_image_path.as_deref());
+        let mut apply_clicked = false;
+        let mut clear_clicked = false;
+        let mut picked_fit: Option<dd_gui::settings::BgImageFit> = None;
+        let mut opacity_tmp = self.settings.background_image_opacity;
+        let mut opacity_changed = false;
+        let mut opacity_released = false;
+        let mut tint_tmp = self.settings.background_image_tint_intensity;
+        let mut tint_changed = false;
+        let mut tint_released = false;
+        draw_settings_card_frame(ui, p, self.backdrop_active, |card| {
+            // 卡头：图标 + 名称 + 描述（同主题 / 材质卡口径；Photo glyph E91B）
+            card.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = 0.0;
+                let (icon_rect, _) =
+                    ui.allocate_exact_size(egui::vec2(16.0, 16.0), egui::Sense::hover());
+                ui.painter().text(
+                    icon_rect.center() + egui::vec2(0.0, 1.0), // +1px 光学下移：Fluent glyph 墨迹重心偏上
+                    egui::Align2::CENTER_CENTER,
+                    '\u{E91B}',
+                    egui::FontId::proportional(16.0),
+                    p.text2,
+                );
+                ui.add_space(12.0);
+                ui.vertical(|ui| {
+                    ui.set_min_height(36.0);
+                    ui.label(
+                        dd_gui::theme::semibold_title(crate::text::t(lang, "set.bgimg.name"), 14.0)
+                            .color(p.text),
+                    );
+                    ui.add(
+                        egui::Label::new(
+                            egui::RichText::new(crate::text::t(lang, "set.bgimg.desc"))
+                                .size(12.0)
+                                .color(p.text3),
+                        )
+                        .wrap(),
+                    );
+                });
+            });
+            // ── 行 1：图片路径输入 + 应用 / 清除按钮 ──
+            card.add_space(8.0);
+            card.label(
+                egui::RichText::new(crate::text::t(lang, "set.bgimg.path"))
+                    .size(14.0)
+                    .color(p.text),
+            );
+            card.add_space(6.0);
+            card.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = 8.0;
+                let apply_label = crate::text::t(lang, "set.bgimg.apply");
+                let clear_label = crate::text::t(lang, "set.bgimg.clear");
+                let btns_w =
+                    text_width(ui, apply_label, egui::FontId::proportional(CONTROL_FONT_PT))
+                        + text_width(ui, clear_label, egui::FontId::proportional(CONTROL_FONT_PT))
+                        + 48.0;
+                let path_w = (ui.available_width() - btns_w).max(160.0);
+                draw_fluent_textbox(
+                    ui,
+                    path_w,
+                    "dd-bgimg-path",
+                    &mut self.bg_path_buf,
+                    crate::text::t(lang, "set.bgimg.path_hint"),
+                    p,
+                );
+                if fluent_button(ui, apply_label, p) {
+                    apply_clicked = true;
+                }
+                ui.add_enabled_ui(bg_set, |ui| {
+                    if fluent_button(ui, clear_label, p) {
+                        clear_clicked = true;
+                    }
+                });
+            });
+            if let Some(err) = &self.bg_err {
+                card.horizontal(|ui| {
+                    ui.label(egui::RichText::new(err.clone()).size(12.0).color(p.danger));
+                });
+            }
+            if decode_failed {
+                card.horizontal(|ui| {
+                    ui.label(
+                        egui::RichText::new(crate::text::t(lang, "set.bgimg.err_decode"))
+                            .size(12.0)
+                            .color(p.danger),
+                    );
+                });
+            }
+            // ── 行 2：适应方式 pill（填满=等比裁剪铺满 / 拉伸）──
+            card.add_space(8.0);
+            card.label(
+                egui::RichText::new(crate::text::t(lang, "set.bgimg.fit"))
+                    .size(14.0)
+                    .color(p.text),
+            );
+            card.add_space(6.0);
+            card.add_enabled_ui(bg_set, |ui| {
+                ui.horizontal(|ui| {
+                    ui.spacing_mut().item_spacing.x = 0.0;
+                    let avail = ui.available_width();
+                    let n = dd_gui::settings::BgImageFit::ALL.len() as f32;
+                    let gap = 8.0;
+                    let pill_w = (avail - (n - 1.0) * gap) / n;
+                    for (i, fit) in dd_gui::settings::BgImageFit::ALL.into_iter().enumerate() {
+                        if i > 0 {
+                            ui.add_space(gap);
+                        }
+                        if draw_density_pill(
+                            ui,
+                            pill_w,
+                            crate::text::t(lang, fit.name_key()),
+                            self.settings.background_image_fit == fit,
+                            p,
+                            dark,
+                            !bg_set,
+                        ) {
+                            picked_fit = Some(fit);
+                        }
+                    }
+                });
+            });
+            // ── 行 3：图片不透明度滑杆（无图 → 置灰）──
+            card.add_space(8.0);
+            card.label(
+                egui::RichText::new(crate::text::t(lang, "set.bgimg.opacity"))
+                    .size(14.0)
+                    .color(p.text),
+            );
+            card.add_space(2.0);
+            card.add(
+                egui::Label::new(
+                    egui::RichText::new(crate::text::t(lang, "set.bgimg.opacity.desc"))
+                        .size(12.0)
+                        .color(p.text3),
+                )
+                .wrap(),
+            );
+            card.add_space(6.0);
+            let (changed, released) = card
+                .push_id("bgimg_opacity", |ui| {
+                    draw_slider_row_with_pct(ui, bg_set, &mut opacity_tmp, p)
+                })
+                .inner;
+            opacity_changed = changed;
+            opacity_released = released;
+            // ── 行 4：着色强度滑杆（无图 → 置灰；默认 0 = 不叠色）──
+            card.add_space(8.0);
+            card.label(
+                egui::RichText::new(crate::text::t(lang, "set.bgimg.tint"))
+                    .size(14.0)
+                    .color(p.text),
+            );
+            card.add_space(2.0);
+            card.add(
+                egui::Label::new(
+                    egui::RichText::new(crate::text::t(lang, "set.bgimg.tint.desc"))
+                        .size(12.0)
+                        .color(p.text3),
+                )
+                .wrap(),
+            );
+            card.add_space(6.0);
+            let (changed, released) = card
+                .push_id("bgimg_tint", |ui| {
+                    draw_slider_row_with_pct(ui, bg_set, &mut tint_tmp, p)
+                })
+                .inner;
+            tint_changed = changed;
+            tint_released = released;
+        });
+        // ── 闭包外应用交互结果 ──
+        if apply_clicked {
+            let path = self.bg_path_buf.trim();
+            if path.is_empty() {
+                // 空输入 + 「设为背景」= 清除（提供无「清除」按钮依赖的出路）
+                self.bg_err = None;
+                self.apply_background_path(ctx, None);
+            } else if !std::path::Path::new(path).is_file() {
+                self.bg_err = Some(crate::text::t(lang, "set.bgimg.err_not_found").to_string());
+            } else {
+                self.bg_err = None;
+                self.apply_background_path(ctx, Some(path.to_string()));
+            }
+        }
+        if clear_clicked {
+            self.bg_path_buf.clear();
+            self.bg_err = None;
+            self.apply_background_path(ctx, None);
+        }
+        if let Some(fit) = picked_fit {
+            self.apply_background_fit(fit);
+        }
+        if opacity_changed {
+            self.apply_background_opacity(opacity_tmp);
+        }
+        if opacity_released {
+            self.save_settings_with_feedback();
+        }
+        if tint_changed {
+            self.apply_background_tint(tint_tmp);
+        }
+        if tint_released {
+            self.save_settings_with_feedback();
         }
     }
 
@@ -1458,6 +1700,409 @@ impl PaletteApp {
         });
         if let Some(l) = lang_picked {
             self.apply_lang(l);
+        }
+
+        // ── 卡 5：预热容量（N4，2026-10-03）── ComboBox 数字 1–16 选（排版
+        // 与语言卡同规格：D42 行 40px + 左列锁宽 wrap + 自绘 Fluent 下拉）；
+        // 切换经 apply_warm_capacity 即时生效（缩容立即驱逐 + 落盘）。
+        ui.add_space(8.0);
+        let warm_labels: Vec<String> = (1..=dd_gui::settings::WARM_CAPACITY_MAX as u32)
+            .map(|n| n.to_string())
+            .collect();
+        let warm_labels: Vec<&str> = warm_labels.iter().map(String::as_str).collect();
+        // 序：idx 0..15 ↔ 容量 1..16，严格对齐。
+        let warm_selected = self.settings.warm_capacity as usize - 1;
+        let mut warm_picked: Option<u8> = None;
+        let warm_combo_w = dropdown_width(ui, &warm_labels);
+        draw_settings_card_frame(ui, p, self.backdrop_active, |card| {
+            card.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = 0.0;
+                let left_w = (ui.available_width() - warm_combo_w - 16.0).max(160.0);
+                ui.allocate_ui(egui::vec2(left_w, 40.0), |ui| {
+                    ui.horizontal(|ui| {
+                        ui.spacing_mut().item_spacing.x = 0.0;
+                        let (icon_rect, _) =
+                            ui.allocate_exact_size(egui::vec2(16.0, 16.0), egui::Sense::hover());
+                        ui.painter().text(
+                            icon_rect.center() + egui::vec2(0.0, 1.0), // +1px 光学下移：Fluent glyph 墨迹重心偏上，对齐标题行
+                            egui::Align2::CENTER_CENTER,
+                            '\u{E9F5}', // Processing：保活池容量语义
+                            egui::FontId::proportional(16.0),
+                            p.text2,
+                        );
+                        ui.add_space(12.0);
+                        ui.vertical(|ui| {
+                            ui.set_min_height(40.0);
+                            ui.label(
+                                dd_gui::theme::semibold_title(
+                                    crate::text::t(lang_eff, "set.warm_capacity.name"),
+                                    14.0,
+                                )
+                                .color(p.text),
+                            );
+                            ui.add_space(2.0);
+                            ui.add(
+                                egui::Label::new(
+                                    egui::RichText::new(crate::text::t(
+                                        lang_eff,
+                                        "set.warm_capacity.desc",
+                                    ))
+                                    .size(12.0)
+                                    .color(p.text3),
+                                )
+                                .wrap(),
+                            );
+                        });
+                    });
+                });
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if let Some(idx) =
+                        draw_fluent_dropdown(ui, warm_selected, &warm_labels, warm_combo_w, p, true)
+                    {
+                        warm_picked = Some((idx + 1) as u8);
+                    }
+                });
+            });
+        });
+        if let Some(cap) = warm_picked {
+            self.apply_warm_capacity(cap);
+        }
+
+        // ── 卡 6：自定义命令（N1，2026-10-04）──管理范式复用搜索引擎卡
+        //（列表行 + 删除小按钮 + 底部添加区）；添加/删除即时落盘 + 置聚合
+        // 脏标记（下一次重聚合后首屏「直达」分组同步）。
+        self.draw_custom_commands_card(ui, p);
+
+        // ── 卡 7：导入 / 导出设置（N5，2026-10-04）──本机迁移（两步确认
+        // 范式复用「恢复默认外观」卡；导出 = 数据目录备份文件，导入覆盖）。
+        self.draw_backup_card(ui, p);
+    }
+
+    /// 常规栏「导入 / 导出设置」卡（N5，2026-10-04）：导出 = 数据目录下
+    /// `dd-settings-backup.json`（原子写，机器态剔除，路径上屏便于拷贝）；
+    /// 导入 = 同文件读回 → 容错解析 → 两步确认（点击变「确认导入」，5s
+    /// 未确认自动撤销——`appearance_reset_armed` 同范式）→ 覆盖并应用。
+    /// 失败一律 toast（复用既有 toast 组件；spec §4.5 零文件对话框依赖——
+    /// 固定路径 + 展示路径）。
+    fn draw_backup_card(&mut self, ui: &mut egui::Ui, p: &theme::Palette) {
+        use std::time::{Duration, Instant};
+        const ARM_WINDOW: Duration = Duration::from_secs(5);
+        let lang = self.lang_effective;
+        let armed = self
+            .settings_import_armed
+            .map(|t| t.elapsed() < ARM_WINDOW)
+            .unwrap_or(false);
+        if self.settings_import_armed.is_some() && !armed {
+            self.settings_import_armed = None; // 超时自动撤销
+        }
+        let import_label = crate::text::t(
+            lang,
+            if armed {
+                "set.backup.armed"
+            } else {
+                "set.backup.import"
+            },
+        );
+        let mut export_clicked = false;
+        let mut import_clicked = false;
+        let backup_path = Self::settings_backup_path();
+
+        draw_settings_card_frame(ui, p, self.backdrop_active, |card| {
+            // ── 卡头：图标 + 名称 + 描述 ──
+            card.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = 0.0;
+                let (icon_rect, _) =
+                    ui.allocate_exact_size(egui::vec2(16.0, 16.0), egui::Sense::hover());
+                ui.painter().text(
+                    icon_rect.center() + egui::vec2(0.0, 1.0),
+                    egui::Align2::CENTER_CENTER,
+                    '\u{E8AB}', // Sync：迁移语义
+                    egui::FontId::proportional(16.0),
+                    p.text2,
+                );
+                ui.add_space(12.0);
+                ui.vertical(|ui| {
+                    ui.set_min_height(36.0);
+                    ui.label(
+                        dd_gui::theme::semibold_title(
+                            crate::text::t(lang, "set.backup.name"),
+                            14.0,
+                        )
+                        .color(p.text),
+                    );
+                    ui.add_space(2.0);
+                    ui.add(
+                        egui::Label::new(
+                            egui::RichText::new(crate::text::t(lang, "set.backup.desc"))
+                                .size(12.0)
+                                .color(p.text3),
+                        )
+                        .wrap(),
+                    );
+                });
+            });
+            card.add_space(8.0);
+            // ── 备份路径上屏（mono 截断，便于用户整行拷贝）──
+            if let Some(path) = &backup_path {
+                let path_resp = card.add(
+                    egui::Label::new(
+                        egui::RichText::new(path.display().to_string())
+                            .size(11.0)
+                            .color(p.text3)
+                            .monospace(),
+                    )
+                    .truncate(),
+                );
+                if card.rect_contains_pointer(path_resp.rect) {
+                    path_resp.show_tooltip_text(path.display().to_string());
+                }
+            }
+            card.add_space(4.0);
+            // ── 动作行：导出 + 导入并覆盖（两步确认）──
+            card.horizontal(|ui| {
+                ui.add_space(28.0);
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    import_clicked = fluent_button(ui, import_label, p);
+                    ui.add_space(8.0);
+                    export_clicked =
+                        fluent_button(ui, crate::text::t(lang, "set.backup.export"), p);
+                });
+            });
+        });
+
+        if export_clicked {
+            self.export_settings_backup();
+        }
+        if import_clicked {
+            if armed {
+                self.settings_import_armed = None;
+                self.import_settings_backup(ui.ctx());
+            } else {
+                self.settings_import_armed = Some(Instant::now());
+                ui.ctx().request_repaint_after(ARM_WINDOW); // 超时后重绘 → 按钮复原
+            }
+        }
+    }
+
+    /// 常规栏「自定义命令」卡（N1，2026-10-04）：关键词直达 URL / 本地路径。
+    /// 交互范式复用搜索引擎卡——列表行（名称 + 关键词 + 目标截断 + 删除，
+    /// D42 行规格 32px）+ 底部添加区（类型下拉 + 名称/关键词/目标输入 +
+    /// 「添加」按钮）。校验经 [`dd_gui::settings::CustomCommand::new`]（trim /
+    /// 小写化 / 空字段与空白关键词拒绝）+ 关键词唯一性，错误行 danger 提示。
+    fn draw_custom_commands_card(&mut self, ui: &mut egui::Ui, p: &theme::Palette) {
+        let lang = self.lang_effective;
+        let cmds = self.settings.custom_commands.clone();
+        let kind_labels = [
+            crate::text::t(lang, "set.custom.kind_url"),
+            crate::text::t(lang, "set.custom.kind_path"),
+        ];
+        let kind_idx = self.custom_kind_idx;
+        let mut remove_keyword: Option<String> = None;
+        let mut kind_picked: Option<usize> = None;
+        let mut add_clicked = false;
+
+        draw_settings_card_frame(ui, p, self.backdrop_active, |card| {
+            // ── 卡头：图标 + 名称 + 描述 ──
+            card.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = 0.0;
+                let (icon_rect, _) =
+                    ui.allocate_exact_size(egui::vec2(16.0, 16.0), egui::Sense::hover());
+                ui.painter().text(
+                    icon_rect.center() + egui::vec2(0.0, 1.0), // +1px 光学下移：Fluent glyph 墨迹重心偏上
+                    egui::Align2::CENTER_CENTER,
+                    '\u{E71B}', // Link：直达语义
+                    egui::FontId::proportional(16.0),
+                    p.text2,
+                );
+                ui.add_space(12.0);
+                ui.vertical(|ui| {
+                    ui.set_min_height(36.0);
+                    ui.label(
+                        dd_gui::theme::semibold_title(
+                            crate::text::t(lang, "set.custom.name"),
+                            14.0,
+                        )
+                        .color(p.text),
+                    );
+                    ui.add_space(2.0);
+                    ui.add(
+                        egui::Label::new(
+                            egui::RichText::new(crate::text::t(lang, "set.custom.desc"))
+                                .size(12.0)
+                                .color(p.text3),
+                        )
+                        .wrap(),
+                    );
+                });
+            });
+            card.add_space(8.0);
+            // ── 已有命令列表：名称 + 关键词 + 目标截断 + 删除（同引擎行 32px，
+            // hover 底与 tooltip 惯用法一致）──
+            for c in &cmds {
+                let (row_rect, row_resp) = card.allocate_exact_size(
+                    egui::vec2(card.available_width(), 32.0),
+                    egui::Sense::hover(),
+                );
+                let hovered_now = card.rect_contains_pointer(row_rect);
+                if hovered_now {
+                    card.painter().rect_filled(
+                        row_rect,
+                        egui::CornerRadius::same(4),
+                        p.control_hover,
+                    );
+                }
+                let mut row_ui = card.new_child(
+                    egui::UiBuilder::new()
+                        .max_rect(row_rect)
+                        .layout(egui::Layout::left_to_right(egui::Align::Center)),
+                );
+                row_ui.spacing_mut().item_spacing.x = 0.0;
+                row_ui.add_space(28.0);
+                row_ui.label(egui::RichText::new(&c.title).size(14.0).color(p.text));
+                row_ui.add_space(12.0);
+                row_ui.label(
+                    egui::RichText::new(format!("@{}", c.keyword))
+                        .size(12.0)
+                        .color(p.text3)
+                        .monospace(),
+                );
+                row_ui.add_space(12.0);
+                let del_label = crate::text::t(lang, "set.custom.delete");
+                let font12 = egui::FontId::proportional(12.0);
+                let btn_w = (text_width(&row_ui, del_label, font12) + 16.0).max(32.0);
+                let font_mono = egui::FontId::monospace(12.0);
+                let target_avail = (row_ui.available_width() - btn_w - 12.0).max(1.0);
+                let target_truncated = text_width(&row_ui, &c.target, font_mono) > target_avail;
+                row_ui.add_sized(
+                    egui::vec2(target_avail, 16.0),
+                    egui::Label::new(
+                        egui::RichText::new(&c.target)
+                            .size(12.0)
+                            .color(p.text3)
+                            .monospace(),
+                    )
+                    .truncate(),
+                );
+                row_ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    ui.add_space(4.0);
+                    if fluent_button_small(ui, del_label, p) {
+                        remove_keyword = Some(c.keyword.clone());
+                    }
+                });
+                if target_truncated && hovered_now {
+                    row_resp.show_tooltip_text(c.target.clone());
+                }
+            }
+            if cmds.is_empty() {
+                card.horizontal(|ui| {
+                    ui.add_space(28.0);
+                    ui.label(
+                        egui::RichText::new(crate::text::t(lang, "set.custom.none"))
+                            .size(12.0)
+                            .color(p.text3),
+                    );
+                });
+            }
+            card.add_space(8.0);
+            // ── 添加区 · 行 1：类型下拉 + 名称 + 关键词（均 CONTROL_H 高同线）──
+            card.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = 8.0;
+                ui.add_space(28.0);
+                if let Some(idx) = draw_fluent_dropdown(ui, kind_idx, &kind_labels, 110.0, p, true)
+                {
+                    kind_picked = Some(idx);
+                }
+                let pair_w = (ui.available_width() - 8.0) / 2.0;
+                draw_fluent_textbox(
+                    ui,
+                    pair_w,
+                    "dd-custom-title",
+                    &mut self.custom_title_buf,
+                    crate::text::t(lang, "set.custom.title_hint"),
+                    p,
+                );
+                draw_fluent_textbox(
+                    ui,
+                    pair_w,
+                    "dd-custom-keyword",
+                    &mut self.custom_keyword_buf,
+                    crate::text::t(lang, "set.custom.keyword_hint"),
+                    p,
+                );
+            });
+            card.add_space(8.0);
+            // ── 添加区 · 行 2：目标输入（flex）+「添加」按钮 ──
+            card.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = 8.0;
+                ui.add_space(28.0);
+                let add_label = crate::text::t(lang, "set.custom.add");
+                let btn_w =
+                    text_width(ui, add_label, egui::FontId::proportional(CONTROL_FONT_PT)) + 24.0;
+                let target_w = (ui.available_width() - btn_w - 8.0).max(160.0);
+                draw_fluent_textbox(
+                    ui,
+                    target_w,
+                    "dd-custom-target",
+                    &mut self.custom_target_buf,
+                    crate::text::t(lang, "set.custom.target_hint"),
+                    p,
+                );
+                if fluent_button(ui, add_label, p) {
+                    add_clicked = true;
+                }
+            });
+            if let Some(err) = &self.custom_add_err {
+                card.horizontal(|ui| {
+                    ui.add_space(28.0);
+                    ui.label(egui::RichText::new(err.clone()).size(12.0).color(p.danger));
+                });
+            }
+        });
+
+        // ── 闭包外应用交互结果 ──
+        if let Some(idx) = kind_picked {
+            self.custom_kind_idx = idx;
+        }
+        if let Some(keyword) = remove_keyword {
+            self.delete_custom_command(&keyword);
+        }
+        if add_clicked {
+            let kind = if self.custom_kind_idx == 0 {
+                dd_gui::settings::CustomCommandKind::Url
+            } else {
+                dd_gui::settings::CustomCommandKind::Path
+            };
+            match dd_gui::settings::CustomCommand::new(
+                &self.custom_title_buf,
+                &self.custom_keyword_buf,
+                kind,
+                &self.custom_target_buf,
+            ) {
+                Some(c) => {
+                    if self
+                        .settings
+                        .custom_commands
+                        .iter()
+                        .any(|x| x.keyword == c.keyword)
+                    {
+                        self.custom_add_err =
+                            Some(crate::text::t(lang, "set.custom.dup_keyword").to_string());
+                    } else {
+                        self.settings.custom_commands.push(c);
+                        self.custom_title_buf.clear();
+                        self.custom_keyword_buf.clear();
+                        self.custom_target_buf.clear();
+                        self.custom_add_err = None;
+                        // 与删除同一落盘 + 重聚合口径（复用 engines_dirty 消费点）。
+                        self.engines_dirty = true;
+                        self.save_settings_with_feedback();
+                    }
+                }
+                None => {
+                    self.custom_add_err =
+                        Some(crate::text::t(lang, "set.custom.invalid").to_string());
+                }
+            }
         }
     }
 
@@ -2073,6 +2718,13 @@ impl PaletteApp {
         let ledger_corrupt = matches!(self.ledger_state, dd_host::trust::LedgerState::Corrupt);
         // R-20：解析失败清单（路径 + 原因），闭包外拷贝。
         let skipped = self.skipped_manifests.clone();
+        // N2：apps 行内「设置」展开态 + 屏蔽名单快照与交互收集位（闭包外
+        // 快照、闭包内只收集，落盘在闭包外——与引擎卡同纪律）。
+        let apps_cfg_open = self.apps_cfg_open;
+        let blocklist_frags = self.apps_blocklist_fragments();
+        let mut apps_cfg_clicked = false;
+        let mut blocklist_remove: Option<String> = None;
+        let mut blocklist_add_clicked = false;
 
         draw_settings_card_frame(ui, p, self.backdrop_active, |card| {
             card.horizontal(|ui| {
@@ -2176,6 +2828,10 @@ impl PaletteApp {
                     }
                     if row.failed_reason.is_some() {
                         right_w += 8.0 + small_btn_w(ui, crate::text::t(lang, "set.ext.retry"));
+                    }
+                    // N2：内置 apps 行「设置」按钮（用户可调项入口，仅内置扩展提供）。
+                    if row.id == "com.ddrun.apps" {
+                        right_w += 8.0 + small_btn_w(ui, crate::text::t(lang, "set.ext.configure"));
                     }
                     let left_w = (ui.available_width() - right_w).max(160.0);
                     ui.vertical(|ui| {
@@ -2295,6 +2951,14 @@ impl PaletteApp {
                                 retry_clicked = true;
                             }
                         }
+                        // N2：内置 apps 行「设置」小按钮（展开/收起用户屏蔽名单编辑器）。
+                        if row.id == "com.ddrun.apps" {
+                            ui.add_space(8.0);
+                            if fluent_button_small(ui, crate::text::t(lang, "set.ext.configure"), p)
+                            {
+                                apps_cfg_clicked = true;
+                            }
+                        }
                     });
                 });
                 if clicked {
@@ -2310,9 +2974,109 @@ impl PaletteApp {
                     trust_action = Some((row.id.clone(), Decision::Deny));
                 }
             }
+            // ── N2：apps 行内「设置」展开区——用户屏蔽名单编辑器（搜索引擎卡
+            // 同款列表范式：32px 行 + 删除小按钮 + 底部添加区）──
+            if apps_cfg_open && rows.iter().any(|r| r.id == "com.ddrun.apps") {
+                let font12 = egui::FontId::proportional(12.0);
+                card.add_space(4.0);
+                card.horizontal(|ui| {
+                    ui.add_space(28.0);
+                    ui.label(
+                        egui::RichText::new(crate::text::t(lang, "set.apps.blocklist.name"))
+                            .size(13.0)
+                            .color(p.text),
+                    );
+                });
+                card.horizontal(|ui| {
+                    ui.add_space(28.0);
+                    ui.add(
+                        egui::Label::new(
+                            egui::RichText::new(crate::text::t(lang, "set.apps.blocklist.desc"))
+                                .size(11.0)
+                                .color(p.text3),
+                        )
+                        .wrap(),
+                    );
+                });
+                card.add_space(4.0);
+                for frag in &blocklist_frags {
+                    let (row_rect, row_resp) = card.allocate_exact_size(
+                        egui::vec2(card.available_width(), 32.0),
+                        egui::Sense::hover(),
+                    );
+                    let hovered_now = card.rect_contains_pointer(row_rect);
+                    if hovered_now {
+                        card.painter().rect_filled(
+                            row_rect,
+                            egui::CornerRadius::same(4),
+                            p.control_hover,
+                        );
+                    }
+                    let mut row_ui = card.new_child(
+                        egui::UiBuilder::new()
+                            .max_rect(row_rect)
+                            .layout(egui::Layout::left_to_right(egui::Align::Center)),
+                    );
+                    row_ui.spacing_mut().item_spacing.x = 0.0;
+                    row_ui.add_space(28.0);
+                    row_ui.label(
+                        egui::RichText::new(frag)
+                            .size(12.0)
+                            .color(p.text)
+                            .monospace(),
+                    );
+                    let del_label = crate::text::t(lang, "set.custom.delete");
+                    let btn_w = (text_width(&row_ui, del_label, font12.clone()) + 16.0).max(32.0);
+                    let rest = (row_ui.available_width() - btn_w).max(1.0);
+                    row_ui.add_sized(
+                        egui::vec2(rest, 16.0),
+                        egui::Label::new(egui::RichText::new("").size(12.0)),
+                    );
+                    row_ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        ui.add_space(4.0);
+                        if fluent_button_small(ui, del_label, p) {
+                            blocklist_remove = Some(frag.clone());
+                        }
+                    });
+                    if hovered_now {
+                        row_resp.show_tooltip_text(frag.clone());
+                    }
+                }
+                card.add_space(4.0);
+                card.horizontal(|ui| {
+                    ui.spacing_mut().item_spacing.x = 8.0;
+                    ui.add_space(28.0);
+                    let add_label = crate::text::t(lang, "set.custom.add");
+                    let btn_w =
+                        text_width(ui, add_label, egui::FontId::proportional(CONTROL_FONT_PT))
+                            + 24.0;
+                    let w = (ui.available_width() - btn_w - 8.0).max(160.0);
+                    draw_fluent_textbox(
+                        ui,
+                        w,
+                        "dd-apps-blocklist",
+                        &mut self.apps_blocklist_buf,
+                        crate::text::t(lang, "set.apps.blocklist.hint"),
+                        p,
+                    );
+                    if fluent_button(ui, add_label, p) {
+                        blocklist_add_clicked = true;
+                    }
+                });
+            }
         });
         if let Some((id, enabled)) = changed {
             self.apply_extension_enabled(&id, enabled);
+        }
+        // N2：apps「设置」展开开合 + 屏蔽名单增删落盘（apply 内含重聚合脏标记）。
+        if apps_cfg_clicked {
+            self.apps_cfg_open = !self.apps_cfg_open;
+        }
+        if let Some(frag) = blocklist_remove {
+            self.apps_blocklist_remove(&frag);
+        }
+        if blocklist_add_clicked {
+            self.apps_blocklist_add();
         }
         // S-05：信任决策（写台账 + 落盘 + 立即重聚合，见 `set_extension_trust`）。
         if let Some((id, decision)) = trust_action {
@@ -2810,6 +3574,54 @@ pub(crate) fn fluent_button(ui: &mut egui::Ui, text: &str, p: &theme::Palette) -
 /// Fluent 2 小按钮（列表行内动作，如引擎「删除」）：高 24 / 文字 12 / padding 8。
 pub(crate) fn fluent_button_small(ui: &mut egui::Ui, text: &str, p: &theme::Palette) -> bool {
     fluent_button_sized(ui, text, p, 24.0, 12.0, 8.0)
+}
+
+/// Fluent 2 单行文本框（N1 自定义命令卡；自绘口径同搜索引擎卡「添加自定义
+/// 引擎」：card 底 / 1px border-strong / 圆角 4 / 高 CONTROL_H + frameless
+/// TextEdit 内嵌垂直居中；聚焦 = 底边 2px accent 下划线）。`width` 为外框
+/// 总宽，`id` 须全页唯一（focus 判定键）。
+pub(crate) fn draw_fluent_textbox(
+    ui: &mut egui::Ui,
+    width: f32,
+    id: &str,
+    buf: &mut String,
+    hint: &str,
+    p: &theme::Palette,
+) {
+    let (box_rect, _) = ui.allocate_exact_size(egui::vec2(width, CONTROL_H), egui::Sense::hover());
+    let edit_id = egui::Id::new(id);
+    let focused = ui.ctx().memory(|m| m.has_focus(edit_id));
+    let radius = egui::CornerRadius::same(4);
+    // 背景与描边先画（TextEdit 文字绘制在其上层）
+    ui.painter().rect_filled(box_rect, radius, p.card);
+    ui.painter().rect_stroke(
+        box_rect,
+        radius,
+        egui::Stroke::new(1.0, p.border_strong),
+        egui::StrokeKind::Inside,
+    );
+    if focused {
+        // Fluent 聚焦态：底边 2px accent 下划线（内缩 1px 避让描边）。
+        ui.painter().rect_filled(
+            egui::Rect::from_min_max(
+                egui::pos2(box_rect.left() + 1.0, box_rect.bottom() - 3.0),
+                egui::pos2(box_rect.right() - 1.0, box_rect.bottom() - 1.0),
+            ),
+            egui::CornerRadius::same(1),
+            p.accent_stroke,
+        );
+    }
+    ui.put(
+        box_rect,
+        egui::TextEdit::singleline(buf)
+            .id(edit_id)
+            .desired_width(width - 24.0)
+            .font(egui::FontId::proportional(CONTROL_FONT_PT))
+            .text_color(p.text)
+            .vertical_align(egui::Align::Center)
+            .frame(egui::Frame::new().inner_margin(egui::Margin::symmetric(12, 0)))
+            .hint_text(hint),
+    );
 }
 
 /// [`fluent_button`] / [`fluent_button_small`] 共用绘制核心。

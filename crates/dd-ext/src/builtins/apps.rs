@@ -47,6 +47,26 @@ fn from_utf16le_lossy(bytes: &[u8]) -> String {
     String::from_utf16_lossy(&v)
 }
 
+/// N2（2026-10-04）：宿主注入的**用户屏蔽名单**（内存通道；websearch 引擎表
+/// `set_configured_engines_json` 同款先例——in-process 内置对 `entry.env`
+/// 不敏感）。值为逗号分隔的显示名片段；`None` = 未配置/已清空。
+static CONFIGURED_BLOCKLIST: std::sync::RwLock<Option<String>> = std::sync::RwLock::new(None);
+
+/// 宿主聚合线程调用：注入/清除用户屏蔽名单（每次重聚合全量覆写）。
+pub fn set_configured_blocklist(text: Option<String>) {
+    *CONFIGURED_BLOCKLIST
+        .write()
+        .unwrap_or_else(|e| e.into_inner()) = text;
+}
+
+/// 读取当前注入的屏蔽名单原文（`sys::user_blocklist` 解析消费）。
+fn configured_blocklist_text() -> Option<String> {
+    CONFIGURED_BLOCKLIST
+        .read()
+        .unwrap_or_else(|e| e.into_inner())
+        .clone()
+}
+
 pub fn spec() -> ExtensionSpec {
     ExtensionSpec {
         id: "com.ddrun.apps",
@@ -945,6 +965,26 @@ mod sys {
             || DEV_TOOL_TITLE_KEYWORDS.iter().any(|k| title.contains(k))
     }
 
+    /// N2：解析宿主注入的用户屏蔽名单（逗号分隔片段 → 小写非空向量；
+    /// 未配置 → 空 = 零过滤）。
+    fn user_blocklist() -> Vec<String> {
+        let Some(text) = super::configured_blocklist_text() else {
+            return Vec::new();
+        };
+        text.split(',')
+            .map(|s| s.trim().to_lowercase())
+            .filter(|s| !s.is_empty())
+            .collect()
+    }
+
+    /// N2：显示名是否命中用户屏蔽名单（片段包含匹配、大小写不敏感；
+    /// 空名单恒 false）。与静态 `is_junk_title` 分层——用户名单只作用于
+    /// 输出层（`top_level_commands`），不改枚举与静态过滤。
+    fn is_user_blocked(title: &str, blocklist: &[String]) -> bool {
+        let t = title.to_lowercase();
+        blocklist.iter().any(|f| t.contains(f))
+    }
+
     /// AppsFolder 层的标题过滤（设计稿 §3.B 补则）：真 UWP（packaged，parsing
     /// name 含 `!`）豁免——其名称可能合法含「帮助」等词（获取帮助）；快捷方式
     /// 注册的伪应用（parsing name 即显示名，无 `!`）套用标题黑名单。
@@ -1093,9 +1133,21 @@ mod sys {
     }
 
     pub fn top_level_commands() -> Vec<CommandItem> {
-        app_list()
-            .iter()
+        top_level_from(app_list(), &user_blocklist())
+    }
+
+    /// N2（2026-10-04）：顶层命令构建（`top_level_commands` 的可注入核心，
+    /// 供屏蔽名单单测）。
+    ///
+    /// **用户屏蔽名单在输出层过滤**（而非枚举层）——`APP_CACHE` 是进程级
+    /// `OnceLock`（in-process 共享宿主进程），枚举层过滤会让配置变更滞后到
+    /// 重启；输出层过滤随每次聚合重算，重聚合即生效。**条目 id 保持全量
+    /// 枚举的原始下标**（`apps.run.{i}` 指向 `app_list()` 位次）——过滤只
+    /// 跳过条目不重排 id，`handle_invoke` 的索引寻址不变。
+    fn top_level_from(apps: &[App], blocklist: &[String]) -> Vec<CommandItem> {
+        apps.iter()
             .enumerate()
+            .filter(|(_, app)| !is_user_blocked(&app.title, blocklist))
             .map(|(i, app)| CommandItem {
                 id: format!("apps.run.{i}"),
                 title: app.title.clone(),
@@ -1183,6 +1235,61 @@ mod sys {
     mod tests {
         use super::*;
         use dd_protocol::model::Sender;
+
+        /// N2 夹具：最小 App（图标回落 glyph、AppsFolder 启动——单测不触 COM）。
+        fn fixture_app(title: &str) -> App {
+            App {
+                title: title.to_string(),
+                subtitle: None,
+                icon: Icon {
+                    kind: IconKind::Glyph,
+                    value: FALLBACK_GLYPH.to_string(),
+                },
+                launch: Launch::AppsFolder(format!("{title}!app")),
+            }
+        }
+
+        /// N2：用户屏蔽名单输出层过滤——① 片段包含匹配、大小写不敏感；
+        /// ② 空名单零过滤（回归锚）；③ **条目 id 保持全量枚举原始下标**
+        /// （过滤跳过条目不重排 id，`handle_invoke` 索引寻址不变）。
+        #[test]
+        fn n2_user_blocklist_filters_top_level_with_stable_ids() {
+            let apps = vec![
+                fixture_app("Visual Studio 2022"),
+                fixture_app("Foo Uninstall Helper"),
+                fixture_app("计算器"),
+            ];
+            // ① 命中过滤：小写片段命中大写标题
+            let blocked = top_level_from(&apps, &["uninstall".to_string()]);
+            assert_eq!(blocked.len(), 2);
+            assert_eq!(blocked[0].title, "Visual Studio 2022");
+            assert_eq!(blocked[1].title, "计算器");
+            // ③ id = 全量枚举原始下标（计算器在 app_list 里是第 3 项 → apps.run.2）
+            assert_eq!(blocked[1].id, "apps.run.2");
+            // 中文片段命中
+            let zh = top_level_from(&apps, &["计算".to_string()]);
+            assert_eq!(zh.len(), 2);
+            assert_eq!(zh[1].id, "apps.run.1");
+            // ② 空名单零过滤
+            assert_eq!(top_level_from(&apps, &[]).len(), 3);
+        }
+
+        /// N2：屏蔽名单原文解析——逗号分隔、trim、空片段丢弃、大小写归一。
+        #[test]
+        fn n2_user_blocklist_parse_fragments() {
+            set_configured_blocklist(Some(" 卸载 , Update Helper,,repair ".to_string()));
+            assert_eq!(
+                user_blocklist(),
+                vec![
+                    "卸载".to_string(),
+                    "update helper".to_string(),
+                    "repair".to_string()
+                ]
+            );
+            // 清除 → 零过滤
+            set_configured_blocklist(None);
+            assert!(user_blocklist().is_empty());
+        }
 
         /// R-04：枚举失败（panic）路径落**负缓存**——失败后空列表随 `OnceLock`
         /// 落定，第二次调用不再执行枚举体（二次聚合不重付全量枚举）。

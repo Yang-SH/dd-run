@@ -9,12 +9,13 @@ use dd_protocol::model::CommandResult;
 use std::thread;
 use std::time::Duration;
 
-/// M3 LRU 保活容量（设计文档 §6.3"最近 N 个"；超出则 close+释放、命令回落 stub，A7）。
-pub(crate) const LRU_WARM_CAPACITY: usize = 8;
-
+// M3 LRU 保活容量（设计文档 §6.3"最近 N 个"；超出则 close+释放、命令回落 stub，A7）。
+// N4（2026-10-03）起容量可配置（`Settings.warm_capacity`，1–16，默认
+// `dd_gui::settings::WARM_CAPACITY_DEFAULT` = 原 8 编译期常量——M1–M4 内存
+// 基线在该默认下维持有效），实际容量在 `PaletteApp::new` 读配置构造。
 /// warm 进程**空闲超时回收**阈值（C 批次性能打磨，2026-09-10）。
 ///
-/// 动机：`LRU_WARM_CAPACITY`(8) 大于扩展总数（内置 5 + 官方 sidecar 1 = 6）→
+/// 动机：预热容量默认 8 大于扩展总数（内置 6 + 官方 sidecar 1 = 7）→
 /// **LRU 永不触发驱逐**，保活集行为上"只增不减"（稳态常驻全部扩展）。空闲超过
 /// 本阈值即按既有驱逐路径释放（close + 回落 stub），下次使用走桩复热。
 pub(crate) const WARM_IDLE_TTL: Duration = Duration::from_secs(120);

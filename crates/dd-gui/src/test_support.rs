@@ -88,6 +88,12 @@ pub(crate) fn dying_process(id: &str) -> ExtensionProcess {
 
 /// 不依赖真实扩展 / 聚合的 PaletteApp（空 channel 注入）。
 pub(crate) fn make_app() -> PaletteApp {
+    make_app_with_settings(dd_gui::settings::Settings::default())
+}
+
+/// 指定 Settings 的 PaletteApp（N4：验证 warm 保活容量等配置在构造点被消费；
+/// 同 `make_app` 空 channel 注入，不触真实扩展 / 聚合 / 落盘）。
+pub(crate) fn make_app_with_settings(settings: dd_gui::settings::Settings) -> PaletteApp {
     let (_ttx, tray_rx) = mpsc::channel::<TrayEvent>();
     let (_atx, agg_rx) = mpsc::channel::<AggregatePayload>();
     PaletteApp::new(
@@ -97,7 +103,7 @@ pub(crate) fn make_app() -> PaletteApp {
         agg_rx,
         ColdStartTimer::new(),
         None,
-        dd_gui::settings::Settings::default(),
+        settings,
         Arc::new(AtomicBool::new(false)),
     )
 }

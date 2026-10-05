@@ -112,49 +112,106 @@ impl PaletteApp {
                     log::warn!("[dd-gui] host/open_url 参数解析失败（ext={ext_id}）");
                     return;
                 };
-                // S-03（2026-09-23）：scheme 白名单前置——只放行 http / https / file
-                // （理由与 `file://` 为何保留见 `platform::is_allowed_open_url` 文档）。
-                // 拒绝时**不静默**：记 warn（含 ext id 与 URL，便于溯源）+ 一次性 toast。
-                if !crate::platform::is_allowed_open_url(&params.url) {
-                    log::warn!(
-                        "[dd-gui] host/open_url 已拦截（scheme 不在白名单）ext={ext_id} url={}",
-                        params.url
-                    );
-                    let msg = crate::text::t(self.lang_effective, "toast.open_url_blocked");
-                    self.show_toast(msg.to_string(), Some(2_500));
-                    return;
-                }
-                log::debug!("[dd-gui] host/open_url（ext={ext_id}）：{}", params.url);
-                // v3.3 P1.5 修复：`file://` 协议改走 ShellExecute 自动派发——
-                // 目录 → Explorer 窗口；文件 → 关联程序（此前一律 webbrowser，
-                // 目录变浏览器索引页、`.txt`/`.html` 走浏览器而非关联程序）。
-                // `http(s)://` 保持 webbrowser 默认浏览器（websearch 不受影响）。
-                // 协议 v1.0 零改动——复用既有 `host/open_url`。
-                // v3.3 P2 §9.6：`file://` 解析改为「候选 + 存在性优选」——
-                // 字面 `%`/`#` 路径优先，不存在才回退 percent-decode；UNC
-                // （`file://host/share`）也从原来的 None 变成受支持的 UNC 路径。
-                if let Some(path) = crate::platform::resolve_file_url_to_path(&params.url) {
-                    // S-03：`file://` = 「双击等价」（设计如此，文件搜索的打开动作依赖它）。
-                    // 记 info 落**扩展 id + 目标路径**——该能力无法由宿主验证"是否用户手势"，
-                    // 故至少保证可溯源（EDR/日志归因）。见审计文档 §4.2。
-                    log::info!("[dd-gui] host/open_url file:// 打开（ext={ext_id}, path={path}）");
-                    if let Err(e) = crate::platform::open_path(&path) {
-                        // R-16：失败不静默——面板多已 Dismiss，无提示即「命令被吃了」。
-                        log::warn!(
-                            "[dd-gui] host/open_url ShellExecute 失败（ext={ext_id}, path={path}）：{e}"
-                        );
-                        let msg = self.tr("toast.open_fail").replace("{e}", &e);
-                        self.show_error_toast(msg);
-                    }
-                } else if let Err(e) = webbrowser::open(&params.url) {
-                    // R-16：同上——无默认浏览器 / 启动失败必须可见。
-                    log::warn!("[dd-gui] host/open_url 浏览器打开失败（ext={ext_id}）：{e}");
-                    let msg = self.tr("toast.open_fail").replace("{e}", &e.to_string());
-                    self.show_error_toast(msg);
-                }
+                self.open_url_execute(&params.url, ext_id);
             }
             other => log::debug!("[dd-gui] 未知 host/* 请求：{other}（ext={ext_id}，已应答忽略）"),
         }
+    }
+
+    /// 打开 URL/文件目标的统一执行端（N1 自宿主 `host/open_url` 执行体抽出，
+    /// 2026-10-04——自定义直达命令复用同一函数，行为逐位一致）。
+    ///
+    /// `source` 为溯源标识（扩展清单 id / `custom`）。口径：
+    /// - S-03（2026-09-23）：scheme 白名单前置——只放行 `http` / `https` / `file`；
+    ///   拒绝时**不静默**（warn + 一次性 toast）。
+    /// - `file://` → ShellExecute「双击等价」（目录 → Explorer；文件 → 关联程序；
+    ///   含 UNC 与候选 + 存在性优选，v3.3 P2 §9.6）。
+    /// - 其余（http/https）→ `webbrowser::open` 默认浏览器。
+    /// - 失败不静默（R-16 toast）。
+    pub(crate) fn open_url_execute(&mut self, url: &str, source: &str) {
+        if !crate::platform::is_allowed_open_url(url) {
+            log::warn!("[dd-gui] host/open_url 已拦截（scheme 不在白名单）src={source} url={url}");
+            let msg = crate::text::t(self.lang_effective, "toast.open_url_blocked");
+            self.show_toast(msg.to_string(), Some(2_500));
+            return;
+        }
+        log::debug!("[dd-gui] host/open_url（src={source}）：{url}");
+        if let Some(path) = crate::platform::resolve_file_url_to_path(url) {
+            // S-03：`file://` = 「双击等价」（设计如此，文件搜索的打开动作依赖它）。
+            // 记 info 落**来源 + 目标路径**——该能力无法由宿主验证"是否用户手势"，
+            // 故至少保证可溯源（EDR/日志归因）。见审计文档 §4.2。
+            log::info!("[dd-gui] host/open_url file:// 打开（src={source}, path={path}）");
+            if let Err(e) = crate::platform::open_path(&path) {
+                // R-16：失败不静默——面板多已 Dismiss，无提示即「命令被吃了」。
+                log::warn!(
+                    "[dd-gui] host/open_url ShellExecute 失败（src={source}, path={path}）：{e}"
+                );
+                let msg = self.tr("toast.open_fail").replace("{e}", &e);
+                self.show_error_toast(msg);
+            }
+        } else if let Err(e) = webbrowser::open(url) {
+            // R-16：同上——无默认浏览器 / 启动失败必须可见。
+            log::warn!("[dd-gui] host/open_url 浏览器打开失败（src={source}）：{e}");
+            let msg = self.tr("toast.open_fail").replace("{e}", &e.to_string());
+            self.show_error_toast(msg);
+        }
+    }
+
+    /// N1（2026-10-04）：执行自定义直达命令（宿主内部分发，§3 惯例 ⑤）。
+    ///
+    /// `item_id` = `custom:{keyword}`（[`dd_gui::aggregator::CUSTOM_ITEM_PREFIX`]）。
+    /// `url` 走 [`Self::open_url_execute`]（S-03 白名单天然生效）；`path` 走
+    /// ShellExecute「双击等价」（与 `file://` 同一执行函数，含 UNC）。
+    /// 配置中已无该关键词（删除后列表未刷新的竞态）→ 记日志忽略。
+    pub(crate) fn run_custom_command(&mut self, item_id: &str) {
+        let Some(keyword) = item_id.strip_prefix(dd_gui::aggregator::CUSTOM_ITEM_PREFIX) else {
+            return;
+        };
+        let Some(cmd) = self
+            .settings
+            .custom_commands
+            .iter()
+            .find(|c| c.keyword == keyword)
+            .cloned()
+        else {
+            log::warn!("[dd-gui] 自定义命令 {item_id} 已不存在（配置已删除），忽略执行");
+            return;
+        };
+        match cmd.kind {
+            dd_gui::settings::CustomCommandKind::Url => {
+                self.open_url_execute(&cmd.target, "custom");
+            }
+            dd_gui::settings::CustomCommandKind::Path => {
+                // 与 file:// 腿同一「双击等价」执行函数（ShellExecute，含 UNC）；
+                // info 落目标路径可溯源（同 S-03 §4.2 口径）。
+                log::info!(
+                    "[dd-gui] 自定义命令 path 打开（keyword={}, path={}）",
+                    cmd.keyword,
+                    cmd.target
+                );
+                if let Err(e) = crate::platform::open_path(&cmd.target) {
+                    log::warn!(
+                        "[dd-gui] 自定义命令 ShellExecute 失败（keyword={}，path={}）：{e}",
+                        cmd.keyword,
+                        cmd.target
+                    );
+                    let msg = self.tr("toast.open_fail").replace("{e}", &e);
+                    self.show_error_toast(msg);
+                }
+            }
+        }
+    }
+
+    /// N1（2026-10-04）：右键菜单「删除」自定义直达命令——从配置移除 + 落盘 +
+    /// 置聚合脏标记（离开设置页/下一帧重聚合后条目消失；此处面板尚在 Root 页，
+    /// `engines_dirty` 的重聚合由 `ui()` 收口点消费）。
+    pub(crate) fn delete_custom_command(&mut self, keyword: &str) {
+        self.settings
+            .custom_commands
+            .retain(|c| c.keyword != keyword);
+        self.save_settings_with_feedback();
+        self.engines_dirty = true; // 重聚合消费点复用（N1：含自定义命令变更）
+        log::debug!("[dd-gui] 自定义命令已删除：{keyword}");
     }
 }
 

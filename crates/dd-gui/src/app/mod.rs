@@ -28,7 +28,7 @@ use crate::app::e2e::E2eSample;
 use crate::app::fallback_flow::FallbackFetchOutcome;
 use crate::app::invoke::InvokeOutcome;
 use crate::app::page::PageOutcome;
-use crate::app::pool::{LRU_WARM_CAPACITY, WARM_IDLE_HIDDEN_TICK};
+use crate::app::pool::WARM_IDLE_HIDDEN_TICK;
 use crate::app::refresh::RefreshState;
 use crate::app::toast::ConfirmDialog;
 use crate::app::toast::ToastState;
@@ -293,7 +293,8 @@ pub struct PaletteApp {
     /// M9：内置 in-process 规格表（`id → ExtensionSpec`）——复热链路据此重建
     /// 内置客户端（`ExtClient::open_builtin`），不依赖 `exts` 里的名义 exe 路径。
     pub(crate) inproc_specs: HashMap<String, ExtensionSpec>,
-    /// M3 LRU 保活集（容量 [`LRU_WARM_CAPACITY`]）：超容驱逐 → close + 命令回落 stub（A7）。
+    /// M3 LRU 保活集（容量 = `settings.warm_capacity`，N4 起可配置 1–16、
+    /// 默认 8）：超容驱逐 → close + 命令回落 stub（A7）。
     pub(crate) lru: LruWarmSet,
     /// M3 冷启动计时（A2 实测：`spawn_start` → 首屏数据就绪）。
     pub(crate) cold: ColdStartTimer,
@@ -374,6 +375,29 @@ pub struct PaletteApp {
     /// 设置页「添加搜索引擎」输入缓冲与校验错误（绘制层状态跨帧存活）。
     pub(crate) engine_url_buf: String,
     pub(crate) engine_add_err: Option<String>,
+    /// 设置页「自定义命令」卡的输入缓冲、类型选择与校验错误（N1，2026-10-04；
+    /// 绘制层状态跨帧存活）。
+    pub(crate) custom_title_buf: String,
+    pub(crate) custom_keyword_buf: String,
+    pub(crate) custom_target_buf: String,
+    /// 目标类型下拉选择：0 = URL / 1 = 本地路径。
+    pub(crate) custom_kind_idx: usize,
+    pub(crate) custom_add_err: Option<String>,
+    /// N2（2026-10-04）：扩展卡 apps 行内「设置」入口展开态 + 屏蔽名单
+    /// 输入缓冲（绘制层状态跨帧存活，不落盘）。
+    pub(crate) apps_cfg_open: bool,
+    pub(crate) apps_blocklist_buf: String,
+    /// N5（2026-10-04）：「导入并覆盖」两步确认武装置位（同
+    /// `appearance_reset_armed` 范式：5s 未确认自动撤销）。
+    pub(crate) settings_import_armed: Option<std::time::Instant>,
+    /// T9（2026-10-05）：背景图纹理缓存（(路径, mtime) 门控 + 解码失败负缓存，
+    /// 见 `ui::backdrop_image::BackdropImageCache`）。
+    pub(crate) backdrop_cache: crate::ui::backdrop_image::BackdropImageCache,
+    /// T9：背景图卡路径输入缓冲（绘制层状态跨帧存活，不落盘；reset / 导入
+    /// 在 apply 链内同步）。
+    pub(crate) bg_path_buf: String,
+    /// T9：背景图卡错误行（路径不存在等，UI 操作时置位、成功后清除）。
+    pub(crate) bg_err: Option<String>,
     /// 设置页左栏当前栏目（§08 v4.6 D27）：纯视图状态、不落盘；
     /// `open_settings` 每次进入重置为「外观」（B5）。
     pub(crate) settings_category: SettingsCategory,
@@ -512,7 +536,7 @@ impl PaletteApp {
             ledger_state: dd_host::trust::LedgerState::Missing,
             skipped_manifests: Vec::new(),
             pending_notified: false,
-            lru: LruWarmSet::new(LRU_WARM_CAPACITY),
+            lru: LruWarmSet::new(settings.warm_capacity as usize),
             cold,
             inflight: HashSet::new(),
             last_command_id: None,
@@ -544,6 +568,17 @@ impl PaletteApp {
             lang_dirty: false,
             engine_url_buf: String::new(),
             engine_add_err: None,
+            custom_title_buf: String::new(),
+            custom_keyword_buf: String::new(),
+            custom_target_buf: String::new(),
+            custom_kind_idx: 0,
+            custom_add_err: None,
+            apps_cfg_open: false,
+            apps_blocklist_buf: String::new(),
+            settings_import_armed: None,
+            backdrop_cache: crate::ui::backdrop_image::BackdropImageCache::new(),
+            bg_path_buf: String::new(),
+            bg_err: None,
             settings_category: SettingsCategory::default(),
             hwnd: None,
             backdrop_active: false,

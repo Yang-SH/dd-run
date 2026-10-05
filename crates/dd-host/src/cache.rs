@@ -260,6 +260,21 @@ impl LruWarmSet {
     pub fn idle_victims(&self, ttl: Duration) -> Vec<String> {
         self.idle_victims_at(Instant::now(), ttl)
     }
+
+    /// N4（2026-10-03）：运行时调整容量（设置页「预热容量」），返回因缩容
+    /// 被驱逐的 id（队尾 = 最久未用优先，调用方负责 close + 回落 stub）。
+    /// 扩容不追补——已保活的扩展保持原状，后续触达照常入队。
+    pub fn set_capacity(&mut self, capacity: usize) -> Vec<String> {
+        assert!(capacity >= 1, "LRU 容量至少为 1");
+        self.capacity = capacity;
+        let mut victims = Vec::new();
+        while self.order.len() > self.capacity {
+            if let Some((id, _)) = self.order.pop_back() {
+                victims.push(id);
+            }
+        }
+        victims
+    }
 }
 
 /// 冷启动计时钩子（A2 实测用）。
@@ -490,6 +505,32 @@ mod tests {
         lru.remove("a");
         assert!(!lru.contains("a"));
         assert_eq!(lru.len(), 1);
+    }
+
+    #[test]
+    fn lru_set_capacity_shrinks_with_lru_tail_victims_and_grows_in_place() {
+        // N4：缩容按队尾（最久未用）优先驱逐并返回受害者；扩容不追补。
+        let mut lru = LruWarmSet::new(4);
+        lru.access("a");
+        lru.access("b");
+        lru.access("c");
+        lru.access("d");
+        lru.access("a"); // a 成为最近使用 → 队序 a d c b（尾 = b 最久未用）
+                         // 缩到 2：依次驱逐 b、c（队尾优先）
+        assert_eq!(lru.set_capacity(2), vec!["b".to_string(), "c".to_string()]);
+        assert_eq!(lru.capacity(), 2);
+        assert!(lru.contains("a") && lru.contains("d"));
+        assert_eq!(lru.len(), 2);
+        // 缩到同值：无事发生
+        assert!(lru.set_capacity(2).is_empty());
+        // 扩到 4：已有条目保留、容量生效（再入队 2 个不驱逐）
+        assert_eq!(lru.set_capacity(4), Vec::<String>::new());
+        assert_eq!(lru.capacity(), 4);
+        assert_eq!(lru.access("e"), None);
+        assert_eq!(lru.access("f"), None);
+        assert_eq!(lru.len(), 4);
+        // 第 5 个触发常规 LRU 驱逐（最久未用 = d）
+        assert_eq!(lru.access("g"), Some("d".to_string()));
     }
 
     /// C 批次（空闲回收）：触达刷新「最后触达时刻」——刚触达者不判空闲。

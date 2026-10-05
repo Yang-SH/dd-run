@@ -441,6 +441,169 @@ impl PaletteApp {
         self.lang_dirty = true;
     }
 
+    /// 设置页预热容量切换（N4，2026-10-03）：更新偏好 + 落盘 + 立即调整
+    /// `LruWarmSet` 容量——缩容时按队尾（最久未用）驱逐受害者（close + 回落
+    /// stub，走既有 `evict_warm` 路径；其内部 `lru.remove` 对已出队 id 为无操作）；
+    /// 扩容不追补，后续触达照常入队。纯内存 + 落盘操作，无失败路径。
+    pub(crate) fn apply_warm_capacity(&mut self, cap: u8) {
+        if self.settings.warm_capacity == cap {
+            return;
+        }
+        self.settings.warm_capacity = cap;
+        self.save_settings_with_feedback();
+        for victim in self.lru.set_capacity(cap as usize) {
+            self.evict_warm(&victim);
+        }
+    }
+
+    // ── N2（2026-10-04）：apps 用户屏蔽名单编辑（设置页扩展卡行内「设置」）──
+
+    /// 当前屏蔽名单片段（`ext_settings["com.ddrun.apps"]["blocklist"]` 逗号
+    /// 分隔解析；trim、去空）。
+    pub(crate) fn apps_blocklist_fragments(&self) -> Vec<String> {
+        self.settings
+            .ext_settings
+            .get("com.ddrun.apps")
+            .and_then(|m| m.get("blocklist"))
+            .map(|s| {
+                s.split(',')
+                    .map(|f| f.trim().to_string())
+                    .filter(|f| !f.is_empty())
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    /// 名单变更统一落盘：写 `ext_settings` + 持久化 + 重聚合脏标记
+    ///（离开设置页重聚合 → 内存通道重注入 + 首屏重拉，扩展侧即生效）。
+    pub(crate) fn apply_apps_blocklist(&mut self, joined: String) {
+        self.settings
+            .ext_settings
+            .entry("com.ddrun.apps".to_string())
+            .or_default()
+            .insert("blocklist".to_string(), joined);
+        self.save_settings_with_feedback();
+        self.engines_dirty = true;
+    }
+
+    /// 追加片段（输入缓冲 trim；空忽略；重复忽略）。
+    pub(crate) fn apps_blocklist_add(&mut self) {
+        let frag = self.apps_blocklist_buf.trim().to_string();
+        if frag.is_empty() {
+            return;
+        }
+        let mut list = self.apps_blocklist_fragments();
+        if list.iter().any(|x| x.eq_ignore_ascii_case(&frag)) {
+            self.apps_blocklist_buf.clear();
+            return;
+        }
+        list.push(frag);
+        self.apps_blocklist_buf.clear();
+        self.apply_apps_blocklist(list.join(", "));
+    }
+
+    /// 移除片段（精确匹配）。
+    pub(crate) fn apps_blocklist_remove(&mut self, frag: &str) {
+        let mut list = self.apps_blocklist_fragments();
+        list.retain(|x| x != frag);
+        self.apply_apps_blocklist(list.join(", "));
+    }
+
+    // ── N5（2026-10-04）：设置导入 / 导出（本机迁移）──
+
+    /// 备份文件路径（数据根目录下 [`dd_gui::settings::BACKUP_FILE_NAME`]，
+    /// 与 config.json 同目录——`config_file()` 不可定位 → `None`）。
+    pub(crate) fn settings_backup_path() -> Option<std::path::PathBuf> {
+        dd_host::manifest::config_file()
+            .map(|p| p.with_file_name(dd_gui::settings::BACKUP_FILE_NAME))
+    }
+
+    /// 导出设置备份（原子写；成功 toast 带路径便于拷贝，失败 toast 不静默）。
+    pub(crate) fn export_settings_backup(&mut self) {
+        let Some(path) = Self::settings_backup_path() else {
+            self.show_error_toast(
+                self.tr("toast.settings_export_fail")
+                    .replace("{e}", "数据目录不可定位"),
+            );
+            return;
+        };
+        if self.settings.save_backup_to(&path) {
+            self.show_toast(
+                self.tr("toast.settings_export_ok")
+                    .replace("{p}", &path.display().to_string()),
+                Some(4_000),
+            );
+        } else {
+            self.show_error_toast(
+                self.tr("toast.settings_export_fail")
+                    .replace("{e}", "写盘失败"),
+            );
+        }
+    }
+
+    /// 导入并覆盖（已在 UI 层两步确认）：读备份文件 → 容错解析（机器态保留
+    /// 本机现值）→ 逐组应用（主题/材质/圆角/边框走既有 apply 链即时生效；
+    /// 语言经 apply_lang 同步托盘 + 聚合脏标记；warm 容量即时调整含缩容驱逐；
+    /// 聚合类配置统一 `engines_dirty`——离开设置页重聚合消费）→ 落盘 + toast。
+    pub(crate) fn import_settings_backup(&mut self, ctx: &eframe::egui::Context) {
+        let Some(path) = Self::settings_backup_path() else {
+            self.show_error_toast(
+                self.tr("toast.settings_import_fail")
+                    .replace("{e}", "数据目录不可定位"),
+            );
+            return;
+        };
+        let text = match std::fs::read_to_string(&path) {
+            Ok(t) => t,
+            Err(e) => {
+                log::warn!("[dd-gui] 备份读取失败（{}）：{e}", path.display());
+                self.show_error_toast(
+                    self.tr("toast.settings_import_fail")
+                        .replace("{e}", &e.to_string()),
+                );
+                return;
+            }
+        };
+        let imported = match dd_gui::settings::Settings::import_backup(&text, &self.settings) {
+            Ok(s) => s,
+            Err(e) => {
+                log::warn!("[dd-gui] 备份导入校验失败：{e}");
+                self.show_error_toast(self.tr("toast.settings_import_fail").replace("{e}", &e));
+                return;
+            }
+        };
+        // UI 即时项先经既有 apply 链（各自内部检查差异 + 落盘 + ctx 生效；
+        // 须在整体赋值前调用——赋值后差值归零会跳过 set_theme 等副作用）。
+        self.apply_theme_pref(ctx, imported.theme);
+        self.apply_backdrop(ctx, imported.backdrop);
+        self.apply_material_opacity(ctx, imported.material_opacity);
+        // T9：背景图路径变化走 apply_background_path（材质链互斥切换）；
+        // 导入后 UI 输入缓冲同步为导入值（自增字段随整体赋值生效）。
+        self.apply_background_path(ctx, imported.background_image_path.clone());
+        self.apply_background_fit(imported.background_image_fit);
+        self.apply_background_opacity(imported.background_image_opacity);
+        self.apply_background_tint(imported.background_image_tint_intensity);
+        self.bg_path_buf = imported.background_image_path.clone().unwrap_or_default();
+        self.bg_err = None;
+        self.apply_corner_pref(imported.corner_pref);
+        self.apply_border_mode(ctx, imported.border_mode);
+        if self.settings.lang != imported.lang {
+            self.apply_lang(imported.lang);
+        }
+        self.settings = imported;
+        // warm 容量：走 apply_warm_capacity 的驱逐口径（缩容立即回落 stub）。
+        for victim in self.lru.set_capacity(self.settings.warm_capacity as usize) {
+            self.evict_warm(&victim);
+        }
+        // 聚合类配置（搜索引擎 / 停用集 / 自定义命令 / ext_settings / 语言）
+        // 统一脏标记——离开设置页重聚合消费（与逐项开关同路径）。
+        self.engines_dirty = true;
+        self.save_settings_with_feedback();
+        ctx.request_repaint();
+        log::info!("[dd-gui] 设置备份已导入并应用（{}）", path.display());
+        self.show_toast(self.tr("toast.settings_import_ok"), Some(4_000));
+    }
+
     /// 设置页扩展**信任决策**（S-05，2026-09-24）：写台账 → 落盘 → 立即重聚合。
     ///
     /// 与 [`Self::apply_extension_enabled`] 的分工（两者都影响"是否被拉起"，但语义不同）：
@@ -551,6 +714,48 @@ impl PaletteApp {
         self.refresh_backdrop(ctx);
     }
 
+    /// T9（2026-10-05）：背景图路径（互斥语义开关）——落盘 + 重走材质链
+    /// （设图 → effective = None 回退路径；清图 → 恢复 `settings.backdrop`）。
+    /// 纹理缓存按 (路径, mtime) 门控，路径变更自动重载，无需显式失效。
+    pub(crate) fn apply_background_path(&mut self, ctx: &egui::Context, path: Option<String>) {
+        let path = path.map(|p| p.trim().to_string()).filter(|p| !p.is_empty());
+        if self.settings.background_image_path == path {
+            return;
+        }
+        log::info!(
+            "[dd-gui] 背景图：{} → 立即生效并保存",
+            match &path {
+                Some(p) => p.as_str(),
+                None => "清除",
+            }
+        );
+        self.settings.background_image_path = path;
+        self.save_settings_with_feedback();
+        self.refresh_backdrop(ctx);
+    }
+
+    /// T9：背景图不透明度（0–100）——拖动即时生效（纯绘制层读值）、松手落盘
+    /// （UI 层 `drag_stopped` 统一 `save_settings_with_feedback`，同材质
+    /// 不透明度口径）。
+    pub(crate) fn apply_background_opacity(&mut self, pct: u8) {
+        let pct = pct.clamp(0, 100);
+        self.settings.background_image_opacity = pct;
+    }
+
+    /// T9：背景图适应方式（Fill / Stretch）——纯设置项，绘制层每帧读值。
+    pub(crate) fn apply_background_fit(&mut self, fit: dd_gui::settings::BgImageFit) {
+        if self.settings.background_image_fit == fit {
+            return;
+        }
+        self.settings.background_image_fit = fit;
+        self.save_settings_with_feedback();
+    }
+
+    /// T9：背景图着色强度（0–100）——拖动即时生效、松手落盘（同上）。
+    pub(crate) fn apply_background_tint(&mut self, pct: u8) {
+        self.settings.background_image_tint_intensity = pct.clamp(0, 100);
+    }
+
     /// 设置页「不透明度」滑杆（P2 v2，2026-09-13）：即时重算 egui 浓淡层
     /// （`alpha = cap × pct/100`，0 = 纯材质、100 = 面板最实），**不落盘**——
     /// 拖动中每帧触发，写盘由 UI 层在松手（`drag_stopped`）时调
@@ -640,6 +845,14 @@ impl PaletteApp {
         let Some(hwnd) = self.hwnd else {
             return;
         };
+        // T9（2026-10-05）：背景图生效 → 材质链路整体按「无材质」走（互斥语义
+        // ——设置值保持不动，清图后经 apply_background_path 重调本函数即恢复
+        // 原材质），本函数内一律以 effective 判定。
+        let effective = if self.settings.background_image_path.is_some() {
+            dd_gui::settings::Backdrop::None
+        } else {
+            self.settings.backdrop
+        };
         // M3/M4（2026-09-13）：窗口 chrome（圆角 + 禁过渡动画）一次性应用，
         // 与材质选择无关（无材质路径同样圆角）；P3 起圆角档来自设置，改选时
         // 经 `apply_corner_pref` 重调；Win10 无对应属性 → platform 层失败跳过。
@@ -648,7 +861,7 @@ impl PaletteApp {
             crate::platform::apply_window_chrome(hwnd, self.settings.corner_pref);
         }
         // ── 不透明化方向（backdrop = None）：先绘制不透明，后清材质 ──
-        if self.settings.backdrop == dd_gui::settings::Backdrop::None {
+        if effective == dd_gui::settings::Backdrop::None {
             if self.backdrop_active {
                 self.backdrop_active = false;
                 // M1：面板底回实色；M2：材质场景结束 → 停画描边。
@@ -663,7 +876,7 @@ impl PaletteApp {
         // ── 透明化方向（云母 / 亚克力）：DWM 先行，再切透明视觉 ──
         // M1：材质 → DWM 类型收敛为 `From<Backdrop>` 单一来源（platform.rs），
         // 新增档位无需改本处。
-        let kind = crate::platform::SystemBackdrop::from(self.settings.backdrop);
+        let kind = crate::platform::SystemBackdrop::from(effective);
         let ok = crate::platform::apply_system_backdrop(hwnd, kind);
         let active = ok;
         if active {
@@ -678,11 +891,7 @@ impl PaletteApp {
             // M1 起语义不同）。
             theme::apply_panel_tint(
                 ctx,
-                theme::panel_tint_with_opacity(
-                    dark,
-                    self.settings.backdrop,
-                    self.settings.material_opacity,
-                ),
+                theme::panel_tint_with_opacity(dark, effective, self.settings.material_opacity),
                 self.colorization(),
             );
         }
@@ -833,6 +1042,12 @@ impl PaletteApp {
         self.apply_theme_pref(ctx, d.theme);
         self.apply_backdrop(ctx, d.backdrop);
         self.apply_material_opacity(ctx, d.material_opacity);
+        self.apply_background_path(ctx, d.background_image_path);
+        self.apply_background_fit(d.background_image_fit);
+        self.apply_background_opacity(d.background_image_opacity);
+        self.apply_background_tint(d.background_image_tint_intensity);
+        self.bg_path_buf.clear();
+        self.bg_err = None;
         self.apply_corner_pref(d.corner_pref);
         self.apply_border_mode(ctx, d.border_mode);
         if self.settings.density != d.density {
@@ -907,6 +1122,8 @@ impl PaletteApp {
             self.settings.search_engines_env(),
             self.settings.disabled_extensions.clone(),
             self.lang_effective,
+            self.settings.custom_commands.clone(),
+            self.settings.ext_settings.clone(),
         );
         self.aggregate_rx = Some(rx);
         self.aggregating = true;
@@ -950,6 +1167,22 @@ mod tests {
             "Ctrl+Alt+P"
         );
         assert!(!PaletteApp::is_system_reserved_combo(0x1, 0x45), "Alt+E");
+    }
+
+    /// N4：warm 保活容量的消费点——① 默认配置构造 → LRU 容量 = 8（= 原
+    /// `LRU_WARM_CAPACITY` 常量，M1–M4 基线口径不变）；② `warm_capacity = 2`
+    /// 的配置构造 → LRU 容量跟随 = 2。驱逐行为本体（缩容队尾优先 / 扩容不
+    /// 追补）由 dd-host `lru_set_capacity_*` 单测锚定，此处不重复。
+    #[test]
+    fn n4_warm_capacity_consumed_at_construction() {
+        let app = crate::test_support::make_app();
+        assert_eq!(app.lru.capacity(), 8, "默认配置 → LRU 容量 8");
+        let settings = dd_gui::settings::Settings {
+            warm_capacity: 2,
+            ..dd_gui::settings::Settings::default()
+        };
+        let app = crate::test_support::make_app_with_settings(settings);
+        assert_eq!(app.lru.capacity(), 2, "构造点读配置容量");
     }
 
     /// R-22：IME 组词期回车守卫——① 同帧 Ime(Preedit/Commit) + Enter → 不激活

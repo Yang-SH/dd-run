@@ -158,8 +158,18 @@ fn main() -> eframe::Result {
             // 扩展环境（DD_WEBSEARCH_ENGINES），面板「网络搜索」按配置渲染。
             let engines_env = settings.search_engines_env();
             let disabled = settings.disabled_extensions.clone();
+            let custom_commands = settings.custom_commands.clone();
+            let ext_settings = settings.ext_settings.clone();
             let (agg_tx, agg_rx) = mpsc::channel();
-            spawn_aggregation(agg_tx, cache.clone(), engines_env, disabled, resolved_lang);
+            spawn_aggregation(
+                agg_tx,
+                cache.clone(),
+                engines_env,
+                disabled,
+                resolved_lang,
+                custom_commands,
+                ext_settings,
+            );
             Ok(Box::new(PaletteApp::new(
                 hotkey,
                 tray.events,

@@ -440,14 +440,14 @@ fn now_7days_unix() -> i64 {
 
 ### 5.4 每日验收清单 D0–D6（历史）
 
-> 🟨 历史计划期验收门（v3.1）；v3.2 落地后核心行为由 §6.3 承接。保留作原始记录。
+> 🟨 历史计划期验收门（v3.1）；v3.2 落地后核心行为由 §6.3 承接。保留作原始记录。**销勾注记（2026-10-03）**：各门实际达成后未回勾，现按行内证据统一销勾——D5 的直达入口已于 2026-09-19 移除（现由 `Ctrl+F` 承担，见 §6.1 移除记录）；D6 的 v0.1.0 Release 已发布（见 CHANGELOG）。
 
-- [ ] **D0 结束**（前置）：`dd_ext` 运行时 `get_items` 支持 `PageHandler`；既有 5 扩展 `pages: None` 行为不变。
-- [ ] **D2 结束**：`echo '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}' | cargo run -p dd-ext --bin dd-ext-search` 返回正确 `provider`。
-- [ ] **D3 结束**：扩展 `get_items` 能从本机 Everything 拿到结果并映射 `CommandItem`。
-- [ ] **D4 结束**：`date_modified` 解析正确（单测）；搜 `dd` 时 `dd-run` 排前；退出 Everything 后返回引导项不挂起。
-- [ ] **D5 结束**：主面板输入即出"在文件中搜索 {query}" → 回车进结果页 → 打开文件 → Esc 返回。
-- [ ] **D6 结束**：测试清单全过；用户文档发布；GitHub Release v0.1.0（Windows）。
+- [x] **D0 结束**（前置）：`dd_ext` 运行时 `get_items` 支持 `PageHandler`；既有 5 扩展 `pages: None` 行为不变。
+- [x] **D2 结束**：`echo '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}' | cargo run -p dd-ext --bin dd-ext-search` 返回正确 `provider`。
+- [x] **D3 结束**：扩展 `get_items` 能从本机 Everything 拿到结果并映射 `CommandItem`。
+- [x] **D4 结束**：`date_modified` 解析正确（单测）；搜 `dd` 时 `dd-run` 排前；退出 Everything 后返回引导项不挂起。
+- [x] **D5 结束**：主面板输入即出"在文件中搜索 {query}" → 回车进结果页 → 打开文件 → Esc 返回。
+- [x] **D6 结束**：测试清单全过；用户文档发布；GitHub Release v0.1.0（Windows）。
 
 ### 5.5 AI Agent 原子任务分解 T-01…T-25（历史计划）
 
@@ -683,9 +683,9 @@ cargo test --workspace -- --ignored   # 可选 L3
 ### 6.3 验收（acceptance）
 
 - [x] ~~**便捷**：根视图 `f report` → 无需第二次 Enter 即进结果页并展示 Everything 前 30 条；搜索框保留 `report`。~~（历史验收记录；该入口已于 2026-09-19 移除，现由 `Ctrl+F` 承担）
-- [ ] **防重**：连续多帧不重复进页；Esc 后不立即重进；清空复位可再进。
-- [ ] **速度**：在线时输入到填充主观 <200ms；`everything_available()` TTL 内不重复探测。
-- [ ] **健壮**：退出 Everything / es.exe 不可用 → 返回引导项，不挂起、不 panic。
+- [x] **防重**：连续多帧不重复进页；Esc 后不立即重进；清空复位可再进。（销勾 2026-10-03：L4 真机验收含防重腿已过，见 §5.6.1 L4 行；T-27 单测锚定）
+- [ ] **速度**：在线时输入到填充主观 <200ms；`everything_available()` TTL 内不重复探测。（TTL 探测已由单测覆盖；**「输入到首屏 ≤200ms」E2E 插桩已落地、真机采样待做**——即 p2 报告 §5 #4 开放项，勿销）
+- [x] **健壮**：退出 Everything / es.exe 不可用 → 返回引导项，不挂起、不 panic。（销勾 2026-10-03：p2 报告 §4.2 形态① 实测 20/20 引导项、max 760 ms ≤2000 ms、零挂起）
 - [x] **回归**：5 扩展 `pages: None` 仍 `-32005`；`cargo test -p dd-ext` 全过。2026-09-08 实证 `cargo test --workspace` **274 passed / 0 failed**。
 - [x] **单测新增**：`search.rs` 覆盖日期多格式 / `score` 归一化与近因 / 路径索引 round-trip / `get_file_items` 空查询→hint、不可用→guide；`dd-ext-search` 单测由 9 → **21**。`path_to_file_url` 单测（约 :1403-1439）取代原 `pct_encode`。
 

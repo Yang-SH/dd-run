@@ -18,6 +18,8 @@ pub(crate) const CTX_GLYPH_PLAY: char = '\u{E768}'; // Play
 
 pub(crate) const CTX_GLYPH_LINK: char = '\u{E71B}'; // Link
 
+pub(crate) const CTX_GLYPH_DELETE: char = '\u{E74D}'; // Delete
+
 /// 默认动作 glyph（10B.0）：进入页 = FolderOpen、打开类（apps/system/websearch）
 /// = OpenFile、执行类 = Play。
 pub(crate) fn default_action_glyph(item: &PanelItem) -> char {
@@ -29,7 +31,7 @@ pub(crate) fn default_action_glyph(item: &PanelItem) -> char {
         .strip_prefix("com.ddrun.")
         .unwrap_or(&item.ext_id);
     match short {
-        "apps" | "system" | "websearch" => CTX_GLYPH_OPEN,
+        "apps" | "system" | "websearch" | "bookmarks" => CTX_GLYPH_OPEN,
         _ => CTX_GLYPH_PLAY,
     }
 }
@@ -119,7 +121,9 @@ const I18N: &[(&str, &str, &str)] = &[
     ("cat.apps", "应用", "Apps"),
     ("cat.system", "设置", "Settings"),
     ("cat.websearch", "网页", "Web"),
+    ("cat.bookmarks", "书签", "Bookmarks"),
     ("cat.command", "命令", "Command"),
+    ("cat.custom", "直达", "Quick links"),
     ("footer.key_execute", "执行", "Run"),
     ("footer.key_hide", "返回·隐藏", "Back·Hide"),
     ("footer.back", "返回", "Back"),
@@ -134,6 +138,7 @@ const I18N: &[(&str, &str, &str)] = &[
     ("ctx.copy_path", "复制路径", "Copy path"),
     ("ctx.copy_link", "复制链接", "Copy link"),
     ("ctx.copied", "已复制到剪贴板", "Copied to clipboard"),
+    ("ctx.delete_custom", "删除此命令", "Delete this command"),
     ("ctx.admin_fail", "以管理员身份运行失败：{e}", "Failed to run as administrator: {e}"),
     ("ctx.locate_fail", "打开所在位置失败：{e}", "Failed to open file location: {e}"),
     // ── host/open_url 执行策略（S-03，2026-09-23）──
@@ -386,6 +391,51 @@ const I18N: &[(&str, &str, &str)] = &[
     ("set.border.neutral", "中性", "Neutral"),
     ("set.border.accent", "强调色", "Accent"),
     ("set.border.off", "关", "Off"),
+    // ── 背景图卡（T9，2026-10-05）──
+    ("set.bgimg.name", "背景图", "Background image"),
+    (
+        "set.bgimg.desc",
+        "用本机图片作面板背景（互斥：生效期间材质、着色与边框暂停，清除后恢复）",
+        "Use a local image as the panel background (exclusive: material, colorization and border are suspended while active, restored when cleared)",
+    ),
+    ("set.bgimg.path", "图片路径", "Image path"),
+    (
+        "set.bgimg.path_hint",
+        "输入本机图片文件的完整路径（支持 PNG / JPEG / WebP）",
+        "Full path of a local image file (PNG / JPEG / WebP)",
+    ),
+    ("set.bgimg.apply", "设为背景", "Apply"),
+    ("set.bgimg.clear", "清除", "Clear"),
+    ("set.bgimg.fit", "适应方式", "Fit"),
+    ("set.bgimg.fit_fill", "填满", "Fill"),
+    ("set.bgimg.fit_stretch", "拉伸", "Stretch"),
+    ("set.bgimg.opacity", "图片不透明度", "Image opacity"),
+    (
+        "set.bgimg.opacity.desc",
+        "图层的浓淡强度：默认 20 保证行内容可读；拖动即时生效，松手保存",
+        "Strength of the image layer: 20 by default to keep rows readable. Applies live, saved on release",
+    ),
+    ("set.bgimg.tint", "着色强度", "Tint intensity"),
+    (
+        "set.bgimg.tint.desc",
+        "在图上叠加一层面板色压制高亮图片；拖动即时生效，松手保存",
+        "Overlay a panel-colour layer to tame bright images. Applies live, saved on release",
+    ),
+    (
+        "set.bgimg.active_hint",
+        "背景图生效中：材质、着色与边框暂停，清除背景图后恢复",
+        "Background image active: material, colorization and border are suspended until cleared",
+    ),
+    (
+        "set.bgimg.err_not_found",
+        "文件不存在，请检查路径",
+        "File not found — check the path",
+    ),
+    (
+        "set.bgimg.err_decode",
+        "图片解码失败（损坏或不受支持的格式）",
+        "Failed to decode the image (corrupt or unsupported format)",
+    ),
     ("set.density.name", "列表密度", "List density"),
     (
         "set.density.desc",
@@ -432,6 +482,65 @@ const I18N: &[(&str, &str, &str)] = &[
         "登录 Windows 后自动后台运行（当前用户注册表）",
         "Run in the background after signing in to Windows (current-user registry)",
     ),
+    // ── 设置页 · 预热容量（N4，2026-10-03）──
+    ("set.warm_capacity.name", "预热容量", "Warm capacity"),
+    (
+        "set.warm_capacity.desc",
+        "扩展进程保活池容量（1–16）：超出后最久未用的扩展被关闭释放，再次使用时重新拉起；默认 8",
+        "How many extension processes stay warm (1–16). The least recently used one is closed beyond the limit and relaunched on demand; default 8",
+    ),
+    // ── 设置页 · 自定义命令（N1，2026-10-04）──
+    ("set.custom.name", "自定义命令", "Custom commands"),
+    (
+        "set.custom.desc",
+        "关键词直达 URL 或本地路径：输入即搜、选中即执行，出现在首屏「直达」分组",
+        "Keyword shortcuts to URLs or local paths. Type to search, Enter to open; shown under \"Quick links\" on the home screen",
+    ),
+    ("set.custom.none", "暂无自定义命令", "No custom commands"),
+    ("set.custom.add", "添加", "Add"),
+    ("set.custom.delete", "删除", "Delete"),
+    ("set.custom.title_hint", "名称（如 GitHub）", "Name (e.g. GitHub)"),
+    ("set.custom.keyword_hint", "关键词（如 gh）", "Keyword (e.g. gh)"),
+    (
+        "set.custom.target_hint",
+        "目标：https://… 或 C:\\path",
+        "Target: https://… or C:\\path",
+    ),
+    ("set.custom.kind_url", "URL", "URL"),
+    ("set.custom.kind_path", "本地路径", "Local path"),
+    ("set.custom.invalid", "名称、关键词与目标均不能为空", "Name, keyword and target are all required"),
+    ("set.custom.dup_keyword", "该关键词已存在", "This keyword already exists"),
+    // ── 设置页 · 扩展卡 apps 行内设置（N2，2026-10-04）──
+    ("set.ext.configure", "设置", "Configure"),
+    ("set.apps.blocklist.name", "用户屏蔽名单", "User blocklist"),
+    (
+        "set.apps.blocklist.desc",
+        "显示名含任一片段的应用不进「应用」列表（返回首屏重聚合后生效）",
+        "Apps whose name contains any fragment are hidden from the Apps list (applies after re-aggregation)",
+    ),
+    (
+        "set.apps.blocklist.hint",
+        "片段（如 卸载）",
+        "Fragment (e.g. uninstall)",
+    ),
+    // ── 设置页 · 导入 / 导出（N5，2026-10-04）──
+    ("set.backup.name", "导入 / 导出设置", "Import / export settings"),
+    (
+        "set.backup.desc",
+        "导出为数据目录下的 dd-settings-backup.json（不含开机自启 / 面板尺寸 / 热键 / 信任台账），拷贝到其他机器后在此导入覆盖",
+        "Exports dd-settings-backup.json to the data directory (excludes autostart / panel size / hotkey / trust ledger); copy it to another machine and import here to overwrite",
+    ),
+    ("set.backup.export", "导出", "Export"),
+    ("set.backup.import", "导入并覆盖", "Import and overwrite"),
+    ("set.backup.armed", "确认导入", "Confirm import"),
+    ("toast.settings_export_ok", "设置已导出：{p}", "Settings exported: {p}"),
+    ("toast.settings_export_fail", "导出失败：{e}", "Export failed: {e}"),
+    (
+        "toast.settings_import_ok",
+        "设置已导入并应用（聚合类配置在返回首屏后生效）",
+        "Settings imported and applied (aggregation-affecting options apply after returning to the home screen)",
+    ),
+    ("toast.settings_import_fail", "导入失败：{e}", "Import failed: {e}"),
     // ── 设置页 · 搜索引擎 ──
     ("set.search.name", "搜索引擎", "Search engines"),
     (
@@ -605,6 +714,7 @@ pub(crate) fn footer_action_text(lang: Lang, item: &PanelItem) -> String {
         "system" => "footer.open_settings",
         "shell" => "footer.run_command",
         "websearch" => "footer.open_web",
+        "bookmarks" => "footer.open_web",
         "calc" => "footer.calc",
         _ => "footer.invoke",
     };

@@ -1,6 +1,6 @@
 # dd-run 后续功能规划（N1–N5）
 
-> **状态**：规划中 ｜ **版本**：v1.1 ｜ **最后更新**：2026-10-02
+> **状态**：**N1–N5 全部落地**（N4 2026-10-03、N1/N2/N3/N5 2026-10-04；自动化真机腿 10-04 已过，执行/拼音/Chrome/N5 按钮/安全弹窗腿待用户会话） ｜ **版本**：v1.7 ｜ **最后更新**：2026-10-04
 > **关联**：[implementation.md](./implementation.md) · [optimization-plan.md](./optimization-plan.md) · [settings-personalization-plan.md](./settings-personalization-plan.md) · [protocol.md](./protocol.md) · [manifest-schema.md](./manifest-schema.md) · [security-audit-2026-09-23.md](./security-audit-2026-09-23.md) · [INDEX.md](./INDEX.md)
 
 ---
@@ -13,11 +13,11 @@
 
 | 编号 | 提案 | 一句话说明 | 协议/清单 | 依赖增量 | 优先级 | 改动量 |
 |---|---|---|---|---|---|---|
-| N1 | 自定义直达命令 | 关键词 → URL / 本地路径，选中即执行 | 零改动 | 零 | P1 | 中 |
-| N2 | 内置扩展配置通道 | 宿主声明设置项 + 环境变量注入（泛化 `DD_WEBSEARCH_ENGINES` 惯例） | 零改动 | 零 | P2 | 中 |
-| N3 | 浏览器书签搜索 | 新内置 in-process 扩展，本地读 Chromium 系书签 | 零改动 | 零 | P2 | 中 |
-| N4 | LRU 预热容量可配置 | 正式承接 `optimization-plan.md` §2.7.1 转功能项 | 零改动 | 零 | P1 | 小 |
-| N5 | 设置导入 / 导出 | 本机迁移；机器态与信任台账明确不随行 | 零改动 | 零 | P3 | 小 |
+| N1 | 自定义直达命令 | 关键词 → URL / 本地路径，选中即执行——**✅ 已落地（2026-10-04，见 §4.1 落地注记）** | 零改动 | 零 | P1 | 中 |
+| N2 | 内置扩展配置通道 | 宿主声明设置项 + 环境变量注入（泛化 `DD_WEBSEARCH_ENGINES` 惯例）——**✅ 已落地（2026-10-04，见 §4.2 落地注记）** | 零改动 | 零 | P2 | 中 |
+| N3 | 浏览器书签搜索 | 新内置 in-process 扩展，本地读 Chromium 系书签——**✅ 已落地（2026-10-04，见 §4.3 落地注记）** | 零改动 | 零 | P2 | 中 |
+| N4 | LRU 预热容量可配置 | 正式承接 `optimization-plan.md` §2.7.1 转功能项——**✅ 已落地（2026-10-03，见 §4.4 落地注记）** | 零改动 | 零 | P1 | 小 |
+| N5 | 设置导入 / 导出 | 本机迁移；机器态与信任台账明确不随行——**✅ 已落地（2026-10-04，见 §4.5 落地注记）** | 零改动 | 零 | P3 | 小 |
 
 > 五项提案均满足「零冻结契约改动 + 零新增依赖」。建议实施顺序与每批纪律见 §6；**明确不做与缓办清单**（含理由与前置条件）见 §5——其中「带参数的关键词直达」因 `f ` 前缀直达的移除先例（2026-09-19）判为缓办。
 
@@ -91,7 +91,9 @@
 
 **范围与工作量**：`settings.rs`（结构 + 往返单测）/ `aggregator.rs`（虚拟条目）/ `app/host_actions.rs`（执行复用）/ `ui/settings_view.rs`（管理卡）/ `text.rs`（zh/en 文案）。估约 300–400 行 + 单测。
 
-**验收草案**：`- [ ]` 配置往返与未知字段兼容单测；`- [ ]` url/path 执行各一例真机走查（含 UNC 路径）；`- [ ]` 拼音 / 别名命中走查；`- [ ]` S-03 白名单外 scheme（如 `javascript:`）被拒走查。
+**验收草案**：`- [x]` 配置往返与未知字段兼容单测（`n1_custom_commands_validate_roundtrip_and_compat`：构造 trim/小写化/空白关键词拒绝/空字段拒绝；解析非法条目跳过、kind 未知跳过、旧版本配置默认空；`to_json_string`→`parse_json` 往返保真——未知字段容忍由既有 `parse_json_tolerates_unknown_fields` 锚定）；`- [x]` 条目构造单测（`custom_command_items_build_host_virtual_entries`：id 前缀 / 保留 ext_id / tags / 副标题 / 拼音 / 「直达」分组 / Invoke）；`- [x]` **首屏呈现腿真机走查（2026-10-04，dist 重建版自动化会话）**：config 预置两条命令（GitHub/url + 系统盘根目录/path）+ 停用 apps/bookmarks 扩容面板 → `WM_HOTKEY` 唤起（窗口矩形 635,250,1285,782 与 V-1 基线逐位一致）→ 截图留档「直达」分组两条命令上屏、徽标「直达」；`- [ ]` url/path 执行腿（需 Enter 真实输入，随用户会话）；`- [ ]` 拼音 / 别名命中（需键入）；`- [ ]` S-03 白名单外 scheme（如 `javascript:`）被拒走查。
+
+**落地注记（2026-10-04）**：设计如上全量兑现，另有两处实现细化——① `host/open_url` 执行体自 `execute_host_request` 抽出为 `open_url_execute(url, source)` 供 url 型命令复用（S-03 白名单 / file:// ShellExecute / R-16 失败 toast 行为逐位一致；path 型直接走其底层 `platform::open_path`「双击等价」）；② 右键菜单「删除此命令」以宿主侧 `CtxAction::DeleteCustomCommand` 实现（`delete_custom_command`：移除 + 落盘 + 重聚合脏标记），非扩展 `more_commands` 通道。条目注入点 = `spawn_aggregation` 末尾 `custom_command_items` 追加（不经扩展、无信任面）；执行路由 = `dispatch_invoke` 对保留 id `com.ddrun.host` 宿主内部分发。设置页管理卡落「常规」第 6 卡（搜索引擎卡范式：32px 列表行 + 删除小按钮 + 类型下拉/名称/关键词/目标输入 + danger 错误行，i18n 14 键 zh/en）。台账 implementation.md §5（578 快照）。
 
 ### 4.2 N2 · 内置扩展配置通道（宿主声明 + 环境变量注入）
 
@@ -110,7 +112,9 @@
 
 **范围与工作量**：通道约 150 行（含合并/覆盖次序单测）+ 试点约 100 行；`settings.rs` / `aggregator.rs` / `ui/settings_view.rs` / `dd-ext` apps 内置。
 
-**验收草案**：`- [ ]` 通道单测（注入次序、S-10 键名拒绝、解析失败回落）；`- [ ]` 屏蔽名单真机走查（命中屏蔽项不出现在结果、清空恢复）；`- [ ]` 旧配置文件读入兼容。
+**验收草案**：`- [x]` 通道单测（`n2_ext_settings_roundtrip_and_compat`：默认空 / 旧版本兼容 / 非字符串值与空 ext_id 跳过 / 往返保真；`n2_ext_cfg_env_name_guards_key_shape`：键名白名单 + 前缀不变式锚定；`n2_inject_ext_settings_targets_listed_exts_only`：表内注入 / 非法键跳过 / 表外扩展零改动；`n2_user_blocklist_filters_top_level_with_stable_ids` + `n2_user_blocklist_parse_fragments`：片段包含匹配大小写不敏感 / 空名单零过滤 / **id 保持全量枚举原始下标** / 解析 trim 去空归一）；`- [x]` **屏蔽名单真机走查（2026-10-04，dist 重建版自动化会话，A/B 对比截图）**：A 基线（blocklist 不命中）首屏「应用」组 7-Zip / brave / Clash Verge 等在列；B（blocklist = `7-Zip, brave, clash` 三片段）重启后三行**消失**、其余行原样——多片段逗号解析 + 大小写不敏感包含匹配 + 输出层过滤真机生效；「清空恢复」方向由 A 基线腿覆盖；`- [x]` 旧配置文件读入兼容（单测已锚；走查会话即以旧版本字段缺失的 config 启动，零异常）。
+
+**落地注记（2026-10-04）**：通道如设计兑现，两处实现细化——① `ext_settings` 值类型由设计稿的 `serde_json::Value` 收窄为 `String`（v1 消费者只需字符串，且 `Value` 无 `Eq` 会破坏 `Settings` derive），容器用 `BTreeMap` 保证序列化确定性；② in-process 内置（apps）对 `entry.env` 不敏感，屏蔽名单走**内存通道直接注入**（websearch `set_configured_engines_json` 先例）+ **输出层过滤**（`top_level_commands`，`APP_CACHE` 进程级 OnceLock 使枚举层过滤会滞后到重启；条目 id 保持全量枚举原始下标，`handle_invoke` 索引寻址不变）。通用 env 注入 `inject_ext_settings`（`DD_EXT_CFG_<KEY>`，S-10 键名白名单 + `PROTECTED_ENV_KEYS` 复查双保险）覆盖子进程扩展。设置 UI 落扩展卡 apps 行内「设置」小按钮展开的屏蔽名单编辑器（宿主持有声明与渲染，仅内置扩展提供）。apps-filtering-plan §4.5「不做用户自定义黑名单 UI」由此承接销项。台账 implementation.md §5（583 快照）。
 
 ### 4.3 N3 · 浏览器书签搜索（新内置 in-process 扩展）
 
@@ -129,7 +133,9 @@
 
 **范围与工作量**：估约 300 行 + 单测（书签 JSON 解析 fixture、截断、mtime 门控）；`dd-ext` / `dd-host/src/builtin.rs` / `aggregator.rs` / `text.rs`。
 
-**验收草案**：`- [ ]` 解析 fixture 单测（Chrome/Edge 两份真实结构样例、损坏文件回落空）；`- [ ]` 真机走查（Chrome 与 Edge 各命中一例、拼音命中、打开）；`- [ ]` 冷启动耗时无回归（桩路径不解析书签）。
+**验收草案**：`- [x]` 解析 fixture 单测（`n3_parse_chrome_fixture_flattens_folders`：Chrome 真实结构三根 + 嵌套文件夹扁平化、folder 路径进 subtitle；`n3_parse_corrupt_and_unknown_nodes_are_tolerated`：非 JSON / 缺 roots / roots 非对象回落 None，缺 url / 空标题 / 未知 type 跳过，缺 type 带 children 按文件夹递归；`n3_parse_truncates_at_cap`：恰 2000 条截断）；`- [x]` **Edge 呈现腿真机走查（2026-10-04，dist 重建版自动化会话）**：本机 Edge `User Data\Default\Bookmarks` 真实解析 **1123 条**（日志「书签 warm（1123 命令）」）→ 首屏「书签」分组渲染（必应 / 百度 / 少数派 / 阮一峰的网络日志等真实条目 + glyph 占位 + 徽标「书签」，截图留档）；本机无 Chrome 书签文件——Chrome 腿随用户会话；`- [ ]` 拼音命中 / 打开腿（需键入 / Enter，随用户会话）；`- [x]` 冷启动耗时无回归（走查会话冷启动 **865 ms**，书签解析在聚合后台线程 + mtime 门控，数据就绪 823 ms 与 V-13 基线同量级）。
+
+**落地注记（2026-10-04）**：设计如上全量兑现，三处实现细化——① 根节点不经 `flatten_node` 重入（根 `name` 与根显示键语义重复，直接以其 `children` 为顶层递归，folder 起点 = `浏览器/根显示名`）；② 缺 `type` 但带 `children` 的节点按文件夹递归（真实书签文件结构随版本演进的健壮性）；③ 截断在**解析层**收口（cap 语义单点，顶层构建与 invoke 共用同一快照；截断时追加「仅索引前 2000 条」提示条目，invoke 仅 toast）。mtime 门控 = 进程内 `(路径, mtime) → 条目` 快照（未变文件沿用旧解析）；`frozen=false` → 不落磁盘桩（书签随时可变）。防漂移哨兵 `registry_matches_dd_ext_specs` / `builtin_registrations_needs_no_exe` 同步 6 个内置。台账 implementation.md §5（586 快照）。
 
 ### 4.4 N4 · LRU 预热容量可配置（承接既有转功能项）
 
@@ -141,7 +147,9 @@
 
 **范围与工作量**：估约 100 行 + 单测（默认值、钳位、持久化往返、消费点）。
 
-**验收草案**：`- [ ]` 单测四项；`- [ ]` 真机走查（调低 → 驱逐回落桩态；调高 → 第三方扩展保活数增加）。
+**验收草案**：`- [x]` 单测四项（`lru_set_capacity_shrinks_with_lru_tail_victims_and_grows_in_place`：缩容队尾优先驱逐返回受害者 / 同值无操作 / 扩容不追补 + 常规 LRU 驱逐回归；`n4_warm_capacity_defaults_clamps_and_roundtrips`：默认 8 / 缺失损坏回落 / 0、99 clamp 1–16 / `to_json_string`→`parse_json` 往返保真；`n4_warm_capacity_consumed_at_construction`：默认构造容量 8 / `warm_capacity=2` 构造点读配置——dd-host 1 条 + dd-gui 2 条，workspace **576/576 全绿**，fmt 零差异、clippy 零告警，2026-10-03）；`- [x]` **调低腿真机走查（2026-10-04，dist 重建版自动化会话）**：config 预置 `warm_capacity=2` → 冷启动日志 **「LRU 驱逐」×4**（websearch 等超容扩展 close+释放回落 stub）+ 会话后段「warm 空闲回收：com.ddrun.shell（空闲 134s ≥ 120s）」——容量消费、驱逐路径、空闲回收三层真机生效；`- [ ]` 调高腿（调高 → 第三方扩展保活数增加，随用户会话）。
+
+**落地注记（2026-10-03）**：设计如上全量兑现——`Settings.warm_capacity`（u8，1–16，默认 8 = 原 `pool.rs LRU_WARM_CAPACITY` 常量值，M1–M4 内存基线口径不变）；设置页「常规」第 5 卡「预热容量」（D42 行规格 + Fluent 数字下拉 1–16，`set.warm_capacity.name/desc` zh/en）；`apply_warm_capacity` 落盘 + 缩容即时驱逐（`LruWarmSet::set_capacity` 返回受害者走既有 `evict_warm` 路径）；`LRU_WARM_CAPACITY` 常量删除、默认口径移至 `settings::WARM_CAPACITY_DEFAULT`。台账 implementation.md §5（576 快照）。
 
 ### 4.5 N5 · 设置导入 / 导出（本机迁移）
 
@@ -157,7 +165,9 @@
 
 **范围与工作量**：估约 150 行 + 单测（导出字段裁剪、导入容错、机器态剔除）。
 
-**验收草案**：`- [ ]` 导出内容单测（无 autostart / panel_size / trust 数据）；`- [ ]` 导入兼容单测（旧版本配置、垃圾文件）；`- [ ]` 真机走查（导出 → 清配置 → 导入 → 设置页逐项还原）。
+**验收草案**：`- [x]` 导出内容单测（`n5_backup_export_strips_and_import_tolerates`：导出剔除 autostart / panel_size 键 + `exported_from` 版本标记 + 业务字段保留；trust 数据天然不在 Settings 序列化内）；`- [x]` 导入兼容单测（同测：垃圾文件 / 非对象 → `Err` 不静默回落默认；旧版本 `exported_from` 不设门槛；未知字段容忍；机器态（autostart / panel_size / 热键）保留本机现值；导出→导入往返还原业务字段）；`- [ ]` 真机走查（导出 → 清配置 → 导入 → 设置页逐项还原）。
+
+**落地注记（2026-10-04）**：设计如上全量兑现，一处实现细化——**热键也不随导入**（`hotkey_mods`/`hotkey_vk` 与 autostart / panel_size 一并保留本机现值）：改绑须走捕获改绑流程（seq 确认协议），导入期自动注册有冲突风险且无法走确认对话框；导出物仍含热键字段供参考。导出复用 R-02 原子写（`Settings::save_backup_to`），备份路径 = 数据根目录 `dd-settings-backup.json`（UI mono 上屏 + tooltip 便于整行拷贝，零文件对话框依赖）。导入应用链：主题/材质/不透明度/圆角/边框走既有 apply 链即时生效（先 apply 后整体赋值，避免差值归零跳过 set_theme 副作用）；语言经 `apply_lang`（托盘同步 + 聚合脏标记）；warm 容量即时调整含缩容驱逐；聚合类配置统一 `engines_dirty`。两步确认 5s 自动撤销（`settings_import_armed`，appearance_reset 同范式）。台账 implementation.md §5（587 快照）。
 
 ---
 
@@ -183,11 +193,11 @@
 
 按「确定性 → 用户价值 → 生态地基」排序，每项独立成批、独立可回退：
 
-1. **N4**（最小、判据最硬——optimization-plan 已取证转功能项）；
-2. **N1**（用户价值最大、复用面最全）；
-3. **N2**（生态地基，试点先行）；
-4. **N3**（内置扩展增量，独立可拆）；
-5. **N5**（迁移补全）。
+1. **N4**（最小、判据最硬——optimization-plan 已取证转功能项）——**✅ 已落地（2026-10-03，§4.4）**；
+2. **N1**（用户价值最大、复用面最全）——**✅ 已落地（2026-10-04，§4.1）**；
+3. **N2**（生态地基，试点先行）——**✅ 已落地（2026-10-04，§4.2）**；
+4. **N3**（内置扩展增量，独立可拆）——**✅ 已落地（2026-10-04，§4.3）**；
+5. **N5**（迁移补全）——**✅ 已落地（2026-10-04，§4.5）。五项提案全部落地；后续按真机走查结果销项，新提案须重新走 §2 立项判据。**
 
 每批遵循项目既有纪律（[optimization-plan.md](./optimization-plan.md) §3 尾注）：**方案/设计稿先行 → 仅改工作副本、不自动 commit → fmt/clippy/test 三关全绿 + 新增单测 → 真机走查 → 人工审核提交**；实施后回写 `implementation.md` §2 / §3.1 与本文状态列。优先级为建议值，实际排期由维护者决定。
 

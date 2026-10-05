@@ -1,7 +1,7 @@
 //! M9 B3：扩展客户端统一抽象（内置 in-process / 第三方·sidecar 子进程）。
 //!
 //! 迁移前宿主只持 `dd_host::process::ExtensionProcess`（子进程 JSON-RPC）。M9 起
-//! 5 个内置扩展改为**进程内**驱动（[`crate::ext_inprocess::InProcessExtension`]，
+//! 6 个内置扩展改为**进程内**驱动（[`crate::ext_inprocess::InProcessExtension`]，
 //! 直接调 `dd_ext::serve_line`，不 spawn / 不物化磁盘），但宿主侧其余链路
 //! （进程池 / 复热 / 通知轮询 / host/* 执行 / 崩溃巡检）**语义不变**。
 //!

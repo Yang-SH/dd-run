@@ -9,6 +9,7 @@ use crate::text::path_like;
 use crate::text::url_like;
 use crate::text::CTX_GLYPH_ADMIN;
 use crate::text::CTX_GLYPH_COPY;
+use crate::text::CTX_GLYPH_DELETE;
 use crate::text::CTX_GLYPH_FOLDER;
 use crate::text::CTX_GLYPH_LINK;
 use dd_gui::settings::Lang;
@@ -33,6 +34,9 @@ pub(crate) enum CtxAction {
     /// 扩展声明的 `more_commands` 项（§8.1；v3.3 P1）：以
     /// `sender=context_menu` 回调该扩展的 `invoke`，副作用与结果由扩展裁决。
     Extension { command_id: String },
+    /// N1（2026-10-04）：删除自定义直达命令（宿主侧配置操作：移除 + 落盘 +
+    /// 重聚合脏标记；下一次重聚合后条目消失）。
+    DeleteCustomCommand { keyword: String },
 }
 
 /// 右键菜单项（10B.1：图标 glyph 16 + 名称 body1 14 + 快捷键 caption1/fg3）。
@@ -179,6 +183,12 @@ impl PaletteApp {
                 ctx.copy_text(text.clone());
                 self.show_toast(self.tr("ctx.copied"), None);
             }
+            CtxAction::DeleteCustomCommand { keyword } => {
+                // N1：宿主侧配置操作——移除 + 落盘 + 重聚合脏标记（条目在
+                // 下一次重聚合后从首屏消失；菜单已随 take 关闭）。
+                self.delete_custom_command(keyword);
+                ctx.request_repaint();
+            }
             CtxAction::Extension { command_id } => {
                 // 与 Default 相同的防陈旧校验（ext_id 取自当前列表项），
                 // 以 `sender=context_menu` + `selected_item_id` 回调扩展 invoke。
@@ -248,6 +258,30 @@ fn glyph_from_command(cmd: &CommandItem) -> char {
 /// 菜单标签按 `lang` 走 i18n 表（v4.13 D38）；`result_category` 的中文值是
 /// 协议侧数据（比对用），不翻译。
 pub(crate) fn context_menu_rows(lang: Lang, item: &PanelItem) -> Vec<CtxRow> {
+    // N1（2026-10-04）：自定义直达命令专属菜单——默认动作 + 分隔线 + 删除
+    // （spec「上下文菜单提供删除」）；不走静态类别映射（其 subtitle 是用户
+    // 配置目标，不适用 管理员/定位 腿）。
+    if item.ext_id == dd_gui::aggregator::HOST_CUSTOM_EXT_ID {
+        if let Some(keyword) = item.id.strip_prefix(dd_gui::aggregator::CUSTOM_ITEM_PREFIX) {
+            return vec![
+                CtxRow::Entry(CtxEntry {
+                    glyph: default_action_glyph(item),
+                    label: footer_action_text(lang, item),
+                    shortcut: "↵ Enter",
+                    action: CtxAction::Default,
+                }),
+                CtxRow::Separator,
+                CtxRow::Entry(CtxEntry {
+                    glyph: CTX_GLYPH_DELETE,
+                    label: crate::text::t(lang, "ctx.delete_custom").to_string(),
+                    shortcut: "",
+                    action: CtxAction::DeleteCustomCommand {
+                        keyword: keyword.to_string(),
+                    },
+                }),
+            ];
+        }
+    }
     let mut rows = vec![CtxRow::Entry(CtxEntry {
         glyph: default_action_glyph(item),
         label: footer_action_text(lang, item),

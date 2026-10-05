@@ -9,6 +9,8 @@
 //! 渲染层语义（在 bin 层接线）：选择变化 → 立即 `ctx.set_theme` 生效 +
 //! [`Settings::save`] 落盘（best-effort，写失败仅记日志不阻断 UI）。
 
+use std::collections::BTreeMap;
+
 use dd_host::manifest::config_file;
 
 /// 设置页在页面栈中的 `page_id` 标记（`PageState::page_id` 的保留值，
@@ -555,6 +557,45 @@ pub fn default_search_engines() -> Vec<SearchEngine> {
     vec![presets[0].clone()]
 }
 
+/// T9（2026-10-05）：背景图适应方式。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BgImageFit {
+    /// 等比裁剪铺满（cover）——保持宽高比，裁掉超出部分（对齐 CmdPal Fill）。
+    Fill,
+    /// 拉伸至面板尺寸（忽略宽高比）。
+    Stretch,
+}
+
+impl BgImageFit {
+    pub const ALL: [BgImageFit; 2] = [BgImageFit::Fill, BgImageFit::Stretch];
+
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            BgImageFit::Fill => "fill",
+            BgImageFit::Stretch => "stretch",
+        }
+    }
+    /// 未知字符串 → `None`（调用方回落 Fill，与 ThemePref 同口径）。
+    pub fn parse(s: &str) -> Option<Self> {
+        match s {
+            "fill" => Some(BgImageFit::Fill),
+            "stretch" => Some(BgImageFit::Stretch),
+            _ => None,
+        }
+    }
+    pub fn name_key(&self) -> &'static str {
+        match self {
+            BgImageFit::Fill => "set.bgimg.fit_fill",
+            BgImageFit::Stretch => "set.bgimg.fit_stretch",
+        }
+    }
+}
+
+/// 背景图不透明度默认值（T9：对齐 CmdPal `BackgroundImageOpacity` = 20）。
+pub const BG_IMAGE_OPACITY_DEFAULT: u8 = 20;
+/// 背景图着色强度默认值（T9：默认不叠色）。
+pub const BG_IMAGE_TINT_DEFAULT: u8 = 0;
+
 /// 宿主本地设置（主题偏好 + 首屏视图 + 搜索引擎 + 窗口材质 + 热键/自启/扩展；
 /// 后续字段向后兼容追加）。
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -593,6 +634,18 @@ pub struct Settings {
     /// 0.12s 过渡等装饰性过渡）；关闭 = 直出终态。**不涉及 DWM 过渡**
     /// （`DWMWA_TRANSITIONS_FORCEDISABLED` 恒禁，避免弹窗闪烁）。
     pub ui_animations: bool,
+    /// 背景图路径（T9，2026-10-05）：`Some` = 该图即面板背景（**互斥语义**
+    /// ——材质 / 着色 / 边框链路暂停生效，清除后恢复）；`None` = 无背景图
+    /// （默认 = 既有行为）。trim 后空串在解析与构造处均归一为 `None`。
+    pub background_image_path: Option<String>,
+    /// 背景图不透明度百分比（T9；0–100，默认 20 = 对齐 CmdPal
+    /// `BackgroundImageOpacity`，低不透明度保证行内容可读）。
+    pub background_image_opacity: u8,
+    /// 背景图适应方式（T9；默认 Fill = 等比裁剪铺满，对齐 CmdPal 档位）。
+    pub background_image_fit: BgImageFit,
+    /// 背景图着色强度（T9；0–100，默认 0 = 不叠色）：面板色按该比例叠加
+    /// 在图上，用于压制高亮图片的干扰。
+    pub background_image_tint_intensity: u8,
     /// 全局热键修饰键位掩码（M6 批次 6.3：MOD_ALT=1/CONTROL=2/SHIFT=4/WIN=8，
     /// 不含 NOREPEAT——注册时由热键线程统一补）。默认 Win+Alt。
     pub hotkey_mods: u32,
@@ -616,6 +669,20 @@ pub struct Settings {
     /// （「优先搜索文件」开关同日加入、同日撤销：自动进页劫持常规搜索，
     /// 用户反馈后移除——当时保留 `f ` 前缀直达；该前缀亦已于 2026-09-19 移除，现由 `Ctrl+F` 一键直达承担。）
     pub search_apps: bool,
+    /// warm 进程池 LRU 保活容量（N4，2026-10-03；1–16，默认 8 = 原
+    /// `LRU_WARM_CAPACITY` 编译期常量值）。超出容量时最久未用的扩展被
+    /// close + 回落 stub；运行时调小经 `LruWarmSet::set_capacity` 立即驱逐。
+    pub warm_capacity: u8,
+    /// 自定义直达命令（N1，2026-10-04）：关键词 → URL / 本地路径。聚合期
+    /// 转为宿主虚拟条目进首屏；默认空 = 无直达命令。
+    pub custom_commands: Vec<CustomCommand>,
+    /// 内置扩展用户可调配置（N2，2026-10-04）：`ext_id → (键 → 值)`。
+    /// 聚合期经 `aggregator::inject_ext_settings` 注入扩展 `entry.env` 内存
+    /// 副本（变量名 `DD_EXT_CFG_<KEY 大写>`）；in-process 内置另走内存通道
+    /// 直接注入（websearch 引擎表先例）。值 v1 一律字符串（设计稿的
+    /// `serde_json::Value` 草型收窄——消费者当前只需字符串，且 `Value` 无
+    /// `Eq` 会破坏 `Settings` 的 derive）；BTreeMap 保证序列化确定性。
+    pub ext_settings: BTreeMap<String, BTreeMap<String, String>>,
 }
 
 /// 全局热键默认修饰键：Win + Alt（MOD_* 值：ALT=1/CONTROL=2/SHIFT=4/WIN=8，
@@ -626,6 +693,80 @@ pub const HOTKEY_MODS_DEFAULT: u32 = 0b1000 | 0b0001;
 pub const HOTKEY_VK_DEFAULT: u32 = 0x20;
 /// 修饰键合法位掩码（Ctrl/Alt/Shift/Win），解析时剔除其余位。
 pub const HOTKEY_MODS_MASK: u32 = 0b1111;
+
+/// N1（2026-10-04）：自定义直达命令的目标类型。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CustomCommandKind {
+    /// URL（http/https 为主；执行时经 S-03 scheme 白名单校验）。
+    Url,
+    /// 本地路径（含 UNC；执行走 ShellExecute「双击等价」）。
+    Path,
+}
+
+impl CustomCommandKind {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            CustomCommandKind::Url => "url",
+            CustomCommandKind::Path => "path",
+        }
+    }
+    /// 未知字符串 → `None`（调用方回落/跳过，与 ThemePref 同口径）。
+    pub fn parse(s: &str) -> Option<Self> {
+        match s {
+            "url" => Some(CustomCommandKind::Url),
+            "path" => Some(CustomCommandKind::Path),
+            _ => None,
+        }
+    }
+}
+
+/// N1（2026-10-04）：自定义直达命令（关键词 → URL / 本地路径）。
+///
+/// 聚合期转为宿主虚拟条目（`aggregator::custom_command_items`）：`keyword`
+/// 并入条目 `tags`、`title` 生成拼音索引——输入即搜、选中即执行；无前缀
+/// 语法、不带参数（`{q}` 带参直达与已移除的 `f ` 前缀同形，判缓办——见
+/// future-features-plan §5）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CustomCommand {
+    /// 显示名（首屏条目标题，生成拼音索引）。
+    pub title: String,
+    /// 匹配别名（并入条目 tags；首屏唯一——UI 添加时拒绝重复）。
+    pub keyword: String,
+    /// 目标类型。
+    pub kind: CustomCommandKind,
+    /// 目标（URL 或本地路径字符串）。
+    pub target: String,
+}
+
+impl CustomCommand {
+    /// 构造并规范化：三字段 trim、去空；keyword 转小写且**不得含空白**
+    /// （关键词是单 token 别名）；任一为空 → `None`。
+    pub fn new(title: &str, keyword: &str, kind: CustomCommandKind, target: &str) -> Option<Self> {
+        let title = title.trim();
+        let keyword = keyword.trim().to_lowercase();
+        let target = target.trim();
+        if title.is_empty() || keyword.is_empty() || target.is_empty() {
+            return None;
+        }
+        if keyword.split_whitespace().count() != 1 {
+            return None;
+        }
+        Some(Self {
+            title: title.to_string(),
+            keyword,
+            kind,
+            target: target.to_string(),
+        })
+    }
+}
+
+/// warm 保活容量默认值（N4：= 原 `pool.rs LRU_WARM_CAPACITY` 编译期常量，
+/// M1–M4 内存基线在该默认下维持有效）。
+pub const WARM_CAPACITY_DEFAULT: u8 = 8;
+/// warm 保活容量下限（N4：LRU 容量至少为 1）。
+pub const WARM_CAPACITY_MIN: u8 = 1;
+/// warm 保活容量上限（N4：防误设超大值无谓常驻扩展进程）。
+pub const WARM_CAPACITY_MAX: u8 = 16;
 
 impl Default for Settings {
     fn default() -> Self {
@@ -644,6 +785,10 @@ impl Default for Settings {
             custom_tint_intensity: 100,
             single_click_activation: true,
             ui_animations: true,
+            background_image_path: None,
+            background_image_opacity: BG_IMAGE_OPACITY_DEFAULT,
+            background_image_fit: BgImageFit::Fill,
+            background_image_tint_intensity: BG_IMAGE_TINT_DEFAULT,
             hotkey_mods: HOTKEY_MODS_DEFAULT,
             hotkey_vk: HOTKEY_VK_DEFAULT,
             autostart: false,
@@ -652,6 +797,9 @@ impl Default for Settings {
             lang: Lang::default(),
             density: ListDensity::default(),
             search_apps: true,
+            warm_capacity: WARM_CAPACITY_DEFAULT,
+            custom_commands: Vec::new(),
+            ext_settings: BTreeMap::new(),
         }
     }
 }
@@ -790,6 +938,30 @@ impl Settings {
             .get("ui_animations")
             .and_then(|x| x.as_bool())
             .unwrap_or(true);
+        // 背景图（T9，2026-10-05）：字段缺失（旧版本配置）→ None（零迁移）；
+        // 非字符串 / trim 后空串 → None；不透明度与着色强度越界 clamp 0–100、
+        // 类型损坏回落默认；适应方式未知字符串回落 Fill。
+        s.background_image_path = v
+            .get("background_image_path")
+            .and_then(|x| x.as_str())
+            .map(str::trim)
+            .filter(|p| !p.is_empty())
+            .map(String::from);
+        s.background_image_opacity = v
+            .get("background_image_opacity")
+            .and_then(|x| x.as_u64())
+            .map(|x| x.clamp(0, 100) as u8)
+            .unwrap_or(BG_IMAGE_OPACITY_DEFAULT);
+        if let Some(t) = v.get("background_image_fit").and_then(|t| t.as_str()) {
+            if let Some(fit) = BgImageFit::parse(t) {
+                s.background_image_fit = fit;
+            }
+        }
+        s.background_image_tint_intensity = v
+            .get("background_image_tint_intensity")
+            .and_then(|x| x.as_u64())
+            .map(|x| x.clamp(0, 100) as u8)
+            .unwrap_or(BG_IMAGE_TINT_DEFAULT);
         // 全局热键（M6 批次 6.3）：掩码先剔除非法位；剔除后无任何修饰键或字段
         // 缺失/类型损坏 → 回落默认 Win+Alt + Space。
         if let Some(m) = v.get("hotkey_mods").and_then(|m| m.as_u64()) {
@@ -859,6 +1031,50 @@ impl Settings {
         if let Some(b) = v.get("search_apps").and_then(|b| b.as_bool()) {
             s.search_apps = b;
         }
+        // warm 保活容量（N4，2026-10-03）：字段缺失（旧版本配置）/ 类型损坏 →
+        // 默认 8；数值越界 clamp 到 1–16（与 material_opacity 同口径）。
+        s.warm_capacity = v
+            .get("warm_capacity")
+            .and_then(|x| x.as_u64())
+            .map(|x| x.clamp(WARM_CAPACITY_MIN as u64, WARM_CAPACITY_MAX as u64) as u8)
+            .unwrap_or(WARM_CAPACITY_DEFAULT);
+        // 自定义直达命令（N1，2026-10-04）：字段缺失（旧版本配置）→ 默认空；
+        // 逐条经 `CustomCommand::new` 校验规范化，非法条目跳过（与搜索引擎
+        // 同口径）。
+        if let Some(arr) = v.get("custom_commands").and_then(|a| a.as_array()) {
+            s.custom_commands = arr
+                .iter()
+                .filter_map(|e| {
+                    CustomCommand::new(
+                        e.get("title").and_then(|x| x.as_str())?,
+                        e.get("keyword").and_then(|x| x.as_str())?,
+                        e.get("kind")
+                            .and_then(|x| x.as_str())
+                            .and_then(CustomCommandKind::parse)?,
+                        e.get("target").and_then(|x| x.as_str())?,
+                    )
+                })
+                .collect();
+        }
+        // 内置扩展用户可调配置（N2，2026-10-04）：字段缺失（旧版本配置）→
+        // 默认空；逐条校验（ext_id 非空、值仅收字符串），非字符串值跳过。
+        if let Some(obj) = v.get("ext_settings").and_then(|x| x.as_object()) {
+            for (ext_id, kv) in obj {
+                if ext_id.is_empty() {
+                    continue;
+                }
+                let Some(kv_obj) = kv.as_object() else {
+                    continue;
+                };
+                let entry: BTreeMap<String, String> = kv_obj
+                    .iter()
+                    .filter_map(|(k, val)| val.as_str().map(|s| (k.clone(), s.to_string())))
+                    .collect();
+                if !entry.is_empty() {
+                    s.ext_settings.insert(ext_id.clone(), entry);
+                }
+            }
+        }
         s
     }
 
@@ -884,6 +1100,10 @@ impl Settings {
             "custom_tint_intensity": self.custom_tint_intensity,
             "single_click_activation": self.single_click_activation,
             "ui_animations": self.ui_animations,
+            "background_image_path": self.background_image_path,
+            "background_image_opacity": self.background_image_opacity,
+            "background_image_fit": self.background_image_fit.as_str(),
+            "background_image_tint_intensity": self.background_image_tint_intensity,
             "hotkey_mods": self.hotkey_mods,
             "hotkey_vk": self.hotkey_vk,
             "autostart": self.autostart,
@@ -895,6 +1115,20 @@ impl Settings {
             "lang": self.lang.as_str(),
             "density": self.density.as_str(),
             "search_apps": self.search_apps,
+            "warm_capacity": self.warm_capacity,
+            "custom_commands": self
+                .custom_commands
+                .iter()
+                .map(|c| {
+                    serde_json::json!({
+                        "title": c.title,
+                        "keyword": c.keyword,
+                        "kind": c.kind.as_str(),
+                        "target": c.target,
+                    })
+                })
+                .collect::<Vec<_>>(),
+            "ext_settings": self.ext_settings,
         })
         .to_string()
     }
@@ -980,7 +1214,68 @@ impl Settings {
             }
         }
     }
+
+    /// N5（2026-10-04）：导出为**迁移备份** JSON 文本——全量字段减去机器态
+    ///（`autostart`：注册表状态随机器；`panel_size`：分辨率相关——跨机无
+    /// 意义），并写 [`BACKUP_VERSION_KEY`] = 宿主版本号。`trust.json` 永不在
+    /// 此（S-05 fail-closed：信任判定绑定本机清单/exe 哈希，导出只会制造
+    /// 虚假迁移预期，spec §4.5）。
+    pub fn export_backup(&self) -> String {
+        let mut v: serde_json::Value =
+            serde_json::from_str(&self.to_json_string()).expect("to_json_string 恒产出合法 JSON");
+        let obj = v.as_object_mut().expect("同上，恒为对象");
+        obj.remove("autostart");
+        obj.remove("panel_size");
+        obj.insert(
+            BACKUP_VERSION_KEY.to_string(),
+            serde_json::json!(crate::aggregator::HOST_VERSION),
+        );
+        v.to_string()
+    }
+
+    /// N5：备份落盘（原子写，同 [`Self::save`] 的 R-02 机制；返回成败供
+    /// 调用方 toast——失败静默会「看似成功」）。
+    pub fn save_backup_to(&self, path: &std::path::Path) -> bool {
+        match atomic_write(path, self.export_backup().as_bytes()) {
+            Ok(()) => {
+                log::info!("[dd-gui] 设置备份已导出：{}", path.display());
+                true
+            }
+            Err(e) => {
+                log::warn!("[dd-gui] 备份写入失败（{}）：{e}", path.display());
+                false
+            }
+        }
+    }
+
+    /// N5：导入迁移备份——先**整体**验证（垃圾文件 → `Err`，不能走
+    /// `parse_json` 的静默回落默认——那等于把用户设置清空）；字段级容错
+    /// 沿用 `parse_json`（未知字段忽略、越界/损坏字段回落，惯例 ②）。
+    ///
+    /// **机器态一律保留本机现值**（不随导入）：`autostart`（注册表）、
+    /// `panel_size`（分辨率）、`hotkey_mods`/`hotkey_vk`（改绑须走捕获流程，
+    /// 导入期自动注册有冲突风险——v1 刻意不随导入，导出物仍含该字段供参考）。
+    pub fn import_backup(text: &str, current: &Settings) -> Result<Settings, String> {
+        let v: serde_json::Value =
+            serde_json::from_str(text).map_err(|e| format!("不是合法 JSON：{e}"))?;
+        if !v.is_object() {
+            return Err("备份内容不是 JSON 对象".to_string());
+        }
+        let mut s = Settings::parse_json(text);
+        s.autostart = current.autostart;
+        s.panel_size = current.panel_size;
+        s.hotkey_mods = current.hotkey_mods;
+        s.hotkey_vk = current.hotkey_vk;
+        Ok(s)
+    }
 }
+
+/// N5：设置迁移备份文件名（数据根目录下，与 `config.json` 同目录——
+/// 用户拷贝该单文件即可迁移）。
+pub const BACKUP_FILE_NAME: &str = "dd-settings-backup.json";
+/// N5：导出物版本标记字段（`exported_from`：导出时宿主版本，便于排查
+/// 「新版本导出 → 旧版本导入」的字段差异）。
+pub const BACKUP_VERSION_KEY: &str = "exported_from";
 
 /// 原子写盘（R-02）：同目录写 `.tmp` 临时文件后 `rename` 覆盖目标。
 ///
@@ -1725,5 +2020,251 @@ mod tests {
             std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o755)).unwrap();
         }
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// N4：`warm_capacity` 默认 / 钳位 / 往返三态——字段缺失（旧版本配置）
+    /// 或类型损坏 → 默认 8；0 与 99 等越界值 clamp 到 1–16；合法值经
+    /// `to_json_string` → `parse_json` 往返保真（`Settings::save` 覆盖依据）。
+    #[test]
+    fn n4_warm_capacity_defaults_clamps_and_roundtrips() {
+        // 默认值 = 原 LRU_WARM_CAPACITY 常量值（M1–M4 基线口径不变）
+        assert_eq!(Settings::default().warm_capacity, WARM_CAPACITY_DEFAULT);
+        assert_eq!(WARM_CAPACITY_DEFAULT, 8);
+        // 字段缺失（旧版本配置）→ 默认
+        assert_eq!(Settings::parse_json("{}").warm_capacity, 8);
+        // 类型损坏 → 默认
+        assert_eq!(
+            Settings::parse_json(r#"{"warm_capacity":"x"}"#).warm_capacity,
+            8
+        );
+        // 越界 clamp 到 1–16
+        assert_eq!(
+            Settings::parse_json(r#"{"warm_capacity":0}"#).warm_capacity,
+            1
+        );
+        assert_eq!(
+            Settings::parse_json(r#"{"warm_capacity":99}"#).warm_capacity,
+            16
+        );
+        // 合法值往返保真
+        let s = Settings {
+            warm_capacity: 3,
+            ..Settings::default()
+        };
+        assert_eq!(Settings::parse_json(&s.to_json_string()), s);
+        assert_eq!(Settings::parse_json(&s.to_json_string()).warm_capacity, 3);
+    }
+
+    /// N1：`CustomCommand` 构造规范化 + `custom_commands` 序列化往返与
+    /// 兼容——① 构造 trim/小写化/空白关键词拒绝/空字段拒绝；② 配置解析逐条
+    /// 校验、非法条目跳过、字段缺失（旧版本配置）默认空；③ 合法值往返保真。
+    #[test]
+    fn n1_custom_commands_validate_roundtrip_and_compat() {
+        use CustomCommandKind::{Path, Url};
+        // ① 构造规范化
+        let c = CustomCommand::new(" GitHub ", " GH ", Url, " https://github.com ").unwrap();
+        assert_eq!(c.keyword, "gh");
+        assert_eq!(c.title, "GitHub");
+        assert!(CustomCommand::new("", "gh", Url, "https://x").is_none());
+        assert!(CustomCommand::new("t", "", Url, "https://x").is_none());
+        assert!(CustomCommand::new("t", "gh", Url, " ").is_none());
+        assert!(CustomCommand::new("t", "两个 词", Url, "https://x").is_none());
+        assert_eq!(CustomCommandKind::parse("url"), Some(Url));
+        assert_eq!(CustomCommandKind::parse("path"), Some(Path));
+        assert_eq!(CustomCommandKind::parse("exe"), None);
+        // ② 配置解析：非法条目跳过、kind 未知跳过、字段缺失默认空
+        let s = Settings::parse_json(
+            r#"{"custom_commands":[
+                {"title":"GitHub","keyword":"gh","kind":"url","target":"https://github.com"},
+                {"title":"坏条目","keyword":"","kind":"url","target":"https://x"},
+                {"title":"报告","keyword":"rep","kind":"folder","target":"C:\\doc"}
+            ]}"#,
+        );
+        assert_eq!(s.custom_commands.len(), 1, "非法条目跳过");
+        assert_eq!(s.custom_commands[0].keyword, "gh");
+        assert_eq!(
+            Settings::parse_json("{}").custom_commands,
+            Vec::<CustomCommand>::new(),
+            "旧版本配置默认空"
+        );
+        // ③ 往返保真
+        let s = Settings {
+            custom_commands: vec![
+                CustomCommand::new("GitHub", "gh", Url, "https://github.com").unwrap(),
+                CustomCommand::new("报告", "rep", Path, r"C:\Users\doc").unwrap(),
+            ],
+            ..Settings::default()
+        };
+        let back = Settings::parse_json(&s.to_json_string());
+        assert_eq!(back, s);
+    }
+
+    /// N2：`ext_settings` 通道——字段缺失（旧版本配置）默认空；逐条校验
+    /// （ext_id 非空、值仅收字符串，非字符串值跳过）；合法值往返保真。
+    #[test]
+    fn n2_ext_settings_roundtrip_and_compat() {
+        // 默认空 + 旧版本配置兼容
+        assert!(Settings::default().ext_settings.is_empty());
+        assert!(Settings::parse_json("{}").ext_settings.is_empty());
+        // 解析：非字符串值 / 空 ext_id / 非对象值跳过；合法条目保留
+        let s = Settings::parse_json(
+            r#"{"ext_settings":{
+                "com.ddrun.apps":{"blocklist":"卸载, update"},
+                "com.ddrun.calc":{"answer":42},
+                "":{"k":"v"},
+                "com.ddrun.shell":"not-an-object"
+            }}"#,
+        );
+        assert_eq!(s.ext_settings.len(), 1);
+        assert_eq!(
+            s.ext_settings
+                .get("com.ddrun.apps")
+                .unwrap()
+                .get("blocklist"),
+            Some(&"卸载, update".to_string())
+        );
+        // 往返保真
+        let back = Settings::parse_json(&s.to_json_string());
+        assert_eq!(back, s);
+    }
+
+    /// N5：导出/导入迁移备份——① 导出剔除机器态（无 autostart / panel_size
+    /// 键）且写 `exported_from`，业务字段保留；② 垃圾文件 → `Err`（不得静默
+    /// 回落默认——那等于清空用户设置）；③ 导入保留本机机器态（autostart /
+    /// panel_size / 热键不随导入）；④ 旧版本导出物（exported_from 任意值）
+    /// 与未知字段兼容；⑤ 导出→导入往返还原业务字段。
+    #[test]
+    fn n5_backup_export_strips_and_import_tolerates() {
+        use CustomCommandKind::Url;
+        // ① 导出裁剪
+        let s = Settings {
+            custom_commands: vec![
+                CustomCommand::new("GitHub", "gh", Url, "https://github.com").unwrap(),
+            ],
+            ..Settings::default()
+        };
+        let backup = s.export_backup();
+        let v: serde_json::Value = serde_json::from_str(&backup).unwrap();
+        assert!(v.get("autostart").is_none(), "机器态剔除：autostart");
+        assert!(v.get("panel_size").is_none(), "机器态剔除：panel_size");
+        assert_eq!(
+            v.get(BACKUP_VERSION_KEY).and_then(|x| x.as_str()),
+            Some(crate::aggregator::HOST_VERSION),
+            "导出物带宿主版本标记"
+        );
+        assert_eq!(
+            v.get("theme").and_then(|x| x.as_str()),
+            Some(s.theme.as_str()),
+            "业务字段保留"
+        );
+        // ② 垃圾文件 → Err（非 JSON / 非对象）
+        assert!(Settings::import_backup("not json", &Settings::default()).is_err());
+        assert!(Settings::import_backup("[1,2]", &Settings::default()).is_err());
+        // ③ 机器态保留本机现值（备份里即使带了也覆盖回去）
+        let current = Settings {
+            autostart: true,
+            panel_size: Some((800, 600)),
+            hotkey_mods: 0b0110,
+            hotkey_vk: 0x50,
+            ..Settings::default()
+        };
+        let backup_with_machine = r#"{
+            "theme": "light", "autostart": false, "panel_size": [100, 100],
+            "hotkey_mods": 1, "hotkey_vk": 32,
+            "exported_from": "0.0.9", "future_field": true
+        }"#;
+        let imported = Settings::import_backup(backup_with_machine, &current).unwrap();
+        assert_eq!(imported.theme.as_str(), "light", "业务字段随导入");
+        assert!(imported.autostart, "autostart 保留本机现值");
+        assert_eq!(
+            imported.panel_size,
+            Some((800, 600)),
+            "panel_size 保留本机现值"
+        );
+        assert_eq!(
+            imported.hotkey_mods, 0b0110,
+            "热键不随导入（改绑须走捕获流程）"
+        );
+        assert_eq!(imported.hotkey_vk, 0x50);
+        // ④ 未知字段容忍（parse_json 惯例 ②）+ 旧版本 exported_from 不设门槛
+        // ⑤ 导出 → 导入往返还原业务字段（机器态按 current 保留）
+        let other = Settings {
+            warm_capacity: 3,
+            search_apps: false,
+            ..Settings::default()
+        };
+        let restored = Settings::import_backup(&other.export_backup(), &current).unwrap();
+        assert_eq!(restored.warm_capacity, 3);
+        assert!(!restored.search_apps);
+        assert!(restored.autostart, "往返后机器态仍为本机现值");
+        assert_eq!(restored, {
+            let mut expect = other.clone();
+            expect.autostart = current.autostart;
+            expect.panel_size = current.panel_size;
+            expect.hotkey_mods = current.hotkey_mods;
+            expect.hotkey_vk = current.hotkey_vk;
+            expect
+        });
+    }
+
+    /// T9（2026-10-05）：背景图字段——默认值 / 类型损坏回落 / 越界 clamp /
+    /// 旧版本兼容（字段缺失 → None）/ trim 归一 / 往返保真。
+    #[test]
+    fn t9_background_image_defaults_clamp_and_roundtrip() {
+        // ① 默认：无图 / 不透明度 20（对齐 CmdPal）/ Fill / 着色 0
+        let d = Settings::default();
+        assert_eq!(d.background_image_path, None, "默认无背景图");
+        assert_eq!(d.background_image_opacity, BG_IMAGE_OPACITY_DEFAULT);
+        assert_eq!(d.background_image_fit, BgImageFit::Fill);
+        assert_eq!(d.background_image_tint_intensity, BG_IMAGE_TINT_DEFAULT);
+        // ② 完整字段解析：路径保留、越界 clamp、合法 fit
+        let parsed = Settings::parse_json(
+            r#"{"background_image_path":"C:\\pic\\bg.png",
+                "background_image_opacity":250,
+                "background_image_fit":"stretch",
+                "background_image_tint_intensity":33}"#,
+        );
+        assert_eq!(
+            parsed.background_image_path.as_deref(),
+            Some("C:\\pic\\bg.png")
+        );
+        assert_eq!(parsed.background_image_opacity, 100, "越界 clamp 0–100");
+        assert_eq!(parsed.background_image_fit, BgImageFit::Stretch);
+        assert_eq!(parsed.background_image_tint_intensity, 33);
+        // ③ 类型损坏 / 未知 fit / 非字符串路径 → 回落默认（None / Fill / 20 / 0）
+        let bad = Settings::parse_json(
+            r#"{"background_image_path":42,"background_image_opacity":"x",
+                "background_image_fit":"cover","background_image_tint_intensity":-1}"#,
+        );
+        assert_eq!(bad.background_image_path, None, "非字符串路径 → None");
+        assert_eq!(bad.background_image_opacity, BG_IMAGE_OPACITY_DEFAULT);
+        assert_eq!(
+            bad.background_image_fit,
+            BgImageFit::Fill,
+            "未知 fit → Fill"
+        );
+        assert_eq!(bad.background_image_tint_intensity, BG_IMAGE_TINT_DEFAULT);
+        // ④ 旧版本配置（字段缺失）→ 默认，零迁移
+        let old = Settings::parse_json(r#"{"theme":"dark"}"#);
+        assert_eq!(old.background_image_path, None);
+        assert_eq!(old.background_image_opacity, BG_IMAGE_OPACITY_DEFAULT);
+        // ⑤ trim 归一：空白路径 → None
+        let blank = Settings::parse_json(r#"{"background_image_path":"   "}"#);
+        assert_eq!(blank.background_image_path, None, "空白路径归一为 None");
+        // ⑥ 往返保真（None 与 Some 两态）
+        let roundtrip_none = Settings::parse_json(&Settings::default().to_json_string());
+        assert_eq!(roundtrip_none.background_image_path, None);
+        let with_bg = Settings {
+            background_image_path: Some("D:/wall.jpg".into()),
+            background_image_opacity: 55,
+            background_image_fit: BgImageFit::Stretch,
+            background_image_tint_intensity: 10,
+            ..Settings::default()
+        };
+        let roundtrip = Settings::parse_json(&with_bg.to_json_string());
+        assert_eq!(roundtrip.background_image_path, Some("D:/wall.jpg".into()));
+        assert_eq!(roundtrip.background_image_opacity, 55);
+        assert_eq!(roundtrip.background_image_fit, BgImageFit::Stretch);
+        assert_eq!(roundtrip.background_image_tint_intensity, 10);
     }
 }

@@ -49,6 +49,8 @@ pub fn spawn_aggregation(
     engines_json: String,
     disabled: Vec<String>,
     lang: dd_gui::settings::Lang,
+    custom_commands: Vec<dd_gui::settings::CustomCommand>,
+    ext_settings: std::collections::BTreeMap<String, std::collections::BTreeMap<String, String>>,
 ) {
     thread::spawn(move || {
         // A2 拆分计时的"数据平面"：从 scan 起到聚合完成止（不含 GUI/字体加载）
@@ -85,10 +87,21 @@ pub fn spawn_aggregation(
             .cloned()
             .collect();
         aggregator::inject_websearch_env(&mut active, &engines_json);
+        // N2（2026-10-04）：用户可调扩展配置通用注入（entry.env 内存副本，
+        // 变量名 `DD_EXT_CFG_<KEY>`；S-10 键名守卫见 inject_ext_settings）。
+        aggregator::inject_ext_settings(&mut active, &ext_settings);
         // M9 内置 websearch 为 in-process（无子进程，进程环境变量对它无效）：
         // 引擎配置经内存通道直接注入扩展（2026-09-12 修复——此前配置被静默
         // 忽略、面板永远显示内置全表）。独立 exe / spawn 路径仍走 entry.env。
         dd_ext::builtins::websearch::set_configured_engines_json(Some(engines_json.clone()));
+        // N2：内置 apps 同为 in-process——用户屏蔽名单经内存通道直接注入
+        //（websearch 同款先例；`None` = 未配置/已清空，扩展侧零过滤）。
+        dd_ext::builtins::apps::set_configured_blocklist(
+            ext_settings
+                .get("com.ddrun.apps")
+                .and_then(|m| m.get("blocklist"))
+                .cloned(),
+        );
         // 批次 D（2026-09-06）：注入生效语言到各扩展进程环境——扩展侧经
         // `DDRUN_LANG` 选 zh/en 文案。`lang` 已是 FollowSystem 解析后的具体语言
         // （zh_cn / en_us）；扩展解析未知值回落 zh_cn。
@@ -100,7 +113,9 @@ pub fn spawn_aggregation(
                 .insert("DDRUN_LANG".to_string(), lang_str.clone());
         }
         let result = aggregator::collect_top_level(&active, &inproc_specs, cache.as_ref());
-        let (items, sources) = aggregator::flatten(&result.per_ext, lang);
+        let (mut items, sources) = aggregator::flatten(&result.per_ext, lang);
+        // N1（2026-10-04）：自定义直达命令追加为宿主虚拟条目（不经扩展，无信任面）。
+        items.extend(aggregator::custom_command_items(&custom_commands, lang));
 
         // 进程与 `ExtItems::Ready` 一一对应（collect 时按序 push）；Stub（读桩）无进程
         let mut procs = result.processes.into_iter();

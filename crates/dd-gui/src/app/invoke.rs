@@ -122,6 +122,12 @@ impl PaletteApp {
     /// `invoke` 分派：warm 进程在 → 直接后台执行；不在 → 桩复热（A6）。
     /// M4：熔断（连续崩溃，§11）的扩展**不再尝试 spawn**，等重启/手动重试。
     pub(crate) fn dispatch_invoke(&mut self, ext_id: &str, params: InvokeParams) {
+        // N1（2026-10-04）：自定义直达命令走**宿主内部分发**（§3 惯例 ⑤）——
+        // 不对应任何扩展进程，无 busy / 熔断面；`params.id` = `custom:{keyword}`。
+        if ext_id == dd_gui::aggregator::HOST_CUSTOM_EXT_ID {
+            self.run_custom_command(&params.id);
+            return;
+        }
         if self.invoke_rx.is_some() || self.inflight.contains(ext_id) {
             log::warn!("[dd-gui] invoke 失败：ext={ext_id} 上一请求仍在处理");
             self.show_toast_kind(ToastKind::Error, self.tr("toast.ext_busy"), Some(2_000));

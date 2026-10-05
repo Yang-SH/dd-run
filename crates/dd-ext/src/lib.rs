@@ -1,7 +1,7 @@
 //! dd-ext —— 共享扩展运行时。
 //!
 //! 背景与决策：M4 实施决策 **D1-A「共享扩展运行时」**（见 [`docs/m4-record.md`](../../docs/m4-record.md) §0）——
-//! 5 个内置扩展（Apps / Calc / System / WebSearch / Shell）共用一套协议样板：
+//! 6 个内置扩展（Apps / Calc / System / WebSearch / Shell / Bookmarks）共用一套协议样板：
 //! stdin 主循环、NDJSON 成帧、JSON-RPC 信封解析、方法分发、结果/错误/通知发送。
 //! 若各扩展手写（`dd-ext-sample` 单文件 ~500 行样板），5 个扩展将产生 ~2500 行重复；
 //! 抽到本 crate 后，扩展只声明 [`ExtensionSpec`]（身份 + 命令集合 + invoke 处理器），
@@ -20,7 +20,7 @@
 //! - `invoke`（§6.5）：交 [`spec.invoke`] 处理，成功回 [`model::CommandResult`]，
 //!   处理器返回的副作用（host/* 请求、items_changed 通知）在响应**之后**按序发出；
 //! - `get_items`（§6.3）：若扩展声明了 `pages`（`PageHandler`），按 `page_id` +
-//!   `search_text` 返回整页项；未声明（`pages: None`，如 5 个内置扩展）则回
+//!   `search_text` 返回整页项；未声明（`pages: None`，如内置扩展）则回
 //!   `-32005 Page not found`；
 //! - `close`（§6.6）：回 `{}` 并置退出标志（后置规则 2：尽快自行退出）。
 //!
@@ -132,7 +132,7 @@ pub type ListHandler = fn() -> Vec<CommandItem>;
 
 /// 子页内容构造器（§6.3 `get_items`）：按 `page_id` + `search_text` 返回整页项。
 ///
-/// 协议 §6.3 已定义 `get_items` 方法，本运行时此前未提供注册点（5 个内置扩展
+/// 协议 §6.3 已定义 `get_items` 方法，本运行时此前未提供注册点（内置扩展
 /// 均无子页，一律回 `-32005`）。新增 `PageHandler` 仅是"补齐协议合规"，**不改
 /// 协议**——有子页的扩展（如文件搜索）声明 `pages: Some(handler)` 即可。
 pub type PageHandler = fn(&GetItemsParams) -> GetItemsResult;
@@ -423,7 +423,7 @@ pub fn serve_line(spec: &ExtensionSpec, line: &str) -> (Vec<serde_json::Value>, 
                         false,
                     )
                 }
-                // 未声明子页（或参数缺失）→ 维持 -32005（5 个内置扩展默认）
+                // 未声明子页（或参数缺失）→ 维持 -32005（内置扩展默认）
                 _ => {
                     log(
                         spec,

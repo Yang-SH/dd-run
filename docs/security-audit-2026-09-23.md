@@ -568,7 +568,7 @@ pub(crate) fn decode_icon_image(bytes: &[u8]) -> Option<egui::ColorImage> {
 | A9 | ✅ | `deny_entry_blocks_and_allow_revokes`（同 id 只留一条记录，可撤销） |
 | A10 | ✅ 代码路径 | 停用集（`disabled_extensions`）与信任判定是**两条独立过滤链**、两个独立存储（`config.json` vs `trust.json`）；互不覆盖 |
 | A11 | ✅ **实测** | `.workbuddy/tmp/trust-probe/`（独立 crate，真实产物 `dist/extensions.d/dd-ext-search.exe` = **836,608 B**）：`sha256_file` **0.874 ms** / `TrustLedger::load` **0.068 ms** / 无记录判定 **0.000 ms**（短路）/ 已批准判定（两次哈希）**1.068 ms** —— 全部 **≪ 10 ms 判据**；首方与内置走短路，常见情形**零哈希开销** |
-| A12 | 进行中：新增已达 19 条；全仓复跑受环境阻塞 | 新增 **19 条**（14 + 4 + 1，> 12 条要求）；全仓 `cargo test --workspace --no-fail-fast` 两次复跑均为 **487 passed / 21 failed**（总数 **508**，与 §3.1 台账登记一致），失败构成为 **20 条已知 `Os error 231`（`ERROR_PIPE_BUSY`）环境批**（dd-host roundtrip/builtin 与 dd-gui `test_support` 的 piped-stdio spawn）+ 1 条既有机器绑定用例；**失败名单中无本项任何新测试**。环境自愈后复跑预期 **507 passed / 1 failed**（= 508 − 1 机器绑定） |
+| A12 | ✅ **收口**（2026-10-01 补跑确认） | 新增 **19 条**（14 + 4 + 1，> 12 条要求）；`Os error 231` 环境批自愈后，全仓 `cargo test --workspace` 复跑 **568/568 全绿**（21 目标，0 失败；机器绑定用例已于 R-09 `#[ignore]` 化，见 stability 方案 R-24 门禁注记与 CHANGELOG 2026-10-01 条目） |
 
 > **环境批的处置依据**：与本日早前那批（22 条）同源，已用「零仓库代码的最小探针 + 临时还原改动 + 时间线」三层证据定性为环境限制（详见 §7.2 留档），**不要改代码**。
 
@@ -742,7 +742,7 @@ pub(crate) fn decode_icon_image(bytes: &[u8]) -> Option<egui::ColorImage> {
 - [x] **零协议/清单变更**：S-01–S-04、S-06、S-10 均未改字段、方法名或清单 schema；仅 `docs/protocol.md` §7.4 增加一段**实现侧策略注**（非契约）。
 - [x] 体积无回归（2026-09-24 实测）：安全加固三批（S-01 批 / S-05 / 低危收尾）后 `cargo build --release` + `tools/package.sh` exit 0——宿主 `dd-run.exe` 9,100,800 → **9,105,408 B**（低危批 +4,608 B / **+0.05%**；S-05 批此前 +0.87%），dist exe 与 release exe sha256 一致，仍在 9–11 MB 目标区间。
 - [ ] 真机回归：Apps 启动、WebSearch 开网页、**文件搜索「打开」**（S-03 的关键回归面）、Shell 危险命令确认弹窗、图标显示、**Calc 复制后出现"扩展已写入剪贴板"提示（S-07）**、**文件搜索「显示所在目录」定位正确（S-08）** —— 需真机走查。
-- [ ] 文档同步：`docs/protocol.md` §7.4 ✅ 已加；`docs/manifest-schema.md` §9 ✅（S-05 批）；`extensions.md` §6.1 ✅（S-05 批）。
+- [x] 文档同步：`docs/protocol.md` §7.4 ✅ 已加；`docs/manifest-schema.md` §9 ✅（S-05 批）；`extensions.md` §6.1 ✅（S-05 批）。
 
 #### 一度出现的 22 条 spawn 用例失败（已排除，非缺陷 —— 留档备查）
 

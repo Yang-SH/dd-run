@@ -4,6 +4,67 @@
 
 ## [Unreleased]
 
+### 功能（T9 落地：背景图通道一期，2026-10-05）
+
+- **承接**：settings-personalization-plan §3.2 P2 / §5（B1–B4 落地后方案内最后一个未实施项）。`Settings` 新增 `background_image_path`（Option，trim 空串归一 None）/ `background_image_opacity`（0–100，默认 20 = 对齐 CmdPal `BackgroundImageOpacity`）/ `background_image_fit`（Fill 等比裁剪铺满 / Stretch 拉伸，默认 Fill）/ `background_image_tint_intensity`（0–100，默认 0）。config.json 往返覆盖、越界 clamp、类型损坏回落、旧版本字段缺失零迁移。
+- **一期互斥语义**：设了背景图 = 该图即面板背景——`refresh_backdrop` 按 effective = None 走（材质 / 着色 / 边框链路整体暂停、设置值保持不动），清除后恢复；设置页材质卡同步置灰 + 提示行。亮度 / 模糊滑杆不做（方案 §4 判缓办）。
+- **实现**：新 `ui/backdrop_image.rs`——S-04 同款显式解码限幅（宽/高 ≤8192）+ 超 2048 最长边等比缩略省显存；纹理缓存按 (路径, mtime) 门控增量重建、解码失败**负缓存**（同键不重试防逐帧 IO）；Fill/Stretch 为绘制期 UV 纯函数——resize 只重算裁剪窗口不重解码。绘制 = `draw_panel` 帧首铺图 + 页脚 / CentralPanel Frame 填充置透明让图层透出（行 / 卡片自带不透明底）；解码失败回落无图。
+- **UI**：设置页「外观」新增「背景图」卡（材质卡之后）——路径文本输入 + 「设为背景 / 清除」+ 适应 pill + 不透明度 / 着色强度双滑杆（即时生效、松手落盘）；文件不存在与运行期解码失败走 danger 错误行。**零文件对话框依赖**（`rfd` 未引入，方案 §3.2 判定：一期路径文本输入 + 提示）。`apply_reset_appearance` 与 N5 导入链同步背景图字段。
+- **依赖**：既有 `image` 0.25 启用 `jpeg` / `webp` 特性（非新增 crate；dist 单文件 9.1M → 9.7M）。
+- **门禁**：新增单测 5 条（设置默认 / clamp / 归一 / 往返 + UV 裁剪两向 / 解码垃圾容忍与超限缩略），`cargo test --workspace` **592/592 全绿**，fmt 零差异、clippy 全仓零告警；**cargo audit 随批零漏洞零警告**（340 依赖，jpeg/webp 特性引入的 zune-jpeg / image-webp 等传递依赖均无 advisory）；release + dist 重打包，GUI 冒烟 6s 存活、冷启动 868 ms 无回归。
+- **自动化真机走查（当批完成，五腿全过）**：A 设图 Fill 100%（图铺满、云母被互斥遮盖）/ B Stretch（整图无裁拉伸）/ C 不透明度 25% / D 不存在路径（回落实色面板、零 panic）/ E 清图基线（恢复云母玻璃 = 互斥恢复）。**走查发现并当批修复一处缺陷**：背景图生效时图下透出的是 `clear_color`（材质未生效路径为半透明暗色）而非面板色，低不透明度档呈暗浊底（像素实测 (81,80,80)）——修复 = `draw_panel` 画图前先铺不透明面板色底；修复后像素取样与混合理论值精确吻合（(244,201,202)/(202,201,245)）。三关复跑 592/592 全绿，dist 重建后复测确认；config 已还原。剩余用户腿：设置页按钮 / 滑杆拖动（需真实点击）、tint 叠层、resize 实时性。
+
+### 真机走查（N1–N4 自动化腿全过：dist 重建版，2026-10-04）
+
+- **dist 重建**：`tools/package.sh` → `dd-run-0.1.1.exe` 9.1M；sidecar 哈希随构建变化 → trust.json pin 判「同版篡改」拦 filesearch（R-12 fail-closed 真机复证，dev 机已知行为——同版重发须 bump 版本的发版要点再次验证）。
+- **走查通道**：config 预置 + `PostThreadMessageW(WM_HOTKEY)` 唤起（窗口矩形 635,250,1285,782 与 V-1 基线逐位一致）+ 截图留档（辅助脚本临时存放 `%TEMP%\ddrun-walkthrough\`，不入仓；合成键盘输入被过滤的约束下，首屏空查询 + 停用集裁剪列表替代键入）。
+- **N1 ✅ 首屏呈现腿**：「直达」分组两条预置命令上屏（GitHub/url + 系统盘根目录/path，徽标「直达」）；**N2 ✅ A/B 对比**：blocklist `7-Zip, brave, clash` 三片段重启后对应「应用」行消失、其余原样（多片段解析 + 大小写不敏感 + 输出层过滤）；**N3 ✅ Edge 呈现腿**：真实解析 Edge 书签 **1123 条**渲染「书签」分组；**N4 ✅ 调低腿**：`warm_capacity=2` → 「LRU 驱逐」×4 + warm 空闲回收日志；冷启动 865 ms 无回归。
+- **剩余用户腿**（需真实键鼠）：N1 url/path 执行 + 拼音命中 + `javascript:` 拦截、N3 Chrome/拼音/打开、N4 调高腿、N5 导出→清→导入还原、安全回归确认弹窗（S-06/S-07/S-08）、R-22 真实 IME、R-23 粘贴、E2E 首屏采样。走查后 config 已从备份还原。
+
+### 功能（N5 落地：设置导入 / 导出——N1–N5 五项提案全部完成，2026-10-04）
+
+- **承接**：future-features-plan §4.5（本规划最后一项）。`Settings::export_backup` 导出数据目录 `dd-settings-backup.json`（R-02 原子写）——全量字段**减去机器态**（autostart / panel_size）并写 `exported_from` 版本标记；**`trust.json` 永不随行**（S-05 fail-closed：信任绑定本机清单/exe 哈希）。
+- **导入**：读同文件 → 整体验证（垃圾文件报错 toast，**不**静默回落默认——那等于清空用户设置）→ 字段级容错（未知字段忽略、越界回落，惯例 ②）→ 两步确认（按钮变「确认导入」，5s 未确认自动撤销）→ 覆盖并应用。
+- **机器态保留本机现值**：autostart（注册表）、panel_size（分辨率），以及**热键**（实现细化：改绑须走 seq 确认捕获流程，导入期自动注册有冲突风险——导出物仍含该字段供参考）。
+- **应用链**：主题/材质/不透明度/圆角/边框走既有 apply 链即时生效；语言经 `apply_lang`（托盘同步）；warm 容量即时调整（含缩容驱逐）；聚合类配置统一 `engines_dirty`（返回首屏重聚合生效）。
+- **UI**：设置页「常规」第 7 卡「导入 / 导出设置」——备份路径 mono 上屏 + tooltip 便于拷贝（零文件对话框依赖，spec §4.5）；成功/失败 toast 全 i18n（zh/en 完备性单测自动覆盖）。
+- **门禁**：新增单测 1 条（导出裁剪 + 导入容错 + 机器态保留 + 往返还原），`cargo test --workspace` **587/587 全绿**，fmt 零差异、clippy 全仓零告警。真机走查（导出 → 清配置 → 导入 → 逐项还原）待做。
+
+### 功能（N3 落地：浏览器书签搜索——第 6 个内置扩展，2026-10-04）
+
+- **承接**：future-features-plan §4.3。新增内置扩展 `com.ddrun.bookmarks`（仅 in-process、不经 spawn、不涉信任台账、无独立 bin 薄壳；`dd-host BUILTINS` 注册 + 防漂移哨兵测试同步 6 个）。
+- **数据**：只读解析 Chrome / Edge 的 `User Data\<profile>\Bookmarks` JSON（每配置档一份），按文件 mtime 门控增量重建（未变文件沿用旧解析）；索引上限 2000 条，超限截断并追加「仅索引前 2000 条」提示条目（invoke 仅 toast）。
+- **交互**：顶层命令 = 扁平化书签条目——文件夹路径进 subtitle（`Chrome/书签栏/…`）、类别徽标「书签」、宿主拼音管线按 title 生成索引（中文书签名拼音可命中）；invoke → `host/open_url` https 档打开（S-03 白名单天然生效）。**零网络请求、零新增依赖**（serde_json 复用）。
+- **健壮性**：损坏文件（非 JSON / 缺 roots / roots 非对象）跳过不挂起；缺 `url`、空标题、未知 `type` 节点跳过；缺 `type` 但带 `children` 的节点按文件夹递归（结构演进的向前兼容）。平台策略同 apps（Windows 优先，其余占位）。
+- **门禁**：新增单测 3 条（Chrome 结构样例扁平化 / 损坏与未知节点容忍 / cap 截断），`cargo test --workspace` **586/586 全绿**，fmt 零差异、clippy 全仓零告警。真机走查（Chrome/Edge 各命中一例、拼音命中、打开）与冷启动无回归验证待做。
+
+### 功能（N2 落地：内置扩展配置通道 + apps 用户屏蔽名单试点，2026-10-04）
+
+- **承接**：future-features-plan §4.2。`Settings` 新增 `ext_settings`（`ext_id → 键值`；值 v1 收窄为字符串，BTreeMap 确定性序列化），config.json 往返覆盖、非字符串值/空 ext_id 跳过、旧版本配置默认空。
+- **通用通道**：聚合期 `inject_ext_settings` 把配置合并写入各扩展 `entry.env` **内存副本**（变量名 `DD_EXT_CFG_<KEY 大写>`，泛化 `DD_WEBSEARCH_ENGINES` 单例惯例）；S-10 双保险——键名白名单（ASCII 字母/数字/下划线 1–32）+ 结果名对 `PROTECTED_ENV_KEYS` 复查（前缀约定本身已结构性避开），spawn 路径仍有 `filter_env_overrides` 终检。运行时内存改写不触碰 S-05 信任台账（哈希对象是清单文件字节流）。
+- **试点（apps 用户屏蔽名单）**：in-process 内置对 env 不敏感 → 走**内存通道**直接注入（websearch `set_configured_engines_json` 先例）+ **输出层过滤**（`top_level_commands`；枚举层会因 `APP_CACHE` 进程级 OnceLock 滞后到重启）——显示名含任一片段（逗号分隔、大小写不敏感）的应用不进「应用」列表；**条目 id 保持全量枚举原始下标**，`handle_invoke` 索引寻址不变；与 apps-filtering-plan 的静态黑名单分层（用户名单只作用于输出层）。
+- **管理 UI**：设置页扩展卡 apps 行内「设置」小按钮展开屏蔽名单编辑器（32px 列表行 + 删除 + 添加输入框；变更落盘 + 重聚合脏标记，离开设置页重聚合后生效）；声明与渲染宿主持有，第三方扩展不涉及。
+- **门禁**：新增单测 5 条（dd-gui 3 + dd-ext apps 2），`cargo test --workspace` **583/583 全绿**，fmt 零差异、clippy 全仓零告警。协议/清单零改动、零新增依赖。apps-filtering-plan §4.5「不做用户自定义黑名单 UI」由本项承接销项。真机走查（屏蔽命中/清空恢复）待做。
+
+### 功能（N1 落地：自定义直达命令，2026-10-04）
+
+- **承接**：future-features-plan §4.1。`Settings` 新增 `custom_commands`（`title` / `keyword` / `kind` url·path / `target`；构造规范化 trim + 关键词小写 + 空字段与空白关键词拒绝），`config.json` 往返覆盖、非法条目跳过、旧版本配置默认空。
+- **首屏**：聚合期每条配置转为宿主虚拟条目（保留 ext_id `com.ddrun.host`，分组/类别徽标「直达」）——`keyword` 进 tags、`title` 生成拼音索引（M6 管线）、`target` 作副标题；输入即搜、选中即执行，无前缀语法、不带参数（`{q}` 带参直达维持缓办）。
+- **执行**：`dispatch_invoke` 对保留 id 走**宿主内部分发**——url 复用自 `host/open_url` 执行体抽出的 `open_url_execute`（S-03 scheme 白名单天然生效，`javascript:` 等一律拦截 toast；http/https 走默认浏览器）；path 走 ShellExecute「双击等价」（含 UNC），失败 R-16 toast 不静默。
+- **管理**：设置页「常规」第 6 卡「自定义命令」（搜索引擎卡范式：32px 列表行 + 删除 + 类型下拉/名称/关键词/目标输入 + danger 错误行）；右键菜单「删除此命令」（宿主侧配置操作，重聚合后条目消失）。关键词唯一性校验，i18n 14 键 zh/en（完备性单测自动覆盖）。
+- **门禁**：新增单测 2 条（`n1_custom_commands_validate_roundtrip_and_compat` / `custom_command_items_build_host_virtual_entries`），`cargo test --workspace` **578/578 全绿**，fmt 零差异、clippy 全仓零告警。协议/清单零改动、零新增依赖。真机走查（url/path 执行含 UNC、拼音/别名命中、白名单外 scheme 拒绝）待做。
+
+### 功能（N4 落地：LRU 预热容量可配置，2026-10-03）
+
+- **承接**：future-features-plan §4.4（正式承接 optimization-plan §2.7.1 的「LRU 容量可配」转功能项）。`Settings` 新增 `warm_capacity`（1–16，**默认 8 = 原 `LRU_WARM_CAPACITY` 常量值**，M1–M4 内存基线口径不变）；`config.json` 持久化往返覆盖，越界 clamp、缺失/损坏回落默认。
+- **设置页**：「常规」第 5 卡「预热容量」（D42 行规格 40px + Fluent 数字下拉 1–16，与语言卡同排版惯例）；切换经 `apply_warm_capacity` 即时生效——落盘 + 缩容时 `LruWarmSet::set_capacity` 按队尾（最久未用）驱逐（close + 回落 stub，走既有 `evict_warm` 路径），扩容不追补。
+- **实现面**：`dd-host` `LruWarmSet::set_capacity`（返回受害者列表）；`PaletteApp::new` 构造点改读配置容量；`pool.rs` 的 `LRU_WARM_CAPACITY` 常量删除，默认口径移至 `settings::WARM_CAPACITY_DEFAULT`；i18n `set.warm_capacity.name/desc` zh/en（完备性单测自动覆盖）。
+- **门禁**：新增单测 3 条（dd-host `lru_set_capacity_shrinks_with_lru_tail_victims_and_grows_in_place` / dd-gui `n4_warm_capacity_defaults_clamps_and_roundtrips` + `n4_warm_capacity_consumed_at_construction`），`cargo test --workspace` **576/576 全绿**（含 10-02/10-03 R-04/R-26 未逐批回写的 +5 一并计入），fmt 零差异、clippy 全仓零告警。真机走查（调低 → 驱逐回落桩态；调高 → 第三方扩展保活数增加）待做。
+
+### 维护（文档销勾清理：六处台账口径对齐，2026-10-03）
+
+- stability 方案 R-12/R-16/R-19/R-20 四项 checkbox 销勾（行内注记已记走查完成，勾未打）；security-audit A12「进行中」回写为收口（10-01 R-24 补跑 568/568 全绿）+ 文档同步项勾选；memory-optimization-plan「真机复验待做」由 V-13 基线（500 循环 + 10.4 h 挂机）覆盖销项（体感腿注记随 V 走查复核）；search-file.md D0–D6 历史验收门与 §6.3 防重/健壮按既有划线口径销勾（**速度项保持开放**——即 p2 报告 §5 #4 E2E 采样）；README Roadmap 候选项 A2 口径同步（L10 已销项）；INDEX 补 V 编号空间澄清注记（settings-keys V-1~V-7 与 stability V-1~V-16 为两套独立编号）。
+
 ### 维护（cargo audit 首检：零漏洞零警告，2026-10-03）
 
 - §7「cargo audit 约定」缓办项首检完成：对 Cargo.lock（339 依赖）扫描 **0 漏洞 / 0 警告**（RustSec advisory-db 1288 条，exit 0）。**约定升级为「发版前随 fmt/clippy 门禁一并执行」**。

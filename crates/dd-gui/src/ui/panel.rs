@@ -35,8 +35,36 @@ impl PaletteApp {
         // 批次 4.2：设置页**也**渲染全局页脚——`draw_status_footer` 内按 `is_settings`
         // 早返回到「左说明文案 + 右 Esc 返回」分支（设计稿 §08 line 1223-1226 + D15 line 971）。
         let mut open_settings = false;
+        // T9（2026-10-05）：背景图纹理（(路径, mtime) 门控缓存；须在 self_ref
+        // 不可变再借用之前完成 &mut self.backdrop_cache 访问）。
+        let bg_path = self.settings.background_image_path.clone();
+        let bg_tex =
+            bg_path.and_then(|path| self.backdrop_cache.texture(ui.ctx(), Some(&path)).cloned());
         let self_ref: &Self = &*self;
         let p = theme::Palette::of(ui.visuals().dark_mode);
+        // T9（2026-10-05）：背景图层（互斥语义）——帧首先把图铺满整窗，页脚 /
+        // CentralPanel 的 Frame 填充在背景图生效时置透明让图层透出（行 / 卡片
+        // 自带不透明底，可读性不受影响）；读盘 / 解码失败（负缓存命中）→
+        // bg_active = false 回落无图（面板底已由 refresh_backdrop 按回退路径
+        // 注册实色，视觉与关闭背景图一致）。
+        let bg_active = bg_tex.is_some();
+        if let Some(tex) = &bg_tex {
+            let rect = ui.max_rect();
+            // 先铺**不透明面板色**底：低不透明度时透出的必须是面板色——直接
+            // 透 clear_color 会在材质未生效路径（clear = 半透明暗色
+            // `from_rgba_unmultiplied(12,12,12,180)`）上得到暗浊底（T9 走查
+            // 腿 C 像素取样实证：底色 (81,80,80) 而非面板色）。
+            ui.painter_at(rect).rect_filled(rect, 0.0, p.panel);
+            crate::ui::backdrop_image::paint_backdrop_image(
+                ui,
+                rect,
+                tex,
+                self.settings.background_image_fit,
+                self.settings.background_image_opacity,
+                self.settings.background_image_tint_intensity,
+                p.panel,
+            );
+        }
         // 材质态页脚填充（P2 v5 修复「底部栏未同步修复效果」，2026-09-13）：
         // D31 时代页脚 = 纯 TRANSPARENT（彼时面板也没有浓淡层，透明对透明一致）；
         // M1 起面板有了浓淡层（panel_fill = tint 基色 × alpha，只由 CentralPanel
@@ -44,7 +72,10 @@ impl PaletteApp {
         // ——面板 tint 越重底部色差带越明显。现改为与面板**同源** `panel_fill`
         // （同一份浓淡层），材质态页脚与面板一体；全关/回退时仍为 --panel-2 不
         // 透明（fallback 观感不变）。
-        let footer_fill = if self.backdrop_active {
+        let footer_fill = if bg_active {
+            // T9：背景图生效 → 页脚透明（背景图层透出）
+            egui::Color32::TRANSPARENT
+        } else if self.backdrop_active {
             ui.style().visuals.panel_fill
         } else {
             p.panel_2
@@ -78,7 +109,12 @@ impl PaletteApp {
         egui::CentralPanel::default()
             .frame(
                 egui::Frame::default()
-                    .fill(ui.style().visuals.panel_fill)
+                    // T9：背景图生效 → 中央填充透明（背景图层透出）
+                    .fill(if bg_active {
+                        egui::Color32::TRANSPARENT
+                    } else {
+                        ui.style().visuals.panel_fill
+                    })
                     // 设计稿 00.1 顶行 padding（v4）：8px 12px 4px —— 顶部 8 +
                     // 搜索栏 40 + 下方 4 = 52px；底部 8 由 `.results` padding-bottom 承担。
                     .inner_margin(egui::Margin {
