@@ -59,7 +59,7 @@ flowchart TD
 | 文档 | 状态 | 版本 | 行数 | 读者 | 职责 |
 |---|---|---|---|---|---|
 | [`../cmdpal-platform-agnostic-design.md`](../cmdpal-platform-agnostic-design.md) | 生效中 | v1.0 | 547 | 设计者与维护者 | 平台无关抽象模型、页面/扩展/宿主模型、上下游对照、**验收项 A1–A12 的定义源** |
-| [`implementation.md`](./implementation.md) | 生效中 | v0.1.15 | 1046 | 维护者 | 实施主线：里程碑状态总表、目标与范围、ADR-1~4、验收映射（含 §3.1 测试基线台账 515 + §3.1.1 内存基线台账 V-13）、遗留台账（L11 审计 11/11 销项）、实施沿革 |
+| [`implementation.md`](./implementation.md) | 生效中 | v0.1.15 | 1047 | 维护者 | 实施主线：里程碑状态总表、目标与范围、ADR-1~4、验收映射（含 §3.1 测试基线台账 515 + §3.1.1 内存基线台账 V-13）、遗留台账（L11 审计 11/11 销项）、实施沿革 |
 
 ### C. 开发指南与用户文档
 
@@ -133,7 +133,7 @@ flowchart TD
 |---|---|---|---|
 | [`../README.md`](../README.md) | 生效中 | 115 | 英文 README |
 | [`../README.zh-CN.md`](../README.zh-CN.md) | 生效中 | 115 | 中文 README（与英文版逐节对应） |
-| [`../CHANGELOG.md`](../CHANGELOG.md) | 生效中 | 819 | 版本变更日志（`[0.1.0]`/`[0.1.1]` 条目均带日期；`[Unreleased]` 含 2026-09-19 起多批变更——`Ctrl+F` 直达 + Shell 真实图标 / 零依赖 PNG 编码器（E2）/ 设置·个性化·材料（B1–B4）/ 安全审计 11 项闭环 / 设置页排版与控件字号统一（K1–K3，D42）/ 行描述与控件重叠修复 / **后续功能规划（N1–N5）**等） |
+| [`../CHANGELOG.md`](../CHANGELOG.md) | 生效中 | 826 | 版本变更日志（`[0.1.0]`/`[0.1.1]` 条目均带日期；`[Unreleased]` 含 2026-09-19 起多批变更——`Ctrl+F` 直达 + Shell 真实图标 / 零依赖 PNG 编码器（E2）/ 设置·个性化·材料（B1–B4）/ 安全审计 11 项闭环 / 设置页排版与控件字号统一（K1–K3，D42）/ 行描述与控件重叠修复 / **后续功能规划（N1–N5）**等） |
 
 > 设计稿与交互演示（HTML）不在本索引收录范围内：`cmdpal-ui-mockups.html`、`cmdpal-ui-optimization-v5.html`、`cmdpal-window-material-effects.html`（窗口材质与边框方案效果页）。设计稿的**版本权威**在文件自身标题，最新决策见 [`implementation.md`](./implementation.md) §2 对应批次。
 

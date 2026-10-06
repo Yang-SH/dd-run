@@ -10,6 +10,7 @@
 
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
 
 use dd_host::manifest::{Entry, LoadedExtension, Manifest, ScanOptions};
 use dd_host::process::{ExtensionProcess, ProtocolError, TIMEOUT_GET_ITEMS, TIMEOUT_INVOKE};
@@ -17,6 +18,31 @@ use dd_protocol::messages::{
     error_codes, GetItemsParams, GetItemsResult, InvokeContext, InvokeParams, RawMessage,
 };
 use dd_protocol::model::{CommandRef, CommandResult, Sender};
+
+/// 有界重试轮询 `items_changed`（CI #58 flake 修复，2026-10-06）。
+///
+/// 为什么不能直接断言单次 `poll_notifications()`：样例扩展按协议设计在
+/// **回包之后**补发 items_changed（sample `main.rs`「回包后补发」注记），
+/// 而 [`ExtensionProcess::poll_notifications`] 是非阻塞 `try_recv`——
+/// 测试消费 invoke 响应后立即轮询时，通知可能尚未被读线程从管道转投入队
+/// （CI runner 上偶发轮空 → `[]`，即 #58 的 `roundtrip_m2_…` 失败形态）。
+/// 生产宿主按帧周期轮询、从不要求通知即时在队，故这是**测试夹具的时序
+/// 断言缺陷**而非产品缺陷。此处改为累计重试至恰好等于期望（2s 上限，
+/// 超时返回实际累计值交由 assert 给出可读失败）。
+fn poll_notifications_until(
+    process: &mut ExtensionProcess,
+    expected: Vec<Option<String>>,
+) -> Vec<Option<String>> {
+    let deadline = Instant::now() + Duration::from_secs(2);
+    let mut got: Vec<Option<String>> = Vec::new();
+    loop {
+        got.extend(process.poll_notifications());
+        if got == expected || Instant::now() >= deadline {
+            return got;
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+}
 
 /// 定位示例扩展可执行文件（与 `roundtrip_builtins.rs::builtin_exe_dir` 同款逻辑：
 /// 集成测试二进制在 `target/debug/deps/`，产物在上一级 `target/debug/`）。
@@ -310,7 +336,7 @@ fn roundtrip_m2_invoke_get_items_items_changed() {
     let result: CommandResult = serde_json::from_value(value).expect("解析 CommandResult");
     assert!(matches!(result, CommandResult::ShowToast { .. }));
     assert_eq!(
-        process.poll_notifications(),
+        poll_notifications_until(&mut process, vec![Some("m2.page".to_string())]),
         vec![Some("m2.page".to_string())],
         "应收到页级 items_changed"
     );
@@ -331,7 +357,7 @@ fn roundtrip_m2_invoke_get_items_items_changed() {
     let result: CommandResult = serde_json::from_value(value).expect("解析 CommandResult");
     assert_eq!(result, CommandResult::KeepOpen);
     assert_eq!(
-        process.poll_notifications(),
+        poll_notifications_until(&mut process, vec![None]),
         vec![None],
         "page_id 缺省应表示顶层"
     );

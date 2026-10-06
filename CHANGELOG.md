@@ -4,6 +4,13 @@
 
 ## [Unreleased]
 
+### 修复（CI #58 flaky 测试定位与夹具修复，2026-10-06）
+
+- **根因**：`roundtrip_m2_invoke_get_items_items_changed`（`dd-host/tests/roundtrip.rs:333`）——样例扩展按协议设计在**回包后**补发 `items_changed`，而宿主 `poll_notifications` 是非阻塞 `try_recv`；测试消费 invoke 响应后立即断言通知在队，CI runner 上通知尚在管道飞行即轮空（`left: [] right: [None]`）。**定性为测试夹具时序断言缺陷，非产品缺陷**（生产宿主按帧周期轮询）。
+- **修复**：测试侧新增 `poll_notifications_until` 有界重试轮询（累计至恰好等于期望，2s 上限），两处断言点（④页级 / ⑤顶层）同修——④同属此竞态只是未发作。
+- **取证通道**：失败日志经临时 GitHub Actions 工作流搬运（Actions 内 `GITHUB_TOKEN` 具 `actions:read`，匿名注记无细节、存储 PAT 过期；工作流用完即删）。
+- **验证**：受影响测试连跑 5 轮全绿；三关 592/592、fmt 零差异、clippy 零告警、docscan 门禁 0 漂移。注：`run_capture_timeouts_long_command`（5s 墙钟界）与 `cold_start_timer`（2ms 下界）存在理论慢机敏感面，未发作不动，再现 CI 瞬时失败时优先复查。
+
 ### 维护（六日产出核对 + 文档回写纪律工具化，2026-10-06）
 
 - **核对**（09-30 → 10-06，35 提交）：台账 559→592 单调一致、声称的 33 条新测试全部真实存在、内置扩展注册与 R 系列勾选一致、窗口 CI 10 次；修正 INDEX 行数漂移 ×3 + **CHANGELOG 存量漂移 412 行**（09-29 体检后各批未同步累积，非本窗口引入）。
