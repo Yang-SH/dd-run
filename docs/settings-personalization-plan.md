@@ -221,7 +221,7 @@
 
 ## 5. 任务清单
 
-> 批次划分原则：同域改动合批、每批三关 + release + 真机 + 文档回写五处（INDEX / implementation / CHANGELOG / 本文档 / 关联文档）+ dist 重打包冒烟。
+> 批次划分原则：同域改动合批、每批三关 + release + 真机 + 文档回写六处（INDEX / implementation / CHANGELOG / 本文档 / 关联文档 / **收口门 `node tools/docscan.mjs`**——链接可达 + INDEX 行数实测零漂移，任一漂移 exit 1；2026-10-06 增补，见 [optimization-plan.md](./optimization-plan.md) §3 尾注）+ dist 重打包冒烟。
 
 | # | 任务 | 目标 | 涉及文件 | 优先级 | 顺序 | 验收标准 |
 |---|------|------|----------|--------|------|----------|

@@ -4,6 +4,12 @@
 
 ## [Unreleased]
 
+### 维护（六日产出核对 + 文档回写纪律工具化，2026-10-06）
+
+- **核对**（09-30 → 10-06，35 提交）：台账 559→592 单调一致、声称的 33 条新测试全部真实存在、内置扩展注册与 R 系列勾选一致、窗口 CI 10 次；修正 INDEX 行数漂移 ×3 + **CHANGELOG 存量漂移 412 行**（09-29 体检后各批未同步累积，非本窗口引入）。
+- **纪律工具化**：`tools/docscan.mjs` 增「INDEX 行数登记 vs `wc -l` 实测」检查（与链接可达合并，任一漂移 exit 1）；批次纪律「文档回写五处」升**六处**——第⑥步 = docscan 收口门（optimization-plan §3 尾注 + settings-personalization-plan §5 同步）。
+- **flaky 排查**：CI #58（纯文档提交）Test(workspace) 瞬时失败，同代码其余 4 次全绿；静态扫描无测试级非确定性模式、本地 3 轮全量稳定——属 CI runner 环境偶发，日志需 admin 权限待维护者核查。
+
 ### 功能（T9 落地：背景图通道一期，2026-10-05）
 
 - **承接**：settings-personalization-plan §3.2 P2 / §5（B1–B4 落地后方案内最后一个未实施项）。`Settings` 新增 `background_image_path`（Option，trim 空串归一 None）/ `background_image_opacity`（0–100，默认 20 = 对齐 CmdPal `BackgroundImageOpacity`）/ `background_image_fit`（Fill 等比裁剪铺满 / Stretch 拉伸，默认 Fill）/ `background_image_tint_intensity`（0–100，默认 0）。config.json 往返覆盖、越界 clamp、类型损坏回落、旧版本字段缺失零迁移。
