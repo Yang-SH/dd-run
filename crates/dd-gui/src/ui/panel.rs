@@ -206,6 +206,20 @@ impl PaletteApp {
                     if self.want_focus {
                         resp.request_focus();
                         self.want_focus = false;
+                        // Ctrl+F 带词进页：query 经 `set_query` 绕过输入框回填数据模型，
+                        // TextEditState 的光标不随之外移（新档默认行首 / 旧档留在根页
+                        // 位置）——回填非空时显式置尾，续接输入语义自然（2026-10-07
+                        // 真机反馈「光标跑到最前面」）。与上方 R-23 截断置尾同一手法。
+                        if !page.list.query().is_empty() {
+                            if let Some(mut st) = egui::TextEdit::load_state(ui.ctx(), resp.id) {
+                                let tail =
+                                    egui::text::CCursor::new(page.list.query().chars().count());
+                                st.cursor.set_char_range(Some(
+                                    egui::text_selection::CCursorRange::one(tail),
+                                ));
+                                egui::TextEdit::store_state(ui.ctx(), resp.id, st);
+                            }
+                        }
                     }
                 }
                 if go_back_clicked {
