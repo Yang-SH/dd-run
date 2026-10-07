@@ -1,6 +1,6 @@
 # dd-run 后续功能规划（N1–N5）
 
-> **状态**：**N1–N5 全部落地**（N4 2026-10-03、N1/N2/N3/N5 2026-10-04；自动化真机腿 10-04 已过，执行/拼音/Chrome/N5 按钮/安全弹窗腿待用户会话） ｜ **版本**：v1.7 ｜ **最后更新**：2026-10-04
+> **状态**：**N1–N5 全部落地且真机走查收口**（N4 2026-10-03、N1/N2/N3/N5 2026-10-04；自动化真机腿 10-04 已过；**2026-10-07 用户真机批量走查通过**——N1 path 腿有 stderr 日志实证，其余腿为批量确认口径，非逐腿判据记录，发现问题逐项重开） ｜ **版本**：v1.9 ｜ **最后更新**：2026-10-07
 > **关联**：[implementation.md](./implementation.md) · [optimization-plan.md](./optimization-plan.md) · [settings-personalization-plan.md](./settings-personalization-plan.md) · [protocol.md](./protocol.md) · [manifest-schema.md](./manifest-schema.md) · [security-audit-2026-09-23.md](./security-audit-2026-09-23.md) · [INDEX.md](./INDEX.md)
 
 ---

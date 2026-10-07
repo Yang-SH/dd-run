@@ -4,6 +4,49 @@
 
 ## [Unreleased]
 
+### 验收（§速度项真机采样收口：输入到首屏 p95 102 ms ≤ 200 PASS，2026-10-07）
+
+- **数据**：用户真机采样（修复后构建）11 条原始样本——带词进页子集 7 条 **min 36 / p50 48 / p95 102 / max 102 ms**，rtt max 93、渲染 max 8 ms；p2 报告 §5 #4 开放项（挂 18 天的「真机采样待做」）正式闭环（search-file v3.13 §6.3 销勾）。
+- **埋点口径修正**：`query=0` 清空回 hint 落地不结算样本——其去抖等待（实测 238–440 ms）属设计内防抖、无「输入 → 首屏」语义，计入会拉成假 FAIL（首轮 4 条实证）。此后采样免人工剔除。
+- **随轮验证**：Ctrl+F 光标置尾腿通过（当日修复，用户未再报）。
+- 三关复跑 596/0 全绿；dist 重打包（**最终交付件** `dd-run-0.1.1.exe` 宿主 8,670,208 B / sha256 `81d04809…`，dist 与 `target/…/release/dd-run.exe` 同哈希；E2E 埋点批记录的 `ae22b56d…` 为该批中间构建，已被口径修正后的重建取代）；判读 `node tools/gui_e2e_parse.mjs`。
+
+### 修复（Ctrl+F 带词进页搜索框光标跑到最前面，2026-10-07）
+
+- **现象**（用户真机反馈）：根页输入关键词按 `Ctrl+F` 进文件搜索页，页内搜索框已回填关键词，但光标停在文本最前面，续接输入语义错乱。
+- **根因**：query 经 `open_page` → `set_query` 绕过输入框回填数据模型，屏幕侧 egui `TextEditState` 的光标不随之外移（新档默认行首 / 旧档留在根页位置）。
+- **修复**：`panel.rs` `want_focus` 消费点——回填 query 非空时 `load_state` → `set_char_range(尾部)` → `store_state`，与 R-23 粘贴截断置尾同一手法；空 query 零变化，根页召唤携旧词时同样落尾（Windows Run 语义）。
+- **验证**：三关全绿（596 passed / fmt 零差异 / clippy 零告警）；无专设单测——TextEdit 焦点/光标属 egui 运行期状态，headless 不可覆盖（同 R-23 置尾腿口径），随真机采样轮验证；dist 重打包。
+
+### 修复（E2E 首屏插桩死代码：`e2e_dispatch_at` 从未赋值，样本 18 天未创建，2026-10-07）
+
+- **发现**：首次真机采样——用户 `Ctrl+F` 带词进页两轮（日志 `Ctrl+F：进入文件搜索页 query=Some("ces"/"asdf")` 在案）而 `E2E 首屏:` 零输出；回读代码实锤 v3.11（`d172260`，2026-09-19）原插桩 `e2e_dispatch_at` 全仓**只有声明 / 置 None / 参与落地 `zip`**，从未赋 `Some` → `zip` 恒 `None` → 样本永不创建。「真机采样待做」期间无人跑过埋点，故 18 天未暴露。
+- **修复**：`page.rs` 两处补 `e2e_dispatch_at = Some(Instant::now())`——`fetch_page_warm`（请求实发时刻，thread spawn 前）与 `fetch_page_reheat`（分派起点含复热期，rtt 记「复热 + 往返」保守口径）。
+- **回归锚**：新增单测 `e2e_dispatch_at_set_on_warm_fetch`（make_app + dying_client 夹具：带词进页后 input / dispatch 双起点必须同时在位）。
+- **验证**：`cargo test --workspace` **596 passed / 0 failed**（基线 595，+1），fmt 零差异、clippy 全仓零告警；dist 重打包（宿主 sha256 `ae22b56d…`——该批中间构建，同日口径修正批重建后最终交付件为 `81d04809…`，见上方采样收口条目）。
+- **同批**：E2E 判读工具移植 Node 版 `tools/gui_e2e_parse.mjs`（见下条）。
+
+### 工具（E2E 判读移植 Node 版：`tools/gui_e2e_parse.mjs`，2026-10-07）
+
+- **动因**：本机无 Python 解释器，`gui_e2e_parse.py` 不可运行——E2E 真机采样的判读环节断链；项目已有零依赖 Node 工具先例（`docscan.mjs` / `glyph_coverage_check.mjs`）。
+- **移植**：与 Python 版逐行对齐（同一正则埋点、nearest-rank 百分位、`--budget-ms` 门禁、退出码 0/1/2），合成样本三态验证过（PASS / FAIL / 文件不可读）。零运行时依赖（`node:fs` 仅此一项）。
+- **配套注记**：`search-file.md` §10.7 判读命令改 Node 版；walkthrough checklist E2E 采样行补「根页输入关键词 → Ctrl+F 带词进页」采样口径与判读命令。
+
+### 验收（用户真机走查批量收口，2026-10-07）
+
+- 用户确认「真机走查基本无问题」——本机可做走查腿全部按批量确认口径收口：R-22（IME 回车守卫）/ R-23（超长粘贴）/ seq 冲突协议替代腿 / S-03·S-07·S-08·S-05 安全走查 / K 批 V-1~V-7 / N1–N5 用户腿（N1 path 腿另有 stderr 日志实证）/ T9·T11 剩余腿 / A-33-03（`%`/`#` 打开验证）。
+- **记档口径注**：批量确认为用户总体结论，非逐腿判据 + 截图记录；后续任一腿发现问题即单项重开（相关文档均留此注记）。
+- **仍待办**：E2E 首屏采样（需日志数据出 p50/p95 + 200ms 门禁）、V-14 多屏腿（需多显示器/RDP 硬件）、R-21 黄线腿（需无拦截他机）；「捕获期解注册当前组合」记入 stability-plan §7 缓办占位备立项。
+- 关联回写：stability-plan v1.25 / future-features-plan v1.9 / settings-personalization-plan v1.5 / settings-keys-typography-plan v1.2 / search-file.md A-33-03 注记 / implementation.md（L11 收口 + 沿革）。零代码改动。
+
+### 验收（自动化真机走查批次：R-08 / O4 / F2 复验 / 体积复核，2026-10-07）
+
+- **R-08 sidecar 链路冒烟（三口径收口）**：停用户会话 Everything 实例（服务实例不承载 IPC 窗口，`es.exe` 实测 rc=8）+ `DDRUN_ES_PATH` 桩 es.exe（探活静默 exit 0；查询输出 300 个 GBK「中」后 exit 0 / 8 两形态）直驱真实 `dd-ext-search.exe`（NDJSON `initialize` → `get_items`）：形态 A（exit 0 + 非 JSON 超长 GBK stdout）→ `files.error` 项 subtitle **恰 200 字符按字符截断、零 panic**；形态 B（exit 8 + 超长 GBK stderr）→ 「es.exe 退出码 8：…」显式上屏，**不再静默降级为空结果**（A-33-06 口径保持）。走查后 Everything 已恢复。详见 stability-plan v1.23。
+- **O4 崩溃链路真机复现**：dist 实例运行中外部终止 filesearch sidecar → 1 Hz 看门狗帧当帧检出并落 debug 级分级日志（「扩展进程已退出：com.ddrun.filesearch（崩溃/非 0 退出码）…诊断：退出码 1；stderr 尾行」+「连续崩溃 1/3」熔断计数）。详见 optimization-plan v1.9 §2.4。
+- **F2 密度三档 + I1 占位层级真机复验**：config 预置 density 三档 + `PostThreadMessageW(WM_HOTKEY)` 唤起 + CopyFromScreen 截图——三档行高与面板高度逐档递增，真实图标 / glyph 弱色占位层级清晰（截图留档 `%TEMP%\ddrun-walk\density_*.png`）。详见 icons-typography-plan v1.3。
+- **重打包体积复核（L11 余待办销项）**：dist 与 release sha256 一致（`caff43a1…`），宿主 8,668,672 B / sidecar 832,000 B——与 T11 批记录一致，implementation.md L11 行更新。
+- 全程零代码改动、零新增依赖；走查后 config 已还原、用户实例已重启。
+
 ### 功能（T11 落地：Steam 游戏默认不参与搜索 + 搜索开关，2026-10-07）
 
 - **需求**：Steam 游戏不再默认出现在搜索结果中；设置页新增开关控制是否显示。对老用户是**行为变更**（升级后 Steam 游戏默认从搜索中消失），开关打开即恢复。

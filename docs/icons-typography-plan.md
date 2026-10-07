@@ -1,6 +1,6 @@
 # 图标与字体展示优化（参考 DeskBox）
 
-> **状态**：已落地（I3 未做；F3 同日追加落地；G1 于 2026-09-19 追加并落地）｜ **版本**：v1.2 ｜ **最后更新**：2026-09-19
+> **状态**：已落地（I3 未做；F3 同日追加落地；G1 于 2026-09-19 追加并落地；真机复验 2026-10-07 完成）｜ **版本**：v1.3 ｜ **最后更新**：2026-10-07
 > **关联**：[implementation.md](./implementation.md)
 
 ---
@@ -15,7 +15,7 @@
 | F1 — 列表路径字号 token 化 | ✅ | `crates/dd-gui/src/theme.rs` | 纯重构，观感零变化 |
 | F2 — 列表密度三档 | ✅ | `theme.rs` / `settings.rs` / `app/mod.rs` / `ui/*` | i18n key 为 `set.density.*`（非 `settings.density.*`） |
 | F3 — 拉丁主字纠偏（Segoe UI 置顶，2026-09-13 追加） | ✅ | `crates/dd-gui/src/platform.rs` | 族序显式重排，仅拉丁一处变化，其余路由逐一不变（见 §5.4） |
-| 真机复验（占位层级 / 密度三档截图） | ⚠️ | — | 待做 |
+| 真机复验（占位层级 / 密度三档截图） | ✅ | — | **完成（2026-10-07，自动化会话）**：config 预置 density 三档（compact / standard / relaxed）+ `PostThreadMessageW(WM_HOTKEY)` 唤起 + 全屏截图——三档行高与面板高度逐档递增（compact ≈33px / standard 40px / relaxed ≈46px），截图留档 `%TEMP%\ddrun-walk\density_*.png`；同屏可辨 I1 占位层级（Calculator 真实图标 / 系统命令 glyph 占位 / 网络搜索 glyph，弱色回落符合设计）。走查后 config 已还原、实例已恢复 |
 | G1 — 文件结果改用 Shell 真实图标（2026-09-19 追加，当日落地） | ✅ | `crates/dd-ext/src/shell_icon.rs`（新增）/ `crates/dd-ext/src/bin/search.rs` | 真实图标为默认档、既有 12 类 glyph 降为回落档；渲染侧零改动，详见 §4.5 |
 
 > 参照对象：[Tianyu199509/DeskBox](https://github.com/Tianyu199509/DeskBox)（WinUI 3 桌面整理工具，GPL-3.0）。借鉴其三个核心做法——**所有条目都有真实图标可显示、图标/文字大小可调、文字与行高联动**；技术栈不同（我们 = egui/Fluent token），只借鉴设计决策，不搬实现。
