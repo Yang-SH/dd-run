@@ -2106,16 +2106,20 @@ impl PaletteApp {
         }
     }
 
-    /// 搜索栏：「搜索应用」卡（2026-09-12）——开关行（名称 + 描述 + 贴右
-    /// 功能态开关），排版同「窗口材质」卡的开关行。关闭后「应用」类项不进
-    /// 首屏与搜索结果。变更经 apply_search_apps 即时生效 + 落盘。
+    /// 搜索栏：「搜索行为」卡（原「搜索应用」卡，2026-09-12）——两行同卡：
+    /// ① 搜索应用（名称 + 描述 + 贴右功能态开关，排版同「窗口材质」卡的
+    /// 开关行）；② Steam 游戏（2026-10-07，排版同上）。关闭后对应类别的项
+    /// 不进首屏与搜索结果。变更经 apply_search_apps / apply_search_steam_games
+    /// 即时生效 + 落盘。
     /// （「优先搜索文件」开关同日加入、同日撤销：自动进页劫持常规搜索，
     /// 用户反馈后移除——当时保留 `f ` 前缀直达；该前缀亦已于 2026-09-19 移除，现由 `Ctrl+F` 一键直达承担。）
     fn draw_search_behavior_card(&mut self, ui: &mut egui::Ui, p: &theme::Palette) {
         // 开关状态在闭包外读取、闭包内只收集点击结果（避免闭包内 &mut self 冲突）。
         let apps_on = self.settings.search_apps;
+        let steam_on = self.settings.search_steam_games;
         let lang = self.lang_effective;
         let mut apps_toggled = false;
+        let mut steam_toggled = false;
         draw_settings_card_frame(ui, p, self.backdrop_active, |card| {
             card.horizontal(|ui| {
                 ui.spacing_mut().item_spacing.x = 0.0;
@@ -2151,9 +2155,43 @@ impl PaletteApp {
                     apps_toggled = draw_switch_fn(ui, apps_on, p);
                 });
             });
+            // ── 行 2：Steam 游戏（2026-10-07，排版同行 1——同 16px 槽位 +
+            // 12px 间距缩进保证两行文本与开关纵向对齐）──
+            card.add_space(12.0);
+            card.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = 0.0;
+                ui.allocate_exact_size(egui::vec2(16.0, 16.0), egui::Sense::hover());
+                ui.add_space(12.0);
+                let left_w = (ui.available_width() - 40.0 - 16.0).max(160.0);
+                ui.allocate_ui(egui::vec2(left_w, 40.0), |ui| {
+                    ui.vertical(|ui| {
+                        ui.set_min_height(40.0);
+                        ui.label(
+                            egui::RichText::new(crate::text::t(lang, "set.search.steam.name"))
+                                .size(14.0)
+                                .color(p.text),
+                        );
+                        ui.add_space(2.0);
+                        ui.add(
+                            egui::Label::new(
+                                egui::RichText::new(crate::text::t(lang, "set.search.steam.desc"))
+                                    .size(12.0)
+                                    .color(p.text3),
+                            )
+                            .wrap(),
+                        );
+                    });
+                });
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    steam_toggled = draw_switch_fn(ui, steam_on, p);
+                });
+            });
         });
         if apps_toggled {
             self.apply_search_apps(ui.ctx(), !apps_on);
+        }
+        if steam_toggled {
+            self.apply_search_steam_games(ui.ctx(), !steam_on);
         }
     }
 

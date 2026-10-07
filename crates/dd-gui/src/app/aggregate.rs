@@ -168,6 +168,10 @@ impl PaletteApp {
                 // 「搜索应用」关（2026-09-12）：根页排除「应用」类项
                 //（空查询首屏与关键词匹配均排除；默认开 = 不过滤）
                 root.list.set_apps_hidden(!self.settings.search_apps);
+                // 「搜索 Steam 游戏」关（2026-10-07）：根页排除 Steam 游戏项
+                //（`steam` 机器标签判据；默认关 = 隐藏）
+                root.list
+                    .set_steam_hidden(!self.settings.search_steam_games);
                 *self.stack.root_mut() = root;
                 self.sources = payload.sources;
                 self.processes = payload.processes;

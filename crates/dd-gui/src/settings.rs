@@ -669,6 +669,11 @@ pub struct Settings {
     /// （「优先搜索文件」开关同日加入、同日撤销：自动进页劫持常规搜索，
     /// 用户反馈后移除——当时保留 `f ` 前缀直达；该前缀亦已于 2026-09-19 移除，现由 `Ctrl+F` 一键直达承担。）
     pub search_apps: bool,
+    /// 搜索 Steam 游戏（2026-10-07 新增）：关闭后根页结果不包含 Steam 游戏
+    /// 条目（扩展侧 `steam` 机器标签判据；空查询首屏与关键词匹配均排除）。
+    /// 默认关——Steam 游戏默认不参与常规搜索（用户需求：游戏不混入应用
+    /// 搜索结果），开关打开后恢复参与。
+    pub search_steam_games: bool,
     /// warm 进程池 LRU 保活容量（N4，2026-10-03；1–16，默认 8 = 原
     /// `LRU_WARM_CAPACITY` 编译期常量值）。超出容量时最久未用的扩展被
     /// close + 回落 stub；运行时调小经 `LruWarmSet::set_capacity` 立即驱逐。
@@ -797,6 +802,7 @@ impl Default for Settings {
             lang: Lang::default(),
             density: ListDensity::default(),
             search_apps: true,
+            search_steam_games: false,
             warm_capacity: WARM_CAPACITY_DEFAULT,
             custom_commands: Vec::new(),
             ext_settings: BTreeMap::new(),
@@ -1031,6 +1037,11 @@ impl Settings {
         if let Some(b) = v.get("search_apps").and_then(|b| b.as_bool()) {
             s.search_apps = b;
         }
+        // 搜索 Steam 游戏（2026-10-07）：字段缺失（旧版本配置）/ 类型损坏 →
+        // 默认关（Steam 游戏默认不参与搜索）。
+        if let Some(b) = v.get("search_steam_games").and_then(|b| b.as_bool()) {
+            s.search_steam_games = b;
+        }
         // warm 保活容量（N4，2026-10-03）：字段缺失（旧版本配置）/ 类型损坏 →
         // 默认 8；数值越界 clamp 到 1–16（与 material_opacity 同口径）。
         s.warm_capacity = v
@@ -1115,6 +1126,7 @@ impl Settings {
             "lang": self.lang.as_str(),
             "density": self.density.as_str(),
             "search_apps": self.search_apps,
+            "search_steam_games": self.search_steam_games,
             "warm_capacity": self.warm_capacity,
             "custom_commands": self
                 .custom_commands
@@ -1850,6 +1862,23 @@ mod tests {
         assert_eq!(parsed, s, "search_apps 往返一致");
         // 类型损坏（非布尔）→ 回落默认开
         assert!(Settings::parse_json(r#"{"search_apps":1}"#).search_apps);
+    }
+
+    #[test]
+    fn search_steam_games_roundtrip() {
+        // 2026-10-07：默认关（Steam 游戏默认不参与搜索）；字段缺失（旧版本
+        // 配置）/ 类型损坏 → 默认关；显式值往返一致。
+        assert!(!Settings::default().search_steam_games);
+        assert!(!Settings::parse_json("{}").search_steam_games);
+        assert!(!Settings::parse_json(r#"{"theme":"dark"}"#).search_steam_games);
+        let s = Settings {
+            search_steam_games: true,
+            ..Settings::default()
+        };
+        let parsed = Settings::parse_json(&s.to_json_string());
+        assert_eq!(parsed, s, "search_steam_games 往返一致");
+        // 类型损坏（非布尔）→ 回落默认关
+        assert!(!Settings::parse_json(r#"{"search_steam_games":1}"#).search_steam_games);
     }
 
     #[test]

@@ -1,6 +1,6 @@
 # dd-run 文档索引
 
-> **状态**：生效中 ｜ **版本**：v1.37 ｜ **最后更新**：2026-09-29
+> **状态**：生效中 ｜ **版本**：v1.38 ｜ **最后更新**：2026-10-07
 > **用途**：全部文档的**唯一导航入口**——按模块分组、标注状态与读者，并定义文档格式规约。
 > **关联**：（本文即导航入口——全部文档见 §3 清单并回链本文）
 
@@ -59,7 +59,7 @@ flowchart TD
 | 文档 | 状态 | 版本 | 行数 | 读者 | 职责 |
 |---|---|---|---|---|---|
 | [`../cmdpal-platform-agnostic-design.md`](../cmdpal-platform-agnostic-design.md) | 生效中 | v1.0 | 547 | 设计者与维护者 | 平台无关抽象模型、页面/扩展/宿主模型、上下游对照、**验收项 A1–A12 的定义源** |
-| [`implementation.md`](./implementation.md) | 生效中 | v0.1.15 | 1047 | 维护者 | 实施主线：里程碑状态总表、目标与范围、ADR-1~4、验收映射（含 §3.1 测试基线台账 515 + §3.1.1 内存基线台账 V-13）、遗留台账（L11 审计 11/11 销项）、实施沿革 |
+| [`implementation.md`](./implementation.md) | 生效中 | v0.1.16 | 1059 | 维护者 | 实施主线：里程碑状态总表、目标与范围、ADR-1~4、验收映射（含 §3.1 测试基线台账 595 + §3.1.1 内存基线台账 V-13）、遗留台账（L11 审计 11/11 销项）、实施沿革 |
 
 ### C. 开发指南与用户文档
 
@@ -74,17 +74,17 @@ flowchart TD
 
 | 文档 | 状态 | 行数 | 职责 |
 |---|---|---|---|
-| [`search-file.md`](./search-file.md) | 生效中（v3.11） | 1084 | **文件搜索的权威技术口径**：双通道传输层、依赖、落地范围、两轮真机验收结论、A-33-05 阈值修订（v3.4）、回落失败不静默（v3.5）、`Ctrl+F` 直达与 Shell 真实图标（v3.6）、移除 `f ` 前缀直达（v3.7）、解除 `es.exe` 前置表述（v3.8）、**图标分层异步 + 自动刷新（v3.9，E1）+ 零依赖 PNG 编码器（v3.10，E2 达标）+ 端到端首屏计时插桩（v3.11，采样待做）**、版本演进 |
+| [`search-file.md`](./search-file.md) | 生效中（v3.12） | 1085 | **文件搜索的权威技术口径**：双通道传输层、依赖、落地范围、两轮真机验收结论、A-33-05 阈值修订（v3.4）、回落失败不静默（v3.5）、`Ctrl+F` 直达与 Shell 真实图标（v3.6）、移除 `f ` 前缀直达（v3.7）、解除 `es.exe` 前置表述（v3.8）、**图标分层异步 + 自动刷新（v3.9，E1）+ 零依赖 PNG 编码器（v3.10，E2 达标）+ 端到端首屏计时插桩（v3.11，采样待做）+ A-IC-02b 空闲复测销项（v3.12，图标验收 8/8 闭环）**、版本演进 |
 | [`refactor-layering-plan.md`](./refactor-layering-plan.md) | 已落地 | 498 | `dd-gui` 业务代码 / UI 代码分层方案与切割表 |
 | [`apps-filtering-plan.md`](./apps-filtering-plan.md) | 已落地 | 130 | Apps 扩展垃圾项过滤（黑/白名单、UWP 豁免、去重键） |
 | [`memory-optimization-plan.md`](./memory-optimization-plan.md) | 已落地 | 129 | 运行时内存占用优化 M1–M4 与实测数据 |
 | [`icons-typography-plan.md`](./icons-typography-plan.md) | 已落地（I3 未做；G1 已落地） | 191 | 图标与字体展示优化：列表密度三档、占位 glyph、token 化；**G1 = 文件结果改用 Shell 真实图标（§4.5）** |
-| [`optimization-plan.md`](./optimization-plan.md) | 规划中（Phase 1 关闭 · Phase 2 首轮完成） | 314 | **项目可优化方案总览（增量）**：体积/协议健壮性/方法名常量/可观测性/依赖治理/跨平台，含已证伪项与落地记录 |
-| [`settings-personalization-plan.md`](./settings-personalization-plan.md) | **B1–B4 已落地**（T1–T8 ✅；**T9 已落地 2026-10-05**；T10 另行立项；K 批 D42 已落地；v1.3） | 278 | **设置/个性化/材料样式优化方案（参照 PowerToys CmdPal）**：材料配置注册表化 + Mica Alt 档 + 着色模式三模式 + Esc/退格/单击/动效行为项 + 重置外观 + **T9 背景图通道一期**（互斥语义：图即背景、材质行置灰；Fill/Stretch UV 裁剪 + mtime 门控纹理缓存 + 解码失败负缓存；零文件对话框依赖）；含 CmdPal 取证、差距分析、T1–T10 任务清单与批次划分 |
+| [`optimization-plan.md`](./optimization-plan.md) | 规划中（Phase 1/2 关闭 · **O5-a 已落地 2026-10-07**，余 O6 Phase 3） | 317 | **项目可优化方案总览（增量）**：体积/协议健壮性/方法名常量/可观测性/依赖治理/跨平台，含已证伪项与落地记录 |
+| [`settings-personalization-plan.md`](./settings-personalization-plan.md) | **B1–B4 已落地**（T1–T8 ✅；**T9 已落地 2026-10-05**；**T11 已落地 2026-10-07：搜索 Steam 游戏开关**；T10 另行立项；K 批 D42 已落地；v1.4） | 280 | **设置/个性化/材料样式优化方案（参照 PowerToys CmdPal）**：材料配置注册表化 + Mica Alt 档 + 着色模式三模式 + Esc/退格/单击/动效行为项 + 重置外观 + **T9 背景图通道一期**（互斥语义：图即背景、材质行置灰；Fill/Stretch UV 裁剪 + mtime 门控纹理缓存 + 解码失败负缓存；零文件对话框依赖）+ **T11 搜索 Steam 游戏开关**（`steam` 机器标签判据、默认关、与「搜索应用」AND 叠加）；含 CmdPal 取证、差距分析、T1–T11 任务清单与批次划分 |
 | [`settings-keys-typography-plan.md`](./settings-keys-typography-plan.md) | 已落地（**真机走查 V-1~V-7 待做**；v1.1 含落地勘误） | 243 | **设置页「按键与交互」排版与控件字号统一方案（D42，v4.19 入稿）**：设置行块 36→40 / 行距 12 / 名-描 +2 全设置页统一（K1）、控件排印 compact 档 28·12 常量组收口（K2，部分修订 D34 ③④）、下拉宽度自适应 `clamp(180, 260)` 纯函数（K3）；含三关验证、V-1~V-7 校验标准与 v1.1 三处勘误 |
 | [`search-file-ctrl-f-icons-plan.md`](./search-file-ctrl-f-icons-plan.md) | 已落地（**E1 / E2 均已处置达标**；v1.3 增补 A-IC-08/09/10，v1.4 E2 关账） | 290 | **文件搜索开启方式与图标方案**：`Ctrl+F` 直达（决策 D1-x）与 Shell 真实文件图标（决策 D2-x）的决策留痕；§11 = 落地记录与 A-CF/A-IC 实测（首抽 703.8 ms **已由分层异步修复为 0.32 ms**；sidecar 体积已由 E2 处置达标 → `search-file.md` §10.6） |
 | [`future-features-plan.md`](./future-features-plan.md) | **N1–N5 全部落地**（N4 2026-10-03、N1/N2/N3/N5 2026-10-04；自动化真机腿 10-04 已过；v1.7） | 220 | **v0.1.1 后功能向增量规划**：立项判据「可行 × 无冲突」（零冻结契约改动 / 惯例可复用 / 零新增依赖）+ 编号空间核查（取 N 系列）+ 现状底座五惯例取证；五项提案 = N1 自定义直达命令 / N2 内置扩展配置通道 / N3 浏览器书签搜索 / N4 LRU 容量可配置 / N5 设置导入导出（均零协议与清单改动）；附不做与缓办边界、实施顺序建议；v1.1 惯例锚点实测刷新（⑤ 改指 invoke.rs / navigation.rs）+ R-12 首跑钉扎时效注记；v1.2 **N4 落地**（`Settings.warm_capacity` 1–16 默认 8 + 设置页「常规」下拉 + 缩容即时驱逐，单测 3 条、576/576 全绿；真机走查待做）；v1.3 **N1 落地**（`Settings.custom_commands` → 聚合期宿主虚拟条目「直达」分组 → `dispatch_invoke` 宿主内部分发，url 复用 `open_url_execute`（S-03 白名单）/ path 走 ShellExecute；设置页「常规」管理卡 + 右键菜单删除，单测 2 条、578/578 全绿；真机走查待做）；v1.4 **N2 落地**（`Settings.ext_settings` 通道 → `inject_ext_settings` env 注入 `DD_EXT_CFG_<KEY>`（S-10 双保险）+ in-process apps 内存通道；试点 = apps 用户屏蔽名单（输出层过滤、id 稳定），设置页扩展卡行内「设置」编辑器；单测 5 条、583/583 全绿；真机走查待做）；v1.5 **N3 落地**（第 6 个内置扩展 `com.ddrun.bookmarks`：Chrome/Edge 书签 JSON 只读解析 + mtime 门控增量重建 + 2000 条截断 + `host/open_url` 打开；类别「书签」；单测 3 条、586/586 全绿；真机走查与冷启动无回归验证待做）；v1.6 **N5 落地**（`dd-settings-backup.json` 导出/导入——机器态 + 热键 + trust.json 永不随行，两步确认覆盖，单测 1 条、587/587 全绿；真机走查待做） |
-| [`user-session-walkthrough-checklist.md`](./user-session-walkthrough-checklist.md) | **进行中**（自动化腿已全过；本文档 = 剩余真实键鼠腿的操作手册，全部销项后归档） | 56 | **用户会话真机走查清单**：合成输入被本机安全软件过滤 → 物理键盘为唯一通路，无法自动化的腿集中于此——N1–N5 用户腿（执行/拼音/Chrome/调高/导出导入）、T9 设置页按钮与滑杆、安全回归（S-05/S-06/S-07/S-08）、R-21/R-22/R-23、E2E 采样、V-14 余腿；每腿含操作步骤 / 预期结果 / 记录位置 |
+| [`user-session-walkthrough-checklist.md`](./user-session-walkthrough-checklist.md) | **进行中**（自动化腿已全过；本文档 = 剩余真实键鼠腿的操作手册，全部销项后归档） | 75 | **用户会话真机走查清单**：合成输入被本机安全软件过滤 → 物理键盘为唯一通路，无法自动化的腿集中于此——N1–N5 用户腿（执行/拼音/Chrome/调高/导出导入）、T9 设置页按钮与滑杆、安全回归（S-05/S-06/S-07/S-08）、R-21/R-22/R-23、E2E 采样、V-14 余腿、O5-a 全页面 tofu 与 emoji 确认腿（§5）、T11 Steam 游戏搜索开关五腿（§6）；每腿含操作步骤 / 预期结果 / 记录位置 |
 | [`stability-usability-security-plan.md`](./stability-usability-security-plan.md) | **实施中**（R1–R26，四批；v1.22） | 477 | **S 审计闭环后新一轮加固规划（稳定性/可用性/安全性）**：三路只读代码审查 + 全量 file:line 回读核对取证；26 项 = 稳定 R1–R9 + R25/R26（screen_rect 崩溃 / 非原子写盘 / 无界队列 / 内置超时 / panic 取证落盘 / 单实例互斥）/ 安全 R10–R14（S-06 确认门多段绕过 / `.url` 限幅 / sidecar 钉扎 / calc 深度）/ 可用 R15–R24（热键失败可见 / 静默失败 toast 化 / IME Enter 守卫）；v1.3 补可诊断性与门禁（兼容矩阵、内存基线走查、§7 缓办占位）；v1.4 **验收标准细化**：26 项「验收」统一单测（`r<编号>_` 命名 + 断言）/ 真机 / 回归三口径 + §6.5 通用口径（回归门操作化定义、记录与阈值纪律），V-1~V-16 判据量化；v1.5–v1.9 批三收尾（R-24 + 568/568 全量补跑确认）与批一真机走查推进（V-1/V-2/V-3/V-12/V-16 完成 → R-25 三口径收口、R-05/R-06 冒烟收口、R-08 注记）；v1.10–v1.12 批四代码项收口（R-03 入站队列定容 / R-04 in-process 超时 + 负缓存 / R-26 单实例互斥 + V-15 完成）；v1.13–v1.18 走查推进（**V-11 → R-04 收口**，死 UNC 超时降级；**V-10 → R-03 收口**，16,000 帧注入 RSS 收敛队列上界 + 恰一次告警；**V-4/V-5/V-9 完成 + V-8 注记收口**，file:// 失败 toast / 托盘标签动态化 / sidecar 三态 + open_url 判据口径修正 + egui 设置页点击受限环境发现；**R-18 en 复跑**（lang 值口径修正）+ **V-13 腿 A**（500 循环 +12.2 MB 门限内，**V-13 收口**——首轮内存基线建立（稳态 PRIV 104.4 MB 恒定，门限 +50 MB/+30%，台账 §3.1.1；批四全部三口径收口，v1.18）；**V-6 完成 + V-9 卡片行视觉实证 + dist 交付重建**（v1.19——发版要点：同版本重发 sidecar 变更须 bump 版本）；**V-7 定性收口**——SendInput 受理不达（安全软件过滤注入输入，v1.20 修正 UIPI 表述））；V-14 分辨率变更腿完成（三拓扑切换面板自适应居中，v1.21）；余 V-7（真实 IME 键盘）/V-14 余腿（热拔插/DPI/RDP）——posted 鼠标全局不达 egui（v1.17）；零冻结契约改动、零新增依赖，附四批实施顺序与不做清单 |
 
 > ⚠️ **V 编号空间提示**：`settings-keys-typography-plan.md` 的 V-1~V-7（其真机走查待做）与 `stability-usability-security-plan.md` 的 V-1~V-16（V-6/V-7 已完成或定性收口）是**两套独立编号空间**，同名编号互不指代，交叉阅读时以所属文档为准。
@@ -133,7 +133,7 @@ flowchart TD
 |---|---|---|---|
 | [`../README.md`](../README.md) | 生效中 | 115 | 英文 README |
 | [`../README.zh-CN.md`](../README.zh-CN.md) | 生效中 | 115 | 中文 README（与英文版逐节对应） |
-| [`../CHANGELOG.md`](../CHANGELOG.md) | 生效中 | 826 | 版本变更日志（`[0.1.0]`/`[0.1.1]` 条目均带日期；`[Unreleased]` 含 2026-09-19 起多批变更——`Ctrl+F` 直达 + Shell 真实图标 / 零依赖 PNG 编码器（E2）/ 设置·个性化·材料（B1–B4）/ 安全审计 11 项闭环 / 设置页排版与控件字号统一（K1–K3，D42）/ 行描述与控件重叠修复 / **后续功能规划（N1–N5）**等） |
+| [`../CHANGELOG.md`](../CHANGELOG.md) | 生效中 | 848 | 版本变更日志（`[0.1.0]`/`[0.1.1]` 条目均带日期；`[Unreleased]` 含 2026-09-19 起多批变更——`Ctrl+F` 直达 + Shell 真实图标 / 零依赖 PNG 编码器（E2）/ 设置·个性化·材料（B1–B4）/ 安全审计 11 项闭环 / 设置页排版与控件字号统一（K1–K3，D42）/ **后续功能规划（N1–N5）** / **O5-a default_fonts 移除（-1.35 MiB）** / **A-IC-02b 空闲复测销项（图标验收 8/8 闭环）** / **T11 Steam 游戏搜索开关（默认不参与搜索）**等） |
 
 > 设计稿与交互演示（HTML）不在本索引收录范围内：`cmdpal-ui-mockups.html`、`cmdpal-ui-optimization-v5.html`、`cmdpal-window-material-effects.html`（窗口材质与边框方案效果页）。设计稿的**版本权威**在文件自身标题，最新决策见 [`implementation.md`](./implementation.md) §2 对应批次。
 
@@ -207,6 +207,6 @@ H1 之后**必须**紧跟此块（上下各留一个空行）：
 | macOS / Linux 实际构建与验收 | [`../cmdpal-platform-agnostic-design.md`](../cmdpal-platform-agnostic-design.md) §8/§9 | ⚠️ 仅设计层，无产物 |
 | CHANGELOG 部分条目缺日期 | [`../CHANGELOG.md`](../CHANGELOG.md) | ✅ 已解决（2026-09-15）：`[0.1.0]` 补日期 **2026-09-06**（取自 tag creatordate 实测值） |
 | 全仓文档行尾统一 CRLF（原 7 份偏离：[`protocol.md`](./protocol.md) 与 `examples/python-minimal/README.md` 全 LF；`extensions.md` 5 处、`manifest-schema.md` 3 处、`README.md`/`README.zh-CN.md` 各 2 处、`search-file.md` 1 处裸 LF） | 全仓 30 份 md | ✅ 已解决（2026-09-14）：7 份全部归一化，复检 bare-LF=0；`core.autocrlf=true` 下为工作区行为、不影响提交内容 |
-| 文件搜索 `Ctrl+F` 直达与真实图标（A-CF / A-IC） | [`search-file.md`](./search-file.md) §10.4 | ✅ 已落地（2026-09-19）：两项未达标**均已处置达标**——① E1 分层异步：按真实路径档**同步** 0.32 ms（原 191–704 ms）；② E2 零依赖 PNG 编码器：sidecar **831,488 B**、增量 **61,952 B ≤ 64 KB**。残留 ⚠️：A-IC-02b 扩展名档首抽负载敏感压线（两轮 50.29 / 66.84 ms，观察线 60；判因为机器负载、编码单张实测 0.62 ms，建议空闲复测）；**感知指标「输入→首屏 ≤200ms」已插桩待真机采样**（`search-file.md` §10.7 + `tools/gui_e2e_parse.py`）；验收工具 `tools/icon_acceptance.py --cold`（六项自动判定 + JSON 证据） |
+| 文件搜索 `Ctrl+F` 直达与真实图标（A-CF / A-IC） | [`search-file.md`](./search-file.md) §10.4 | ✅ 已落地（2026-09-19）：两项未达标**均已处置达标**——① E1 分层异步：按真实路径档**同步** 0.32 ms（原 191–704 ms）；② E2 零依赖 PNG 编码器：sidecar **831,488 B**、增量 **61,952 B ≤ 64 KB**。**A-IC-02b 已销项（2026-10-07，v3.12）**：空闲复测首档 36.47 ms ≤ 40、八项 8/8 PASS，此前压线定性为机器负载；**图标验收全部闭环**。残留 ⚠️ 仅一项：**感知指标「输入→首屏 ≤200ms」已插桩待真机采样**（`search-file.md` §10.7 + `tools/gui_e2e_parse.py`）；验收工具 `tools/icon_acceptance.py --cold`（八项自动判定 + JSON 证据） |
 | 文件搜索 `f ` 前缀直达（已被 `Ctrl+F` 取代） | [`search-file.md`](./search-file.md) §6.1 | ✅ 已移除（2026-09-19）：`f ` 回归**普通搜索词**；前缀常量 / `file_search_drill_target()` / `maybe_drill_file_search()` / `file_drill` + `file_drill_armed` 状态 / `page.rs` 落地回填分支**整条删除**（无死代码残留），`Ctrl+F` 查询带入不再剥离前缀；面板内直达入口收敛为 `Ctrl+F` 一条（进入方式三条） |
 | 代码安全审计 11 项发现 | [`security-audit-2026-09-23.md`](./security-audit-2026-09-23.md) §1、§7 | ✅ **全部销项（11/11，2026-09-24 闭环）**：S-01（高，命令注入）、S-02（中，NDJSON 无界缓冲 —— PoC 已反转为 bounded）、S-03（中，`open_url` 三 scheme 白名单）、S-04（中，图标读盘/解码双上限）、S-05（中，扩展信任门禁 —— `dd-host/src/trust.rs` + spawn 唯一入口门禁 + 设置页行内审批；A11 哈希开销实测 0.874 ms @836,608 B）、S-06（中，危险命令二次确认）、**S-07（低，剪贴板 1 MiB 上限 + info 溯源 + 来源 toast）**、**S-08（低，reveal 路径拒控制字符/%/^）**、**S-09（低，缓存名 FNV-1a 指纹 + 旧名兼容 + `ext_id` 归属校验）**、S-10（低，`entry.env` 关键变量保护）、**S-11（低，序列化 `.expect` 归零 → `-32603`）** = **共 +40 单测**（低危收尾 +5：S-07 ×2 / S-09 ×2 / S-11 ×1；S-08 扩展既有断言）。余待办：**真机走查**（S-03 打开 / S-07 剪贴板提示 / S-08 显示所在目录 / S-05 审批流）与**重打包体积实测**；低危收尾轮 dd-gui 6 条失败为已知 `Os error 231` 环境批（名单无新测试）；进度同步登记于 [`implementation.md`](./implementation.md) §6.1 台账 L11 |

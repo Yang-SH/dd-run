@@ -139,6 +139,11 @@ pub struct PanelState {
     /// 是否隐藏「应用」类项（设置项「搜索应用」关；空查询与关键词匹配**均**
     /// 排除，2026-09-12）。嵌套页 passthrough 分支不受影响（页内无应用类项）。
     apps_hidden: bool,
+    /// 是否隐藏 Steam 游戏项（设置项「搜索 Steam 游戏」关；空查询与关键词
+    /// 匹配**均**排除，2026-10-07）。判据 = `tags` 含机器标签 `"steam"`（apps
+    /// 扩展下发，同 filesearch `"files"` 标签先例）。与 `apps_hidden` 正交叠加
+    ///（AND）——「搜索应用」关时 Steam 游戏本就不在结果里。
+    steam_hidden: bool,
     /// 嵌套页是否跳过宿主本地二次过滤（`true` = 扩展 `get_items` 已按查询过滤/排序完毕，
     /// 宿主 `visible` 直接 = 全部 `items`，保持扩展返回顺序）。Root 页恒为 `false`。
     passthrough: bool,
@@ -172,6 +177,8 @@ impl PanelState {
             selected: Selected::None,
             empty_view,
             apps_hidden: false,
+            // 默认隐藏（设置 `search_steam_games` 默认关 = 游戏不参与搜索）。
+            steam_hidden: true,
             passthrough: false,
         };
         s.recompute_visible();
@@ -198,6 +205,17 @@ impl PanelState {
             return;
         }
         self.apps_hidden = hidden;
+        self.recompute_visible();
+        self.clamp_selection();
+    }
+
+    /// 切换「搜索 Steam 游戏」开关（设置页变更时调用；`true` = 隐藏 Steam
+    /// 游戏项）：空查询与关键词匹配两条分支都重算可见表（同 [`Self::set_apps_hidden`]）。
+    pub fn set_steam_hidden(&mut self, hidden: bool) {
+        if self.steam_hidden == hidden {
+            return;
+        }
+        self.steam_hidden = hidden;
         self.recompute_visible();
         self.clamp_selection();
     }
@@ -386,6 +404,7 @@ impl PanelState {
             // 应用类项在空查询下同样排除（2026-09-12）。
             self.visible = (0..n)
                 .filter(|&i| self.apps_shown(i))
+                .filter(|&i| self.steam_shown(i))
                 .filter(|&i| {
                     self.empty_view != EmptyQueryView::WithoutApps
                         || self.items[i].result_category.as_deref() != Some("应用")
@@ -401,7 +420,9 @@ impl PanelState {
             .iter()
             .enumerate()
             // 「搜索应用」关：应用类项不参与关键词匹配（2026-09-12）
+            // 「搜索 Steam 游戏」关：Steam 游戏项不参与关键词匹配（2026-10-07）
             .filter(|&(i, _)| self.apps_shown(i))
+            .filter(|&(i, _)| self.steam_shown(i))
             .filter_map(|(i, it)| fm.score(it).map(|s| (i, s)))
             .collect();
         // `sort_by_key` 为稳定排序：同分项保持原始顺序（切片 2 行为测试守卫）
@@ -427,6 +448,12 @@ impl PanelState {
     /// 第 `i` 项是否受「搜索应用」开关排除（关 = 隐藏「应用」类项）。
     fn apps_shown(&self, i: usize) -> bool {
         !self.apps_hidden || self.items[i].result_category.as_deref() != Some("应用")
+    }
+
+    /// 第 `i` 项是否受「搜索 Steam 游戏」开关排除（关 = 隐藏带 `"steam"`
+    /// 机器标签的项，2026-10-07）。
+    fn steam_shown(&self, i: usize) -> bool {
+        !self.steam_hidden || !self.items[i].tags.iter().any(|t| t == "steam")
     }
 
     /// 选中索引夹紧到 [0, visible_count)，越界则归零；空列表置 None。
@@ -560,6 +587,42 @@ mod tests {
         assert_eq!(s.visible_count(), 2, "重新开启后空查询恢复全量");
         s.set_query("7-zip");
         assert_eq!(s.visible_count(), 1, "重新开启后应用恢复参与匹配");
+    }
+
+    #[test]
+    fn steam_hidden_excludes_steam_tagged_items() {
+        // 2026-10-07：默认隐藏（设置 `search_steam_games` 默认关）——带
+        // `"steam"` 机器标签的项在空查询与关键词匹配两分支均排除；开关打开
+        // 后恢复。与「搜索应用」正交叠加（AND）。
+        let mut game = PanelItem::new("45号电车");
+        game.result_category = Some("应用".into());
+        game.tags.push("steam".into());
+        let calc = PanelItem::new("= 表达式");
+        let items = vec![game, calc];
+
+        let mut s = PanelState::new(items);
+        assert!(s.steam_hidden, "默认隐藏 Steam 游戏");
+        // 空查询：Steam 游戏隐藏（即使 All 视图）
+        assert_eq!(s.visible_count(), 1, "默认空查询排除 Steam 游戏");
+        // 关键词命中游戏名：同样排除
+        s.set_query("45");
+        assert_eq!(s.visible_count(), 0, "默认 Steam 游戏不参与匹配");
+        // 普通「应用」类项不受影响（无 steam 标签）
+        s.set_query("");
+        assert_eq!(s.visible_count(), 1, "非 Steam 项不被误伤");
+
+        // 打开「搜索 Steam 游戏」：恢复（空查询 + 查询两条分支都重算）
+        s.set_steam_hidden(false);
+        s.set_query("");
+        assert_eq!(s.visible_count(), 2, "开启后空查询恢复全量");
+        s.set_query("45");
+        assert_eq!(s.visible_count(), 1, "开启后 Steam 游戏恢复参与匹配");
+
+        // 与「搜索应用」AND 叠加：应用类全隐时 Steam 游戏同样不在
+        s.set_steam_hidden(true);
+        s.set_apps_hidden(true);
+        s.set_query("45");
+        assert_eq!(s.visible_count(), 0, "双重过滤叠加");
     }
 
     #[test]

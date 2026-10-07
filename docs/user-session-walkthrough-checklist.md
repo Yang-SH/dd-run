@@ -1,10 +1,10 @@
 # 用户会话真机走查清单（真实键鼠腿）
 
-> **状态**：进行中（自动化腿已全部过，见 [implementation.md](./implementation.md) §7 同日行）｜ **版本**：v1.0 ｜ **最后更新**：2026-10-05
+> **状态**：进行中（自动化腿已全部过，见 [implementation.md](./implementation.md) §7 同日行）｜ **版本**：v1.1 ｜ **最后更新**：2026-10-07
 > **关联**：[implementation.md](./implementation.md) §7 · [future-features-plan.md](./future-features-plan.md) §4 · [security-audit-2026-09-23.md](./security-audit-2026-09-23.md) · [stability-usability-security-plan.md](./stability-usability-security-plan.md) · [INDEX.md](./INDEX.md)
 >
 > **为什么需要你**：本机安全软件在系统级过滤注入输入（V-7 通道清单穷尽：posted 消息不经 IME / SendInput 受理不达 / osk UIA 合成键同样被拦），物理键盘为唯一通路——以下腿无法自动化。
-> **通用纪律**：走查前备份 `%APPDATA%\dd-run\config.json`；交付件 = `dist/dd-run-0.1.1.exe`（9.7M，2026-10-05 重打包，自动化腿 9 腿已过）；每项完成后还原配置；结果按「记录位置」回写对应文档并销勾。
+> **通用纪律**：走查前备份 `%APPDATA%\dd-run\config.json`；交付件 = `dist/dd-run-0.1.1.exe`（8.3M，2026-10-07 重打包，自动化腿 9 腿已过）；每项完成后还原配置；结果按「记录位置」回写对应文档并销勾。
 
 ---
 
@@ -48,6 +48,25 @@
 - [ ] **R-08**：es.exe 错误路径冒烟（本机 Everything 运行中不可达——临时停 Everything 后触发 sidecar 错误分支，错误文案不截断多字节）
 - [ ] **E2E 采样**（search-file.md §速度项）：在线时输入到首屏填充 ≤200ms 主观采样
 - [ ] **V-14 余腿**：显示器热拔插 / DPI 变更 / RDP 拓扑下面板自适应居中
+
+## 5. O5-a default_fonts 移除回归（optimization-plan §2.1，2026-10-07 落地）
+
+> 程序化穷举（`tools/glyph_coverage_check.mjs`，942 码位 × 运行时字体栈）已 PASS、首屏真机抽查零 tofu；以下为穷举不可覆盖的真机确认腿。
+
+- [ ] **全页面 tofu 走查**：zh / en 两语言 × 全部页面（首屏 / 设置页各卡 / 危险命令确认对话框 / Toast / 右键菜单 / 嵌套页）扫一遍——重点 `→` / `↵` 键帽与符号字形
+- [ ] **emoji 用户数据确认**：设一条含 emoji 的自定义命令名或书签标题——确认呈 tofu（缺 NotoEmoji 兜底，**接受的取舍**）；确认 UI 文案本身零影响
+
+---
+
+## 6. T11 Steam 游戏搜索开关（settings-personalization-plan §5 T11，2026-10-07 落地）
+
+> 自动化腿已过（打标 / roundtrip / 过滤 3 单测 + 595 全绿）；以下为真机确认腿。
+
+- [ ] **默认隐藏腿**：干净 config 启动（`search_steam_games` 缺省）→ 空查询首屏与输入游戏名关键词均**无** Steam 游戏行（对照：Steam 库任一已装游戏，如输入其名称首字母）
+- [ ] **开关开启腿**：设置 → 搜索 → 「搜索行为」卡第二行「Steam 游戏」开 → 即时回到面板输入同一关键词 → 游戏行出现且可启动
+- [ ] **开关关闭腿**：关回开关 → 游戏行即时消失（空查询与关键词两分支）
+- [ ] **组合腿**：「搜索应用」关 + 「Steam 游戏」开 → 游戏仍不可见（AND 叠加）；再开「搜索应用」→ 普通应用出现、游戏按开关档位出现
+- [ ] **持久化腿**：重启后开关档位与 config.json `search_steam_games` 一致；旧 config（无该字段）启动回落「关」
 
 ---
 

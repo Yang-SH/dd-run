@@ -574,6 +574,13 @@ const I18N: &[(&str, &str, &str)] = &[
         "关闭后，本机应用不再出现在首屏与搜索结果中",
         "When off, installed apps no longer appear on the main screen or in search results",
     ),
+    // ── 设置页 · Steam 游戏开关（2026-10-07）──
+    ("set.search.steam.name", "Steam 游戏", "Steam games"),
+    (
+        "set.search.steam.desc",
+        "开启后，Steam 游戏出现在首屏与搜索结果中",
+        "When on, Steam games appear on the main screen and in search results",
+    ),
     // ── 设置页 · 扩展管理 ──
     ("set.ext.name", "扩展管理", "Extensions"),
     (

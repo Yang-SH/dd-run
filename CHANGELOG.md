@@ -4,6 +4,28 @@
 
 ## [Unreleased]
 
+### 功能（T11 落地：Steam 游戏默认不参与搜索 + 搜索开关，2026-10-07）
+
+- **需求**：Steam 游戏不再默认出现在搜索结果中；设置页新增开关控制是否显示。对老用户是**行为变更**（升级后 Steam 游戏默认从搜索中消失），开关打开即恢复。
+- **协议零改动**：复用 `CommandItem.tags` 既有可选字段——apps 扩展给 Steam 条目下发机器标签 `"steam"`（同 filesearch `"files"` 标签先例）。`dd-ext/builtins/apps.rs`：`App` 增 `steam: bool`，`.url` 分支按 `steam://` **前缀**打标（不按 `steam_appid()`——后者仅解析 rungameid 形态，白名单放行的 run/open/rungameid 三形态按 appid 会漏标；安装过滤仍走 appid 分支，职责分开），`top_level_from` 统一映射。
+- **设置**：`Settings.search_steam_games` 布尔，**默认关**；旧 config 缺字段 / 类型损坏回落关（防御性解析惯例）。`PanelState.steam_hidden` 默认隐藏，空查询首屏与关键词匹配两分支均排除；与「搜索应用」开关 AND 正交叠加（关「搜索应用」时 Steam 游戏本就不在结果中）。
+- **生效**：设置页「搜索」分区「搜索行为」卡由单行扩两行（新增「Steam 游戏」开关行，排版同行 1）；变更经 `apply_search_steam_games` 即时生效 + 原子落盘；聚合落地链（`poll_aggregate`）同步。i18n 2 键 zh/en。
+- **验证**：新增单测 3 条（打标映射 / `search_steam_games_roundtrip` / 过滤与 AND 叠加），`cargo test --workspace` **595 passed / 0 failed**（基线 592，+3），fmt 零差异、clippy 全仓零告警；release + dist 重打包（sha256 一致，宿主 8,668,672 B，较 O5-a 基线 +5,120 B；sidecar 832,000 B；便携 zip 同步刷新 4,202,937 B——此前停留在 10-03 旧 exe，O5-a 批未刷新，本批补上）；GUI 冒烟 6s 存活、冷启动 848 ms 无回归、6 内置扩展全 warm；字形穷举 943/944（唯一例外 U+000A 非渲染字形，与 O5-a 基线口径一致）。**真机走查待用户会话**。
+
+### 验收（A-IC-02b 空闲复测销项：图标验收八项 8/8 闭环，2026-10-07）
+
+- **复测**：`tools/icon_acceptance.py --cold` 空闲时段重跑——A-IC-02b 按扩展名首抽 max **36.47 ms ≤ 40 通过线**（各档 36.47 / 12.06 / 13.58 / 8.79），其余七项全 PASS、0 失败（证据 `target/acceptance/icon-acceptance.json`）。
+- **定性**：此前两轮压线（50.29 / 66.84 ms，观察线 60）确为机器负载——与同轮缓存命中同步抬升（0.10 → 0.14–0.21 ms）、编码单张 0.6188 ms 探针互证；判据不变（≤40 通过线 / 60 观察线），该项不再观察。
+- **回写**：`search-file.md` v3.12（§10.6 改写 + 版本演进）、`INDEX.md` §5 未闭环项移除该残留——文件搜索图标验收（A-IC-01…A-IC-10）全部闭环。零代码改动。
+
+### 性能（O5-a 落地：移除 eframe `default_fonts`，宿主单件 -1.35 MiB ≈ -14%，2026-10-07）
+
+- **承接**：[optimization-plan.md](./docs/optimization-plan.md) §2.1 O5-a——2026-10-05 收益量化（10,082,816 → 8,663,552 B）与真机首屏抽查后，唯一悬置为「全量字符串穷举 tofu 走查」前置与维护者拍板。维护者拍板「移除」，本批收口。
+- **程序化穷举（前置判据收口）**：新增 `tools/glyph_coverage_check.mjs`（零依赖 Node 脚本，可复跑）——解析运行时字体栈五文件（segoeui / msyh.ttc / seguisym / SegoeIcons / segmdl2）cmap 取码位并集，对 dd-gui / dd-ext / dd-host 全部源码剥注释后的字符串与 char 字面量（含 `\u{...}` 转义）逐码位判覆盖：**942 码位中仅 U+000A（字符串内换行、非渲染字形）无覆盖，PASS**。
+- **改动**：`crates/dd-gui/Cargo.toml` eframe features 收窄为 `["glow"]`（唯一改动面）。`FontDefinitions::default()` 无该特性时返回空集，`platform.rs` 叠加逻辑天然兼容；族序重排 `retain` 自动剔除不再注册的 `NotoEmoji-Regular` / `emoji-icon-font`，最终族 `[segoe, cjk, sym, icons]`。**接受副作用**：运行期用户数据（书签 / 扩展结果标题）中的 emoji 呈 tofu（UI 文案穷举零缺字不受影响）——真机走查腿复核（walkthrough checklist §5）。
+- **回归修复**：`dropdown_width_clamps_zh_and_en` 依赖 headless 默认字体测宽，空字体集下测宽恒 0——测试装入系统 segoeui.ttf 复原测宽前提（测试仅在 Windows 跑），测试总数不变。
+- **验证**：fmt 零差异 / clippy 零告警 / `cargo test --workspace` 592/592 全绿；windows-gnu release 重编实测 **8,663,552 B**，与 2026-10-05 预测值分毫吻合。
+
 ### 修复（CI #58 flaky 测试定位与夹具修复，2026-10-06）
 
 - **根因**：`roundtrip_m2_invoke_get_items_items_changed`（`dd-host/tests/roundtrip.rs:333`）——样例扩展按协议设计在**回包后**补发 `items_changed`，而宿主 `poll_notifications` 是非阻塞 `try_recv`；测试消费 invoke 响应后立即断言通知在队，CI runner 上通知尚在管道飞行即轮空（`left: [] right: [None]`）。**定性为测试夹具时序断言缺陷，非产品缺陷**（生产宿主按帧周期轮询）。

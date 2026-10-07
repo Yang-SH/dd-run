@@ -312,6 +312,10 @@ mod sys {
         /// 已解析图标
         icon: Icon,
         launch: Launch,
+        /// Steam 游戏标记（开始菜单 `steam://` 协议快捷方式）：经 `top_level_from`
+        /// 转成机器标签 `"steam"`，宿主「搜索 Steam 游戏」开关据此过滤
+        ///（协议零改动，同文件搜索 `"files"` 标签先例）。
+        steam: bool,
     }
 
     static APP_CACHE: OnceLock<Vec<App>> = OnceLock::new();
@@ -440,6 +444,7 @@ mod sys {
                         subtitle: Some(target.display().to_string()),
                         icon: icon_or_glyph(unsafe { file_icon_png(&target) }),
                         launch: Launch::Lnk(path),
+                        steam: false,
                     });
                 } else if path.extension().and_then(|s| s.to_str()) == Some("url") {
                     // 协议快捷方式兜底：Steam 游戏 / Epic / 网页 / 自定义协议——开始菜单
@@ -472,11 +477,16 @@ mod sys {
                     // 否则回落通用 app glyph，避免图标覆盖率测试阈值失败。
                     let icon_png = url_icon_file(&path).and_then(|p| unsafe { file_icon_png(&p) });
                     if seen.insert(title.to_lowercase()) {
+                        // 打标判据按 steam:// 前缀而非 appid：白名单放行 run/open/
+                        // rungameid 三种形态，`steam_appid()` 仅解析 rungameid，
+                        // 按 appid 会漏标（安装过滤仍走 appid 分支，两者职责分开）。
+                        let steam = url.starts_with("steam://");
                         apps.push(App {
                             title,
                             subtitle: Some(url.clone()),
                             icon: icon_or_glyph(icon_png),
                             launch: Launch::Url(url),
+                            steam,
                         });
                     }
                 }
@@ -584,6 +594,7 @@ mod sys {
                                             &format!("appsfolder:{parsing}"),
                                         )),
                                         launch: Launch::AppsFolder(parsing),
+                                        steam: false,
                                     });
                                     pushed += 1;
                                 }
@@ -1154,7 +1165,13 @@ mod sys {
                 subtitle: app.subtitle.clone(),
                 icon: Some(app.icon.clone()),
                 section: Some(tr("应用", "Apps").to_string()),
-                tags: None,
+                // Steam 游戏打机器标签 `"steam"`，其余条目不带标签——宿主
+                // 「搜索 Steam 游戏」开关的过滤判据（协议零改动）。
+                tags: if app.steam {
+                    Some(vec!["steam".to_string()])
+                } else {
+                    None
+                },
                 details: None,
                 text_to_suggest: None,
                 more_commands: None,
@@ -1246,6 +1263,7 @@ mod sys {
                     value: FALLBACK_GLYPH.to_string(),
                 },
                 launch: Launch::AppsFolder(format!("{title}!app")),
+                steam: false,
             }
         }
 
@@ -1272,6 +1290,24 @@ mod sys {
             assert_eq!(zh[1].id, "apps.run.1");
             // ② 空名单零过滤
             assert_eq!(top_level_from(&apps, &[]).len(), 3);
+        }
+
+        /// Steam 游戏机器标签：`steam` 标记的 App 经 `top_level_from` 下发
+        /// `"steam"` 标签（「搜索 Steam 游戏」开关的过滤判据），普通应用不带
+        /// 任何标签（协议零改动，同 filesearch `"files"` 标签先例）。
+        #[test]
+        fn steam_game_items_carry_machine_tag() {
+            let mut game = fixture_app("45号电车");
+            game.steam = true;
+            let apps = vec![fixture_app("计算器"), game];
+            let items = top_level_from(&apps, &[]);
+            assert_eq!(items.len(), 2);
+            assert_eq!(items[0].tags, None, "普通应用不打标");
+            assert_eq!(
+                items[1].tags,
+                Some(vec!["steam".to_string()]),
+                "Steam 游戏下发 steam 机器标签"
+            );
         }
 
         /// N2：屏蔽名单原文解析——逗号分隔、trim、空片段丢弃、大小写归一。

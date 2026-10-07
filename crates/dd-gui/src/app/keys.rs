@@ -1092,6 +1092,19 @@ impl PaletteApp {
         ctx.request_repaint();
     }
 
+    /// 设置页改「搜索 Steam 游戏」（2026-10-07）：立即重算根页可见表（空查询
+    /// 与关键词匹配两条分支都在 `set_steam_hidden` 内重算）+ 持久化。
+    pub(crate) fn apply_search_steam_games(&mut self, ctx: &egui::Context, on: bool) {
+        if self.settings.search_steam_games == on {
+            return;
+        }
+        log::debug!("[dd-gui] 搜索 Steam 游戏：{on}");
+        self.settings.search_steam_games = on;
+        self.stack.root_mut().list.set_steam_hidden(!on);
+        self.save_settings_with_feedback();
+        ctx.request_repaint();
+    }
+
     /// 设置页搜索引擎变更（勾选预设/添加/删除自定义，2026-09-05）：
     /// 立即持久化 + 置脏标记；**离开设置页时**由 `ui()` 的 size-diff 收口点
     /// 消费并全量重聚合（websearch 进程须以新环境变量重启才能生效）。

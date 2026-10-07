@@ -1,6 +1,6 @@
 # dd-run 设置 / 个性化 / 材料样式优化方案（参照 PowerToys CmdPal）
 
-> **状态**：**B1–B4 已落地**（T1–T8 ✅）；**T9 已落地（2026-10-05，见 §5 落地注记）**；T10 另行立项；K 批（D42）已落地（2026-09-27，见 [settings-keys-typography-plan.md](./settings-keys-typography-plan.md)）｜ **版本**：v1.3 ｜ **最后更新**：2026-10-05
+> **状态**：**B1–B4 已落地**（T1–T8 ✅）；**T9 已落地（2026-10-05，见 §5 落地注记）**；**T11 已落地（2026-10-07，搜索 Steam 游戏开关）**；T10 另行立项；K 批（D42）已落地（2026-09-27，见 [settings-keys-typography-plan.md](./settings-keys-typography-plan.md)）｜ **版本**：v1.4 ｜ **最后更新**：2026-10-07
 > **关联**：[settings.rs](../crates/dd-gui/src/settings.rs) · [settings_view.rs](../crates/dd-gui/src/ui/settings_view.rs) · [theme.rs](../crates/dd-gui/src/theme.rs) · [platform.rs](../crates/dd-gui/src/platform.rs) · [cmdpal-window-material-effects.html](../cmdpal-window-material-effects.html) · [cmdpal-ui-mockups.html](../cmdpal-ui-mockups.html) · [INDEX.md](./INDEX.md)
 > **参照来源**：`microsoft/PowerToys` 仓库 `src/modules/cmdpal/`（`SettingsModel.cs` / `BackdropStyles.cs` / `BackdropStyleConfig.cs` / `AppearanceSettingsViewModel.cs` / `AppearancePage.xaml` / `BackdropControllerKind.cs`，main 分支）与 Microsoft Learn「Command Palette settings」文档。
 
@@ -235,6 +235,7 @@
 | ✅ T8 | 界面动效开关（B4） | 装饰过渡一键关闭 | app（动效调用点）/ settings.rs / settings_view.rs / text.rs | P2 | 8 | 关档过渡直出终态、开=现状（默认开）；DWM 过渡恒禁不受影响 |
 | ✅ T9 | 背景图通道一期（P2 项，2026-10-05） | 图即背景（互斥）：路径/适应/不透明度/着色 | settings.rs / settings_view.rs / ui/panel.rs / 新 ui/backdrop_image.rs | P3 | 9 | 设图/清图/解码失败回落/resize 重裁剪；材质行置灰与恢复 |
 | T10 | 另行立项评估 | ShowAppDetails 详情窗 / 全屏忽略热键 / 强调色实时监听 / 亮度模糊二期 | — | P3 | 10 | 立项评审通过后单独立项，不属本方案执行范围 |
+| ✅ T11 | Steam 游戏搜索开关（2026-10-07，需求外批：默认不参与搜索） | `search_steam_games` 布尔（默认**关**）；apps 扩展 `steam://` 条目打 `"steam"` 机器标签（同 `"files"` 先例，协议零改动）；GUI 两分支过滤 | dd-ext/builtins/apps.rs / settings.rs / state.rs / aggregate.rs / keys.rs / settings_view.rs / text.rs | P2 | 11 | roundtrip / 过滤 / 打标 3 单测；595 passed（基线 592，+3）；默认关 = 旧行为变更（用户需求），旧 config 缺字段回落关 |
 
 **建议批次**：B1 = T1+T2（材料批）→ B2 = T3+T4+T5（行为+重置批）→ B3 = T6（着色批）→ B4 = T7+T8（行为二期批）→ T9/T10 另议。
 
@@ -276,3 +277,4 @@
 | v1.1 | 2026-09-20 | **B1–B4 落地（T1–T8）**：材料注册表化 + Mica Alt + 滑杆口径文案；Esc 三档 / 退格返回 / 恢复默认外观；着色三档（系统强调色/无/自定义+强度）；单击激活与界面动效开关。470 passed / clippy 0 / release exit 0；**T9（背景图）/ T10 未做**，见 §4 |
 | v1.2 | 2026-09-28 | 状态行补记：**K 批（按键卡排版 / 全设置页控件排印，D42）已落地**（2026-09-27）——本稿 B1–B4 所落的「按键与交互」卡随 D42 统一行块 40 / 行距 12 / 控件 28·12；方案与验收见 [settings-keys-typography-plan.md](./settings-keys-typography-plan.md) |
 | v1.3 | 2026-10-05 | **T9 落地（背景图通道一期）**：设计如 §3.2 P2 全量兑现，实现细化四处——① 互斥语义落 `refresh_backdrop`（effective = None，设置值不动，清图即恢复，避免材质链分叉残留）；② 纹理缓存键 = (路径, mtime) 门控 + 解码失败**负缓存**（同键不重试防逐帧 IO），超 2048 最长边等比缩略省显存；③ Fill/Stretch 为绘制期 UV 纯函数——**resize 只重算 UV 不重解码**；④ 文件选择零新依赖（`rfd` 未引入，§3.2 判定）——路径文本输入 + 提示 + danger 校验行。既有 `image` 启用 jpeg/webp 特性（非新增 crate）。单测 5 条、592/592 全绿。**自动化真机走查当批完成（五腿全过）**：设图 Fill / Stretch / 不透明度 25% / 失败回落 / 清图恢复——其中 25% 腿暴露「图下透出半透明暗 clear_color 而非面板色」缺陷（像素实测 (81,80,80)），当批修复（画图前铺不透明面板色底）并像素级复验；剩余用户腿 = 设置页按钮/滑杆（需真实点击）、tint 叠层、resize 实时性。T10（ShowAppDetails / 全屏忽略热键 / 强调色实时监听 / 亮度模糊二期）维持另行立项 |
+| v1.4 | 2026-10-07 | **T11 落地（搜索 Steam 游戏开关）**：需求驱动的追加任务（Steam 游戏默认不混入搜索结果）。实现链五处——① apps 扩展 `App` 增 `steam: bool`，`.url` 分支按 `steam://` **前缀**打标（不按 `steam_appid()`：后者仅解析 rungameid 形态，白名单放行的 run/open 三形态会漏标；安装过滤仍走 appid，职责分开），`top_level_from` 统一转 `"steam"` 机器标签（协议零改动，同 filesearch `"files"` 先例）；② `search_steam_games: bool` 默认**关**（= 行为变更，用户需求；旧 config 缺字段回落关）；③ `PanelState.steam_hidden` **默认 true**（与 `apps_hidden` 默认 false 方向相反，镜像时不能照抄）+ `steam_shown()` 在空查询/关键词匹配两分支 AND 叠加，与「搜索应用」正交；④ `apply_search_steam_games` + `poll_aggregate` 落地同步，即时生效；⑤ 「搜索行为」卡由单行扩两行（同行 1 的 16px 槽位 + 12px 间距缩进，开关纵向对齐），i18n 两键。单测 3 条（打标 / roundtrip / 过滤）、595/595 全绿 / clippy 0 / fmt 无差异 |
