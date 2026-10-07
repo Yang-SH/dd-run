@@ -125,14 +125,21 @@ impl PaletteApp {
                                 // E2E：建样本（page 借用至此已结束）——本帧 draw_panel
                                 // 完成时由 `e2e_report` 结算输出。
                                 if let Some((input_at, dispatch_at)) = e2e_times {
-                                    self.e2e_pending = Some(E2eSample {
-                                        page_id: page_id.clone(),
-                                        query_chars: prev_query.chars().count(),
-                                        items: e2e_items,
-                                        input_at,
-                                        dispatch_at,
-                                        landed_at: e2e_landed_at,
-                                    });
+                                    // E2E 口径：空查询落地（清空回 hint）无「输入 → 首屏」
+                                    // 语义——其去抖等待属设计内防抖，计入会把 p95 拉成假
+                                    // FAIL（2026-10-07 首轮采样实证：4 条 query=0 样本
+                                    // wait 238–440 ms 全部为清空补拉）。首屏判据样本 =
+                                    // 带词落地。
+                                    if !prev_query.is_empty() {
+                                        self.e2e_pending = Some(E2eSample {
+                                            page_id: page_id.clone(),
+                                            query_chars: prev_query.chars().count(),
+                                            items: e2e_items,
+                                            input_at,
+                                            dispatch_at,
+                                            landed_at: e2e_landed_at,
+                                        });
+                                    }
                                 }
                                 // 嵌套页落地后 query 已由 draw_searchbar 写回列表
                                 // （panel.rs），这里无需额外处理。
@@ -321,6 +328,9 @@ impl PaletteApp {
         };
         let (_, mut proc) = self.processes.remove(idx);
         self.inflight.insert(ext_id.to_string());
+        self.e2e_dispatch_at = Some(Instant::now()); // E2E：请求实发时刻。v3.11 原插桩**漏赋值**——
+                                                     // dispatch_at 恒 None → 落地 zip 恒 None → 样本永不
+                                                     // 创建（死代码 18 天，2026-10-07 首次真机采样时暴露）
         let ext_id = ext_id.to_string();
         let page_id = page_id.to_string();
         let search_req = search.clone(); // 供落地时比对（v3.3 过期补偿）
@@ -353,6 +363,7 @@ impl PaletteApp {
             ext.manifest.id
         );
         self.inflight.insert(ext.manifest.id.clone());
+        self.e2e_dispatch_at = Some(Instant::now()); // E2E：分派起点含复热期（rtt 记「复热 + 往返」，保守口径）
         let ext = ext.clone();
         let ext_id = ext.manifest.id.clone();
         let page_id = page_id.to_string();
@@ -400,6 +411,30 @@ impl PaletteApp {
 #[cfg(test)]
 mod tests {
     use super::landing_is_stale;
+    use crate::test_support::{dying_client, make_app};
+
+    /// E2E 埋点回归锚（2026-10-07 首次真机采样暴露）：v3.11 原插桩
+    /// `e2e_dispatch_at` 全仓从未赋 `Some` → 落地 `zip` 恒 `None` → 样本
+    /// 永不创建（死代码 18 天，「真机采样待做」因此一直无人发现）。
+    /// 带词进页 + warm 分派后，input / dispatch 两起点必须**同时**在位。
+    #[test]
+    fn e2e_dispatch_at_set_on_warm_fetch() {
+        let mut app = make_app();
+        app.processes
+            .push(("com.ddrun.test".to_string(), dying_client("com.ddrun.test")));
+        app.open_page(
+            "com.ddrun.test",
+            "files.results",
+            Some("q".to_string()),
+            None,
+            None,
+        );
+        assert!(app.e2e_input_at.is_some(), "带词进页应设 input 感知起点");
+        assert!(
+            app.e2e_dispatch_at.is_some(),
+            "warm 分派应设 dispatch 起点——缺失即 E2E 样本永不创建（v3.11 漏赋值回归）"
+        );
+    }
 
     /// 请求期间用户又输入（当前 query ≠ 请求查询）→ 过期，不得落地。
     /// 真机 2026-09-14：文件搜索输入后 ~1s 误显「该页暂无内容」即此路径。
