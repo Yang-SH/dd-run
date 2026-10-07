@@ -23,10 +23,14 @@ log = "0.4"
 # dd-ext）——Cargo.lock 零变更、供应链面零新增（方案 §7 audit 约定的结论记录
 # 见 CHANGELOG R-25 条目）。
 chrono = "0.4"
-eframe = { version = "0.36", default-features = false, features = [
-    "glow",
-    "default_fonts",
-] }
+# O5-a（2026-10-07）：default_fonts 移除——不再嵌入 egui 内置字体三件套
+# （Ubuntu-Light / NotoEmoji / emoji-icon），宿主单件 -1.35 MiB（-14%）。
+# 前置核查已闭环：全仓源码字面量 942 码位 × 运行时字体栈（segoeui / msyh /
+# seguisym / SegoeIcons）程序化穷举零缺字（tools/glyph_coverage_check.mjs）；
+# `FontDefinitions::default()` 在无该特性时返回空集，platform.rs 以其作基底
+# 的叠加逻辑不受影响。副作用：用户数据（书签/结果标题）中的 emoji 不再有
+# NotoEmoji 兜底，属接受的取舍（真机走查腿复核）。
+eframe = { version = "0.36", default-features = false, features = ["glow"] }
 windows-sys = { version = "0.61", features = [
     "Win32_Foundation",
     "Win32_UI_Input_KeyboardAndMouse",

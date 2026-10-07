@@ -3884,10 +3884,27 @@ mod tests {
     /// 超长选项 = 260）；②真实 zh/en 选项集落在 (180, 260] 区间内且不溢出。
     /// 注：方案 §3.3「zh 常态落 180」估宽前提不成立——Esc 卡最长选项实为
     /// 「先清除搜索内容，然后返回」（13 全角字 ≈188+），非「返回上一级
-    /// （默认）」；headless 默认字体无 CJK，按 fallback 字形计宽。
+    /// （默认）」；zh 按 fallback 字形计宽。
+    /// O5-a（2026-10-07）：`default_fonts` 移除后 headless 上下文字体集为空、
+    /// 测宽恒 0——装入系统 segoeui.ttf 复现「有拉丁字形」的测宽前提（测试仅
+    /// 在 windows CI / 真机跑，该文件必有）。
     #[test]
     fn dropdown_width_clamps_zh_and_en() {
         let ctx = egui::Context::default();
+        let segoeui = std::fs::read(r"C:\Windows\Fonts\segoeui.ttf").expect(
+            "测试前置失败：C:\\Windows\\Fonts\\segoeui.ttf 不可读（本测试仅在 Windows 跑）",
+        );
+        let mut fonts = egui::FontDefinitions::default();
+        fonts.font_data.insert(
+            "segoeui".to_owned(),
+            std::sync::Arc::new(egui::FontData::from_owned(segoeui)),
+        );
+        fonts
+            .families
+            .entry(egui::FontFamily::Proportional)
+            .or_default()
+            .push("segoeui".to_owned());
+        ctx.set_fonts(fonts);
         let mut out = ctx.run_ui(Default::default(), |ctx| {
             egui::CentralPanel::default().show(ctx, |ui| {
                 // ① 分支行为：短选项 → 下限 180；超长选项 → 上限 260。

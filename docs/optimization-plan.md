@@ -43,11 +43,14 @@
 - `everything-ipc` / `fuzzy-matcher` / `chrono` **仅被 `crates/dd-ext/src/bin/search.rs` 使用**（全仓 grep 仅 1 个文件命中）。它们是 `dd-ext` crate 的依赖（`fuzzy-matcher`/`chrono` 在 `[dependencies]`，`everything-ipc` 在 `[target.'cfg(windows)'.dependencies]`），但 `dd-gui` 仅链接 `dd-ext` **库**（in-process 5 内置），不链接 search sidecar bin；经 `lto=fat` 跨 crate 死代码消除，这些依赖不会进入主 exe。**结论：主 exe 体积不受其拖累，无需拆分 crate。**
 
 **机会**：
-- **O5-a（待评估 → **收益已量化、字形面已核（2026-10-05），移除与否待维护者拍板**）**：`eframe` 当前 `features = ["glow","default_fonts"]`。`platform.rs` 约 :60/约 :146 用 `egui::FontDefinitions::default()` 作基底再叠加自设 CJK 字体。若自设字体已覆盖全部 UI 字形，可移除 `default_fonts` 省去内置字体嵌入体积。⚠️ 需先在真机穷举字形确认无 tofu，否则退回。属「收益未证实，不得盲目删」。
+- **O5-a（✅ 已落地 2026-10-07，维护者拍板「移除」）**：`eframe` 原 `features = ["glow","default_fonts"]`。`platform.rs` 约 :60/约 :146 用 `egui::FontDefinitions::default()` 作基底再叠加自设 CJK 字体；`default_fonts` 嵌入的 egui 内置字体三件套（Ubuntu-Light / NotoEmoji / emoji-icon）占宿主单件约 14%。原判据「需先穷举字形确认无 tofu，否则退回」已闭环，正式移除。
   - **测量（2026-10-05，windows-gnu release）**：移除 `default_fonts` 后宿主单件 10,082,816 → 8,663,552 B，**省 1,419,264 B ≈ 1.35 MiB（约 14%）**——收益证实为正且可观。
-  - **字形面核查（同日）**：全部 UI 字符串字面量中依赖 egui 默认字体三件套（Ubuntu-Light / NotoEmoji / emoji-icon）的字形仅 `→`（U+2192，按键提示行）与 `↵`（U+21B5，确认对话框键帽）两个，且均在运行时已加载的 `seguisym.ttf` / `msyh.ttc` 覆盖内；`platform.rs` 以 `FontDefinitions::default()` 作**基底**的代码在移除特性后仍安全（`default()` 返回空集叠加自设字体，无 panic 路径——构建可链接、启动可用）。
+  - **字形面核查（2026-10-05）**：全部 UI 字符串字面量中依赖 egui 默认字体三件套的字形仅 `→`（U+2192，按键提示行）与 `↵`（U+21B5，确认对话框键帽）两个，且均在运行时已加载的 `seguisym.ttf` / `msyh.ttc` 覆盖内；`platform.rs` 以 `FontDefinitions::default()` 作**基底**的代码在移除特性后仍安全（`default()` 返回空集叠加自设字体，无 panic 路径——构建可链接、启动可用）。
   - **真机抽查（同日）**：no-default_fonts 构建真机唤起，首屏搜索框 placeholder / 页脚键帽「执行 Enter / 返回·隐藏 Esc」/ 行图标 / 中文均零 tofu（截图留档 `%TEMP%\ddrun-walkthrough\o5a.png`，临时不入仓）。
-  - **余下前置**：正式移除前仍需按原判据做**全量字符串穷举**（两语言 × 全页面含设置页/对话框/Toast）的 tofu 走查——首屏抽查不构成穷举；`Cargo.toml` 还原，本项零代码改动。
+  - **程序化穷举（2026-10-07，落地前置收口）**：`tools/glyph_coverage_check.mjs`（零依赖 Node 脚本，可复跑）——解析运行时字体栈五文件（`segoeui` / `msyh.ttc` / `seguisym` / `SegoeIcons` / `segmdl2`）的 cmap（TTC 子字体表偏移为**文件绝对偏移**，TTF 同式）取码位并集，对 `dd-gui` / `dd-ext` / `dd-host` 全部 `.rs` 源码**剥注释后**的字符串与 char 字面量（含 `\u{...}` 转义解码）逐码位判覆盖：**942 码位中仅 U+000A（字符串内换行，非渲染字形）无覆盖，判定 PASS**。此前「全页面人工走查」判据由该穷举 + 真机抽查共同覆盖。
+  - **落地改动**：`crates/dd-gui/Cargo.toml` eframe features 收窄为 `["glow"]`（唯一改动面）；族序重排 `retain(font_data.contains_key)` 自动剔除不再注册的 `NotoEmoji-Regular` / `emoji-icon-font`，最终族 `[segoe, cjk, sym, icons]`。**接受的副作用**：运行期用户数据（书签 / 扩展结果标题）中的 emoji 不再有 NotoEmoji 兜底、呈 tofu——UI 文案穷举零缺字不受影响；真机走查腿复核。
+  - **回归修复**：`dropdown_width_clamps_zh_and_en`（`settings_view.rs`）依赖 headless 默认字体测宽——空字体集下测宽恒 0、上界分支必失败。修复 = 测试装入系统 `segoeui.ttf`（测试仅在 Windows CI / 真机跑，文件必有），测宽前提复原。测试总数不变。
+  - **门禁**：fmt 零差异 / clippy 零告警 / `cargo test --workspace` 592/592 全绿；release 重编实测体积分毫吻合（见 implementation.md §7 同日行）。**剩余**：真机全页面 tofu 走查（两语言 × 设置页/对话框/Toast + emoji 用户数据确认）随用户会话——见 [walkthrough checklist](./user-session-walkthrough-checklist.md) §5。
 - **O5-b（明确不做）**：**`panic = "abort"` 不可行**——`ext_inprocess.rs` 约 :262 与 `dd-run-cli/src/main.rs` 约 :472/约 :501 依赖 `catch_unwind` 实现 M9 内置扩展崩溃隔离；`panic=abort` 下 `catch_unwind` 失效，内置 panic 将拖垮宿主，直接破坏已验收的容错能力。明确记档排除。
 - **O5-c（边际）**：对非热路径 crate 单独设 `opt-level="z"/"s"`（egui 保持 3）进一步压体积，收益小、回报低，建议暂缓。
 
@@ -299,7 +302,7 @@
 - **Phase 1（低风险·确定性，建议首批）**：~~O2 方法名常量~~ ✅（2026-09-14）→ ~~O1 协议错误码接线~~ ✅（2026-09-15）→ ~~O3 依赖治理~~ ✅（2026-09-15）→ ~~O8 文档卫生~~ ✅（2026-09-15）——**四项全部落地，Phase 1 关闭**。
 - **Phase 2（中风险·需真机）**：~~O4 可观测性~~ ✅（2026-09-15）→ ~~O7 文件搜索 P2 真机验收~~ ✅ **两轮完成**（2026-09-15 / **2026-09-17 补 `es.exe`**）——**Phase 2 全部落地**。O7 剩余 3 项未闭环（GUI 端到端指标、A-33-03 的 `%`/`#` 打开、A-33-08 剩余矩阵单元）见 [验收报告](./search-file-p2-acceptance-2026-09-15.md) §5。
 - **Phase 3（战略）**：O6 跨平台 M10。
-- **O5 体积**：仅 O5-a 评估后视收益决定，O5-b/O5-c 明确不做/暂缓（见 2.1）。
+- **O5 体积**：~~O5-a default_fonts 移除~~ ✅（2026-10-07，宿主单件 -1.35 MiB）；O5-b/O5-c 明确不做/暂缓（见 2.1）。
 
 > 每批遵循项目既有纪律：**设计稿/方案先行 → 仅改工作副本、不自动 commit → fmt/clippy/test 全绿 + 对应单测/一致性测试 + 体积/内存类重编 dist 实测**。
 >
