@@ -1,6 +1,6 @@
 # dd-run 实施方案
 
-> **状态**：生效中 ｜ **版本**：v0.1.15 ｜ **最后更新**：2026-10-05
+> **状态**：生效中 ｜ **版本**：v0.1.17 ｜ **最后更新**：2026-10-07
 > **关联**：[protocol.md](./protocol.md) · [manifest-schema.md](./manifest-schema.md) · [extensions.md](./extensions.md) · [../cmdpal-platform-agnostic-design.md](../cmdpal-platform-agnostic-design.md)
 
 ---
@@ -32,13 +32,14 @@
 | 协议两项定稿（`-32002` / `PageInfo`） | ✅ 已定稿 | 2026-09-17（工作副本） | `-32002` 判为**扩展侧可用错误码**（宿主不产出）、`PageInfo` **维持不传递**；`protocol.md` §9.2/§8.5 注记改终态口径，INDEX §5 两项关闭 | [§2 协议两项定稿](#协议两项定稿-32002--pageinfo2026-09-17-定稿) |
 | 文件搜索 `Ctrl+F` + Shell 真实图标（v3.6） | ✅ 已落地（两项未达标已处置：E1 / E2） | 2026-09-19（工作副本） | 宿主 `Ctrl+F` 任意页直达文件搜索（栈深恒 2、Root 查询带入）；文件结果图标改 **Shell 真实图标**（`Icon::Path` + `file-icons/` 落盘缓存，失败回落 glyph）；图标管线自 apps 上移共享；协议/清单零改动。未达标两项已处置（E1：首抽 703.8 ms → 同步 0.32 ms；E2：sidecar +104.5 KB → 增量 61,952 B ≤ 64 KB） | [§2](#文件搜索-ctrlf-直达--shell-真实图标v36-2026-09-19-落地) · [search-file §10](./search-file.md) |
 
-## 产物与分发（2026-09-13 实测）
+## 产物与分发（2026-10-07 实测，v0.2.0 发版件）
 
-- `dist/dd-run-0.1.1.exe` — **8,601,088 B**（单文件宿主；含 5 内置扩展 in-process；M9 起单文件分发）
-- `dist/extensions.d/dd-ext-search.exe` — 749,568 B（文件搜索 sidecar，随绿色包 `extensions.d/` 携带）
+- `dist/dd-run-0.2.0.exe` — **8,670,720 B**（单文件宿主；含 5 内置扩展 in-process；M9 起单文件分发；sha256 `655b0044…`，与 `target/…/release/dd-run.exe` 逐字节同哈希）
+- `dist/extensions.d/dd-ext-search.exe` — 832,000 B（文件搜索 sidecar，随绿色包 `extensions.d/` 携带）
 - `dist/extensions.d/com.ddrun.filesearch.json` — 421 B（sidecar 清单）
-- `dist/dev/dd-run-cli.exe` — 1,203,200 B（开发 / 自检工具，`--conformance` 全表面自检）
-- `dist/dev/dd-ext-sample.exe` — 432,640 B（示例扩展）
+- `dist/dd-run-0.2.0-portable.zip` — 4,321,035 B（3 成员：exe + sidecar + 清单；条目名正斜杠；**GitHub Release 附着的即 CI 重打的同名包**）
+- `dist/dev/dd-run-cli.exe` — 1,146,368 B（开发 / 自检工具，`--conformance` 全表面自检）
+- `dist/dev/dd-ext-sample.exe` — 452,608 B（示例扩展）
 - ⚠️ **不存在 `dist/dd-run.exe`**：旧流水账曾误称该名。实际发版产物名为 `dist/dd-run-<ver>.exe`（crate 仍名 `dd-gui`，经 `[[bin]] name = "dd-run"` 产出 `dd-run-<ver>.exe`），`dist/dev/` 下两个为开发期产物。
 
 ---
@@ -965,7 +966,7 @@ K-T1~K-T4 任务清单与 V-1~V-7 校验标准见 [`settings-keys-typography-pla
 - **v5.2 UI 优化 B1–B8**：✅ 已关闭（2026-09-13）。八批增量优化全落地，含进页回填/返回聚焦/搜索引擎配置失效三项真机修复。详情见 [`cmdpal-ui-optimization-v5.html`](../cmdpal-ui-optimization-v5.html)。
 - **图标与字体优化 I1/I2/F1/F2**：✅ 已关闭（2026-09-12）。I3 未做。详情见 [`icons-typography-plan.md`](./icons-typography-plan.md)。
 - **遗留项**：见 §6.1 台账——L1/L2/L3/L4/L5/L6/L7/L8/L9/L10 全部 ✅ 销项，无开放项。
-- **版本与发版**：crates 版本 `dd-gui`/`dd-host`/`dd-ext`/`dd-ext-sample`/`dd-run-cli` = **0.1.1**，`dd-protocol` = **1.0.0**；已发布 tag `v0.1.0`、`v0.1.1`，分支 `main`。
+- **版本与发版**：crates 版本 `dd-gui`/`dd-host`/`dd-ext`/`dd-ext-sample`/`dd-run-cli` = **0.2.0**，`dd-protocol` = **1.0.0**；已发布 tag `v0.1.0`、`v0.1.1`、`v0.2.0`，分支 `main`。
 
 ---
 
@@ -1062,4 +1063,5 @@ K-T1~K-T4 任务清单与 V-1~V-7 校验标准见 [`settings-keys-typography-pla
 | 2026-10-07 | **自动化真机走查批次（R-08 / O4 / F2 复验 / 体积复核）**：① **R-08 sidecar 链路冒烟**——停用户会话 Everything（服务实例不承载 IPC）+ `DDRUN_ES_PATH` 桩 es.exe（探活静默 exit 0 / 查询输出 300 GBK「中」exit 0/8）直驱真实 sidecar（NDJSON initialize → get_items）：形态 A 落 `files.error` 且 subtitle **恰 200 字符截断零 panic**、形态 B 落「es.exe 退出码 8」**不再静默空结果**；② **O4 崩溃链路复现**——dist 实例运行中 `taskkill` filesearch sidecar → 1 Hz 看门狗帧当帧落 debug 级「扩展进程已退出（崩溃/非 0 退出码）+ 诊断（退出码/stderr 尾行）」+「连续崩溃 1/3」熔断计数；③ **F2 密度三档 + I1 占位层级真机复验**——config 预置三档 density + `PostThreadMessageW(WM_HOTKEY)` 唤起 + CopyFromScreen 截图，三档行高逐档递增、真实图标/glyph 弱色占位层级清晰（截图 `%TEMP%\ddrun-walk\density_*.png`）；④ **重打包体积复核**——dist 与 release sha256 一致（`caff43a1…`，T11 批产物仍最新），宿主 8,668,672 B / sidecar 832,000 B，L11「重打包体积实测」销项。全程零代码改动、纯验收动作；走查后 config 已还原、用户实例已重启 | ✅ 工作副本（R-08 / O4 / F2 / 体积四项收口；详见 stability-plan v1.23、optimization-plan v1.9、icons-typography-plan v1.3） |
 | 2026-10-07 | **用户真机走查首批（N1 path 腿 ✅ + 热键捕获回落实证）**：① **N1 自定义直达命令 path 腿通过**——用户复测（config：keyword `dr` → `G:\AI\dd-run\dist`）+ stderr 日志两次记录「自定义命令 path 打开（keyword=dr）」零失败告警，ShellExecute 成功；② **热键捕获「无法录入 Ctrl+Space」定性**——用户截图实证回落 toast 上屏（本机钩子被安全软件拦截，捕获恒为基础模式）：当前已注册组合被自家 `RegisterHotKey` 截走（WM_HOTKEY 不达 egui 键盘事件）+ 候选 == 当前组合保存禁用（未改动语义）——均非缺陷，9-30 记档「系统行为」口径成立；「捕获期解注册当前组合」记入 stability-plan §7 缓办占位备立项；seq 冲突协议腿改口径（可录入组合 + PowerToys 占用）。零代码改动 | ✅ 工作副本（详见 stability-plan v1.24、future-features-plan v1.8） |
 | 2026-10-07 | **用户真机走查批量收口**：用户确认「真机走查基本无问题」——本机可做腿全部按批量确认口径收口：R-22（IME 回车）/ R-23（超长粘贴）/ seq 冲突协议替代腿 / S-03·S-07·S-08·S-05 走查 / K 批 V-1~V-7 / N1–N5 用户腿 / T9·T11 剩余腿 / A-33-03（`%`/`#` 打开）。**记档口径注**：批量确认为用户总体结论，非逐腿判据 + 截图记录，发现问题单项重开。**仍待办**：E2E 首屏采样（需日志数据出 p50/p95）、V-14 多屏腿（需硬件）、R-21 黄线腿（需他机）。零代码改动 | ✅ 工作副本（详见 stability-plan v1.25、future-features-plan v1.9、personalization-plan v1.5、keys-typography-plan v1.2、search-file v3.12 注记） |
+| 2026-10-07 | **v0.2.0 发版（tag `v0.2.0` + GitHub Release）**：版本号 0.1.1 → **0.2.0**（5 crate；`dd-protocol` 维持 1.0.0）+ CHANGELOG `[Unreleased]` 收敛为 `[0.2.0] - 2026-10-07` 并补「自 0.1.1 起累计变更」摘要（7 条含行为变更提示）。本地 `bash tools/package.sh` exit 0 → `dist/dd-run-0.2.0.exe` **8,670,720 B**（dist 与 release sha256 一致 `655b0044…`）/ sidecar 832,000 B / 便携 zip **4,321,035 B**（3 成员、正斜杠条目名）；分发级冒烟：conformance 内置 calc 9 步 + bookmarks 9 步 exit 0、GUI 6 s 存活（WS 108.1 MB、冷启动 **862 ms**、6 内置 + filesearch 全 warm）；三关 596/0 + fmt 零差异 + clippy 0 告警 + docscan 0 漂移。同批修 `.github/workflows/release.yml` 的 zip 步骤（`Compress-Archive` 反斜杠条目名 → .NET `ZipArchive` 显式正斜杠）并补 Release 说明正文（本次亮点 + 行为变更） | ✅ 已发布（GitHub Release 附着 CI 重打的同名 zip） |
 > 构建环境记档：本机 windows-gnu 链接需补 `as.exe`（与 dlltool 同目录）与 `libshlwapi.a`（2026-09-03 修复）；跑测试前须 `export APPDATA`（否则 apps 图标抽取测试必失败，见 CHANGELOG）。

@@ -2,11 +2,11 @@
 
 [English](./README.md) | [简体中文](./README.zh-CN.md)
 
-> **状态**：生效中 ｜ **版本**：v0.1.1 ｜ **最后更新**：2026-09-13
+> **状态**：生效中 ｜ **版本**：v0.2.0 ｜ **最后更新**：2026-10-07
 
 **A command palette / launcher written in Rust, built on a platform-agnostic core.** Currently shipping on **Windows** only (macOS / Linux are planned from v0.2). Design inspired by the [PowerToys Command Palette (CmdPal)](https://github.com/microsoft/PowerToys/tree/main/src/modules/cmdpal) module.
 
-> **Status**: MVP milestones **M0–M9 are all closed** and verified on real hardware (M0–M6 core panel & settings; M7 release engineering; M8 extension ecosystem validation; M9 in-process built-ins). **v0.1.1** published 2026-09-10. See [`docs/implementation.md`](./docs/implementation.md) §5 for milestone progress and §6.1 for the follow-ups ledger.
+> **Status**: MVP milestones **M0–M9 are all closed** and verified on real hardware (M0–M6 core panel & settings; M7 release engineering; M8 extension ecosystem validation; M9 in-process built-ins). **v0.2.0** published 2026-10-07 (previous: v0.1.1, 2026-09-10) — see the [CHANGELOG](./CHANGELOG.md) `[0.2.0]` section for the highlights since v0.1.1, including one behaviour change (Steam games are no longer searched by default). See [`docs/implementation.md`](./docs/implementation.md) §5 for milestone progress and §6.1 for the follow-ups ledger.
 
 ---
 
@@ -31,7 +31,7 @@ Its architecture and extension contracts are **distilled from Microsoft PowerToy
 - **Settings pages** (open with `Ctrl+,`): appearance (light/dark theme, Mica/Acrylic material), general (autostart, customizable global hotkey — default `Win+Alt+Space`), search-engine management (preset + custom engines with `{q}` templates), extension management (enable/disable per extension).
 - **Localized UI**: the panel follows the system display language.
 - **Fast & isolated**: built-in extensions are always ready (in-process, no launch cost); third-party and the file-search sidecar launch lazily via frozen/stub/LRU; the file-search sidecar runs in its own process, so its crash can't take the host down.
-- **Portable distribution**: `dist/dd-run-0.1.1.exe` (~8 MB, 8,601,088 bytes; `strip = "symbols"`) is a single file bundling the host and the five built-in extensions in-process (no embedded exes since M9). The file-search extension ships as a sidecar in `dist/extensions.d/` and is discovered automatically next to the executable. No installer: unzip the release zip and run.
+- **Portable distribution**: `dist/dd-run-0.2.0.exe` (~8.3 MB, 8,670,720 bytes; `strip = "symbols"`) is a single file bundling the host and the five built-in extensions in-process (no embedded exes since M9). The file-search extension ships as a sidecar in `dist/extensions.d/` and is discovered automatically next to the executable. No installer: unzip the release zip and run.
 
 ## Goals and non-goals
 
@@ -58,7 +58,7 @@ Its architecture and extension contracts are **distilled from Microsoft PowerToy
 
 | Item | Detail |
 |---|---|
-| Entry artifact | `dist/dd-run-0.1.1.exe` (Windows, ~8 MB / 8,601,088 bytes; version tracks `crates/dd-gui/Cargo.toml`) |
+| Entry artifact | `dist/dd-run-0.2.0.exe` (Windows, ~8.3 MB / 8,670,720 bytes; version tracks `crates/dd-gui/Cargo.toml`) |
 | Bundling (M9) | The five built-in extensions are compiled in-process: the host drives `dd_ext::serve_line` directly, so no extension exes are embedded. `dd-gui/build.rs` embeds an empty table; `assets/embed/` is a leftover scratch dir and is gitignored |
 | Sidecar | The file-search extension (`dd-ext-search.exe` + `com.ddrun.filesearch.json`) ships in `dist/extensions.d/`; the host scans an `extensions.d/` next to the executable (batch 7.5), so the zip is unzip & run — precedence: user data dir > sidecar > built-ins |
 | Naming | `dd-run.exe` = GUI host (crate stays `dd-gui`); the M0 CLI is renamed `dd-run-cli.exe` (keeps self-check ability, yields the artifact name) |

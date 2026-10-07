@@ -49,13 +49,34 @@ jobs:
 
       # zip 布局（解压即用）：dd-run-<ver>.exe + extensions.d/（清单 ${EXT_DIR}
       # 解析到本目录，自动定位 dd-ext-search.exe）。
+      # 条目名一律正斜杠：Compress-Archive 写反斜杠，被解压工具当成文件名字符
+      # （出现 `extensions.d\com.ddrun.filesearch.json` 这类条目），故改用 .NET
+      # ZipArchive 显式指定（与 T11 批本地便携包同口径，3 成员）。
       - name: Zip portable bundle
         shell: pwsh
         run: |
           $ver = (Select-String -Path crates/dd-gui/Cargo.toml -Pattern '^version = "(.+)"').Matches[0].Groups[1].Value
-          Compress-Archive -Path "dist/dd-run-$ver.exe", "dist/extensions.d" `
-            -DestinationPath "dist/dd-run-$ver-portable.zip" -Force
+          $zip = "dist/dd-run-$ver-portable.zip"
+          if (Test-Path $zip) { Remove-Item $zip -Force }
+          Add-Type -AssemblyName System.IO.Compression
+          Add-Type -AssemblyName System.IO.Compression.FileSystem
+          $archive = [System.IO.Compression.ZipFile]::Open($zip, [System.IO.Compression.ZipArchiveMode]::Create)
+          try {
+            [System.IO.Compression.ZipFileExtensions]::CreateEntryFromFile(
+              $archive, "dist/dd-run-$ver.exe", "dd-run-$ver.exe",
+              [System.IO.Compression.CompressionLevel]::Optimal) | Out-Null
+            Get-ChildItem "dist/extensions.d" -File | ForEach-Object {
+              [System.IO.Compression.ZipFileExtensions]::CreateEntryFromFile(
+                $archive, $_.FullName, "extensions.d/$($_.Name)",
+                [System.IO.Compression.CompressionLevel]::Optimal) | Out-Null
+            }
+          } finally {
+            $archive.Dispose()
+          }
           Get-ChildItem dist -Filter *.zip | Select-Object Name, Length
+          $z = [System.IO.Compression.ZipFile]::OpenRead((Resolve-Path $zip).Path)
+          $z.Entries | ForEach-Object { "  {0}  {1} B" -f $_.FullName, $_.Length }
+          $z.Dispose()
 
       - name: Attach to GitHub Release
         uses: softprops/action-gh-release@v3
@@ -63,6 +84,15 @@ jobs:
           files: dist/dd-run-*-portable.zip
           body: |
             dd-run ${{ github.ref_name }} — 免安装绿色版（portable）
+
+            **本次亮点（自 v0.1.1 起的累计变更）**
+
+            - 文件搜索：`Ctrl+F` 直达 + Shell 真实文件图标；「输入到首屏」真机采样 p95 **102 ms**（≤ 200 ms 门禁内）
+            - 安全与稳定性：安全审计 S-01–S-11 **11/11 闭环** + R 系列 **26 项**加固（扩展信任门禁 / 危险命令二次确认 / 单实例互斥 / panic 取证落盘 / IME Enter 守卫等）
+            - 设置与个性化：材料注册表化 + 云母 Alt + 着色三模式、背景图通道、热键捕获对话框（seq 确认协议，根治冲突假成功）
+            - 新增能力：自定义直达命令、内置扩展配置通道、Chrome/Edge 书签搜索、warm 容量可配置、设置导出/导入
+            - 体积：宿主单件较 0.1.1 基线 **−14%**（移除 eframe 默认字体，字形穷举 943/944 覆盖）
+            - ⚠️ **行为变更**：Steam 游戏默认不参与搜索——设置 → 搜索 → 「Steam 游戏」开关打开即恢复
 
             - 解压后直接运行 `dd-run-<版本>.exe`（单文件，5 个内置扩展以 in-process 方式内置于宿主进程，无安装器）
             - `extensions.d/` 为文件搜索扩展 sidecar：与 exe 保持相对位置即可被自动发现（需本机装有 [Everything](https://www.voidtools.com/)）

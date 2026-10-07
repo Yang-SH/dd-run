@@ -442,7 +442,7 @@ dependencies = [
 
 [[package]]
 name = "dd-ext"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "chrono",
@@ -458,7 +458,7 @@ dependencies = [
 
 [[package]]
 name = "dd-ext-sample"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "dd-protocol",
  "log",
@@ -467,7 +467,7 @@ dependencies = [
 
 [[package]]
 name = "dd-gui"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "arboard",
  "chrono",
@@ -488,7 +488,7 @@ dependencies = [
 
 [[package]]
 name = "dd-host"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "chrono",
  "dd-protocol",
@@ -509,7 +509,7 @@ dependencies = [
 
 [[package]]
 name = "dd-run-cli"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "dd-ext",
  "dd-host",

@@ -4,7 +4,7 @@
 > **关联**：[implementation.md](./implementation.md) §7 · [future-features-plan.md](./future-features-plan.md) §4 · [security-audit-2026-09-23.md](./security-audit-2026-09-23.md) · [stability-usability-security-plan.md](./stability-usability-security-plan.md) · [INDEX.md](./INDEX.md)
 >
 > **为什么需要你**：本机安全软件在系统级过滤注入输入（V-7 通道清单穷尽：posted 消息不经 IME / SendInput 受理不达 / osk UIA 合成键同样被拦），物理键盘为唯一通路——以下腿无法自动化。
-> **通用纪律**：走查前备份 `%APPDATA%\dd-run\config.json`；交付件 = `dist/dd-run-0.1.1.exe`（8.3M，2026-10-07 重打包，自动化腿 9 腿已过）；每项完成后还原配置；结果按「记录位置」回写对应文档并销勾。
+> **通用纪律**：走查前备份 `%APPDATA%\dd-run\config.json`；交付件 = `dist/dd-run-0.2.0.exe`（8.3M，2026-10-07 v0.2.0 发版件，自动化腿 9 腿已过）；每项完成后还原配置；结果按「记录位置」回写对应文档并销勾。
 
 ---
 

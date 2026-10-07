@@ -483,7 +483,7 @@ trait HostHandle: Send + Sync {       // 对应 §5.1 IExtensionHost + §6.4 能
 
 - **✅ 免 VS / Windows SDK（Windows 开发）**：纯 Rust GUI crate（egui 用 glow/wgpu）自带所需绑定，本地仅需 `rustup` + `cargo`。**验证方法**：在干净 Windows 环境（未装 VS）执行 `cargo build` 成功即通过——v0.1.1 已在未装 VS 的 Windows 环境构建通过。
 - **⚠️ 待核实：跨平台产出原生 `.exe`（cargo-xwin）**：从 Linux/macOS 直接产出 Windows `.exe`，自动下载 MSVC CRT + SDK 库。**验证方法**：`cargo-xwin build --target x86_64-pc-windows-msvc --release` 成功产出 `target/x86_64-pc-windows-msvc/release/<bin>.exe`；CRT 由 cargo-xwin 自动拉取，无需本机 VS/SDK。本仓库当前仅 Windows 有实际构建产物（macOS/Linux ⚠️ 未实施）。
-- **✅ 单文件静态 exe 体积（目标 < 10MB，已达成）**：`dist/dd-run-0.1.1.exe` = **8.2 MB**（8,601,088 B，`strip = "symbols"`；M9 后实测，`dist/` 唯一产物即此值，较内嵌 5 内置 exe 时 ↓ 2.2 MB）。**验证方法**：`cargo build --release` 后查看；用 `cargo bloat` 复核体积来源。
+- **✅ 单文件静态 exe 体积（目标 < 10MB，已达成）**：`dist/dd-run-0.2.0.exe` = **8.3 MB**（8,670,720 B，`strip = "symbols"`；v0.2.0 发版件实测，`dist/` 唯一产物即此值，较内嵌 5 内置 exe 时 ↓ 2.2 MB；2026-09-13 快照为 8,601,088 B）。**验证方法**：`cargo build --release` 后查看；用 `cargo bloat` 复核体积来源。
 - **✅ 冷启动数据就绪（目标毫秒级，已达成）**：无 .NET 运行时、无 XAML 解析；**数据就绪 ~2ms（A2 实测达标，M3 真机复验）**。**验证方法**：Windows `Measure-Command` 计真机首屏渲染耗时（注：CLI 的 `--bench-startup` 参数属早期设想，未实现；当前启动埋点计时见代码内 `state.rs`）；`total` 首帧受 GUI/wgpu + CJK 字体（msyh ~19.7MB）加载影响较高，瓶颈记录于 implementation.md R2，**不调目标值**。
 
 上述体积与冷启动数值为 **v0.1.1 实测结论**（非待验证目标）；其余（cargo-xwin 跨平台产出等）仍为**设计目标，须按验证方法实测确认**。

@@ -1081,7 +1081,7 @@ E2 处置（**已采纳选项 ②，2026-09-19 用户决策**，落地记录见 
 
 **落点**：新增 `crates/dd-gui/src/app/e2e.rs`（`E2eSample` 三段分解纯函数 + `e2e_report` 帧尾结算 + 3 单测）；接线：`app/mod.rs`（3 计时字段 + `draw_panel` 后结算，可见/隐藏帧两处）、`app/page.rs`（分派点 / 非过期落地建样本 / 失败与离页清理 / 带词进页起点）、`ui/panel.rs`（页内输入变化 = 起点）。埋点为**常驻 `log::debug!`**（不加 `#[cfg(debug_assertions)]`——感知指标属 release 真机口径；常态成本 3 个 `Option<Instant>` + 每次落地一条日志）。已知边界：结算遇面板隐藏会在隐藏帧结算，总时长含隐藏期，判读时按上下文甄别离群值。
 
-**采样与判读（可复现）**：`dist\dd-run-0.1.1.exe 2> gui.log`（或 debug 构建）跑会话（根页输入关键词 → `Ctrl+F` 带词进页，埋点 = 带词进页瞬间；数轮）→ `node tools/gui_e2e_parse.mjs gui.log`（2026-10-07 移植 Node 版——本机无 Python 解释器，与 `gui_e2e_parse.py` 逐行对齐）→ 输出 total/wait/rtt/paint 的 min/p50/p95/max + 门禁判定（p95 < 200 → PASS，exit 0；有超预算样本列出行号）。
+**采样与判读（可复现）**：`dist\dd-run-0.2.0.exe 2> gui.log`（或 debug 构建）跑会话（根页输入关键词 → `Ctrl+F` 带词进页，埋点 = 带词进页瞬间；数轮）→ `node tools/gui_e2e_parse.mjs gui.log`（2026-10-07 移植 Node 版——本机无 Python 解释器，与 `gui_e2e_parse.py` 逐行对齐）→ 输出 total/wait/rtt/paint 的 min/p50/p95/max + 门禁判定（p95 < 200 → PASS，exit 0；有超预算样本列出行号）。
 
 **真机采样收口（2026-10-07，v3.13）**：用户真机（修复后构建）11 条原始样本——带词进页子集 7 条 **min 36 / p50 48 / p95 102 / max 102 ms → ≤ 200 ms PASS**（rtt max 93、渲染 max 8 ms）。随采样轮修正两处：① **v3.11 埋点死代码**——`e2e_dispatch_at` 全仓从未赋 `Some` → 落地 `zip` 恒 `None` → 样本自落地起 18 天从未创建（首跑零输出暴露；`fetch_page_warm` / `fetch_page_reheat` 各补一处赋值 + 回归锚单测 `e2e_dispatch_at_set_on_warm_fetch`）；② **空查询不结算**——`query=0` 清空回 hint 落地的去抖等待（首轮 4 条实测 238–440 ms）属设计内防抖、无「输入 → 首屏」语义，计入会拉成假 FAIL。此后采样免人工剔除；随轮验证 `Ctrl+F` 带词进页光标置尾腿通过。「真机采样待做」开放项（验收报告 §5 #4）至此闭环。
 
