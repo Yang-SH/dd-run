@@ -77,6 +77,7 @@ fn fallback_commands() -> Vec<CommandItem> {
 mod sys {
     use super::*;
     use crate::Effect;
+    use std::io::Read;
     use std::process::{Command, Stdio};
     use std::time::{Duration, Instant};
 
@@ -278,10 +279,15 @@ mod sys {
         }
     }
 
-    /// 无头执行并捕获输出：轮询等待（超时 kill）→ 读管道 → 合并 stdout/stderr。
+    /// 无头执行并捕获输出：读线程**先**排空管道 → 轮询等待（超时 kill）→ join 收集 → 合并 stdout/stderr。
     ///
     /// 工作目录统一为**用户主目录**（与 `shell.open_terminal` 一致）——否则会继承
     /// 宿主进程不确定的 CWD，相对路径命令结果随启动位置漂移。
+    ///
+    /// 读管道必须**先于等待退出**（P1，2026-10-09）：子进程输出超过 OS 管道缓冲
+    /// （约 4–64KB）时，若无人读取，子进程会阻塞在写端、永不退出，轮询只能等到
+    /// 超时误杀。因此 spawn 后立即起读线程 `read_to_end` 排空，写端不再反压子
+    /// 进程；正常退出后 `join` 读到 EOF 恒有限时完成。
     fn run_capture(program: &str, args: &[&str]) -> Result<String, String> {
         let mut command = Command::new(program);
         command
@@ -293,7 +299,15 @@ mod sys {
         }
         let mut child = command.spawn().map_err(|e| format!("spawn 失败：{e}"))?;
 
-        // 轮询退出，超时则 kill（进程退出后管道写端关闭，wait_with_output 不会死锁）
+        // ① 先取管道、起读线程排空（对端写满缓冲不再反压子进程——P1 死锁根因消除）
+        let stdout_reader = child.stdout.take().map(spawn_pipe_reader);
+        let stderr_reader = child.stderr.take().map(spawn_pipe_reader);
+
+        // ② 轮询退出，超时则 kill。超时路径**不 join** 读线程（detached）：kill 只
+        //    杀直接子进程，孙进程（如 `cmd /C ping …` 的 ping.exe）可能仍持有写端，
+        //    join 会等到孙进程退出——把「超时误杀」劣化成「超时挂死」（既有测试
+        //    `run_capture_timeouts_long_command` 的 5s 断言即依赖立即返回）。读线程
+        //    在全部写端关闭后读到 EOF 自行结束，不泄漏。
         let deadline = Instant::now() + Duration::from_millis(EXEC_TIMEOUT_MS);
         loop {
             match child.try_wait().map_err(|e| e.to_string())? {
@@ -308,14 +322,34 @@ mod sys {
                 }
             }
         }
+        let _ = child.wait();
 
-        let output = child.wait_with_output().map_err(|e| e.to_string())?;
-        let mut combined = decode_output(&output.stdout);
-        let stderr = decode_output(&output.stderr);
-        if !stderr.trim().is_empty() {
-            combined.push_str(&stderr);
+        // ③ 正常退出：join 收集（EOF 已到或即将到达，join 恒有限时完成；与原
+        //    `wait_with_output` 的 read-to-EOF 口径一致）
+        let stdout_bytes = stdout_reader
+            .map(|h| h.join().unwrap_or_default())
+            .unwrap_or_default();
+        let stderr_bytes = stderr_reader
+            .map(|h| h.join().unwrap_or_default())
+            .unwrap_or_default();
+        let mut combined = decode_output(&stdout_bytes);
+        let stderr_text = decode_output(&stderr_bytes);
+        if !stderr_text.trim().is_empty() {
+            combined.push_str(&stderr_text);
         }
         Ok(combined)
+    }
+
+    /// 单管道读线程：`read_to_end` 直到 EOF（写端全部关闭——进程退出或被 kill——
+    /// 后自然结束）。读失败按空处理，与原 `wait_with_output` 的宽容口径一致。
+    fn spawn_pipe_reader<R: std::io::Read + Send + 'static>(
+        mut r: R,
+    ) -> std::thread::JoinHandle<Vec<u8>> {
+        std::thread::spawn(move || {
+            let mut buf = Vec::new();
+            let _ = r.read_to_end(&mut buf);
+            buf
+        })
     }
 
     /// 解码子进程输出为 UTF-8 字符串。
@@ -430,6 +464,31 @@ mod sys {
                 out.trim()
                     .eq_ignore_ascii_case(home.to_string_lossy().trim()),
                 "无头执行应在主目录，实得：{out:?}，期望：{home:?}"
+            );
+        }
+
+        /// P1 回归锚：输出远超 OS 管道缓冲（~64KB）时不得被超时误杀——修复前
+        /// 子进程阻塞在管道写端、永不退出，3s 被 kill 误报「执行超时」。
+        #[test]
+        fn run_capture_drains_output_larger_than_pipe_buffer() {
+            let big = std::env::temp_dir().join("ddrun_run_capture_big.txt");
+            std::fs::write(&big, "a".repeat(300 * 1024)).unwrap();
+            // ⚠️ cmd 经 `Command::args` 传参走 MSVCRT 转义规则，路径**不能带内嵌引号**
+            //（`\"` 会被 cmd 误解，BatBadBut 语义面——2026-10-09 首跑实锤）。
+            // 故免引号直传；TEMP 路径含空格的环境跳过（本机与 CI 的 TEMP 均无空格）。
+            let path = big.to_string_lossy().to_string();
+            if path.contains(' ') {
+                let _ = std::fs::remove_file(&big);
+                eprintln!("跳过：TEMP 路径含空格，cmd /C 无法免引号传参：{path}");
+                return;
+            }
+            let out = run_capture("cmd.exe", &["/C", &format!("type {path}")]);
+            let _ = std::fs::remove_file(&big);
+            let out = out.expect("大输出命令不得误判超时");
+            assert!(
+                out.len() >= 300 * 1024,
+                "输出应完整排空，实得 {} 字节",
+                out.len()
             );
         }
 
