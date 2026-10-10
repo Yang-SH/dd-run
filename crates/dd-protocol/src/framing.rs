@@ -81,12 +81,20 @@ impl Decoder {
         }
         self.buf.extend_from_slice(chunk);
         let mut frames = Vec::new();
-        while let Some(pos) = self.buf.iter().position(|&b| b == b'\n') {
-            let mut line: Vec<u8> = self.buf.drain(..=pos).collect();
-            line.pop(); // 去掉行尾 \n
+        // P3（2026-10-10）：消费偏移单遍扫描。原实现每行 `position` 从头扫 +
+        // `drain(..=pos)` 全量搬移，单 chunk 含大量小行时整体 O(n²)；改为在
+        // `buf[consumed..]` 窗口内推进 `consumed`，末尾一次 `drain(..consumed)`
+        // 搬移——每个 push 恰好一次 O(残留) 搬移，总 O(n)。行切分语义与原
+        // 实现逐字节一致（判定顺序保持：CRLF 剥离 → 空行忽略 → 已终止行
+        // 超限 TooLarge 不毒化 → UTF-8 校验）。
+        let mut consumed = 0usize;
+        while let Some(rel) = self.buf[consumed..].iter().position(|&b| b == b'\n') {
+            let end = consumed + rel; // '\n' 的绝对下标
+            let mut line = &self.buf[consumed..end]; // 行内容，不含行尾 \n
             if line.last() == Some(&b'\r') {
-                line.pop(); // §2.2 规则 1：CRLF 容错
+                line = &line[..line.len() - 1]; // §2.2 规则 1：CRLF 容错
             }
+            consumed = end + 1;
             if line.is_empty() {
                 continue; // §2.2 规则 5：空行忽略
             }
@@ -95,12 +103,16 @@ impl Decoder {
                     size: line.len(),
                     max: self.max,
                 });
-                continue;
+                continue; // 已终止行超限：不毒化，继续处理后续行（§2.4）
             }
-            match String::from_utf8(line) {
-                Ok(s) => frames.push(Frame::Message(s)),
+            match std::str::from_utf8(line) {
+                Ok(s) => frames.push(Frame::Message(s.to_string())),
                 Err(_) => frames.push(Frame::InvalidUtf8),
             }
+        }
+        // 末尾一次搬移：仅保留未消费的残留
+        if consumed > 0 {
+            self.buf.drain(..consumed);
         }
         // 残留（无换行）超限 → 一次 TooLarge + 毒化
         if self.buf.len() > self.max {
@@ -173,6 +185,40 @@ mod tests {
         let frames = d.push(b"{\"a\":1}\n{\"a\":2}\n");
         assert_eq!(frames, vec![m("{\"a\":1}"), m("{\"a\":2}")]);
         assert_eq!(d.buffered(), 0);
+    }
+
+    /// P3 回归锚：单 chunk 万行应全部成帧、一行不丢（旧 O(n²) 实现语义等价，
+    /// 本测试锁定正确性；性能另见 `push_quadratic_regression_bound`）。
+    #[test]
+    fn push_many_small_lines_in_one_chunk_is_all_frames() {
+        let mut d = Decoder::with_default_limit();
+        let mut chunk = Vec::with_capacity(30_000);
+        for _ in 0..10_000 {
+            chunk.extend_from_slice(b"{}\n");
+        }
+        let frames = d.push(&chunk);
+        assert_eq!(frames.len(), 10_000, "单 chunk 万行应全部成帧，一行不丢");
+        assert!(frames.iter().all(|f| matches!(f, Frame::Message(_))));
+        assert!(d.buf.is_empty(), "无残留");
+    }
+
+    /// P3 性能回归（宽松阈值防 CI 抖动；debug 构建下也须通过）：旧 O(n²)
+    /// 实现 debug 下 20 万小行 > 数秒，O(n) 新实现 < 1s（余量 10 倍）。
+    #[test]
+    fn push_quadratic_regression_bound() {
+        let mut d = Decoder::with_default_limit();
+        let mut chunk = Vec::with_capacity(400_000);
+        for _ in 0..200_000 {
+            chunk.extend_from_slice(b"x\n");
+        }
+        let t = std::time::Instant::now();
+        let frames = d.push(&chunk);
+        assert_eq!(frames.len(), 200_000);
+        assert!(
+            t.elapsed() < std::time::Duration::from_secs(1),
+            "elapsed = {:?}",
+            t.elapsed()
+        );
     }
 
     #[test]
