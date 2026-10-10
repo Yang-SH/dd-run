@@ -29,10 +29,11 @@ jobs:
       - name: Build (workspace, all targets)
         run: cargo build --workspace --all-targets
 
-      # --skip：apps 扩展的 steam 测试硬编码期望本机已装「Flowframes」，机器相关，
-      # CI 环境不满足（docs/implementation.md M7 取舍记档；夹具改造后移除）。
+      # 机器相关的 Steam 测试已更名 machine_steam_... 且 #[ignore]（apps.rs，
+      # P8 收口：本机断言由维护者 `cargo test -p dd-ext -- --ignored machine_`
+      # 真机覆盖），CI 无例外全跑。
       - name: Test (workspace)
-        run: cargo test --workspace -- --skip steam_installed_shown_uninstalled_filtered_root_lnk_shown
+        run: cargo test --workspace
 
       - name: Clippy (-D warnings)
         run: cargo clippy --workspace --all-targets -- -D warnings

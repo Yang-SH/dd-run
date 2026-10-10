@@ -740,18 +740,29 @@ mod sys {
 
     /// Steam 安装目录候选（须含 `steamapps` 子目录才有效，过滤掉不存在的盘符路径）。
     fn steam_install_dirs() -> Vec<PathBuf> {
+        let env_override = std::env::var("DDRUN_STEAM_ROOT")
+            .ok()
+            .filter(|s| !s.is_empty());
+        steam_install_dirs_with(env_override.as_deref())
+    }
+
+    /// [`steam_install_dirs`] 的可注入主体（env 覆盖作参数，纯函数便于无竞态单测）。
+    ///
+    /// P8（2026-10-10）：删除原开发者盘符硬编码（个人环境泄漏，字面量不入库）；
+    /// 同行 `C:\Program Files (x86)\Steam` 与 `PROGRAMFILES(X86)`
+    /// 变量路径重复，一并删除。测试与便携安装钩子改走 `DDRUN_STEAM_ROOT`
+    /// 显式覆盖（与 search 扩展的 `DDRUN_EVERYTHING_DIR` 命名一致）。
+    fn steam_install_dirs_with(env_override: Option<&str>) -> Vec<PathBuf> {
         let mut dirs: Vec<PathBuf> = Vec::new();
+        // 显式覆盖优先（用户/测试指定，信任其存在性，仍统一过 steamapps 过滤）
+        if let Some(dir) = env_override {
+            dirs.push(PathBuf::from(dir));
+        }
         if let Some(pf) = std::env::var_os("PROGRAMFILES(X86)") {
             dirs.push(PathBuf::from(&pf).join("Steam"));
         }
         if let Some(pf) = std::env::var_os("PROGRAMFILES") {
             dirs.push(PathBuf::from(&pf).join("Steam"));
-        }
-        for c in [
-            PathBuf::from(r"G:\Program Files (x86)\Steam"),
-            PathBuf::from(r"C:\Program Files (x86)\Steam"),
-        ] {
-            dirs.push(c);
         }
         dirs.retain(|d| d.join("steamapps").is_dir());
         dirs
@@ -1742,6 +1753,23 @@ mod sys {
             });
             assert!(has_default, "应含默认库 steamapps：{:?}", libs);
             assert!(has_vdf_lib, "应解析出 vdf 中的库路径：{:?}", libs);
+        }
+
+        /// P8 回归锚：`DDRUN_STEAM_ROOT` 显式覆盖进入枚举清单（便携/测试钩子，
+        /// 与 `DDRUN_EVERYTHING_DIR` 命名一致）；盘符硬编码已删除——全文件
+        /// 仅剩 `exe_dedup_key` 任意字符串夹具两行（生产代码零盘符字面量）。
+        /// 经可注入主体测试，避免进程级 env 修改与并行测试竞态。
+        #[test]
+        fn steam_install_dirs_env_override_injected() {
+            // 夹具：临时目录 + steamapps 子目录（过 retain 过滤）
+            let tmp = std::env::temp_dir().join(format!("ddrun_steam_root_{}", std::process::id()));
+            std::fs::create_dir_all(tmp.join("steamapps")).unwrap();
+            let dirs = steam_install_dirs_with(Some(tmp.to_str().unwrap()));
+            let _ = std::fs::remove_dir_all(&tmp);
+            assert!(
+                dirs.iter().any(|d| d == &tmp),
+                "显式覆盖目录应进入候选清单，实得 {dirs:?}"
+            );
         }
 
         /// 真机集成守卫：三问题修复的端到端验证。

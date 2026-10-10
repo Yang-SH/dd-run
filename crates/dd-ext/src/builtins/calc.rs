@@ -422,7 +422,24 @@ pub fn format_number(v: f64) -> String {
     }
     let rounded = v.round();
     if (v - rounded).abs() < 1e-9 {
-        return format!("{}", rounded as i128);
+        // P2（2026-10-09）：去掉 `as i128`——Rust 浮点→整型为饱和转换，
+        // |v| ≥ 2¹²⁷（如 2^128 ≈ 3.4e38）一律显示为 i128::MAX，给出貌似
+        // 正确的错误答案。f64 Display 是 round-trip 语义（最短唯一确定该
+        // f64 的十进制串，~16 位有效数字），非精确整数展开。
+        // 负零防御：极小负数（如 -1e-300，非零不走上方 v==0.0 前置分支）
+        // round 为 -0.0，Display 输出 "-0"，与原 `as i128` → "0" 行为
+        // 不一致，归一处理。
+        if rounded == 0.0 {
+            return "0".to_string();
+        }
+        // ≥1e21 回落科学计数法（对齐 JS `Number.toString()` ≥1e21 语义，
+        // 2026-10-10 用户定案 C）：f64 仅 ~16 位十进制精度，完整展开会以
+        // 尾随 0 伪装精确值——与 i128::MAX 同类「貌似正确的错误答案」；
+        // 科学计数法明示精度边界。阈值以下保持整数展开（f64 精确可表示段）。
+        if rounded.abs() >= 1e21 {
+            return format!("{rounded:e}");
+        }
+        return format!("{rounded}");
     }
     let mut s = format!("{v:.9}");
     while s.ends_with('0') {
@@ -519,6 +536,26 @@ mod tests {
         assert_eq!(format_number(2.5), "2.5");
         assert_eq!(format_number(-0.0), "0");
         assert_eq!(format_number(1.0 / 3.0 * 3.0), "1", "浮点回整");
+    }
+
+    /// P2 回归锚：|v| ≥ 2¹²⁷ 越过 i128 上限——原 `as i128` 饱和转换把 2^128
+    /// 显示成 i128::MAX（貌似正确的错误答案）。
+    ///
+    /// 显示形态（2026-10-10 用户定案 C）：≥1e21 回落科学计数法（对齐 JS
+    /// `Number.toString()` ≥1e21 语义），明示 f64 ~16 位精度边界，无尾随 0
+    /// 伪装精确问题；<1e21 的整数展开保持不变（1e20 在 f64 中精确可表示）。
+    #[test]
+    fn format_number_beyond_i128_range_is_exact() {
+        assert_eq!(format_number(2.0f64.powi(128)), "3.402823669209385e38");
+        assert_eq!(format_number(-2.0f64.powi(128)), "-3.402823669209385e38");
+        // ≥1e21 阈值边界：1e21 自身即走科学计数法
+        assert_eq!(format_number(1e21), "1e21");
+        // <1e21 保持整数展开（1e20 = 2²⁰×5²⁰，f64 精确可表示）
+        assert_eq!(format_number(1e20), "100000000000000000000");
+        // i128 范围内行为回归
+        assert_eq!(format_number(4.0), "4");
+        // 负零防御：极小负数 round 为 -0.0，须与 -0.0 字面量同归一为 "0"
+        assert_eq!(format_number(-1e-300), "0");
     }
 
     #[test]

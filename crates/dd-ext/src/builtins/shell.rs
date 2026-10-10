@@ -236,9 +236,12 @@ mod sys {
                         CommandResult::Confirm {
                             title: tr("确认执行危险命令？", "Run this dangerous command?")
                                 .to_string(),
+                            // UI-6/P4（2026-10-10）：明示「不拦截」语义——旧文案
+                            // 「该操作可能不可撤销」易让用户高估防护、反而敢粘贴
+                            // 不明命令。首行保留将执行的命令内容（确认前必须可见）。
                             description: tr(
-                                "将执行：{query}　该操作可能不可撤销",
-                                "Will run: {query} — this may be irreversible",
+                                "将执行：{query}\n\ndd-run 不会拦截或沙箱化任何命令：确认后将以你的用户权限直接执行，请核对命令内容再继续。",
+                                "Will run: {query}\n\ndd-run does not block or sandbox commands: on confirm it runs with your user privileges as-is. Review the command before continuing.",
                             )
                             .replace("{query}", query),
                             confirm_label: tr("执行", "Run").to_string(),
@@ -490,6 +493,52 @@ mod sys {
                 "输出应完整排空，实得 {} 字节",
                 out.len()
             );
+        }
+
+        /// UI-6/P4 回归锚：危险命令确认弹窗的 description 必须明示「不拦截」
+        /// 语义——旧文案「该操作可能不可撤销」易让用户高估防护、反而敢粘贴
+        /// 不明命令。进程级语言不能在单测翻转（与 i18n 集成测试同口径，见
+        /// i18n.rs tests 尾注），英文文案由 tr 双字面量静态保证 + 真机腿覆盖。
+        #[test]
+        fn confirm_description_declares_no_blocking() {
+            let params = InvokeParams {
+                id: "shell.run.query".to_string(),
+                sender: dd_protocol::model::Sender::TopLevel,
+                context: Some(dd_protocol::messages::InvokeContext {
+                    query: Some("format q:".to_string()),
+                    selected_item_id: None,
+                    form_data: None,
+                    confirmed: None,
+                }),
+            };
+            let (result, effects) = handle_invoke(&params);
+            assert!(effects.is_empty(), "确认分支不产生 effect");
+            match result {
+                CommandResult::Confirm {
+                    description,
+                    is_critical,
+                    ..
+                } => {
+                    assert!(is_critical, "critical 红底语义不变");
+                    assert!(
+                        description.contains("不会拦截"),
+                        "中文文案须明示不拦截：{description}"
+                    );
+                    assert!(
+                        description.contains("用户权限"),
+                        "须声明以用户权限直接执行：{description}"
+                    );
+                    assert!(
+                        description.contains("format q:"),
+                        "必须显示将执行的命令：{description}"
+                    );
+                    assert!(
+                        !description.contains("{query}"),
+                        "占位符应已替换：{description}"
+                    );
+                }
+                _ => panic!("危险命令未确认应返回 Confirm"),
+            }
         }
 
         #[test]
