@@ -98,20 +98,42 @@ fn lookup_path(id: u64) -> Option<String> {
 /// - UNC（`\\server\share\x`）→ `file://server/share/x`——authority 承载主机名，
 ///   宿主据此还原成 `\\server\share\x`（此前拼成 `file:////server/…`，被解析成
 ///   根相对路径而必然打不开）；
-/// - 常规路径 → `file:///<path>`（`\` → `/`），保持不变。
-///
-/// **不做 percent-encode**：宿主 `resolve_file_url_to_path` 采用「存在性优先 +
-/// decode 兜底」的宽容解析，文件名里的 `%`/`#` 原样随 URL 传递即可正确打开，
-/// 改动扩展侧只会让新旧版本的扩展与宿主产生不必要的耦合。
+/// - 常规路径 → `file:///<path>`（`\` → `/`），路径段经 [`percent_encode_path`]
+///   编码（F11/P6.2，2026-10-10）：空格/`%`/`#`/中文等非 unreserved 字节一律
+///   `%XX`——宿主 `file_url_candidates` 的 literal→decode 双候选链可无损还原
+///   （字面候选不存在时落 decode 候选），修复含 `%`/`#`/中文文件名直拼 URL
+///   被按 URL 语义误解析的缺陷（§9.6 缺陷 1 关闭）。
+/// - host 段保持原样（主机名不含保留字符）。
 fn path_to_file_url(path: &str) -> String {
     if let Some(rest) = path.strip_prefix(r"\\") {
         if let Some((host, tail)) = rest.split_once('\\') {
             if !host.is_empty() && !tail.is_empty() {
-                return format!("file://{host}/{}", tail.replace('\\', "/"));
+                return format!(
+                    "file://{host}/{}",
+                    percent_encode_path(&tail.replace('\\', "/"))
+                );
             }
         }
     }
-    format!("file:///{}", path.replace('\\', "/"))
+    format!("file:///{}", percent_encode_path(&path.replace('\\', "/")))
+}
+
+/// F11/P6.2：file URL path 段的极简 RFC 3986 编码（零新依赖）。保留
+/// unreserved（`A-Za-z0-9-._~`）+ `/`（路径分隔）+ `:`（盘符冒号），其余字节
+/// （空格/`%`/`#`/`?`/控制/非 ASCII UTF-8 序列）一律 `%XX`。
+/// 解码侧为 `dd-gui/platform.rs::file_url_candidates` 的 percent-decode 兜底
+/// （两侧编码/解码规则须保持一致，改动必须互相同步）。
+fn percent_encode_path(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for &b in s.as_bytes() {
+        match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'.' | b'_' | b'~' | b'/' | b':' => {
+                out.push(b as char)
+            }
+            _ => out.push_str(&format!("%{b:02X}")),
+        }
+    }
+    out
 }
 
 /// 当前索引条目数（仅测试用，用于断言容量上限生效）。
@@ -2013,14 +2035,15 @@ mod tests {
             path_to_file_url("C:\\proj\\src\\main.rs"),
             "file:///C:/proj/src/main.rs"
         );
-        // 文件名含 `%` / `#` 时不做百分号编码（依赖宿主的宽容解析，§9.6 缺陷 1）
+        // F11/P6.2：`%`/`#` 一律 percent-encode（宿主 decode 兜底无损还原）——
+        // 原「不编码依赖宽容解析」口径废止（§9.6 缺陷 1 关闭）
         assert_eq!(
             path_to_file_url("D:\\a\\report%20final.txt"),
-            "file:///D:/a/report%20final.txt"
+            "file:///D:/a/report%2520final.txt"
         );
         assert_eq!(
             path_to_file_url("D:\\a\\plan#2.txt"),
-            "file:///D:/a/plan#2.txt"
+            "file:///D:/a/plan%232.txt"
         );
     }
 
@@ -2062,8 +2085,8 @@ mod tests {
         match &effects[0] {
             Effect::HostRequest { params, .. } => assert_eq!(
                 params["url"].as_str().unwrap(),
-                "file://nas/public/报告.pdf",
-                "UNC 结果的 URL 必须由 authority 承载主机名"
+                "file://nas/public/%E6%8A%A5%E5%91%8A.pdf",
+                "UNC 结果的 URL 必须由 authority 承载主机名；路径段 percent-encode（F11）"
             ),
             other => panic!("期望 HostRequest，实际 {other:?}"),
         }

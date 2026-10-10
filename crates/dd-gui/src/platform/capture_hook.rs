@@ -50,6 +50,15 @@ static SELFTEST_HIT: AtomicBool = AtomicBool::new(false);
 /// 同一时刻至多一个捕获钩子，单槽 Mutex 足够。
 static THREAD_ID: Mutex<u32> = Mutex::new(0);
 
+// F10（2026-10-10）：钩子线程**自己的** HHOOK 句柄（裸指针以 `Cell` 存放，
+// null = 未安装）。LL 钩子回调恒在安装线程执行 → TLS 可靠——`hook_proc`
+// 入口的陈旧会话自检据此自卸（见 hook_proc 注释；句柄只在本线程内读写，
+// 无跨线程共享）。普通注释：thread_local! 宏不消费 doc comment（-D warnings）。
+thread_local! {
+    static OWN_HOOK: std::cell::Cell<*mut core::ffi::c_void> =
+        const { std::cell::Cell::new(std::ptr::null_mut()) };
+}
+
 /// 捕获钩子 → 宿主 UI 的捕获事件。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CaptureEvent {
@@ -128,6 +137,7 @@ fn async_down(vk: u16) -> bool {
 /// LL 钩子回调（系统在安装线程泵消息期间同步调用——必须快）。
 #[cfg(windows)]
 unsafe extern "system" fn hook_proc(code: i32, wparam: usize, lparam: isize) -> isize {
+    use windows_sys::Win32::System::Threading::GetCurrentThreadId;
     use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
         VK_CONTROL, VK_ESCAPE, VK_LWIN, VK_MENU, VK_RWIN, VK_SHIFT,
     };
@@ -137,6 +147,25 @@ unsafe extern "system" fn hook_proc(code: i32, wparam: usize, lparam: isize) -> 
 
     // 链约定：code < 0 必须透传给下一钩子。
     if code < 0 {
+        return CallNextHookEx(std::ptr::null_mut(), code, wparam, lparam);
+    }
+    // F10 陈旧会话自检：THREAD_ID 恒存「最新安装会话」的线程 id。本线程若已
+    // 不是最新会话（start() 被快速重启、旧线程收尾慢于新会话安装），立即自卸
+    // 钩子并放行事件——旧钩子既不再吞键，也不再向新会话通道投递，根除
+    // 「短暂双钩子并存 + 旧事件灌入新会话」竞态。自卸必须走
+    // `unhook_windows_hook` 辅助（windows-sys 缺 UnhookWindowsHookExW 符号，
+    // 见上方 91-95 行注记）；句柄读写仅在本线程（TLS），无锁竞争。
+    // 卸载后本线程随泵循环退出（发送端被 Drop 清空 / WM_QUIT），TLS 随线程消亡。
+    if *THREAD_ID.lock().unwrap_or_else(|e| e.into_inner()) != unsafe { GetCurrentThreadId() } {
+        OWN_HOOK.with(|c| {
+            let h = c.get();
+            if !h.is_null() {
+                // SAFETY：句柄来自本线程 SetWindowsHookExW 的成功返回，且 LL
+                // 钩子回调恒在安装线程执行（卸载线程 = 安装线程）。
+                unsafe { unhook_windows_hook(h) };
+                c.set(std::ptr::null_mut());
+            }
+        });
         return CallNextHookEx(std::ptr::null_mut(), code, wparam, lparam);
     }
     let down = wparam == WM_KEYDOWN as usize || wparam == WM_SYSKEYDOWN as usize;
@@ -279,6 +308,8 @@ pub fn start(tx: mpsc::Sender<CaptureEvent>) -> Result<CaptureHookGuard, String>
                 log::error!("[dd-gui] 捕获钩子安装失败（GetLastError={err}）——回落 egui 捕获");
                 return;
             }
+            // F10：登记本线程钩子句柄（TLS）——hook_proc 陈旧自检的卸载依据。
+            OWN_HOOK.with(|c| c.set(hook));
             // ④ **自回声验证**：注入一次 F15，验证钩子真的收到注入
             //    （SetWindowsHookExW 成功 ≠ 钩子真的在收事件——安全软件可能
             //    剥离）。F15 不在捕获白名单 → 对 UI 零副作用；**不带 Alt 等

@@ -582,14 +582,33 @@ fn hex_byte(b: u8) -> Option<u8> {
     }
 }
 
+/// 路径字符门控（F9/P6.1，2026-10-10）：与 `dd-ext/src/bin/search.rs` 的
+/// `valid_reveal_path`（S-08）**同规则**——拒绝双引号 / 控制字符（含 \t\n\r
+/// 与 0x7F）/ `%` / `^`。explorer 参数为单 arg 直传（无 shell 中间层），但
+/// 参数仍会被 explorer 二次解析（`%VAR%` 展开、`^` 转义），纵深防御与其对齐。
+/// 规则收敛候选（归属 `dd-protocol` 纯函数）留待后续，本轮不跨 crate 重构。
+fn reveal_path_allowed(path: &str) -> bool {
+    !path.is_empty()
+        && !path
+            .chars()
+            .any(|c| c == '"' || c == '%' || c == '^' || c.is_control())
+}
+
 /// 在资源管理器中定位文件（`explorer /select,<path>`，10B.2）。
 ///
 /// 若目标路径不存在，fallback 到其父目录；父目录也不存在则返回错误，避免
 /// Windows 在 `/select` 失效时随机打开「文档」等默认位置。
+/// F9（P6.1）：入参先过 [`reveal_path_allowed`] 字符门控（与 search 扩展
+/// S-08 同规则）——含 `%`/`^`/引号/控制字符的路径拒绝并报错（调用点
+/// `ctx_menu.rs` 落 `show_error_toast`），不再直通 explorer。
 #[cfg(windows)]
 pub(crate) fn reveal_in_folder(path: &str) -> Result<(), String> {
     use std::path::Path;
 
+    if !reveal_path_allowed(path) {
+        // 错误信息不回显原路径：路径可能含控制字符/换行，toast 呈现不可控
+        return Err("路径含不允许字符（引号 / % / ^ / 控制字符）".to_string());
+    }
     let p = Path::new(path);
     let arg = if p.exists() {
         format!("/select,{path}")
@@ -1136,10 +1155,71 @@ impl Default for MouseHideScope {
 #[cfg(test)]
 mod tests {
     use super::{
-        cursor_should_hide, file_url_candidates, is_allowed_open_url, MouseHideScope,
-        CURSOR_IDLE_HIDE,
+        cursor_should_hide, file_url_candidates, is_allowed_open_url, reveal_path_allowed,
+        MouseHideScope, CURSOR_IDLE_HIDE,
     };
     use std::time::{Duration, Instant};
+
+    /// F11/P6.2 跨 crate 契约：search 扩展（`dd-ext/src/bin/search.rs`
+    /// `percent_encode_path`）编码的 file URL 必须可由本侧 `file_url_candidates`
+    /// 无损还原原路径。测试内复制其编码器（保留集 = unreserved + `/` + `:`），
+    /// 两侧改动须互相同步（注释互指）。
+    #[test]
+    fn file_url_candidates_restore_percent_encoded_from_search_ext() {
+        fn encode_like_search_ext(s: &str) -> String {
+            let mut out = String::with_capacity(s.len());
+            for &b in s.as_bytes() {
+                match b {
+                    b'A'..=b'Z'
+                    | b'a'..=b'z'
+                    | b'0'..=b'9'
+                    | b'-'
+                    | b'.'
+                    | b'_'
+                    | b'~'
+                    | b'/'
+                    | b':' => out.push(b as char),
+                    _ => out.push_str(&format!("%{b:02X}")),
+                }
+            }
+            out
+        }
+        // 含空格/中文/`%`/`#` 的路径：字面候选不存在 → decode 候选命中
+        for p in [r"C:\my files\报告 final.txt", r"C:\a%b#c.txt"] {
+            let url = format!("file:///{}", encode_like_search_ext(&p.replace('\\', "/")));
+            let restored = file_url_candidates(&url);
+            assert!(
+                restored
+                    .iter()
+                    .any(|c| c.replace('\\', "/") == p.replace('\\', "/")),
+                "编码 URL 必须可还原原路径：{url} → {restored:?}"
+            );
+        }
+    }
+
+    /// F9/P6.1：reveal 门控与 search 扩展 S-08（`valid_reveal_path`）同规则的
+    /// 镜像用例集——引号/控制字符/%/^ 拒绝；合法含空格/中文路径放行。
+    #[test]
+    #[cfg(windows)]
+    fn reveal_path_allowed_mirrors_search_s08_rules() {
+        // 合法放行
+        assert!(
+            reveal_path_allowed(r"C:\my files\报告 final.txt"),
+            "空格与中文"
+        );
+        assert!(reveal_path_allowed(r"C:\a\b\c.exe"), "常规路径");
+        // 非法拒绝（镜像 search.rs S-08 用例集）
+        assert!(!reveal_path_allowed(r#"C:\a"b"#), "双引号");
+        assert!(!reveal_path_allowed("C:\\a\nb"), "换行（控制字符）");
+        assert!(!reveal_path_allowed("C:\\a\tb"), "制表符（控制字符）");
+        assert!(
+            !reveal_path_allowed(r"C:\a%b"),
+            "百分号（explorer 变量展开）"
+        );
+        assert!(!reveal_path_allowed(r"C:\a^b"), "脱字符（explorer 转义）");
+        assert!(!reveal_path_allowed("C:\u{7f}b"), "DEL（控制字符）");
+        assert!(!reveal_path_allowed(""), "空路径");
+    }
 
     /// 面板唤起后鼠标未动 → 隐藏；刚动过 → 显示（v4.17a 修复的正是这条：
     /// 旧实现无条件隐藏，导致"鼠标动起来反而不见了"）。

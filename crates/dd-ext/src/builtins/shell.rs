@@ -77,7 +77,6 @@ fn fallback_commands() -> Vec<CommandItem> {
 mod sys {
     use super::*;
     use crate::Effect;
-    use std::io::Read;
     use std::process::{Command, Stdio};
     use std::time::{Duration, Instant};
 
