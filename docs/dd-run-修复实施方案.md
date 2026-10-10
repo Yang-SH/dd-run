@@ -114,26 +114,43 @@ fn run_capture_drains_output_larger_than_pipe_buffer() {
 
 **根因**：整数浮点分支 `rounded as i128` 是 Rust 饱和转换，|v| ≥ 2¹²⁷ ≈ 1.7e38 一律显示为 `170141183460469231731687303715884105727`。
 
-**改法**：整数分支去掉 i128 转换，直接格式化浮点（Rust 对整数值 f64 输出无小数点、无科学计数法，语义正确且无上限）：
+**改法**：整数分支去掉 i128 转换，直接格式化浮点（f64 Display 输出无小数点、无科学计数法且无上限；⚠️ **实施修正（2026-10-09）**：Display 是 **round-trip 语义**——输出最短唯一确定该 f64 的十进制串（~16 位有效数字），**非精确整数展开**。方案原期望「2^128 显示完整 39 位精确值」不可达（需大数库，超出 F2 范围）；round-trip 展开与 JS `Number.toString()`（<1e21）同款，量级与前 16 位正确，已消除 i128::MAX 错误答案。显示形态经用户定案 **C（2026-10-10）**：≥1e21 回落科学计数法（对齐 JS `Number.toString()` ≥1e21 语义），明示精度边界、无尾随 0 伪装精确问题；<1e21 保持整数展开）：
 
 ```rust
 if (v - rounded).abs() < 1e-9 {
-    return format!("{rounded}");   // 4.0 → "4"，1e60 → 全数字展开
+    // 负零防御（实施补充）：极小负数（如 -1e-300）非零、绕过 v==0.0 前置
+    // 分支，round 为 -0.0 后 Display 输出 "-0"；原 `as i128` 行为为 "0"，
+    // 归一保持一致（-0.0 字面量本身由前置 v==0.0 分支兜住，不受影响）。
+    if rounded == 0.0 {
+        return "0".to_string();
+    }
+    // ≥1e21 回落科学计数法（用户定案 C）：f64 仅 ~16 位十进制精度，完整
+    // 展开会以尾随 0 伪装精确值（与 i128::MAX 同类「貌似正确」）；科学
+    // 计数法明示精度边界，对齐 JS `Number.toString()` ≥1e21 语义。
+    if rounded.abs() >= 1e21 {
+        return format!("{rounded:e}");
+    }
+    return format!("{rounded}");   // 4.0 → "4"，1e20 → 精确整数展开
 }
 ```
 
-**影响面与冲突**：仅 `calc.rs`。既有测试 `format_number_trim`（4.0→"4"、2.5→"2.5"、-0.0→"0"）行为不变，无需改动。
+**影响面与冲突**：仅 `calc.rs`。既有测试 `format_number_trim`（4.0→"4"、2.5→"2.5"、-0.0→"0"）行为不变，无需改动（-0.0 字面量由既有 `v == 0.0` 前置分支兜住；实施另补极小负数 round 后 `-0.0` 的归一防御）。
 
 **新增测试**：
 
 ```rust
 #[test]
 fn format_number_beyond_i128_range_is_exact() {
-    let big = format_number(2.0f64.powi(128)); // ≈3.4e38，越过 i128 上限
-    assert_eq!(big, "340282366920938463463374607431768211456");
-    assert_eq!(format_number(-2.0f64.powi(128)), "-340282366920938463463374607431768211456");
+    // 用户定案 C：≥1e21 回落科学计数法（明示 f64 ~16 位精度边界），
+    // <1e21 保持整数展开——回归锚锁定「不再是 i128::MAX」
+    assert_eq!(format_number(2.0f64.powi(128)), "3.402823669209385e38");
+    assert_eq!(format_number(-2.0f64.powi(128)), "-3.402823669209385e38");
+    assert_eq!(format_number(1e21), "1e21");              // 阈值边界
+    assert_eq!(format_number(1e20), "100000000000000000000"); // f64 精确，保持展开
     // i128 范围内行为回归
     assert_eq!(format_number(4.0), "4");
+    // 负零防御：极小负数 round 为 -0.0，须与 -0.0 字面量同归一为 "0"
+    assert_eq!(format_number(-1e-300), "0");
 }
 ```
 
@@ -265,6 +282,8 @@ if let Ok(dir) = std::env::var("DDRUN_STEAM_ROOT") {
 }
 ```
 
+**实施版（2026-10-10）**：env 读取与逻辑拆为**可注入纯函数主体**（避免单测 set_var 与并行测试竞态，与 `is_dangerous_query` 纯函数风格一致）——`steam_install_dirs()` 读 env 后委托 `steam_install_dirs_with(env_override: Option<&str>)`；env 覆盖目录排候选清单首位、仍统一过 `steamapps` 存在性过滤。新测试 `steam_install_dirs_env_override_injected` 直接测注入主体（1 passed）；`rg -n 'G:'` 仅剩 `exe_dedup_key` 夹具两行（新注释措辞已避免引入盘符字面量）。
+
 2. **现状确认（2026-10-09 核对，本子项已完成、无需改动）**：该测试已更名为 `machine_steam_installed_shown_uninstalled_filtered_root_lnk_shown`（apps.rs:1755）且已带 `#[ignore = "机器相关：依赖本机安装 Flowframes / Dead Cells、未装 Cataclismo"]`（1754）——维持现状即可；
 3. `ci.yml` 删除 `-- --skip steam_installed_shown_uninstalled_filtered_root_lnk_shown`，让 workspace 测试无例外全跑（被 ignore 的测试在 CI 自然跳过，不再污染 skip 语义）。
 
@@ -286,14 +305,14 @@ if let Ok(dir) = std::env::var("DDRUN_STEAM_ROOT") {
 
 **位置**：`crates/dd-ext/src/builtins/shell.rs:233-248`（`CommandResult::Confirm { .. }` 构造处；Confirm 字面量本体 235-245，完整分支到 248）
 
-**改法**：description 文案改为明示"不拦截"语义（中英双语走既有 `tr()`）：
+**改法**：description 文案改为明示"不拦截"语义（中英双语走既有 `tr()`；**实施增补（2026-10-10）**：文案前置 `将执行：{query}` 首行——确认弹窗必须让用户看到命令内容，纯声明句会丢失该信息）：
 
-> 中：**"dd-run 不会拦截或沙箱化任何命令：确认后将以你的用户权限直接执行。请核对命令内容再继续。"**
-> 英：**"dd-run does not block or sandbox commands: on confirm it runs with your user privileges as-is. Review the command before continuing."**
+> 中：**"将执行：{query}⏎⏎dd-run 不会拦截或沙箱化任何命令：确认后将以你的用户权限直接执行，请核对命令内容再继续。"**（⏎ = 换行）
+> 英：**"Will run: {query}⏎⏎dd-run does not block or sandbox commands: on confirm it runs with your user privileges as-is. Review the command before continuing."**
 
 标题保留"危险命令"，确认按钮标签保留现状（critical 红底语义不变）。egui `ConfirmDialog`（`dd-gui/src/ui/confirm.rs`）按 `description` 渲染，UI 层零改动。
 
-**新增测试**（shell.rs tests）：断言未确认分支返回的 `CommandResult::Confirm` 的 description 同时含"不会拦截"与"用户权限"（中文文案）；英文分支含 "does not block"。
+**新增测试**（shell.rs tests）：断言未确认分支返回的 `CommandResult::Confirm` 的 description 同时含"不会拦截"与"用户权限"（中文文案）、显示实际命令（`{query}` 已替换）、`is_critical` 不变。**实施口径**：进程级语言不能在单测翻转（i18n.rs tests 尾注既有口径），英文分支断言由 tr 双字面量静态保证 + 真机腿覆盖，不入单测。
 
 **验收标准**：`cargo test -p dd-ext shell::` 全绿；真机触发 `shutdown /r` 类命令，弹窗文案与上述一致、Enter/Esc 语义不变。
 
