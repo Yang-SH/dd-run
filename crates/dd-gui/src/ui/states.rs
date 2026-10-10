@@ -17,7 +17,7 @@ use eframe::egui;
 ///
 /// 返回整行可交互响应（hover + click 感知），供 `draw_list` 做
 /// 「悬停高亮 / 单击执行」与「选中项滚入可视区」。
-/// `icon` = [`PaletteApp::resolve_icons`] 预解析结果（`None` 项 = 弱色占位
+/// `icon` = [`PaletteApp::resolve_icons_readonly`] 预解析结果（`None` 项 = 弱色占位
 /// glyph，对齐不变——I1 修订原「空列」决策）。
 ///
 /// 行背景在 Frame 之前按**预算行矩形**判定 hover（`ui.rect_contains_pointer`），

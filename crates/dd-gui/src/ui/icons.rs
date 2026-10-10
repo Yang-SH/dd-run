@@ -115,21 +115,26 @@ pub(crate) fn decode_icon_image(bytes: &[u8]) -> Option<egui::ColorImage> {
 }
 
 impl PaletteApp {
-    /// 预解析一批可见项的图标为渲染形态（M5 批次 2）。
+    /// F8（2026-10-10）：只读图标解析（原 `resolve_icons` 的借用化重构，M5 批次 2 演进）——
+    /// 参数改借用 `&PanelItem`（内部只读 `icon` 字段，从不拥有项数据），且**不写
+    /// 缓存**：miss 项的读盘/解码产物收集进返回值 [`IconCacheWrites`]，由调用方在
+    /// items 借用结束后经 [`Self::ingest_icon_writes`] 统一落盘。这样 `&self`
+    /// 只读与调用方的 `items` 不可变借用共存合法（绘制段全借用的前提）。
     ///
-    /// 在 `ScrollArea` 闭包**外**调用（可 `&mut self` 写纹理缓存）：
+    /// 缓存语义不变（M3/M5 口径）：
     /// - `glyph` → 原文直接渲染（图标字体已在 `setup_cjk_fonts` 装入字形回退链）；
-    /// - `path` → 查 [`Self::icon_cache`]；未命中则读盘 + [`decode_icon_image`] +
-    ///   `ctx.load_texture` 入缓存；读盘/解码失败 → 占位 glyph（[`PLACEHOLDER_GLYPH`]）；
+    /// - `path` → 查 [`Self::icon_cache`]；未命中则读盘 + [`decode_icon_image`]；
+    ///   读盘/解码失败 → 占位 glyph（[`PLACEHOLDER_GLYPH`]）+ 负缓存记档；
     /// - `url` → 留接口暂缓（M5 决策：不做网络下载），弱色占位 glyph（I1）；
     /// - 无 icon → 弱色占位 glyph（I1 修订设计稿 04：原「空列」改为占位符，
     ///   对齐不变、观感不再像「图标缺失」）。
-    pub(crate) fn resolve_icons(
-        &mut self,
+    pub(crate) fn resolve_icons_readonly(
+        &self,
         ctx: &egui::Context,
-        items: &[(usize, PanelItem)],
-    ) -> HashMap<usize, IconView> {
+        items: &[(usize, &PanelItem)],
+    ) -> (HashMap<usize, IconView>, IconCacheWrites) {
         let mut views = HashMap::new();
+        let mut writes = IconCacheWrites::default();
         for (idx, item) in items {
             let Some(icon) = &item.icon else {
                 continue;
@@ -158,15 +163,12 @@ impl PaletteApp {
                                 let dark = icon_is_dark(&img);
                                 let name = format!("dd-path-icon://{}", icon.value);
                                 let tex = ctx.load_texture(name, img, egui::TextureOptions::LINEAR);
-                                let view = IconView::Texture {
-                                    tex: tex.clone(),
-                                    dark,
-                                };
-                                self.icon_cache.insert(icon.value.clone(), (tex, dark));
-                                view
+                                // F8：缓存写收集后置（原在此处直接 &mut self 写入）
+                                writes.cache.push((icon.value.clone(), (tex.clone(), dark)));
+                                IconView::Texture { tex, dark }
                             }
                             None => {
-                                self.icon_failed.insert(icon.value.clone());
+                                writes.failed.push(icon.value.clone());
                                 log::debug!(
                                     "[dd-gui] path 图标读盘/解码失败：{}（回落占位 glyph，本次会话不再重试）",
                                     icon.value
@@ -183,8 +185,29 @@ impl PaletteApp {
             };
             views.insert(*idx, view);
         }
-        views
+        (views, writes)
     }
+
+    /// F8：把只读解析阶段收集的缓存产物落盘（items 借用结束后调用，`&mut self`）。
+    /// 语义与原 `resolve_icons` 的即时写入一致（cache 正缓存 / failed 负缓存）。
+    pub(crate) fn ingest_icon_writes(&mut self, writes: IconCacheWrites) {
+        for (key, entry) in writes.cache {
+            self.icon_cache.insert(key, entry);
+        }
+        for key in writes.failed {
+            self.icon_failed.insert(key);
+        }
+    }
+}
+
+/// F8：[`PaletteApp::resolve_icons_readonly`] 收集的缓存写（借用段内不可
+/// `&mut self`，故先收集、借用结束后由 [`PaletteApp::ingest_icon_writes`] 统一写入）。
+#[derive(Default)]
+pub(crate) struct IconCacheWrites {
+    /// 正缓存：路径 → (纹理, 是否深色)
+    cache: Vec<(String, (egui::TextureHandle, bool))>,
+    /// 负缓存：读盘/解码失败过的路径（本会话不再重试）
+    failed: Vec<String>,
 }
 
 /// 渲染列表行图标单元格（边长 `m.icon_cell`，行首固定列，垂直居中）。

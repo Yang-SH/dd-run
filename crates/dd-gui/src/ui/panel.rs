@@ -436,6 +436,13 @@ impl PaletteApp {
         let p = theme::Palette::of(ui.visuals().dark_mode);
         // F2：列表密度档 → 行几何/排印指标（行高/字号/图标格一档联动）
         let metrics = theme::ListMetrics::of(self.settings.density);
+        // F7（2026-10-10）：PgUp/PgDn 页步长 = 本帧可视行数（面板可用高 /
+        // 行高实测，三档密度 metrics.row_h——**不能用常量 ROW_H**，见 D8 契约）。
+        // 用面板可用高近似 ScrollArea 可视高（页脚/边距占比小，翻页步长允许
+        // 粗粒度）；下限钳制在 set_page_step 内。须在下方 `self.stack.current()`
+        // 不可变借用前完成回写。
+        let page_rows = (ui.available_height() / metrics.row_h.max(1.0)) as usize;
+        self.stack.current_mut().list.set_page_step(page_rows);
         // P2 v5：行填充材质适配（hover 分档 + selected 玻璃化治扫动闪烁，
         // 见 `theme::row_fills`——循环外一次解析，行内直用）。
         let row_fills = theme::row_fills(
@@ -448,7 +455,7 @@ impl PaletteApp {
 
         // 先把需要的状态拷贝出来（释放对 `self` 的不可变借用），
         // 以便循环结束后可写回 hover/click 结果，避免借用冲突。
-        let (is_loading, empty, selected, items, query_empty) = {
+        let (is_loading, empty, selected, query_empty) = {
             let page = self.stack.current();
             (
                 // 首拉 Loading（`open_page` 置位）或**延迟骨架到期**——快速补拉
@@ -457,10 +464,6 @@ impl PaletteApp {
                 page.is_loading || page.skeleton_due(std::time::Instant::now()),
                 page.empty.clone(),
                 page.list.selected_index(),
-                page.list
-                    .filtered()
-                    .map(|(i, it)| (i, it.clone()))
-                    .collect::<Vec<_>>(),
                 page.list.query().is_empty(),
             )
         };
@@ -471,6 +474,11 @@ impl PaletteApp {
                 ui.ctx().request_repaint_after(deadline - now);
             }
         }
+
+        // F8：可见项**借用表**（不 clone 项数据，消除每帧深拷贝）；借用存活至
+        // ScrollArea 闭包结束（NLL），期间禁止 `&mut self`（写回全部后置）。
+        // 置于骨架/空态分支前——`items.is_empty()` 空态判定即消费它。
+        let items: Vec<(usize, &PanelItem)> = self.stack.current().list.filtered().collect();
 
         if is_loading {
             // C 组批次 C2（§07.2）：Spinner + 3 条骨架行替换纯文本；
@@ -506,17 +514,19 @@ impl PaletteApp {
             return;
         }
 
-        // 按 section 分组（用拷贝出的 items，不借用 self）
-        let mut groups: Vec<(String, Vec<(usize, PanelItem)>)> = Vec::new();
+        // 按 section 分组（借用形式：section 借自项的 String，项借用 items）
+        let mut groups: Vec<(&str, Vec<(usize, &PanelItem)>)> = Vec::new();
         for (idx, item) in &items {
-            match groups.iter_mut().find(|(s, _)| s == &item.section) {
-                Some((_, list)) => list.push((*idx, item.clone())),
-                None => groups.push((item.section.clone(), vec![(*idx, item.clone())])),
+            match groups.iter_mut().find(|(s, _)| *s == item.section.as_str()) {
+                Some((_, list)) => list.push((*idx, *item)),
+                None => groups.push((item.section.as_str(), vec![(*idx, *item)])),
             }
         }
 
-        // M5 批次 2：ScrollArea 闭包外预解析图标（闭包内只读借用，避免借用冲突）
-        let icon_views = self.resolve_icons(ui.ctx(), &items);
+        // M5 批次 2：ScrollArea 闭包外预解析图标（F8：只读解析 + 缓存写收集
+        // 后置——`&self` 只读与 items 不可变借用共存；`ingest_icon_writes` 在
+        // 闭包结束、借用结束后统一落盘）
+        let (icon_views, icon_writes) = self.resolve_icons_readonly(ui.ctx(), &items);
 
         let mut hovered: Option<usize> = None;
         let mut clicked: Option<usize> = None;
@@ -554,7 +564,7 @@ impl PaletteApp {
                             ui.add_space(12.0);
                             ui.horizontal(|ui| {
                                 ui.add_space(10.0);
-                                ui.label(theme::semibold_title(section, 12.0).color(p.text3));
+                                ui.label(theme::semibold_title(*section, 12.0).color(p.text3));
                             });
                             ui.add_space(4.0);
                         } else {
@@ -563,7 +573,7 @@ impl PaletteApp {
                         for (idx, item) in group_items {
                             let resp = draw_item_row(
                                 ui,
-                                item,
+                                *item,
                                 Some(*idx) == selected,
                                 icon_views.get(idx),
                                 hover_visual,
@@ -605,6 +615,8 @@ impl PaletteApp {
                 });
         });
         self.ctx_row_rects = row_rects;
+        // F8：图标缓存写落盘（items 借用已随 ScrollArea 闭包结束，`&mut self` 合法）
+        self.ingest_icon_writes(icon_writes);
 
         // 回写鼠标结果：
         // - clicked：选中并直接执行（与 Enter 等价），不受 hover 冲突规则影响；
@@ -651,8 +663,16 @@ impl PaletteApp {
         // ── v4.4 右键菜单触发（D19）───────────────────────────────
         // 右键行：置选中（与键盘选中视觉一致）+ 打开菜单（锚点 = 右键点 + 2,2）。
         if let Some((idx, pos)) = right_clicked {
-            if let Some((_, item)) = items.iter().find(|(i, _)| *i == idx) {
-                let item = item.clone();
+            // F8：items 借用已结束——按 index 重查 + 单次 clone（每帧 0 次，
+            // 仅真实右键时发生；`current()` 只读借用先结束再 `current_mut()`）
+            let hit = self
+                .stack
+                .current()
+                .list
+                .filtered()
+                .find(|(i, _)| *i == idx)
+                .map(|(_, it)| it.clone());
+            if let Some(item) = hit {
                 self.stack.current_mut().list.set_selected(idx);
                 self.last_hovered_index = Some(idx);
                 self.scroll_follow = false;
@@ -669,8 +689,15 @@ impl PaletteApp {
             self.want_ctx_menu_for_selected = false;
             let selected_now = self.stack.current().list.selected_index();
             if let (Some(sel), Some(rect)) = (selected_now, selected_rect) {
-                if let Some((_, item)) = items.iter().find(|(i, _)| *i == sel) {
-                    let item = item.clone();
+                // F8：借用结束后按 index 重查 + 单次 clone（仅键盘触发时发生）
+                let hit = self
+                    .stack
+                    .current()
+                    .list
+                    .filtered()
+                    .find(|(i, _)| *i == sel)
+                    .map(|(_, it)| it.clone());
+                if let Some(item) = hit {
                     let anchor = egui::pos2(rect.left(), rect.bottom());
                     self.open_ctx_menu(sel, &item, anchor);
                     ui.ctx().request_repaint();
