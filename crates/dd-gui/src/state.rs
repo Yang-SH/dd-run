@@ -147,6 +147,10 @@ pub struct PanelState {
     /// 嵌套页是否跳过宿主本地二次过滤（`true` = 扩展 `get_items` 已按查询过滤/排序完毕，
     /// 宿主 `visible` 直接 = 全部 `items`，保持扩展返回顺序）。Root 页恒为 `false`。
     passthrough: bool,
+    /// PgUp/PgDn 页步长（F7，2026-10-10）：`panel.rs` 的 `draw_list` 每帧按
+    /// ScrollArea 可视高 / 行高（密度三档 `metrics.row_h`）实测回写；未回写时
+    /// 默认 10。私有字段，经 [`Self::set_page_step`] 更新。
+    page_step: usize,
 }
 
 impl PanelState {
@@ -180,6 +184,8 @@ impl PanelState {
             // 默认隐藏（设置 `search_steam_games` 默认关 = 游戏不参与搜索）。
             steam_hidden: true,
             passthrough: false,
+            // F7：PgUp/PgDn 页步长默认 10（panel.rs 每帧按可视行高实测回写覆盖）。
+            page_step: 10,
         };
         s.recompute_visible();
         s.reset_selection();
@@ -353,6 +359,49 @@ impl PanelState {
             Selected::Some(0) => Selected::Some(n - 1), // 环绕
             Selected::Some(i) => Selected::Some(i - 1),
         };
+    }
+
+    /// PgUp/PgDn 页步长回写（F7）：`panel.rs` 的 `draw_list` 每帧按可视行数
+    /// 实测计算后调用；`n` 下限 1（防零步长原地踏步）。
+    pub fn set_page_step(&mut self, n: usize) {
+        self.page_step = n.max(1);
+    }
+
+    /// `Home`：跳到第一项。空列表无操作。
+    pub fn move_home(&mut self) {
+        if self.visible_count() > 0 {
+            self.selected = Selected::Some(0);
+        }
+    }
+
+    /// `End`：跳到最后一项。空列表无操作。
+    pub fn move_end(&mut self) {
+        let n = self.visible_count();
+        if n > 0 {
+            self.selected = Selected::Some(n - 1);
+        }
+    }
+
+    /// `PgDn`：下移一页（`page_step` 项）。**不回绕**——与 `move_down` 的环绕
+    /// 语义刻意不同：翻页是跳转手势，越界即停在末项（F7 取舍，注释与
+    /// 设计稿键位表同步记档）。
+    pub fn move_page_down(&mut self) {
+        let n = self.visible_count();
+        if n == 0 {
+            return;
+        }
+        let cur = self.selected_index().unwrap_or(0);
+        self.selected = Selected::Some((cur + self.page_step).min(n - 1));
+    }
+
+    /// `PgUp`：上移一页。同 [`Self::move_page_down`]，不回绕，越界停在首项。
+    pub fn move_page_up(&mut self) {
+        let n = self.visible_count();
+        if n == 0 {
+            return;
+        }
+        let cur = self.selected_index().unwrap_or(0);
+        self.selected = Selected::Some(cur.saturating_sub(self.page_step));
     }
 
     /// `Enter`：返回当前选中项（若存在）。
@@ -808,6 +857,66 @@ mod tests {
         assert_eq!(s.selected_index(), Some(2));
         s.move_up();
         assert_eq!(s.selected_index(), Some(1));
+    }
+
+    /// F7：Home 跳首项；空列表无操作。
+    #[test]
+    fn move_home_selects_first() {
+        let mut s = PanelState::new(sample_items());
+        s.move_end();
+        s.move_home();
+        assert_eq!(s.selected_index(), Some(0));
+        let mut empty = PanelState::new(vec![]);
+        empty.move_home();
+        assert_eq!(empty.selected_index(), None);
+    }
+
+    /// F7：End 跳末项；空列表无操作。
+    #[test]
+    fn move_end_on_empty_list_is_noop() {
+        let mut empty = PanelState::new(vec![]);
+        empty.move_end();
+        assert_eq!(empty.selected_index(), None);
+        let mut s = PanelState::new(sample_items());
+        s.move_end();
+        assert_eq!(s.selected_index(), Some(2));
+    }
+
+    /// F7：PgUp/PgDn 按页步长跳转、**不回绕**（与 ↑↓ 环绕刻意不同）；
+    /// 默认步长 10 与自定义 3 两档；越界钳制到边界。
+    #[test]
+    fn move_page_clamps_without_wrap() {
+        let base = sample_items();
+        let items: Vec<PanelItem> = (0..25)
+            .map(|i| {
+                let mut it = base[i % base.len()].clone();
+                it.title = format!("Item {i}");
+                it
+            })
+            .collect();
+        // 默认步长 10
+        let mut s = PanelState::new(items.clone());
+        s.move_page_down();
+        assert_eq!(s.selected_index(), Some(10));
+        s.move_page_down();
+        assert_eq!(s.selected_index(), Some(20));
+        s.move_page_down(); // 20 + 10 = 30 → 钳到 24，不回绕
+        assert_eq!(s.selected_index(), Some(24));
+        s.move_page_up();
+        assert_eq!(s.selected_index(), Some(14));
+        // 自定义步长 3
+        let mut s3 = PanelState::new(items);
+        s3.set_page_step(3);
+        s3.move_page_down();
+        assert_eq!(s3.selected_index(), Some(3));
+        s3.move_page_up();
+        assert_eq!(s3.selected_index(), Some(0));
+        s3.move_page_up(); // 0 − 3 saturating → 停在首项，不回绕到末尾
+        assert_eq!(s3.selected_index(), Some(0));
+        // 步长下限防御：0 会被钳到 1
+        s3.set_page_step(0);
+        s3.move_page_down();
+        assert_eq!(s3.selected_index(), Some(1));
     }
 
     #[test]

@@ -85,6 +85,19 @@ impl PaletteApp {
         // v4.4（D19）：Shift+F10 对选中行打开右键菜单（egui 0.36 键表无 Menu
         // 键，Shift+F10 为 Windows 菜单键的等价惯例——偏离记档：Menu 键不可达）。
         let shift_f10 = ctx.input_mut(|i| i.consume_key(egui::Modifiers::SHIFT, egui::Key::F10));
+        // F7（2026-10-10）：Home/End/PgUp/PgDn 列表导航（长列表便利性，对齐
+        // CmdPal / PowerToys Run）。与 ↑↓ 同层消费（NONE 修饰）。取舍声明：
+        // 搜索框聚焦时 Home/End 被列表消费（handle_keys 先于 TextEdit 处理
+        // 输入）——单行输入框内光标跳行首/行尾让位列表导航，与 CmdPal 行为
+        // 一致；未来若需保留编辑光标语义可改 Ctrl+Home/End，本轮不做。
+        let (home, end, page_up, page_down) = ctx.input_mut(|i| {
+            (
+                i.consume_key(egui::Modifiers::NONE, egui::Key::Home),
+                i.consume_key(egui::Modifiers::NONE, egui::Key::End),
+                i.consume_key(egui::Modifiers::NONE, egui::Key::PageUp),
+                i.consume_key(egui::Modifiers::NONE, egui::Key::PageDown),
+            )
+        });
 
         // 确认对话框活跃时：Enter=确认、Esc=取消，其余键不穿透到列表
         if self.confirm.is_some() {
@@ -166,6 +179,23 @@ impl PaletteApp {
         }
         if up || shift_tab {
             self.stack.current_mut().list.move_up();
+            self.scroll_follow = true;
+        }
+        // F7：Home/End/PgUp/PgDn 与 ↑↓ 同分支分发（scroll_follow 同步置位）
+        if home {
+            self.stack.current_mut().list.move_home();
+            self.scroll_follow = true;
+        }
+        if end {
+            self.stack.current_mut().list.move_end();
+            self.scroll_follow = true;
+        }
+        if page_down {
+            self.stack.current_mut().list.move_page_down();
+            self.scroll_follow = true;
+        }
+        if page_up {
+            self.stack.current_mut().list.move_page_up();
             self.scroll_follow = true;
         }
         if enter {

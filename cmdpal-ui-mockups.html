@@ -1399,6 +1399,8 @@
       <tr><th>键位</th><th>作用</th><th>生效范围 / 例外</th></tr>
       <tr><td><b class="keycap">Ctrl+F</b></td><td><b>文件搜索直达</b>（D39）</td><td>面板内任意页；已在结果页时仅聚焦（输入保留）；设置页「热键捕获」模式中仅作候选键</td></tr>
       <tr><td><b class="keycap">↑</b> <b class="keycap">↓</b></td><td>列表移动</td><td>鼠标静止时不抢键盘选中（既有交互约定）</td></tr>
+      <tr><td><b class="keycap">Home</b> <b class="keycap">End</b></td><td>跳到列表首项 / 末项（F7）</td><td>搜索框聚焦时被列表消费（与 ↑↓ 同策略，handle_keys 先于 TextEdit）——单行输入框内光标跳行首/行尾让位列表导航，与 CmdPal 行为一致</td></tr>
+      <tr><td><b class="keycap">PgUp</b> <b class="keycap">PgDn</b></td><td>列表翻页（步长 = 可视行数，按密度档 <code>metrics.row_h</code> 实测）</td><td><b>不回绕</b>：越界停在末项/首项（与 ↑↓ 环绕语义刻意不同——翻页是跳转手势，F7 取舍）</td></tr>
       <tr><td><b class="keycap">Tab</b> / <b class="keycap">Shift+Tab</b></td><td>列表移动（正向 / 反向）</td><td>Tab 不用于焦点遍历——保持列表导航语义</td></tr>
       <tr><td><b class="keycap">Enter</b></td><td>执行选中项（默认命令）</td><td>确认对话框活跃时 = 确认</td></tr>
       <tr><td><b class="keycap">Esc</b></td><td>返回上一级；Root = 隐藏面板</td><td>确认对话框 = 取消；右键菜单 = 关闭菜单并回到列表</td></tr>
