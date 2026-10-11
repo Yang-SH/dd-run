@@ -14,13 +14,14 @@
 //! - **三态降级（D5）**：`Valid` → 免同意 `AutoTrusted`；`Invalid` → fail-closed
 //!   `Pending` + 告警位（比现状严）；`Absent` → 落入既有判定（不比现状差）。
 //!
-//! ## 发布状态（批次一已落地）
+//! ## 发布状态（批次一落地；真钥已轮换 2026-10-11）
 //!
 //! - 验签机器全量就位（解析 / 捆绑 / ed25519 验签 / 三态整合 + 单测）；
-//! - [`PUBLISHER_PUBLIC_KEY_HEX`] 为**占位公钥**：openssl 现场生成、**种子即弃**
-//!   （未写入任何文件/CI）——当前没有任何 `.sig` 能通过内置公钥验签，属预期
-//!   安全姿态（fail-closed）；批次二以 Release 工作流 secret 持有真种子、轮换
-//!   本常量并补端到端用例（含内置公钥全链路腿）；
+//! - [`PUBLISHER_PUBLIC_KEY_HEX`] 已轮换为**发行方真钥公钥**（密钥仪式
+//!   2026-10-11：`--gen-sign-key` 离线生成、种子入 Release 工作流 secret
+//!   `DDRUN_SIGN_KEY`，CI 经「Materialize signing key」步落地为临时文件供
+//!   package.sh 签名钩子消费；种子本体离线保管、永不离机入库）。批次一
+//!   占位钥（种子即弃）遗留的 `.sig` 兼容面为零（占位期无任何有效 `.sig`）；
 //! - 非 Windows：哈希走纯 Rust `sha2`（O6 首批收口 D2 缺口）——验签三态在
 //!   全平台同语义；ed25519 验签本身跨平台。
 
@@ -31,11 +32,11 @@ use std::path::{Path, PathBuf};
 
 /// 发行方公钥（Ed25519 公钥，32 字节小写 hex）。
 ///
-/// **批次一占位**：由 openssl 现场生成、种子即弃（未落任何存储）——当前不存在
-/// 能签出有效 `.sig` 的私钥，任何 `.sig` 都会落入 `Invalid`（fail-closed）。
-/// 批次二以发行方真钥轮换本常量（私钥入 Release 工作流 secret，见选型稿 §4-D4）。
+/// **真钥（2026-10-11 密钥仪式轮换）**：私钥种子仅存于 Release 工作流 secret
+/// `DDRUN_SIGN_KEY` 与发行方离线保管，永不入库；轮换 = 更新本常量 + 重签
+/// 随包扩展并发版（换钥即换发行方身份，全体用户的信任根）。
 pub const PUBLISHER_PUBLIC_KEY_HEX: &str =
-    "298f5123ef025ce61d13ce367bfcf7c5050e287a06b8f4d90dc85d97974438a1";
+    "cd4a4f95c529a4899ff6e078c027d2852ddb55f1eea05dd5fcb168fe41dfbe67";
 
 /// 签名检查三态（O14 选型稿 §4-D5）。
 #[derive(Debug, Clone, PartialEq, Eq)]
