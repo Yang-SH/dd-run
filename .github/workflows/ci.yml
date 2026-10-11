@@ -66,17 +66,15 @@ jobs:
       - name: Unused dependencies
         run: cargo machete
 
-  # O6 首批（2026-10-11）：三方平台构建矩阵探索批——build/test 在 ubuntu/macOS
-  # 上跑通即达成首个可交付物（conformance 类自检随后续批次接入）。**非阻塞**
-  # （continue-on-error）：Linux/macOS 的 GUI 系统依赖（dlopen 系）与平台差异
-  # 首轮可能红，探索收敛后移除本开关并升级为门禁。clippy/fmt 仍以 Windows 门禁
-  # 为准（避免跨平台 lint 噪音稀释既有门禁语义）。
+  # O6 首批（2026-10-11）：三方平台构建矩阵——build/test/conformance 在
+  # ubuntu/macOS 为**阻塞门禁**（探索轮两处平台缺口修复后全绿，已摘
+  # continue-on-error）。clippy/fmt 仍以 Windows 门禁为准（避免跨平台 lint
+  # 噪音稀释既有门禁语义）。
   check-linux:
-    name: build / test (linux, O6 exploratory)
+    name: build / test (linux, O6 gate)
     runs-on: ubuntu-latest
     timeout-minutes: 30
-    continue-on-error: true
-    env:
+        env:
       # 仓库 .cargo/config.toml 硬编码 build.target = x86_64-pc-windows-gnu
       # （本地单平台开发口径）——CI 探索批用 env 覆盖回宿主三元组，否则
       # 非 Windows runner 上连 windows-gnu 的 std 都没有（E0463）。
@@ -106,12 +104,14 @@ jobs:
           done
           tail -n 40 test_output.txt
 
+      - name: Conformance smoke (calc, in-process)
+        run: cargo run -p dd-run-cli -- --conformance --ext-id com.ddrun.calc
+
   check-macos:
-    name: build / test (macos, O6 exploratory)
+    name: build / test (macos, O6 gate)
     runs-on: macos-latest
     timeout-minutes: 30
-    continue-on-error: true
-    env:
+        env:
       # 同上：覆盖 config.toml 的 windows-gnu 默认目标。
       CARGO_BUILD_TARGET: aarch64-apple-darwin
     steps:
@@ -138,3 +138,6 @@ jobs:
             echo "::error::$line"
           done
           tail -n 40 test_output.txt
+
+      - name: Conformance smoke (calc, in-process)
+        run: cargo run -p dd-run-cli -- --conformance --ext-id com.ddrun.calc

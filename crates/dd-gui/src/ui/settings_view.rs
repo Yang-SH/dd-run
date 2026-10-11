@@ -311,9 +311,12 @@ mod tests {
     #[test]
     fn dropdown_width_clamps_zh_and_en() {
         let ctx = egui::Context::default();
-        let segoeui = std::fs::read(r"C:\Windows\Fonts\segoeui.ttf").expect(
-            "测试前置失败：C:\\Windows\\Fonts\\segoeui.ttf 不可读（本测试仅在 Windows 跑）",
-        );
+        let Ok(segoeui) = std::fs::read(r"C:\Windows\Fonts\segoeui.ttf") else {
+            // O6：非 Windows 平台无该系统字体——测宽前提不成立，优雅跳过
+            // （Windows CI / 真机保持全覆盖）。
+            eprintln!("skip: C:\\Windows\\Fonts\\segoeui.ttf 不可读（非 Windows 平台）");
+            return;
+        };
         let mut fonts = egui::FontDefinitions::default();
         fonts.font_data.insert(
             "segoeui".to_owned(),

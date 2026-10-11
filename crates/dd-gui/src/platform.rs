@@ -1341,8 +1341,11 @@ mod tests {
     }
 
     #[test]
+    #[cfg(windows)]
     fn resolve_file_url_to_path_prefers_existing_literal_file() {
-        // 存在性优选：两个同名候选都在时，先看字面 `%` 文件，再看解码后文件
+        // 存在性优选：两个同名候选都在时，先看字面 `%` 文件，再看解码后文件。
+        // 本函数语义 = Windows explorer 打开链路（§9.6，P4 口径：候选为反斜杠
+        // UNC/盘符形态）——跨平台 file:// 语义属 O6 后续批次。
         let dir = std::env::temp_dir().join("dd-run-url-fixture");
         std::fs::create_dir_all(&dir).expect("建夹具目录");
         let literal = dir.join("report%20final.txt");
