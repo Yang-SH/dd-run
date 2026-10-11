@@ -561,7 +561,9 @@ fn message_loop_unix(
         //    回发失败事件——与 Windows 侧 message_loop 的 seq 协议一致。
         while let Ok(cmd) = cmd_rx.try_recv() {
             let old = current;
-            let mut result = (false, false); // (ok, rolled_back)
+            // (ok, rolled_back)——match 全分支都会赋值，无需初始化
+            //（linux 构建曾报 unused_assignments：初始值从未被读）。
+            let result;
             match (&manager, to_hotkey(cmd.mods, cmd.vk)) {
                 (Some(m), Some(hk)) => {
                     if let Some(cur) = old {

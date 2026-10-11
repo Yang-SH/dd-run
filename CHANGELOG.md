@@ -8,7 +8,7 @@
 
 - `PUBLISHER_PUBLIC_KEY_HEX` 占位公钥轮换为**发行方真钥公钥**（`signing.rs` 常量与模块头注释同步）；真钥种子仅存于 Release 工作流 secret `DDRUN_SIGN_KEY` 与发行方离线保管，永不入库。占位期无任何有效 `.sig`，兼容面为零。
 - **随仪式修正**：① release.yml 补「Materialize signing key」步——secret 内容落 `RUNNER_TEMP` 临时文件供 package.sh 签名钩子按路径消费（原配置 CI 会静默跳过签名）；② package.sh dev 工具（dd-run-cli/dd-ext-sample）拷贝前先构建（原拷 target 残留，曾为缺签名子命令的旧版）。
-- 端到端预演通过（2026-10-11）：真钥签发随包 `.sig`（双 SHA256 锚格式逐位符合设计），新内置公钥离线校验 ✅（exit 0）；篡改/换钥拒绝腿批量确认。CI 自动签发与真包验证归发版。
+- 端到端预演通过（2026-10-11）：真钥签发随包 `.sig`（双 SHA256 锚格式逐位符合设计），新内置公钥离线校验 ✅（exit 0）；篡改/换钥拒绝腿批量确认。**CI 自动签发已实证**（同日 Release dispatch run 38139151768 三作业全绿，Windows job 日志 `✅ 已签发`）；正式发版（版本提升 + tag）待定。
 
 ### O6 批次四：打包链平台化（三平台发布产物，2026-10-11）
 
