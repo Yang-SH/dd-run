@@ -1,4 +1,5 @@
-//! 发行方扩展签名（**O14/F12 批次一**，2026-10-11）。
+//! 发行方扩展签名（**O14/F12 批次一**，2026-10-11；批次二签发工具链见 CLI
+//! `--gen-sign-key` / `--sign-ext` / `--verify-ext-sig`）。
 //!
 //! 完整选型与三态语义见 [`docs/extension-signing-plan.md`](../../../docs/extension-signing-plan.md)
 //! §4–§5。要点：
@@ -13,7 +14,7 @@
 //! - **三态降级（D5）**：`Valid` → 免同意 `AutoTrusted`；`Invalid` → fail-closed
 //!   `Pending` + 告警位（比现状严）；`Absent` → 落入既有判定（不比现状差）。
 //!
-//! ## 批次一范围（本模块现状）
+//! ## 发布状态（批次一已落地）
 //!
 //! - 验签机器全量就位（解析 / 捆绑 / ed25519 验签 / 三态整合 + 单测）；
 //! - [`PUBLISHER_PUBLIC_KEY_HEX`] 为**占位公钥**：openssl 现场生成、**种子即弃**
@@ -26,7 +27,7 @@
 
 use crate::manifest::LoadedExtension;
 use crate::trust::sha256_file;
-use ed25519_dalek::{Signature, VerifyingKey};
+use ed25519_dalek::{Signature, Signer, SigningKey, VerifyingKey};
 use std::path::{Path, PathBuf};
 
 /// 发行方公钥（Ed25519 公钥，32 字节小写 hex）。
@@ -66,7 +67,31 @@ pub fn bundle_message(manifest_sha_hex: &str, exe_sha_hex: &str) -> Vec<u8> {
     format!("dd-run-ext-sig-v1\nmanifest={manifest_sha_hex}\nexe={exe_sha_hex}\n").into_bytes()
 }
 
-/// 解析 `.sig` 文本（选型稿 §5 草案）：
+/// 标准 base64 编码（仅 `.sig` 载荷使用；手写实现避免为 88 字符引入 base64
+/// crate，O3 依赖克制口径）。**签发与验签共用本函数对**——格式单一来源。
+fn encode_base64(b: &[u8]) -> String {
+    const TABLE: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = String::new();
+    for chunk in b.chunks(3) {
+        let mut buf = [0u8; 3];
+        buf[..chunk.len()].copy_from_slice(chunk);
+        out.push(TABLE[(buf[0] >> 2) as usize] as char);
+        out.push(TABLE[((buf[0] & 0x03) << 4 | buf[1] >> 4) as usize] as char);
+        out.push(if chunk.len() > 1 {
+            TABLE[((buf[1] & 0x0F) << 2 | buf[2] >> 6) as usize] as char
+        } else {
+            '='
+        });
+        out.push(if chunk.len() > 2 {
+            TABLE[(buf[2] & 0x3F) as usize] as char
+        } else {
+            '='
+        });
+    }
+    out
+}
+
+/// 解析 `.sig` 文本（选型稿 §5）：
 ///
 /// ```text
 /// untrusted comment: dd-run extension signature v1
@@ -104,8 +129,7 @@ fn parse_sig(text: &str) -> Result<(Signature, String, String), &'static str> {
     Ok((sig, m.to_ascii_lowercase(), x.to_ascii_lowercase()))
 }
 
-/// 标准 base64 解码（64 字节定长）。**刻意手写**：仅此一处使用，避免为 88 字符
-/// 引入 base64 crate（依赖克制，O3 口径）。
+/// 标准 base64 解码（64 字节定长）。与 [`encode_base64`] 严格互逆。
 fn base64_decode_64(s: &str) -> Option<[u8; 64]> {
     const TABLE: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
     let s = s.trim_end_matches('=');
@@ -129,13 +153,12 @@ fn base64_decode_64(s: &str) -> Option<[u8; 64]> {
     (oi == 64).then_some(out)
 }
 
-/// 内置公钥解析（防御式：常量损坏 → `None`，调用方视作 `Absent` 并记日志）。
-pub fn built_in_verifying_key() -> Option<VerifyingKey> {
-    let mut key = [0u8; 32];
-    let hex = PUBLISHER_PUBLIC_KEY_HEX;
+/// 通用 hex（64 字符）→ Ed25519 公钥。内置钥与 CLI `--verify-ext-sig` 共用。
+pub fn verifying_key_from_hex(hex: &str) -> Option<VerifyingKey> {
     if hex.len() != 64 {
         return None;
     }
+    let mut key = [0u8; 32];
     for (i, chunk) in hex.as_bytes().chunks(2).enumerate() {
         let hi = (chunk[0] as char).to_digit(16)? as u8;
         let lo = (chunk[1] as char).to_digit(16)? as u8;
@@ -144,15 +167,39 @@ pub fn built_in_verifying_key() -> Option<VerifyingKey> {
     VerifyingKey::from_bytes(&key).ok()
 }
 
+/// 内置公钥解析（防御式：常量损坏 → `None`，调用方视作 `Absent` 并记日志）。
+pub fn built_in_verifying_key() -> Option<VerifyingKey> {
+    verifying_key_from_hex(PUBLISHER_PUBLIC_KEY_HEX)
+}
+
+/// 签发侧（批次二，签发链用）：清单 + exe 双哈希 → 捆绑签名 → `.sig` 文本
+/// （与 [`parse_sig`] 严格互逆——签发与验签共用同一格式单一来源）。
+/// 非 Windows 返回 Err（哈希设施未实现，与验签侧 `Absent` 口径一致）。
+pub fn sign_ext(manifest_path: &Path, exe_path: &Path, sk: &SigningKey) -> Result<String, String> {
+    let m_hex = crate::trust::sha256_file(manifest_path)?;
+    let x_hex = sha256_file(exe_path)?;
+    let sig = sk.sign(&bundle_message(&m_hex, &x_hex));
+    Ok(format!(
+        "untrusted comment: dd-run extension signature v1\n{}\ntrusted comment: manifest={m_hex} exe={x_hex}\n",
+        encode_base64(&sig.to_bytes())
+    ))
+}
+
 /// 三态签名检查（D5）。`Absent` = 无 `.sig` 或非 Windows（哈希设施缺失）；
 /// 其余任何不合法情形一律 `Invalid`（fail-closed），不吞错误。
 pub fn check_signature(ext: &LoadedExtension, vk: &VerifyingKey) -> SigCheck {
+    check_signature_parts(&ext.path, &ext.command, vk)
+}
+
+/// check_signature 的路径核心（CLI --verify-ext-sig 离线校验复用——无需构造
+/// 完整 LoadedExtension）。
+pub fn check_signature_parts(manifest_path: &Path, exe_path: &Path, vk: &VerifyingKey) -> SigCheck {
     if !crate::trust::hash_available() {
         // 非 Windows：捆绑锚的 SHA-256 未实现（trust.rs 已声明缺口），无法构成
         // 验签前提 → 与无 `.sig` 同等回落（现行 fail-open 行为保持不变）。
         return SigCheck::Absent;
     }
-    let sig_path = sig_path_for(&ext.path);
+    let sig_path = sig_path_for(manifest_path);
     if !sig_path.is_file() {
         return SigCheck::Absent;
     }
@@ -165,7 +212,7 @@ pub fn check_signature(ext: &LoadedExtension, vk: &VerifyingKey) -> SigCheck {
         Err(e) => return SigCheck::Invalid(e),
     };
     // 双哈希：清单读字节（清单小，直接读），exe 流式（可达数十 MB，复用既有设施）。
-    let manifest_bytes = match std::fs::read(&ext.path) {
+    let manifest_bytes = match std::fs::read(manifest_path) {
         Ok(b) => b,
         Err(_) => return SigCheck::Invalid("清单读取失败"),
     };
@@ -173,14 +220,14 @@ pub fn check_signature(ext: &LoadedExtension, vk: &VerifyingKey) -> SigCheck {
         Ok(h) => h,
         Err(_) => return SigCheck::Invalid("清单哈希失败"),
     };
-    let x_now = match sha256_file(&ext.command) {
+    let x_now = match sha256_file(exe_path) {
         Ok(h) => h,
         Err(_) => return SigCheck::Invalid("exe 哈希失败"),
     };
     if m_now != m_hex || x_now != x_hex {
         return SigCheck::Invalid("双哈希与 trusted comment 不符（清单或 exe 已变更）");
     }
-    // verify_strict：额外拒绝弱公钥与非规范 R——发行方单源签发，零兼容负担
+    // verify_strict：额外拒绝弱公钥与非规范 R——发行方单源签发，零兼容负担。
     match vk.verify_strict(&bundle_message(&m_now, &x_now), &sig) {
         Ok(()) => SigCheck::Valid,
         Err(_) => SigCheck::Invalid("ed25519 验签失败"),
@@ -188,9 +235,8 @@ pub fn check_signature(ext: &LoadedExtension, vk: &VerifyingKey) -> SigCheck {
 }
 
 #[cfg(test)]
-pub(crate) mod tests {
+mod tests {
     use super::*;
-    use ed25519_dalek::{Signer, SigningKey};
 
     /// 测试专用密钥对（**非**内置占位公钥——内置钥种子已弃，任何测试都不可能
     /// 用它签出 Valid；三态 Valid 腿经注入 `vk` 覆盖）。
@@ -244,40 +290,6 @@ pub(crate) mod tests {
         }
     }
 
-    fn sign_and_write(dir: &Path, sk: &SigningKey, m_hex: &str, x_hex: &str) -> PathBuf {
-        let sig = sk.sign(&bundle_message(m_hex, x_hex));
-        let sig_path = dir.join("com.example.x.json.sig");
-        let body = format!(
-            "untrusted comment: dd-run extension signature v1\n{}\ntrusted comment: manifest={m_hex} exe={x_hex}\n",
-            encode_base64(&sig.to_bytes())
-        );
-        std::fs::write(&sig_path, body).expect("写 .sig");
-        sig_path
-    }
-
-    pub(crate) fn encode_base64(b: &[u8]) -> String {
-        const TABLE: &[u8; 64] =
-            b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-        let mut out = String::new();
-        for chunk in b.chunks(3) {
-            let mut buf = [0u8; 3];
-            buf[..chunk.len()].copy_from_slice(chunk);
-            out.push(TABLE[(buf[0] >> 2) as usize] as char);
-            out.push(TABLE[((buf[0] & 0x03) << 4 | buf[1] >> 4) as usize] as char);
-            out.push(if chunk.len() > 1 {
-                TABLE[((buf[1] & 0x0F) << 2 | buf[2] >> 6) as usize] as char
-            } else {
-                '='
-            });
-            out.push(if chunk.len() > 2 {
-                TABLE[(buf[2] & 0x3F) as usize] as char
-            } else {
-                '='
-            });
-        }
-        out
-    }
-
     #[test]
     fn built_in_key_parses() {
         // 占位公钥常量必须可解析（批次二轮换时防手误）
@@ -303,12 +315,14 @@ pub(crate) mod tests {
         let sk = test_signing_key();
         let m_hex = crate::trust::sha256_bytes(&m).expect("清单哈希");
         let x_hex = crate::trust::sha256_bytes(&x).expect("exe 哈希");
-        let _ = sign_and_write(&dir, &sk, &m_hex, &x_hex);
+        let sig_path = sig_path_for(&ext.path);
+        let body = format!(
+            "untrusted comment: dd-run extension signature v1\n{}\ntrusted comment: manifest={m_hex} exe={x_hex}\n",
+            encode_base64(&sk.sign(&bundle_message(&m_hex, &x_hex)).to_bytes())
+        );
+        std::fs::write(&sig_path, body).expect("写 .sig");
         let vk = sk.verifying_key();
-        let r = check_signature(&ext, &vk);
-        if r != SigCheck::Valid {
-            panic!("VALID 腿失败: {r:?}");
-        }
+        assert_eq!(check_signature(&ext, &vk), SigCheck::Valid);
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -320,7 +334,12 @@ pub(crate) mod tests {
         let sk = test_signing_key();
         let m_hex = crate::trust::sha256_bytes(&m).expect("清单哈希");
         let x_hex = crate::trust::sha256_bytes(&x).expect("exe 哈希");
-        let _ = sign_and_write(&dir, &sk, &m_hex, &x_hex);
+        let sig_path = sig_path_for(&ext.path);
+        let body = format!(
+            "untrusted comment: dd-run extension signature v1\n{}\ntrusted comment: manifest={m_hex} exe={x_hex}\n",
+            encode_base64(&sk.sign(&bundle_message(&m_hex, &x_hex)).to_bytes())
+        );
+        std::fs::write(&sig_path, body).expect("写 .sig");
         // 篡改清单一字节（验收判据 2：fail-closed）
         std::fs::write(
             &ext.path,
@@ -343,7 +362,12 @@ pub(crate) mod tests {
         let sk = test_signing_key();
         let m_hex = crate::trust::sha256_bytes(&m).expect("清单哈希");
         let x_hex = crate::trust::sha256_bytes(&x).expect("exe 哈希");
-        let _ = sign_and_write(&dir, &sk, &m_hex, &x_hex);
+        let sig_path = sig_path_for(&ext.path);
+        let body = format!(
+            "untrusted comment: dd-run extension signature v1\n{}\ntrusted comment: manifest={m_hex} exe={x_hex}\n",
+            encode_base64(&sk.sign(&bundle_message(&m_hex, &x_hex)).to_bytes())
+        );
+        std::fs::write(&sig_path, body).expect("写 .sig");
         // 用另一把钥匙验
         let vk = SigningKey::from_bytes(&[9u8; 32]).verifying_key();
         assert!(
@@ -358,12 +382,31 @@ pub(crate) mod tests {
         let dir = std::env::temp_dir().join(format!("dd-sig-m-{}", std::process::id()));
         let (_, _, _, _) = write_fixtures(&dir);
         let ext = make_ext(&dir);
-        std::fs::write(dir.join("com.example.x.json.sig"), "garbage").expect("写坏 .sig");
+        std::fs::write(sig_path_for(&ext.path), "garbage").expect("写坏 .sig");
         let vk = test_signing_key().verifying_key();
         assert!(
             matches!(check_signature(&ext, &vk), SigCheck::Invalid(_)),
             "坏格式 .sig 应判 Invalid（fail-closed）"
         );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 批次二：sign_ext → parse_sig / check_signature 严格互逆
+    /// （签发与验签共用同一格式来源；换钥验签必须失败）。
+    #[test]
+    fn sign_ext_roundtrips_through_check_signature() {
+        let dir = std::env::temp_dir().join(format!("dd-sig-r-{}", std::process::id()));
+        let (_, _, _, _) = write_fixtures(&dir);
+        let ext = make_ext(&dir);
+        let sk = test_signing_key();
+        let text = sign_ext(&ext.path, &ext.command, &sk).expect("签发");
+        std::fs::write(sig_path_for(&ext.path), text).expect("写 .sig");
+        assert_eq!(check_signature(&ext, &sk.verifying_key()), SigCheck::Valid);
+        let other = SigningKey::from_bytes(&[11u8; 32]);
+        assert!(matches!(
+            check_signature(&ext, &other.verifying_key()),
+            SigCheck::Invalid(_)
+        ));
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

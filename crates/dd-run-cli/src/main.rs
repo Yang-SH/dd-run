@@ -58,6 +58,21 @@ enum Command {
     List,
     Roundtrip,
     Conformance,
+    /// O14/F12 批次二：生成发行方 Ed25519 密钥对（公钥打印 stdout、种子写文件）。
+    GenSignKey,
+    /// O14/F12 批次二：对清单+exe 签发 `.sig`。
+    SignExt,
+    /// O14/F12 批次二：离线校验 `.sig`（指定公钥 hex，内置钥轮换前可预演）。
+    VerifyExtSig,
+}
+
+/// O14/F12 批次二签名子命令的共享参数（清单 / exe / 密钥或公钥）。
+#[derive(Debug, Default)]
+struct SigArgs {
+    manifest: Option<PathBuf>,
+    exe: Option<PathBuf>,
+    key_file: Option<PathBuf>,
+    pubkey_hex: Option<String>,
 }
 
 fn main() -> ExitCode {
@@ -70,6 +85,7 @@ fn main() -> ExitCode {
     let mut dir: Option<PathBuf> = None;
     let mut ext_id: Option<String> = None;
     let mut do_invoke = false;
+    let mut sig_args = SigArgs::default();
     let mut iter = args.iter();
 
     while let Some(arg) = iter.next() {
@@ -81,6 +97,9 @@ fn main() -> ExitCode {
             "--list-extensions" => command = Some(Command::List),
             "--roundtrip" => command = Some(Command::Roundtrip),
             "--conformance" => command = Some(Command::Conformance),
+            "--gen-sign-key" => command = Some(Command::GenSignKey),
+            "--sign-ext" => command = Some(Command::SignExt),
+            "--verify-ext-sig" => command = Some(Command::VerifyExtSig),
             // §6.5 `invoke` 有真实副作用（改剪贴板 / 开浏览器 / 关机…）
             // → `--conformance` 默认**不**调用它，必须显式打开。
             "--invoke" => do_invoke = true,
@@ -95,6 +114,34 @@ fn main() -> ExitCode {
                 Some(value) => dir = Some(PathBuf::from(value)),
                 None => {
                     log::warn!("错误：`--extensions-dir` 缺少目录参数");
+                    return ExitCode::FAILURE;
+                }
+            },
+            "--manifest" => match iter.next() {
+                Some(value) => sig_args.manifest = Some(PathBuf::from(value)),
+                None => {
+                    log::warn!("错误：`--manifest` 缺少路径参数");
+                    return ExitCode::FAILURE;
+                }
+            },
+            "--exe" => match iter.next() {
+                Some(value) => sig_args.exe = Some(PathBuf::from(value)),
+                None => {
+                    log::warn!("错误：`--exe` 缺少路径参数");
+                    return ExitCode::FAILURE;
+                }
+            },
+            "--key" => match iter.next() {
+                Some(value) => sig_args.key_file = Some(PathBuf::from(value)),
+                None => {
+                    log::warn!("错误：`--key` 缺少路径参数");
+                    return ExitCode::FAILURE;
+                }
+            },
+            "--pubkey" => match iter.next() {
+                Some(value) => sig_args.pubkey_hex = Some(value.clone()),
+                None => {
+                    log::warn!("错误：`--pubkey` 缺少 hex 参数");
                     return ExitCode::FAILURE;
                 }
             },
@@ -125,6 +172,122 @@ fn main() -> ExitCode {
         Command::Conformance => {
             conformance(&dir, &opts, explicit_dir, do_invoke, ext_id.as_deref())
         }
+        Command::GenSignKey => gen_sign_key(sig_args.key_file.as_deref()),
+        Command::SignExt => sign_ext_cmd(&sig_args),
+        Command::VerifyExtSig => verify_ext_sig_cmd(&sig_args),
+    }
+}
+
+// ── O14/F12 批次二：发行方签名签发与校验工具链 ─────────────────────────
+
+/// `--gen-sign-key <种子文件>`：生成发行方 Ed25519 密钥对——**64 字符 hex 种子
+/// 写入指定文件**（密钥仪式：该文件即私钥本体，离线保管、不入库不入 CI 日志），
+/// 公钥 hex 打印 stdout（轮换 `signing::PUBLISHER_PUBLIC_KEY_HEX` 用）。
+fn gen_sign_key(key_file: Option<&Path>) -> ExitCode {
+    use ed25519_dalek::SigningKey;
+    use rand_core::OsRng;
+    let Some(key_file) = key_file else {
+        log::warn!("错误：`--gen-sign-key` 需要 `--key <种子文件路径>`");
+        return ExitCode::FAILURE;
+    };
+    let sk = SigningKey::generate(&mut OsRng);
+    let seed_hex: String = sk.to_bytes().iter().map(|b| format!("{b:02x}")).collect();
+    if std::fs::write(key_file, &seed_hex).is_err() {
+        log::warn!("错误：种子文件写入失败（{}）", key_file.display());
+        return ExitCode::FAILURE;
+    }
+    println!("✅ 密钥对已生成");
+    println!(
+        "  种子（私钥）→ {}（64 字符 hex，离线保管，切勿入库/入日志）",
+        key_file.display()
+    );
+    println!("  公钥（轮换 signing::PUBLISHER_PUBLIC_KEY_HEX 用）：");
+    println!(
+        "    {}",
+        sk.verifying_key()
+            .to_bytes()
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect::<String>()
+    );
+    ExitCode::SUCCESS
+}
+
+fn read_seed_hex(key_file: &Path) -> Result<ed25519_dalek::SigningKey, String> {
+    use ed25519_dalek::SigningKey;
+    let text = std::fs::read_to_string(key_file).map_err(|e| format!("读取种子失败：{e}"))?;
+    let hex = text.trim();
+    if hex.len() != 64 || !hex.bytes().all(|b| b.is_ascii_hexdigit()) {
+        return Err(format!(
+            "种子文件应为 64 字符 hex（实际 {} 字符）",
+            hex.len()
+        ));
+    }
+    let mut seed = [0u8; 32];
+    for (i, chunk) in hex.as_bytes().chunks(2).enumerate() {
+        let hi = (chunk[0] as char).to_digit(16).ok_or("种子含非 hex 字符")? as u8;
+        let lo = (chunk[1] as char).to_digit(16).ok_or("种子含非 hex 字符")? as u8;
+        seed[i] = (hi << 4) | lo;
+    }
+    Ok(SigningKey::from_bytes(&seed))
+}
+
+/// `--sign-ext <清单> --exe <exe> --key <种子文件>`：签发 `.sig` 到清单旁。
+fn sign_ext_cmd(args: &SigArgs) -> ExitCode {
+    let (Some(manifest), Some(exe), Some(key)) = (&args.manifest, &args.exe, &args.key_file) else {
+        log::warn!("错误：`--sign-ext` 需要 `--manifest <清单> --exe <exe> --key <种子文件>`");
+        return ExitCode::FAILURE;
+    };
+    let sk = match read_seed_hex(key) {
+        Ok(sk) => sk,
+        Err(e) => {
+            log::warn!("错误：{e}");
+            return ExitCode::FAILURE;
+        }
+    };
+    match dd_host::signing::sign_ext(manifest, exe, &sk) {
+        Ok(text) => {
+            let sig_path = dd_host::signing::sig_path_for(manifest);
+            if let Err(e) = std::fs::write(&sig_path, text) {
+                log::warn!("错误：.sig 写入失败（{}）：{e}", sig_path.display());
+                return ExitCode::FAILURE;
+            }
+            println!("✅ 已签发：{}", sig_path.display());
+            ExitCode::SUCCESS
+        }
+        Err(e) => {
+            log::warn!("错误：签发失败：{e}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+/// `--verify-ext-sig <清单> --exe <exe> --pubkey <hex>`：离线三态校验
+/// （密钥仪式预演：轮换内置公钥前先用本命令确认签发物可过验）。
+fn verify_ext_sig_cmd(args: &SigArgs) -> ExitCode {
+    let (Some(manifest), Some(exe), Some(pubkey_hex)) =
+        (&args.manifest, &args.exe, &args.pubkey_hex)
+    else {
+        log::warn!("错误：`--verify-ext-sig` 需要 `--manifest <清单> --exe <exe> --pubkey <hex>`");
+        return ExitCode::FAILURE;
+    };
+    let Some(vk) = dd_host::signing::verifying_key_from_hex(pubkey_hex) else {
+        log::warn!("错误：--pubkey 不是合法的 64 字符 Ed25519 公钥 hex");
+        return ExitCode::FAILURE;
+    };
+    match dd_host::signing::check_signature_parts(manifest, exe, &vk) {
+        dd_host::signing::SigCheck::Valid => {
+            println!("✅ 签名校验通过（清单与 exe 双哈希锚一致）");
+            ExitCode::SUCCESS
+        }
+        dd_host::signing::SigCheck::Invalid(reason) => {
+            println!("❌ 签名校验失败：{reason}");
+            ExitCode::FAILURE
+        }
+        dd_host::signing::SigCheck::Absent => {
+            println!("⚠️ 未发现 .sig（清单旁无签名文件）");
+            ExitCode::FAILURE
+        }
     }
 }
 
@@ -144,7 +307,13 @@ fn print_usage() {
          \x20 --invoke            --conformance 时也执行一次 invoke（**有真实副作用**，默认跳过）\n\
          \x20 --ext-id <ID>       指定要自检的扩展 id（目录内有多个时用；内置 id 如\n\
          \x20                     com.ddrun.calc → --conformance 走 in-process，不 spawn 子进程）\n\
-         \x20 --extensions-dir    覆盖扫描目录（默认 {SAMPLE_DIR}，不存在时回落到平台目录）"
+         \x20 --extensions-dir    覆盖扫描目录（默认 {SAMPLE_DIR}，不存在时回落到平台目录）\n\
+         \n\
+         \x20 --gen-sign-key      生成发行方 Ed25519 密钥对（O14/F12）：--key <种子文件>\n\
+         \x20                     （种子即私钥，离线保管；公钥 hex 打印 stdout 供轮换常量）\n\
+         \x20 --sign-ext          签发 .sig（O14/F12）：--manifest <清单> --exe <exe> --key <种子文件>\n\
+         \x20 --verify-ext-sig    离线校验 .sig（O14/F12 密钥仪式预演）：--manifest <清单>\n\
+         \x20                     --exe <exe> --pubkey <hex>"
     );
 }
 

@@ -1,6 +1,6 @@
 # dd-run 扩展签名立项与选型（O14 / F12）
 
-> **状态**：v1.2｜ **批次一已落地**（2026-10-11，`63750f1`）；**批次三（可独立部分）已落地**（同日：manifest-schema §9 分发签名登记 + security-audit S-12 入账 v1.9 + 设置页 sig_invalid 告警行）；批次二（签发链）待 CI secret ｜ **日期**：2026-10-11 ｜ **输入**：《O9–O14 优化方向规划》O14 节 · 修复实施方案 **F12 纲要** · `dd-host/src/trust.rs`（S-05 / R-12 / D2 源码级核对）· security-audit §4.4.2「明确不做①」
+> **状态**：v1.3｜ **批次一已落地**（`63750f1`）；**批次三（可独立部分）已落地**（manifest-schema §9 + audit S-12 v1.9 + 设置页告警行）；**批次二工具链已就绪**（同日：`dd-run-cli --gen-sign-key/--sign-ext/--verify-ext-sig` + package.sh 签名钩子 + release.yml secret env）——**仅余密钥仪式**（生成真钥 → CI secret → 轮换内置公钥常量）｜ **日期**：2026-10-11 ｜ **输入**：《O9–O14 优化方向规划》O14 节 · 修复实施方案 **F12 纲要** · `dd-host/src/trust.rs`（S-05 / R-12 / D2 源码级核对）· security-audit §4.4.2「明确不做①」
 > **定位**：本文是 **F12 的立项载体**（《O9–O14 规划》§7 预留）——只做**动机、边界取证、选型决策表与验收框架**，不含实现；各决策点（D1–D5）给出推荐但不锁死，评审拍板后按 §8 批次实施。
 > **立项判据**（沿用 future-features-plan §1 硬判据）：**可行**（零冻结契约改动 / 有既有代码惯例可复用 / 依赖克制 / 可通过单测与真机走查验收）× **无冲突**（不与协议 v1.0 冻结、README 非目标、在途项、已证伪项冲突）。逐项核查见 §2。
 
@@ -127,7 +127,7 @@ dist/
 - **占位公钥**：`PUBLISHER_PUBLIC_KEY_HEX` 由 openssl 现场生成、种子即弃——当前任何 `.sig` 均判 Invalid（预期 fail-closed 姿态），批次二轮换真钥；
 - **非 Windows 口径修正**：ed25519 验签已跨平台就绪，但捆绑锚的 SHA-256 仍 Windows-only（trust.rs 既有缺口）→ `check_signature` 在非 Windows 恒 `Absent`、现行 fail-open 不变。**D1-A 对 D2 的收口是"就绪"而非"完成"**：哈希跨平台化随 O6；
 - **测试**：新增 12 条（signing 单测 6 + trust 三态整合 6），先红后绿实证（恒 Absent 桩下 3 条签名依赖腿 FAILED → 恢复 623/0）；批次一覆盖验收框架 §6 之 1/2/3/4/6 的单测腿（判 5 非 Windows 腿与端到端内置钥腿随批次二/三）；
-- **批次二待办**：真钥生成与 CI secret、`package.sh`/release.yml 签发步骤、`PUBLISHER_PUBLIC_KEY_HEX` 轮换、端到端内置钥腿、发行包体积实测；**批次三**：manifest-schema.md「分发签名」节 + protocol.md 登记 + 设计文档 §8.2 注记 + security-audit S-xx 续位 + 设置页 `sig_invalid` 告警展示。**批次三实施修正（同日）**：`.sig` 经核实不触碰任何协议承载物——protocol.md 与设计文档 §8.2 均**零改动**（登记面收敛为 manifest-schema.md §9「分发签名」+ 审计 v1.9 S-12 入账）；设置页告警行已沿 R-12 `set.ext.tamper_warn` 先例落地（i18n 键 `set.ext.sig_warn`）。
+- **批次二进度（2026-10-11 更新）**：签发工具链已全部就绪——`dd-run-cli --gen-sign-key`（种子写文件 + 公钥打印）/ `--sign-ext` / `--verify-ext-sig`（离线校验，密钥仪式预演）；`package.sh` §6.5 签名钩子（`DDRUN_SIGN_KEY` 未设置自动跳过，构建照常）；release.yml job env 注入 `secrets.DDRUN_SIGN_KEY`。sign_ext ↔ parse_sig 互逆单测 + E2E 实测（gen→sign→verify 通过 / 篡改拒绝 / 换钥拒绝）全过。**仅余密钥仪式（需人工）**：① 运行 `--gen-sign-key` 生成真钥（种子离线保管）；② 种子入仓库 secret `DDRUN_SIGN_KEY`；③ 公钥 hex 轮换 `PUBLISHER_PUBLIC_KEY_HEX` 并补端到端内置钥腿 + 发行包体积实测；**批次三**：manifest-schema.md「分发签名」节 + protocol.md 登记 + 设计文档 §8.2 注记 + security-audit S-xx 续位 + 设置页 `sig_invalid` 告警展示。**批次三实施修正（同日）**：`.sig` 经核实不触碰任何协议承载物——protocol.md 与设计文档 §8.2 均**零改动**（登记面收敛为 manifest-schema.md §9「分发签名」+ 审计 v1.9 S-12 入账）；设置页告警行已沿 R-12 `set.ext.tamper_warn` 先例落地（i18n 键 `set.ext.sig_warn`）。
 
 ## 9. 与既有文档关系 + 实施批次建议
 

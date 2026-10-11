@@ -1037,16 +1037,10 @@ mod tests {
 
     /// 造一把测试发行方钥（**非**内置占位钥）并为 ext 签发合法 `.sig`。
     fn sign_valid_sig(ext: &LoadedExtension) -> ed25519_dalek::VerifyingKey {
-        use ed25519_dalek::{Signer, SigningKey};
+        use ed25519_dalek::SigningKey;
         let sk = SigningKey::from_bytes(&[7u8; 32]);
-        let m_hex = sha256_file(&ext.path).expect("清单哈希");
-        let x_hex = sha256_file(&ext.command).expect("exe 哈希");
-        let sig = sk.sign(&signing::bundle_message(&m_hex, &x_hex));
-        let body = format!(
-            "untrusted comment: dd-run extension signature v1\n{}\ntrusted comment: manifest={m_hex} exe={x_hex}\n",
-            crate::signing::tests::encode_base64(&sig.to_bytes())
-        );
-        write(&signing::sig_path_for(&ext.path), body.as_bytes());
+        let text = signing::sign_ext(&ext.path, &ext.command, &sk).expect("签发");
+        write(&signing::sig_path_for(&ext.path), text.as_bytes());
         sk.verifying_key()
     }
 

@@ -13,6 +13,9 @@ permissions:
 
 env:
   CARGO_INCREMENTAL: "0"
+  # O14/F12 批次二：发行方签名种子（仓库 secret：64 字符 hex 文件内容）。未配置
+  # 时 package.sh 自动跳过 .sig 签发（构建照常，随包扩展回落信任同意流）。
+  DDRUN_SIGN_KEY: ${{ secrets.DDRUN_SIGN_KEY }}
 
 jobs:
   release:

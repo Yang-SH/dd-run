@@ -83,6 +83,20 @@ mkdir -p dist/extensions.d
 cp "${REL}/dd-ext-search.exe" dist/extensions.d/
 cp examples/extensions.d/com.ddrun.filesearch.json dist/extensions.d/
 
+# 6.5) O14/F12 批次二（可选）：发行方签名——DDRUN_SIGN_KEY 指向 64 字符 hex
+# 种子文件时，对随包清单签发 .sig（与 dd-host::signing 验签互逆）；未设置则
+# 跳过，产物不含 .sig，宿主对随包扩展回落信任同意流（R-12 钉扎仍生效）。
+if [ -n "${DDRUN_SIGN_KEY:-}" ] && [ -f "${DDRUN_SIGN_KEY}" ]; then
+  echo "==> 签发随包扩展 .sig（发行方钥，O14/F12 批次二）"
+  cargo ${TOOLCHAIN} build --release -p dd-run-cli
+  "${REL}/dd-run-cli.exe" --sign-ext \
+    --manifest dist/extensions.d/com.ddrun.filesearch.json \
+    --exe dist/extensions.d/dd-ext-search.exe \
+    --key "${DDRUN_SIGN_KEY}"
+else
+  echo "==> DDRUN_SIGN_KEY 未设置，跳过 .sig 签发（随包扩展回落信任同意流）"
+fi
+
 # 可选：同时把开发自检 CLI 与示例扩展放到 dist/dev/（非分发必需，便于排查）
 DEV="dist/dev"
 mkdir -p "$DEV"

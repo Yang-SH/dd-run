@@ -23,7 +23,7 @@ chrono = "0.4"
 # O14/F12 批次一（2026-10-11）：发行方 ed25519 签名验签（docs/extension-signing-plan.md
 # §4-D1-A）。纯 Rust 跨平台实现——CNG 无 Ed25519 原生支持（见该文 §4-D1 事实核查）。
 # 验签只需 VerifyingKey/Signature，默认特性已够用。
-ed25519-dalek = { version = "2", default-features = false, features = ["std", "fast"] }
+ed25519-dalek = { version = "2", default-features = false, features = ["std", "fast", "rand_core"] }
 
 # S-05：扩展内容哈希走 Windows CNG（`bcrypt.dll` 的 SHA-256），不引入纯 Rust 哈希
 # crate。`windows-sys` 0.61 已在 `Cargo.lock`（dd-gui / dd-ext 已依赖）→ **lock
