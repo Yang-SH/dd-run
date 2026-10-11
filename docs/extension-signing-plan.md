@@ -10,9 +10,9 @@
 
 | 项 | 一句话 |
 |---|---|
-| 目标 | 同时关闭两处已声明边界：① trust 台账「**用户同意 + 变更检测 ≠ 防篡改**」定性（trust.rs 模块文档自记）；② 非 Windows `assess` fail-open（**D2 缺口声明**，trust.rs:288–291） |
+| 目标 | 同时关闭两处已声明边界：① trust 台账「**用户同意 + 变更检测 ≠ 防篡改**」定性（trust.rs 模块文档自记）；② 非 Windows `assess` fail-open（**D2 缺口声明**，trust.rs:287–291） |
 | 推荐方案 | 宿主**内置发行方 ed25519 公钥** + 清单旁挂 **`.sig` detached 签名**（签名对象 = 清单字节 + 清单/exe 双 SHA256 锚）+ 三态降级（验签通过 → 免同意；失败 → `Pending`+告警；无签名 → 现行同意流） |
-| 协议影响 | 清单 schema v1.0 **零字段改动**（`.sig` 在清单之外）；「宿主发现并校验 `.sig`」属分发契约增量 → 走 **v1.1 候选流程**登记，v1.0 冻结不破坏 |
+| 协议影响 | 清单 schema v1.0 **零字段改动**（`.sig` 在清单之外）；`.sig` 不触碰 NDJSON 方法面与协商——按 protocol.md §13 预期**连 MINOR 递增都不需要**，登记性质为「扫描层分发契约」（manifest-schema.md 新节 + 设计文档 §8.2 注记）；v1.0 冻结不破坏 |
 | 依赖增量 | `ed25519-dalek`（纯 Rust，连带 curve25519-dalek / signature trait，约 2–4 crate、零 C 依赖）——D1 选型定案后进 Cargo.lock |
 | 改动量 | 大（trust/scan 判定链 + 打包链签名步骤 + 文档），**独立里程碑**；与 O6（跨平台）二选一作为下一主战役的定位不变 |
 | 决策点 | D1 算法 / D2 载体 / D3 签名对象 / D4 信任模型 / D5 降级路径（§4，各含推荐） |
@@ -36,7 +36,7 @@
 1. **非防篡改定性**：`trust.rs` 模块文档自记——「本模块实现的是『用户同意 + 变更检测』，**不是防篡改**。能写 `extensions.d` 的攻击者同样能写 `trust.json`。真正意义上的防篡改需要扩展签名（宿主内置公钥 + 作者签名）」。security-audit §4.4.2「明确不做①」同口径。
 2. **非 Windows fail-open**：`trust.rs` `assess` 首行 `if !hash_available() { Trust::AutoTrusted }`（注释「D2 缺口声明：非 Windows 不做门禁」）——无哈希能力平台全部自动信任。签名验签若为**纯 Rust 跨平台实现**（D1-A），此缺口顺带收口；若选 Windows CNG（D1-B）则依旧保留。
 3. **R-12 静默重钉窗口**：首方 sidecar 首跑钉扎后，**升级**（宿主版本变化）时静默重钉——攻击者在升级窗口替换 sidecar 即可白拿新锚。签名验证以发行方私钥为锚，天然闭合该窗口（§4-D3/D5）。
-4. **既有可复用惯例**：CNG 流式哈希（64 KiB/块，`sha256_file`/`sha256_bytes`）已是 trust.rs 既有设施；`assess` 短路判定表结构可直接扩展一行「签名分支」；`LoadedExtension` 已携带清单字节与 exe 路径，验签输入现成。
+4. **既有可复用惯例**：CNG 流式哈希（64 KiB/块，`sha256_file`/`sha256_bytes`）已是 trust.rs 既有设施；`assess` 短路判定表结构可直接扩展一行「签名分支」；`LoadedExtension` 已携带清单路径（`path`）与解析后 exe 路径（`command`），验签输入可由磁盘直接重读，CNG 流式哈希设施现成。
 
 ---
 
@@ -51,6 +51,8 @@
 | C. minisign/signify 外部工具链 | 签发用官方工具，运行时仍需自实现验签 | 同 A | ✅ | 签发端省事但运行时依赖量相同，且引入第二套格式规范；不推荐 |
 
 **推荐 A**。代价是 Cargo.lock 首次引入密码学 crate（约 +1 MiB 编译产物，发行包体积影响需实测记录——O5-a 后体积纪律在案）。
+
+> 事实核查（2026-10-11）：**Windows CNG 无 Ed25519 原生支持**——BCrypt 算法清单无 EdDSA 标识，`BCRYPT_ECDSA_ALGORITHM` 仅覆盖 NIST 曲线（P-256/384/521），Microsoft Q&A 明确「Ed25519/curve25519 接口不在 CNG 中」；2025 年 CNG 的 PQC 增补（ML-DSA/ML-KEM/SLH-DSA）亦不含 Ed25519。故「沿用 CNG 惯例做签名」必然退到 ECDSA P-256 并保留非 Windows 缺口，D1-B 的评析据此成立。
 
 ### D2 — 签名载体
 
