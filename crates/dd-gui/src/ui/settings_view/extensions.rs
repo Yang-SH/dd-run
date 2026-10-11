@@ -234,7 +234,8 @@ impl PaletteApp {
                                 )
                                 .truncate(),
                             );
-                        } // 失败原因行（既有）：仅失败时
+                        }
+                        // 失败原因行（既有）：仅失败时
                         if let Some(reason) = &row.failed_reason {
                             ui.add_space(2.0);
                             let reason_resp = ui.add(
