@@ -21,9 +21,8 @@
 //!   （未写入任何文件/CI）——当前没有任何 `.sig` 能通过内置公钥验签，属预期
 //!   安全姿态（fail-closed）；批次二以 Release 工作流 secret 持有真种子、轮换
 //!   本常量并补端到端用例（含内置公钥全链路腿）；
-//! - 非 Windows：哈希设施未实现（trust.rs「已声明的缺口」），捆绑锚无从计算
-//!   → [`check_signature`] 恒 [`SigCheck::Absent`]，现行 fail-open 行为不变
-//!   （D2 缺口的签名侧收口依赖哈希跨平台化，随 O6；ed25519 验签本身已跨平台）。
+//! - 非 Windows：哈希走纯 Rust `sha2`（O6 首批收口 D2 缺口）——验签三态在
+//!   全平台同语义；ed25519 验签本身跨平台。
 
 use crate::manifest::LoadedExtension;
 use crate::trust::sha256_file;
@@ -194,11 +193,6 @@ pub fn check_signature(ext: &LoadedExtension, vk: &VerifyingKey) -> SigCheck {
 /// check_signature 的路径核心（CLI --verify-ext-sig 离线校验复用——无需构造
 /// 完整 LoadedExtension）。
 pub fn check_signature_parts(manifest_path: &Path, exe_path: &Path, vk: &VerifyingKey) -> SigCheck {
-    if !crate::trust::hash_available() {
-        // 非 Windows：捆绑锚的 SHA-256 未实现（trust.rs 已声明缺口），无法构成
-        // 验签前提 → 与无 `.sig` 同等回落（现行 fail-open 行为保持不变）。
-        return SigCheck::Absent;
-    }
     let sig_path = sig_path_for(manifest_path);
     if !sig_path.is_file() {
         return SigCheck::Absent;

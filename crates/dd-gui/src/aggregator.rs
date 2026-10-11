@@ -323,9 +323,6 @@ pub fn load_extension_sources(lang: Lang) -> ExtensionSources {
              （设置页可逐个批准；文件不会因此被删）"
         );
     }
-    if !trust::hash_available() {
-        log::warn!("[dd-gui] 当前平台无哈希实现 → S-05 信任门禁不生效（已声明的缺口，非 Windows）");
-    }
     let mut trust_map = HashMap::with_capacity(merged.len());
     for ext in &merged {
         let origin = if specs.contains_key(&ext.manifest.id) {

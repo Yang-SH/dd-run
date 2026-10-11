@@ -29,6 +29,11 @@ ed25519-dalek = { version = "2", default-features = false, features = ["std", "f
 # crate。`windows-sys` 0.61 已在 `Cargo.lock`（dd-gui / dd-ext 已依赖）→ **lock
 # 零新增**。非 Windows 不启用该依赖，`trust::sha256_*` 回落为返回 `Err` 的占位
 # （门禁在非 Windows 不生效，见 `trust` 模块文档「已声明的缺口」）。
+[target.'cfg(not(windows))'.dependencies]
+# O6 首批（2026-10-11）：非 Windows 哈希走纯 Rust sha2——它已在依赖图
+# （ed25519-dalek 的算法内必需依赖），lock 零新增；Windows 保持 CNG（上节）。
+sha2 = "0.10"
+
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61", features = [
     "Win32_Foundation",

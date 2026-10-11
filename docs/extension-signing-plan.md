@@ -125,7 +125,7 @@ dist/
 - **新增 `dd-host::signing`**：`.sig` 文本格式定稿（untrusted 行 + 88 字符 base64 签名 + trusted 行内嵌双 SHA256 hex 锚；手写 base64 编解码，防为 88 字符引入 base64 crate）；捆绑消息带域分隔前缀 `dd-run-ext-sig-v1`（防哈希错位重放）；
 - **三态整合**：签名分支先于台账/钉扎链短路；`Assessment` 新增 `sig_invalid` 告警位（设置页展示随批次三接线）；**D5 细化：用户 Deny 优先于签名免同意**（与 R-12 ⑤ 同款——签名不覆盖用户明确拒绝）；
 - **占位公钥**：`PUBLISHER_PUBLIC_KEY_HEX` 由 openssl 现场生成、种子即弃——当前任何 `.sig` 均判 Invalid（预期 fail-closed 姿态），批次二轮换真钥；
-- **非 Windows 口径修正**：ed25519 验签已跨平台就绪，但捆绑锚的 SHA-256 仍 Windows-only（trust.rs 既有缺口）→ `check_signature` 在非 Windows 恒 `Absent`、现行 fail-open 不变。**D1-A 对 D2 的收口是"就绪"而非"完成"**：哈希跨平台化随 O6；
+- **非 Windows 口径修正**：ed25519 验签已跨平台就绪，但捆绑锚的 SHA-256 仍 Windows-only（trust.rs 既有缺口）→ `check_signature` 在非 Windows 恒 `Absent`、现行 fail-open 不变。**D1-A 对 D2 的收口状态更新（2026-10-11 O6 首批）**：非 Windows 哈希已改走纯 Rust `sha2`（依赖图内，lock 零新增），D2 缺口正式收口、验签三态全平台同语义；
 - **测试**：新增 12 条（signing 单测 6 + trust 三态整合 6），先红后绿实证（恒 Absent 桩下 3 条签名依赖腿 FAILED → 恢复 623/0）；批次一覆盖验收框架 §6 之 1/2/3/4/6 的单测腿（判 5 非 Windows 腿与端到端内置钥腿随批次二/三）；
 - **批次二进度（2026-10-11 更新）**：签发工具链已全部就绪——`dd-run-cli --gen-sign-key`（种子写文件 + 公钥打印）/ `--sign-ext` / `--verify-ext-sig`（离线校验，密钥仪式预演）；`package.sh` §6.5 签名钩子（`DDRUN_SIGN_KEY` 未设置自动跳过，构建照常）；release.yml job env 注入 `secrets.DDRUN_SIGN_KEY`。sign_ext ↔ parse_sig 互逆单测 + E2E 实测（gen→sign→verify 通过 / 篡改拒绝 / 换钥拒绝）全过。**仅余密钥仪式（需人工）**：① 运行 `--gen-sign-key` 生成真钥（种子离线保管）；② 种子入仓库 secret `DDRUN_SIGN_KEY`；③ 公钥 hex 轮换 `PUBLISHER_PUBLIC_KEY_HEX` 并补端到端内置钥腿 + 发行包体积实测；**批次三**：manifest-schema.md「分发签名」节 + protocol.md 登记 + 设计文档 §8.2 注记 + security-audit S-xx 续位 + 设置页 `sig_invalid` 告警展示。**批次三实施修正（同日）**：`.sig` 经核实不触碰任何协议承载物——protocol.md 与设计文档 §8.2 均**零改动**（登记面收敛为 manifest-schema.md §9「分发签名」+ 审计 v1.9 S-12 入账）；设置页告警行已沿 R-12 `set.ext.tamper_warn` 先例落地（i18n 键 `set.ext.sig_warn`）。
 

@@ -65,3 +65,48 @@ jobs:
 
       - name: Unused dependencies
         run: cargo machete
+
+  # O6 首批（2026-10-11）：三方平台构建矩阵探索批——build/test 在 ubuntu/macOS
+  # 上跑通即达成首个可交付物（conformance 类自检随后续批次接入）。**非阻塞**
+  # （continue-on-error）：Linux/macOS 的 GUI 系统依赖（dlopen 系）与平台差异
+  # 首轮可能红，探索收敛后移除本开关并升级为门禁。clippy/fmt 仍以 Windows 门禁
+  # 为准（避免跨平台 lint 噪音稀释既有门禁语义）。
+  check-linux:
+    name: build / test (linux, O6 exploratory)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Install toolchain (stable)
+        run: rustup toolchain install stable --profile minimal && rustup default stable
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+
+      - name: Build (workspace, all targets)
+        run: cargo build --workspace --all-targets
+
+      - name: Test (workspace)
+        run: cargo test --workspace
+
+  check-macos:
+    name: build / test (macos, O6 exploratory)
+    runs-on: macos-latest
+    timeout-minutes: 30
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Install toolchain (stable)
+        run: rustup toolchain install stable --profile minimal && rustup default stable
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+
+      - name: Build (workspace, all targets)
+        run: cargo build --workspace --all-targets
+
+      - name: Test (workspace)
+        run: cargo test --workspace

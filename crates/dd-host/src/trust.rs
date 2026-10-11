@@ -35,9 +35,10 @@
 //! `Cargo.lock`（dd-gui / dd-ext 已依赖）→ **lock 零新增、体积增量可忽略**；
 //! 也无需自研密码学实现。
 //!
-//! **非 Windows 为已声明的缺口**：`sha256_file` / `sha256_bytes` 返回 `Err`，
-//! `assess` 直接放行（保持门禁引入前的行为）。理由：P4 为 Windows 优先，非 Windows
-//! 下 `extensions.d` 生态尚不存在；若 fail-closed 会让该平台任何扩展都无法使用。
+//! **非 Windows（O6 首批，2026-10-11 已收口）**：原实现返回 `Err`（门禁不生效，
+//! 已声明的缺口）；现改用纯 Rust `sha2`（ed25519-dalek 同款依赖，lock 零新增），
+//! 门禁三态在**全平台同语义**（fail-closed）。信任锚的完整跨平台收口见
+//! extension-signing-plan（O14 批次一）。
 
 use crate::manifest::{trust_file, LoadedExtension};
 use crate::signing;
@@ -329,10 +330,6 @@ pub fn assess_with_publisher(
         }
         // 签名分支仅在哈希能力可用时产出 Valid（见 signing::check_signature），
         // 故 Absent 时沿用既有 D2 缺口口径。
-        signing::SigCheck::Absent if !hash_available() => {
-            // D2 缺口声明：非 Windows 不做门禁（保持旧行为）。
-            Trust::AutoTrusted
-        }
         signing::SigCheck::Absent => match origin {
             ExtOrigin::Builtin => Trust::AutoTrusted,
             _ => match ledger.entry(&id) {
@@ -418,10 +415,6 @@ pub fn assess_sidecar_with_ledger(
         },
         // 内置公钥常量损坏（防御式）：视作无签名能力，落回钉扎链
         None => log::warn!("[dd-host] 内置发行方公钥解析失败——签名检查本轮停用"),
-    }
-    if !hash_available() {
-        // D2 缺口（非 Windows）：与 `assess` 同口径放行
-        return (assessment, false);
     }
     match ledger.entry(&ext.manifest.id).cloned() {
         None => {
@@ -530,9 +523,11 @@ fn hashes_match(ext: &LoadedExtension, e: &TrustEntry) -> bool {
     }
 }
 
-/// 哈希能力是否可用（**非 Windows 未实现**，见模块文档「已声明的缺口」）。
+/// 哈希能力是否可用。**O6 首批（2026-10-11）起全平台可用**——非 Windows 走
+/// 纯 Rust `sha2`（与 ed25519-dalek 共享，lock 零新增），Windows 保持 CNG。
+/// 原「非 Windows 未实现」的 D2 缺口就此收口；函数保留为 API（未来平台扩展位）。
 pub fn hash_available() -> bool {
-    cfg!(windows)
+    true
 }
 
 /// 文件 SHA-256（小写 hex）。分块流式读盘。
@@ -658,8 +653,24 @@ fn sha256_hex(reader: &mut impl std::io::Read) -> Result<String, String> {
 
 /// 非 Windows 占位：返回 `Err`（模块文档「已声明的缺口」）。
 #[cfg(not(windows))]
-fn sha256_hex(_reader: &mut impl std::io::Read) -> Result<String, String> {
-    Err("当前平台未实现 SHA-256（S-05 门禁在非 Windows 上不生效）".to_string())
+fn sha256_hex(reader: &mut impl std::io::Read) -> Result<String, String> {
+    use sha2::Digest;
+    use std::io::Read as _;
+    // 64 KiB 分块读入（与 Windows CNG 路径同口径；sha2 内部另有吸收缓冲）
+    let mut hasher = sha2::Sha256::new();
+    let mut buf = vec![0u8; 64 * 1024];
+    loop {
+        let n = reader.read(&mut buf).map_err(|e| e.to_string())?;
+        if n == 0 {
+            break;
+        }
+        hasher.update(&buf[..n]);
+    }
+    Ok(hasher
+        .finalize()
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect())
 }
 
 #[cfg(test)]
@@ -988,9 +999,8 @@ mod tests {
         let _ = std::fs::remove_dir_all(&d);
     }
 
-    /// 哈希实现与 NIST 已知向量一致（单块 + 多块各一）。
+    /// 哈希实现与 NIST 已知向量一致（单块 + 多块各一）。O6 首批起全平台运行。
     #[test]
-    #[cfg(windows)]
     fn sha256_matches_nist_known_vectors() {
         // 向量来源：NIST FIPS 180-4 示例（广为引用的 KAT）
         assert_eq!(
@@ -1009,9 +1019,8 @@ mod tests {
         );
     }
 
-    /// `sha256_file` 与 `sha256_bytes` 对同一内容一致（分块与整块等价）。
+    /// `sha256_file` 与 `sha256_bytes` 对同一内容一致（分块与整块等价）。全平台运行。
     #[test]
-    #[cfg(windows)]
     fn file_and_bytes_hash_agree() {
         let d = tmp_dir("hashfile");
         let p = d.join("blob.bin");
