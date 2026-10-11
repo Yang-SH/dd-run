@@ -40,6 +40,7 @@
 //! 下 `extensions.d` 生态尚不存在；若 fail-closed 会让该平台任何扩展都无法使用。
 
 use crate::manifest::{trust_file, LoadedExtension};
+use crate::signing;
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 
@@ -77,6 +78,10 @@ pub struct Assessment {
     /// R-12：随包首方 sidecar **同版篡改嫌疑**（哈希与钉扎不符且钉扎版本 ==
     /// 当前宿主版本）——判定 fail-closed 为 `Pending`，此位供设置页显式告警。
     pub sidecar_tampered: bool,
+    /// O14/F12 批次一：发行方签名检查结果为 **Invalid**（`.sig` 存在但解析 /
+    /// 验签 / 双哈希任一失败，见 [`crate::signing`]）——判定 fail-closed 为
+    /// `Pending`，此位供设置页显式告警（与 `sidecar_tampered` 同款语义）。
+    pub sig_invalid: bool,
 }
 
 impl Assessment {
@@ -283,12 +288,52 @@ impl TrustLedger {
 /// 随包首方 sidecar 不经本函数（R-12 起改走 [`assess_sidecar`] 首跑钉扎，
 /// 不再有白名单短路）。
 pub fn assess(ext: &LoadedExtension, origin: ExtOrigin, ledger: &TrustLedger) -> Assessment {
+    assess_with_publisher(ext, origin, ledger, &signing::built_in_verifying_key())
+}
+
+/// [`assess`] 的可注入核心（O14/F12 批次一）：`publisher` 为发行方公钥。
+/// 生产路径传内置公钥；测试注入自备密钥对以覆盖签名三态（内置占位钥种子
+/// 已弃，Valid 腿无法经内置钥构造）。
+#[doc(hidden)]
+pub fn assess_with_publisher(
+    ext: &LoadedExtension,
+    origin: ExtOrigin,
+    ledger: &TrustLedger,
+    publisher: &Option<ed25519_dalek::VerifyingKey>,
+) -> Assessment {
     let id = ext.manifest.id.clone();
-    let trust = if !hash_available() {
-        // D2 缺口声明：非 Windows 不做门禁（保持旧行为）。
-        Trust::AutoTrusted
-    } else {
-        match origin {
+    // O14/F12 批次一：发行方签名三态在台账判定之前短路（选型稿 §4-D5）。
+    // 细化（与 R-12 ⑤ 同款）：**用户 Deny 优先于签名免同意**——签名 Valid 不
+    // 覆盖用户明确拒绝；签名 Invalid 比现状严（Allow + 哈希一致原本直通）。
+    let sig = match publisher {
+        Some(vk) => signing::check_signature(ext, vk),
+        None => signing::SigCheck::Absent,
+    };
+    let trust = match sig {
+        // Valid 蕴含哈希能力可用（signing::check_signature 对非 Windows 恒
+        // Absent），故此处直接查台账；用户 Deny 优先（R-12 ⑤ 同款）。
+        signing::SigCheck::Valid => match ledger.entry(&id) {
+            Some(e) if e.decision == Decision::Deny && hashes_match(ext, e) => Trust::Blocked,
+            Some(e) if e.decision == Decision::Deny => Trust::Pending,
+            _ => Trust::AutoTrusted,
+        },
+        signing::SigCheck::Invalid(reason) => {
+            log::warn!("[dd-host] 扩展 {id} 发行方签名校验失败（fail-closed）：{reason}");
+            return Assessment {
+                id,
+                trust: Trust::Pending,
+                origin,
+                sidecar_tampered: false,
+                sig_invalid: true,
+            };
+        }
+        // 签名分支仅在哈希能力可用时产出 Valid（见 signing::check_signature），
+        // 故 Absent 时沿用既有 D2 缺口口径。
+        signing::SigCheck::Absent if !hash_available() => {
+            // D2 缺口声明：非 Windows 不做门禁（保持旧行为）。
+            Trust::AutoTrusted
+        }
+        signing::SigCheck::Absent => match origin {
             ExtOrigin::Builtin => Trust::AutoTrusted,
             _ => match ledger.entry(&id) {
                 Some(e) if e.decision == Decision::Allow && hashes_match(ext, e) => {
@@ -298,13 +343,14 @@ pub fn assess(ext: &LoadedExtension, origin: ExtOrigin, ledger: &TrustLedger) ->
                 // 无记录 / 哈希变化 / 文件不可读 → 重新征求同意（fail-closed）
                 _ => Trust::Pending,
             },
-        }
+        },
     };
     Assessment {
         id,
         trust,
         origin,
         sidecar_tampered: false,
+        sig_invalid: false,
     }
 }
 
@@ -351,7 +397,28 @@ pub fn assess_sidecar_with_ledger(
         trust: Trust::AutoTrusted,
         origin: ExtOrigin::Sidecar,
         sidecar_tampered: false,
+        sig_invalid: false,
     };
+    // O14/F12 批次一：发行方签名三态先于钉扎链（选型稿 §4-D5）。Valid = 发行方
+    // 背书即信任（首跑免钉扎待批准，钉扎链保留作 `Absent` 时的纵深）；Invalid =
+    // fail-closed 告警（比现状严：升级重钉窗口被签名锚闭合）；Absent = 原三态。
+    match signing::built_in_verifying_key() {
+        Some(vk) => match signing::check_signature(ext, &vk) {
+            signing::SigCheck::Valid => return (assessment, false),
+            signing::SigCheck::Invalid(reason) => {
+                log::warn!(
+                    "[dd-host] 首方 sidecar {} 发行方签名校验失败（fail-closed）：{reason}",
+                    assessment.id
+                );
+                assessment.trust = Trust::Pending;
+                assessment.sig_invalid = true;
+                return (assessment, false);
+            }
+            signing::SigCheck::Absent => {}
+        },
+        // 内置公钥常量损坏（防御式）：视作无签名能力，落回钉扎链
+        None => log::warn!("[dd-host] 内置发行方公钥解析失败——签名检查本轮停用"),
+    }
     if !hash_available() {
         // D2 缺口（非 Windows）：与 `assess` 同口径放行
         return (assessment, false);
@@ -962,5 +1029,124 @@ mod tests {
     #[test]
     fn first_party_allowlist_is_not_empty_and_has_filesearch() {
         assert!(FIRST_PARTY_IDS.contains(&"com.ddrun.filesearch"));
+    }
+
+    // ── O14/F12 批次一：发行方签名三态整合（选型稿 §4-D5 / §6）──
+
+    use crate::signing;
+
+    /// 造一把测试发行方钥（**非**内置占位钥）并为 ext 签发合法 `.sig`。
+    fn sign_valid_sig(ext: &LoadedExtension) -> ed25519_dalek::VerifyingKey {
+        use ed25519_dalek::{Signer, SigningKey};
+        let sk = SigningKey::from_bytes(&[7u8; 32]);
+        let m_hex = sha256_file(&ext.path).expect("清单哈希");
+        let x_hex = sha256_file(&ext.command).expect("exe 哈希");
+        let sig = sk.sign(&signing::bundle_message(&m_hex, &x_hex));
+        let body = format!(
+            "untrusted comment: dd-run extension signature v1\n{}\ntrusted comment: manifest={m_hex} exe={x_hex}\n",
+            crate::signing::tests::encode_base64(&sig.to_bytes())
+        );
+        write(&signing::sig_path_for(&ext.path), body.as_bytes());
+        sk.verifying_key()
+    }
+
+    /// 验收判据 1（单测腿）：合法签名 → **免同意** AutoTrusted（无台账记录，
+    /// 原本应 Pending——先红后绿：去签名分支即红）。
+    #[test]
+    fn o14_sig_valid_grants_auto_trust_without_ledger() {
+        let d = tmp_dir("o14valid");
+        let ext = disk_ext(&d, "com.example.signed", b"{\"id\":\"x\"}", b"EXE");
+        if !hash_available() {
+            return;
+        }
+        let vk = sign_valid_sig(&ext);
+        let a = assess_with_publisher(&ext, ExtOrigin::UserDir, &TrustLedger::default(), &Some(vk));
+        assert_eq!(a.trust, Trust::AutoTrusted, "发行方签名应免同意");
+        assert!(!a.sig_invalid);
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    /// 验收判据 2（单测腿）：`.sig` 存在但清单被篡改 → Pending + 告警位
+    /// （比现状严：无签名分支时该场景 Allow 台账下可直通）。
+    #[test]
+    fn o14_sig_invalid_on_tamper_is_pending_with_alert() {
+        let d = tmp_dir("o14tamper");
+        let ext = disk_ext(&d, "com.example.signed", b"{\"id\":\"x\"}", b"EXE");
+        if !hash_available() {
+            return;
+        }
+        let vk = sign_valid_sig(&ext);
+        write(&ext.path, b"{\"tampered\":true}");
+        let a = assess_with_publisher(&ext, ExtOrigin::UserDir, &TrustLedger::default(), &Some(vk));
+        assert_eq!(a.trust, Trust::Pending, "篡改后必须 fail-closed");
+        assert!(a.sig_invalid, "告警位应置位");
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    /// 验收判据 3（单测腿）：无 `.sig` → 现行同意流零变化（无记录 → Pending）。
+    #[test]
+    fn o14_sig_absent_keeps_consent_flow() {
+        let d = tmp_dir("o14absent");
+        let ext = disk_ext(&d, "com.example.plain", b"{\"id\":\"x\"}", b"EXE");
+        if !hash_available() {
+            return;
+        }
+        let a = assess_with_publisher(
+            &ext,
+            ExtOrigin::UserDir,
+            &TrustLedger::default(),
+            &signing::built_in_verifying_key(),
+        );
+        assert_eq!(a.trust, Trust::Pending);
+        assert!(!a.sig_invalid);
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    /// D5 细化（与 R-12 ⑤ 同款）：用户 Deny 优先于签名免同意。
+    #[test]
+    fn o14_user_deny_overrides_valid_sig() {
+        let d = tmp_dir("o14deny");
+        let ext = disk_ext(&d, "com.example.signed", b"{\"id\":\"x\"}", b"EXE");
+        if !hash_available() {
+            return;
+        }
+        let vk = sign_valid_sig(&ext);
+        let mut ledger = TrustLedger::default();
+        ledger.record(&ext, Decision::Deny).expect("记录拒绝");
+        let a = assess_with_publisher(&ext, ExtOrigin::UserDir, &ledger, &Some(vk));
+        assert_eq!(a.trust, Trust::Blocked, "用户拒绝不应被签名覆盖");
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    /// 首方 sidecar 腿：坏 `.sig` → Pending + 告警位（钉扎链被签名分支短路前拦截）。
+    #[test]
+    fn o14_sidecar_sig_invalid_is_pending_with_alert() {
+        let d = tmp_dir("o14sidecar");
+        let ext = disk_ext(&d, "com.ddrun.filesearch", b"{\"id\":\"x\"}", b"EXE");
+        if !hash_available() {
+            return;
+        }
+        write(&signing::sig_path_for(&ext.path), b"garbage");
+        let mut ledger = TrustLedger::default();
+        let (a, _) = assess_sidecar_with_ledger(&ext, "0.2.0", &mut ledger);
+        assert_eq!(a.trust, Trust::Pending);
+        assert!(a.sig_invalid, "sidecar 坏签名应置告警位");
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    /// 首方 sidecar 腿：无 `.sig` → 钉扎链原样（首跑 → AutoTrusted）。
+    #[test]
+    fn o14_sidecar_sig_absent_keeps_pinning() {
+        let d = tmp_dir("o14sidecarnone");
+        let ext = disk_ext(&d, "com.ddrun.filesearch", b"{\"id\":\"x\"}", b"EXE");
+        if !hash_available() {
+            return;
+        }
+        // 注入内存台账（生产 wrapper 会读真机 trust.json，不可用于测试）
+        let mut ledger = TrustLedger::default();
+        let (a, _) = assess_sidecar_with_ledger(&ext, "0.2.0", &mut ledger);
+        assert_eq!(a.trust, Trust::AutoTrusted, "无签名回落钉扎首跑");
+        assert!(!a.sig_invalid);
+        let _ = std::fs::remove_dir_all(&d);
     }
 }

@@ -461,6 +461,7 @@ mod tests {
                 trust: Trust::Blocked,
                 origin: ExtOrigin::UserDir,
                 sidecar_tampered: false,
+                sig_invalid: false,
             },
         );
         trust.insert(
@@ -470,6 +471,7 @@ mod tests {
                 trust: Trust::AutoTrusted,
                 origin: ExtOrigin::Builtin,
                 sidecar_tampered: false,
+                sig_invalid: false,
             },
         );
 

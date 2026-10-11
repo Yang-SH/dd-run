@@ -10,6 +10,7 @@ pub mod builtin;
 pub mod cache;
 pub mod manifest;
 pub mod process;
+pub mod signing;
 pub mod trust;
 
 /// 原子写盘（R-02）：同目录写 `.tmp` 临时文件后 `rename` 覆盖目标。

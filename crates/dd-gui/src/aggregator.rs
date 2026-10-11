@@ -1261,6 +1261,7 @@ mod tests {
                 trust: Trust::Pending,
                 origin: ExtOrigin::UserDir,
                 sidecar_tampered: false,
+                sig_invalid: false,
             },
         );
         trust.insert(
@@ -1270,6 +1271,7 @@ mod tests {
                 trust: Trust::Blocked,
                 origin: ExtOrigin::UserDir,
                 sidecar_tampered: false,
+                sig_invalid: false,
             },
         );
         trust.insert(
@@ -1279,6 +1281,7 @@ mod tests {
                 trust: Trust::AutoTrusted,
                 origin: ExtOrigin::Sidecar,
                 sidecar_tampered: false,
+                sig_invalid: false,
             },
         );
         assert_eq!(pending_count(&trust), 1);
@@ -1322,6 +1325,7 @@ mod tests {
             trust: Trust::AutoTrusted,
             origin: ExtOrigin::Sidecar,
             sidecar_tampered: false,
+            sig_invalid: false,
         })
         .map(|_| ())
         .expect_err("exe 不存在 → 仍应失败");
@@ -1350,6 +1354,7 @@ mod tests {
                 trust: Trust::AutoTrusted,
                 origin: ExtOrigin::Sidecar,
                 sidecar_tampered: false,
+                sig_invalid: false,
             }
         });
         assert_eq!(
@@ -1369,6 +1374,7 @@ mod tests {
                 trust: Trust::AutoTrusted,
                 origin: ExtOrigin::UserDir,
                 sidecar_tampered: false,
+                sig_invalid: false,
             }
         });
         assert_eq!(
