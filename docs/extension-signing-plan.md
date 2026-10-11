@@ -121,7 +121,7 @@ dist/
 
 ## 8. 批次一落地记录（2026-10-11，`63750f1`）
 
-- **依赖实测**：`ed25519-dalek 2.2`（default-features=false，仅 std/fast）——Cargo.lock 实测 +23 条目，其中实际依赖图约 14 包（`sha2` 为 Ed25519 算法内必需，不可裁剪）；其余为 resolver 保留条目。发行包体积实测随批次二 dist 重打包记录；
+- **依赖实测**：`ed25519-dalek 2.2`（default-features=false，仅 std/fast）——Cargo.lock 实测 +23 条目，其中实际进入依赖图 **15 包**（`sha2` 为 Ed25519 算法内必需不可裁剪；pkcs8/rand_core/getrandom/der/spki/const-oid/base64ct/wasi 共 8 条为 resolver 保留孤儿，不在 `cargo tree` 图内）；核对批次追加减硬化：验签用 `verify_strict`（额外拒绝弱公钥与非规范 R，发行方单源签发零兼容负担）发行包体积实测随批次二 dist 重打包记录；
 - **新增 `dd-host::signing`**：`.sig` 文本格式定稿（untrusted 行 + 88 字符 base64 签名 + trusted 行内嵌双 SHA256 hex 锚；手写 base64 编解码，防为 88 字符引入 base64 crate）；捆绑消息带域分隔前缀 `dd-run-ext-sig-v1`（防哈希错位重放）；
 - **三态整合**：签名分支先于台账/钉扎链短路；`Assessment` 新增 `sig_invalid` 告警位（设置页展示随批次三接线）；**D5 细化：用户 Deny 优先于签名免同意**（与 R-12 ⑤ 同款——签名不覆盖用户明确拒绝）；
 - **占位公钥**：`PUBLISHER_PUBLIC_KEY_HEX` 由 openssl 现场生成、种子即弃——当前任何 `.sig` 均判 Invalid（预期 fail-closed 姿态），批次二轮换真钥；

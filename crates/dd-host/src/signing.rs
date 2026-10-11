@@ -83,7 +83,7 @@ fn parse_sig(text: &str) -> Result<(Signature, String, String), &'static str> {
     }
     let sig_b64 = lines[1].trim();
     if sig_b64.len() != 88 {
-        // 64 字节 Ed25519 签名的标准 base64 长度（含 1 个 `=` 填充）
+        // 64 字节 Ed25519 签名的标准 base64 长度（86 数据字符 + 2 个 `=` 填充）
         return Err("签名字段长度不符（应为 88 字符 base64）");
     }
     let sig_bytes = base64_decode_64(sig_b64).ok_or("签名字段 base64 解码失败")?;
@@ -180,7 +180,8 @@ pub fn check_signature(ext: &LoadedExtension, vk: &VerifyingKey) -> SigCheck {
     if m_now != m_hex || x_now != x_hex {
         return SigCheck::Invalid("双哈希与 trusted comment 不符（清单或 exe 已变更）");
     }
-    match vk.verify(&bundle_message(&m_now, &x_now), &sig) {
+    // verify_strict：额外拒绝弱公钥与非规范 R——发行方单源签发，零兼容负担
+    match vk.verify_strict(&bundle_message(&m_now, &x_now), &sig) {
         Ok(()) => SigCheck::Valid,
         Err(_) => SigCheck::Invalid("ed25519 验签失败"),
     }
