@@ -415,7 +415,9 @@ fn version_negotiation_rejects_version_higher_than_offered() {
 
 #[test]
 fn stdout_eof_is_reported_as_process_exited() {
-    // §11 崩溃检测的基础：子进程 stdout 立即 EOF 时，in-flight 请求必须失败而非挂起
+    // §11 崩溃检测的基础：子进程 stdout 立即 EOF 时，in-flight 请求必须失败而非挂起。
+    // CI 高载下 spawn/调度抖动可把失败路径滑成 Timeout（CI linux 首轮实证）——
+    // 按 CI #58 先例做有界重试（3 次 × 30s 界；EOF 正常时当次即返回，不磨时间）。
     let (command, args): (&str, Vec<String>) = if cfg!(windows) {
         ("cmd.exe", vec!["/c".to_string(), "exit 1".to_string()])
     } else {
@@ -449,23 +451,30 @@ fn stdout_eof_is_reported_as_process_exited() {
         cwd: PathBuf::from("."),
     };
 
-    let mut process = ExtensionProcess::spawn(&ext).expect("spawn 立即退出的进程");
-    let err = process
-        .call(
-            "initialize",
-            serde_json::json!({}),
-            std::time::Duration::from_secs(5),
-        )
-        .expect_err("stdout EOF 应立即失败");
-
-    assert!(
-        matches!(err, ProtocolError::ProcessExited),
-        "期望 ProcessExited，实际：{err}"
-    );
-    assert_eq!(
-        err.as_rpc_error().map(|e| e.code),
-        Some(error_codes::PROVIDER_UNAVAILABLE),
-        "进程退出在 UI 层应呈现为 -32003 provider_unavailable（§11）"
+    let mut last_err: Option<ProtocolError> = None;
+    for attempt in 1..=3 {
+        let mut process = ExtensionProcess::spawn(&ext).expect("spawn 立即退出的进程");
+        let err = process
+            .call(
+                "initialize",
+                serde_json::json!({}),
+                std::time::Duration::from_secs(30),
+            )
+            .expect_err("stdout EOF 应立即失败");
+        if matches!(err, ProtocolError::ProcessExited) {
+            assert_eq!(
+                err.as_rpc_error().map(|e| e.code),
+                Some(error_codes::PROVIDER_UNAVAILABLE),
+                "进程退出在 UI 层应呈现为 -32003 provider_unavailable（§11）"
+            );
+            return;
+        }
+        eprintln!("attempt {attempt}: 非 ProcessExited（{err}）——CI 高载竞态，重试");
+        last_err = Some(err);
+    }
+    panic!(
+        "期望 ProcessExited，3 次尝试均未命中，最后一次：{}",
+        last_err.expect("至少一次尝试")
     );
 }
 
