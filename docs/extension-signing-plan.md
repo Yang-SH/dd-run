@@ -1,6 +1,6 @@
 # dd-run 扩展签名立项与选型（O14 / F12）
 
-> **状态**：v1 选型稿（**待评审**）｜ **日期**：2026-10-11 ｜ **输入**：《O9–O14 优化方向规划》O14 节 · 修复实施方案 **F12 纲要** · `dd-host/src/trust.rs`（S-05 / R-12 / D2 源码级核对）· security-audit §4.4.2「明确不做①」
+> **状态**：v1.1｜ 选型稿已按推荐方案（D1-A/D2-A/D3/D5）实施**批次一**（2026-10-11，`63750f1`）；批次二（签发链）待 CI secret、批次三（文档与审计入账）待批次二 ｜ **日期**：2026-10-11 ｜ **输入**：《O9–O14 优化方向规划》O14 节 · 修复实施方案 **F12 纲要** · `dd-host/src/trust.rs`（S-05 / R-12 / D2 源码级核对）· security-audit §4.4.2「明确不做①」
 > **定位**：本文是 **F12 的立项载体**（《O9–O14 规划》§7 预留）——只做**动机、边界取证、选型决策表与验收框架**，不含实现；各决策点（D1–D5）给出推荐但不锁死，评审拍板后按 §8 批次实施。
 > **立项判据**（沿用 future-features-plan §1 硬判据）：**可行**（零冻结契约改动 / 有既有代码惯例可复用 / 依赖克制 / 可通过单测与真机走查验收）× **无冲突**（不与协议 v1.0 冻结、README 非目标、在途项、已证伪项冲突）。逐项核查见 §2。
 
@@ -119,7 +119,17 @@ dist/
 - **非 Windows 打包链签名**：验签跨平台可用（D1-A），签发仍仅 Windows/CI；
 - **协议方法面改动**：`.sig` 全程不触碰 NDJSON 方法面与 `initialize` 协商。
 
-## 8. 与既有文档关系 + 实施批次建议
+## 8. 批次一落地记录（2026-10-11，`63750f1`）
+
+- **依赖实测**：`ed25519-dalek 2.2`（default-features=false，仅 std/fast）——Cargo.lock 实测 +23 条目，其中实际依赖图约 14 包（`sha2` 为 Ed25519 算法内必需，不可裁剪）；其余为 resolver 保留条目。发行包体积实测随批次二 dist 重打包记录；
+- **新增 `dd-host::signing`**：`.sig` 文本格式定稿（untrusted 行 + 88 字符 base64 签名 + trusted 行内嵌双 SHA256 hex 锚；手写 base64 编解码，防为 88 字符引入 base64 crate）；捆绑消息带域分隔前缀 `dd-run-ext-sig-v1`（防哈希错位重放）；
+- **三态整合**：签名分支先于台账/钉扎链短路；`Assessment` 新增 `sig_invalid` 告警位（设置页展示随批次三接线）；**D5 细化：用户 Deny 优先于签名免同意**（与 R-12 ⑤ 同款——签名不覆盖用户明确拒绝）；
+- **占位公钥**：`PUBLISHER_PUBLIC_KEY_HEX` 由 openssl 现场生成、种子即弃——当前任何 `.sig` 均判 Invalid（预期 fail-closed 姿态），批次二轮换真钥；
+- **非 Windows 口径修正**：ed25519 验签已跨平台就绪，但捆绑锚的 SHA-256 仍 Windows-only（trust.rs 既有缺口）→ `check_signature` 在非 Windows 恒 `Absent`、现行 fail-open 不变。**D1-A 对 D2 的收口是"就绪"而非"完成"**：哈希跨平台化随 O6；
+- **测试**：新增 12 条（signing 单测 6 + trust 三态整合 6），先红后绿实证（恒 Absent 桩下 3 条签名依赖腿 FAILED → 恢复 623/0）；批次一覆盖验收框架 §6 之 1/2/3/4/6 的单测腿（判 5 非 Windows 腿与端到端内置钥腿随批次二/三）；
+- **批次二待办**：真钥生成与 CI secret、`package.sh`/release.yml 签发步骤、`PUBLISHER_PUBLIC_KEY_HEX` 轮换、端到端内置钥腿、发行包体积实测；**批次三**：manifest-schema.md「分发签名」节 + protocol.md 登记 + 设计文档 §8.2 注记 + security-audit S-xx 续位 + 设置页 `sig_invalid` 告警展示。
+
+## 9. 与既有文档关系 + 实施批次建议
 
 - 本文 = **F12 的立项载体**（《O9–O14 规划》§7 衔接）；立项通过后修复实施方案 F12 节回写落地注记，security-audit 附录以 **S-xx 续位**将「扩展签名」编号入账（沿用 S-01–S-11 后续位）；
 - 协议侧：manifest-schema.md 新增「分发签名」节（`.sig` 发现/校验/缺失语义）+ protocol.md **v1.1 候选流程**登记（清单字节零改动的说明随附）；cmdpal-platform-agnostic-design.md §8.2 协议注释同步；
