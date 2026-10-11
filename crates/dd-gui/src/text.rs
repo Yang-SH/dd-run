@@ -619,6 +619,12 @@ const I18N: &[(&str, &str, &str)] = &[
         "随包扩展文件与首次记录不符（宿主版本未变），疑似被替换，已暂停该扩展",
         "Bundled extension files no longer match their first-run record (host version unchanged); possibly replaced — paused",
     ),
+    // O14/F12 批次三：发行方签名校验失败（.sig 解析/验签/双哈希任一失败）
+    (
+        "set.ext.sig_warn",
+        "发行方签名校验失败（清单或程序可能与签名时不一致），已暂停该扩展",
+        "Publisher signature check failed (manifest or binary may differ from what was signed) — paused",
+    ),
     (
         "set.ext.ledger_corrupt",
         "信任台账（trust.json）损坏或版本不识别，已按「全部待批准」处理",

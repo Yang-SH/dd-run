@@ -446,6 +446,35 @@ mod tests {
         assert_eq!(rows[0].exe_path, "a.exe");
     }
 
+    /// O14/F12：Assessment.sig_invalid（发行方签名校验失败）应透传到行数据，
+    /// 驱动设置页告警行（沿 R-12 sidecar_tampered 先例）。
+    #[test]
+    fn extension_rows_propagate_sig_invalid() {
+        let exts = vec![dd_host::manifest::from_executable(
+            "a.exe".into(),
+            "com.example.a",
+            "Ext A",
+        )];
+        let trust: HashMap<String, Assessment> = HashMap::new();
+        // 无判定记录：sig_invalid 缺省 false
+        let rows = extension_rows(&exts, &[], &[], &trust);
+        assert!(!rows[0].sig_invalid);
+        // 有记录且 sig_invalid 置位 → 透传
+        let mut trust2 = HashMap::new();
+        trust2.insert(
+            "com.example.a".to_string(),
+            Assessment {
+                id: "com.example.a".to_string(),
+                trust: Trust::Pending,
+                origin: ExtOrigin::UserDir,
+                sidecar_tampered: false,
+                sig_invalid: true,
+            },
+        );
+        let rows = extension_rows(&exts, &[], &[], &trust2);
+        assert!(rows[0].sig_invalid, "sig_invalid 应透传到行数据");
+    }
+
     /// S-05：信任状态与来源驱动行内按钮与标签（纯视图逻辑，不依赖 egui）。
     #[test]
     fn extension_rows_expose_trust_and_origin() {

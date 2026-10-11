@@ -1,6 +1,6 @@
 # dd-run 扩展签名立项与选型（O14 / F12）
 
-> **状态**：v1.1｜ 选型稿已按推荐方案（D1-A/D2-A/D3/D5）实施**批次一**（2026-10-11，`63750f1`）；批次二（签发链）待 CI secret、批次三（文档与审计入账）待批次二 ｜ **日期**：2026-10-11 ｜ **输入**：《O9–O14 优化方向规划》O14 节 · 修复实施方案 **F12 纲要** · `dd-host/src/trust.rs`（S-05 / R-12 / D2 源码级核对）· security-audit §4.4.2「明确不做①」
+> **状态**：v1.2｜ **批次一已落地**（2026-10-11，`63750f1`）；**批次三（可独立部分）已落地**（同日：manifest-schema §9 分发签名登记 + security-audit S-12 入账 v1.9 + 设置页 sig_invalid 告警行）；批次二（签发链）待 CI secret ｜ **日期**：2026-10-11 ｜ **输入**：《O9–O14 优化方向规划》O14 节 · 修复实施方案 **F12 纲要** · `dd-host/src/trust.rs`（S-05 / R-12 / D2 源码级核对）· security-audit §4.4.2「明确不做①」
 > **定位**：本文是 **F12 的立项载体**（《O9–O14 规划》§7 预留）——只做**动机、边界取证、选型决策表与验收框架**，不含实现；各决策点（D1–D5）给出推荐但不锁死，评审拍板后按 §8 批次实施。
 > **立项判据**（沿用 future-features-plan §1 硬判据）：**可行**（零冻结契约改动 / 有既有代码惯例可复用 / 依赖克制 / 可通过单测与真机走查验收）× **无冲突**（不与协议 v1.0 冻结、README 非目标、在途项、已证伪项冲突）。逐项核查见 §2。
 
@@ -127,7 +127,7 @@ dist/
 - **占位公钥**：`PUBLISHER_PUBLIC_KEY_HEX` 由 openssl 现场生成、种子即弃——当前任何 `.sig` 均判 Invalid（预期 fail-closed 姿态），批次二轮换真钥；
 - **非 Windows 口径修正**：ed25519 验签已跨平台就绪，但捆绑锚的 SHA-256 仍 Windows-only（trust.rs 既有缺口）→ `check_signature` 在非 Windows 恒 `Absent`、现行 fail-open 不变。**D1-A 对 D2 的收口是"就绪"而非"完成"**：哈希跨平台化随 O6；
 - **测试**：新增 12 条（signing 单测 6 + trust 三态整合 6），先红后绿实证（恒 Absent 桩下 3 条签名依赖腿 FAILED → 恢复 623/0）；批次一覆盖验收框架 §6 之 1/2/3/4/6 的单测腿（判 5 非 Windows 腿与端到端内置钥腿随批次二/三）；
-- **批次二待办**：真钥生成与 CI secret、`package.sh`/release.yml 签发步骤、`PUBLISHER_PUBLIC_KEY_HEX` 轮换、端到端内置钥腿、发行包体积实测；**批次三**：manifest-schema.md「分发签名」节 + protocol.md 登记 + 设计文档 §8.2 注记 + security-audit S-xx 续位 + 设置页 `sig_invalid` 告警展示。
+- **批次二待办**：真钥生成与 CI secret、`package.sh`/release.yml 签发步骤、`PUBLISHER_PUBLIC_KEY_HEX` 轮换、端到端内置钥腿、发行包体积实测；**批次三**：manifest-schema.md「分发签名」节 + protocol.md 登记 + 设计文档 §8.2 注记 + security-audit S-xx 续位 + 设置页 `sig_invalid` 告警展示。**批次三实施修正（同日）**：`.sig` 经核实不触碰任何协议承载物——protocol.md 与设计文档 §8.2 均**零改动**（登记面收敛为 manifest-schema.md §9「分发签名」+ 审计 v1.9 S-12 入账）；设置页告警行已沿 R-12 `set.ext.tamper_warn` 先例落地（i18n 键 `set.ext.sig_warn`）。
 
 ## 9. 与既有文档关系 + 实施批次建议
 

@@ -222,7 +222,19 @@ impl PaletteApp {
                                 .truncate(),
                             );
                         }
-                        // 失败原因行（既有）：仅失败时
+
+                        // O14 告警行：发行方签名校验失败（fail-closed 拦下）
+                        if row.sig_invalid {
+                            ui.add_space(2.0);
+                            ui.add(
+                                egui::Label::new(
+                                    egui::RichText::new(crate::text::t(lang, "set.ext.sig_warn"))
+                                        .size(11.0)
+                                        .color(p.danger),
+                                )
+                                .truncate(),
+                            );
+                        } // 失败原因行（既有）：仅失败时
                         if let Some(reason) = &row.failed_reason {
                             ui.add_space(2.0);
                             let reason_resp = ui.add(
@@ -420,6 +432,8 @@ pub(crate) struct ExtRow {
     pub(crate) shadow: bool,
     /// R-12：随包 sidecar 同版篡改嫌疑（哈希与钉扎不符且宿主版本未变）。
     pub(crate) sidecar_tampered: bool,
+    /// O14/F12：发行方签名校验失败（.sig 解析/验签/双哈希任一失败）。
+    pub(crate) sig_invalid: bool,
     /// 清单路径（展示 + 溯源）。
     pub(crate) manifest_path: String,
     /// 可执行文件路径（内置为名义路径，渲染时改用文案替代）。
@@ -488,6 +502,7 @@ pub(super) fn extension_rows(
                 origin: a.map(|x| x.origin).unwrap_or(ExtOrigin::UserDir),
                 shadow: a.map(|x| x.shadows_first_party()).unwrap_or(false),
                 sidecar_tampered: a.map(|x| x.sidecar_tampered).unwrap_or(false),
+                sig_invalid: a.map(|x| x.sig_invalid).unwrap_or(false),
                 manifest_path: e.path.display().to_string(),
                 exe_path: e.command.display().to_string(),
             }

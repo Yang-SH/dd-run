@@ -163,3 +163,13 @@
 **file-search（`com.ddrun.filesearch`）** 是目前唯一的清单注册型官方扩展（同目录另有 `com.example.sample.json`，属开发示例、不随包分发）：清单源码在 `examples/extensions.d/com.ddrun.filesearch.json`，由 `tools/package.sh` 归集进 `dist/extensions.d/` 作为 sidecar 随包分发（位置与优先级见 §2 便携 sidecar）；开发期可将该清单拷入用户扩展目录，并把 `entry.command` 指向本地构建产物进行调试。
 
 **加载优先级**（同 `id` 去重、先者优先）：内置（`merge_builtins`）＞ 用户数据目录 ＞ 便携 sidecar。
+
+## 9. 分发签名（O14/F12，批次三登记）
+
+随包分发物可携带**发行方 detached 签名**（O14/F12 立项与完整选型见 [`extension-signing-plan.md`](./extension-signing-plan.md)；实现 `dd-host/src/signing.rs`）。本节登记宿主的 `.sig` 发现与校验规则——**清单 schema 与字节零改动**，本节为扫描层分发契约（不触碰协议 §13 的 NDJSON 方法面，无需 MINOR 递增）：
+
+- **发现**：宿主扫描清单时探测同目录同名 `.sig`（`com.ddrun.filesearch.json` → `com.ddrun.filesearch.json.sig`）；无 `.sig` → 走 §7 既有校验与信任判定（S-05 同意流），行为零变化；
+- **格式**（3 行文本）：`untrusted comment:` 行 + 88 字符 base64 Ed25519 签名（86 数据字符 + 2 个 `=` 填充）+ `trusted comment: manifest=<清单 SHA256 hex> exe=<exe SHA256 hex>`（捆绑锚）；
+- **校验**：发行方公钥编译期内置（宿主即信任根）；清单与 exe 双哈希先与 trusted comment 逐字节比对，再对域分隔捆绑消息（`dd-run-ext-sig-v1`）做 `verify_strict` 验签；
+- **三态**（判定链先于台账/钉扎，见 trust 模块文档）：Valid → 免同意 `AutoTrusted`（**用户 Deny 仍优先**）；Invalid（解析/验签/双哈希任一失败）→ fail-closed `Pending` + `sig_invalid` 告警位（设置页告警行）；Absent → 既有判定；
+- **发布状态（2026-10-11）**：批次一（验签机器 + 三态整合 + 12 单测）已落地；内置公钥为**占位钥**（种子即弃）——当前任何 `.sig` 都判 Invalid 属预期；批次二以发行方真钥（CI secret 签发链）轮换并附随包 `.sig`。
