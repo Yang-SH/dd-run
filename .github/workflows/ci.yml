@@ -93,7 +93,17 @@ jobs:
       - name: Build (workspace, all targets)
         run: cargo build --workspace --all-targets
 
-      - name: Test (workspace)
+        run: |
+          set -o pipefail
+          cargo test --workspace 2>&1 | tee test_output.txt
+
+      - name: Surface test failures as annotations
+        if: failure()
+        run: |
+          grep -E "panicked at|test result: FAILED|---- .* stdout ----" test_output.txt | head -60 | while IFS= read -r line; do
+            echo "::error::$line"
+          done
+          tail -n 40 test_output.txt
         run: cargo test --workspace
 
   check-macos:
@@ -116,5 +126,15 @@ jobs:
       - name: Build (workspace, all targets)
         run: cargo build --workspace --all-targets
 
-      - name: Test (workspace)
+        run: |
+          set -o pipefail
+          cargo test --workspace 2>&1 | tee test_output.txt
+
+      - name: Surface test failures as annotations
+        if: failure()
+        run: |
+          grep -E "panicked at|test result: FAILED|---- .* stdout ----" test_output.txt | head -60 | while IFS= read -r line; do
+            echo "::error::$line"
+          done
+          tail -n 40 test_output.txt
         run: cargo test --workspace
