@@ -1,0 +1,72 @@
+468:2026-10-11T07:29:38.2785730Z error[E0463]: can't find crate for `core`
+469-2026-10-11T07:29:38.2786290Z   |
+470-2026-10-11T07:29:38.2786710Z   = note: the `x86_64-pc-windows-gnu` target may not be installed
+471-2026-10-11T07:29:38.2787260Z   = help: consider downloading the target with `rustup target add x86_64-pc-windows-gnu`
+472-2026-10-11T07:29:38.2787770Z 
+--
+474:2026-10-11T07:29:38.2914270Z error: could not compile `windows-link` (lib) due to 1 previous error
+475-2026-10-11T07:29:38.2973940Z warning: build failed, waiting for other jobs to finish...
+476-2026-10-11T07:29:40.9567540Z ##[error]Process completed with exit code 101.
+477-2026-10-11T07:29:40.9722490Z Post job cleanup.
+478-2026-10-11T07:29:41.0810650Z [command]/opt/homebrew/bin/git version
+---- tail ----
+2026-10-11T07:29:36.7930230Z   Downloaded wgpu-hal v30.0.1
+2026-10-11T07:29:36.8124980Z   Downloaded objc2-app-kit v0.3.2
+2026-10-11T07:29:36.8601330Z   Downloaded winit v0.30.13
+2026-10-11T07:29:36.8962790Z   Downloaded khronos_api v3.1.0
+2026-10-11T07:29:36.9194820Z   Downloaded tracing v0.1.44
+2026-10-11T07:29:36.9456270Z   Downloaded windows_x86_64_gnu v0.52.6
+2026-10-11T07:29:36.9639460Z   Downloaded libc v0.2.189
+2026-10-11T07:29:37.0364660Z   Downloaded naga v30.0.1
+2026-10-11T07:29:37.0720490Z   Downloaded windows_x86_64_gnu v0.53.1
+2026-10-11T07:29:37.0900980Z   Downloaded windows-sys v0.60.2
+2026-10-11T07:29:37.1788260Z   Downloaded windows-sys v0.61.2
+2026-10-11T07:29:37.2601660Z   Downloaded windows-sys v0.52.0
+2026-10-11T07:29:37.3460710Z   Downloaded windows v0.62.2
+2026-10-11T07:29:37.8032050Z    Compiling proc-macro2 v1.0.107
+2026-10-11T07:29:37.8032440Z    Compiling quote v1.0.47
+2026-10-11T07:29:37.8032680Z    Compiling unicode-ident v1.0.24
+2026-10-11T07:29:38.2538250Z    Compiling windows-link v0.2.1
+2026-10-11T07:29:38.2785730Z error[E0463]: can't find crate for `core`
+2026-10-11T07:29:38.2786290Z   |
+2026-10-11T07:29:38.2786710Z   = note: the `x86_64-pc-windows-gnu` target may not be installed
+2026-10-11T07:29:38.2787260Z   = help: consider downloading the target with `rustup target add x86_64-pc-windows-gnu`
+2026-10-11T07:29:38.2787770Z 
+2026-10-11T07:29:38.2901580Z For more information about this error, try `rustc --explain E0463`.
+2026-10-11T07:29:38.2914270Z error: could not compile `windows-link` (lib) due to 1 previous error
+2026-10-11T07:29:38.2973940Z warning: build failed, waiting for other jobs to finish...
+2026-10-11T07:29:40.9567540Z ##[error]Process completed with exit code 101.
+2026-10-11T07:29:40.9722490Z Post job cleanup.
+2026-10-11T07:29:41.0810650Z [command]/opt/homebrew/bin/git version
+2026-10-11T07:29:41.0962590Z git version 2.55.0
+2026-10-11T07:29:41.0985620Z Copying '/Users/runner/.gitconfig' to '/Users/runner/work/_temp/fa2a851b-062d-4b87-a8aa-6b08635e7e83/.gitconfig'
+2026-10-11T07:29:41.0992730Z Temporarily overriding HOME='/Users/runner/work/_temp/fa2a851b-062d-4b87-a8aa-6b08635e7e83' before making global git config changes
+2026-10-11T07:29:41.0995290Z Adding repository directory to the temporary git global config as a safe directory
+2026-10-11T07:29:41.0997570Z [command]/opt/homebrew/bin/git config --global --add safe.directory /Users/runner/work/dd-run/dd-run
+2026-10-11T07:29:41.1092080Z Removing SSH command configuration
+2026-10-11T07:29:41.1097080Z [command]/opt/homebrew/bin/git config --local --name-only --get-regexp core\.sshCommand
+2026-10-11T07:29:41.1155230Z [command]/opt/homebrew/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :"
+2026-10-11T07:29:41.1935550Z Removing HTTP extra header
+2026-10-11T07:29:41.1941750Z [command]/opt/homebrew/bin/git config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+2026-10-11T07:29:41.1996640Z [command]/opt/homebrew/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :"
+2026-10-11T07:29:41.2743330Z Removing includeIf entries pointing to credentials config files
+2026-10-11T07:29:41.2747300Z [command]/opt/homebrew/bin/git config --local --name-only --get-regexp ^includeIf\.gitdir:
+2026-10-11T07:29:41.2799750Z includeif.gitdir:/Users/runner/work/dd-run/dd-run/.git.path
+2026-10-11T07:29:41.2800240Z includeif.gitdir:/Users/runner/work/dd-run/dd-run/.git/worktrees/*.path
+2026-10-11T07:29:41.2800730Z includeif.gitdir:/github/workspace/.git.path
+2026-10-11T07:29:41.2801130Z includeif.gitdir:/github/workspace/.git/worktrees/*.path
+2026-10-11T07:29:41.2807180Z [command]/opt/homebrew/bin/git config --local --get-all includeif.gitdir:/Users/runner/work/dd-run/dd-run/.git.path
+2026-10-11T07:29:41.2858890Z /Users/runner/work/_temp/git-credentials-fa72140e-12d0-44b9-a52b-584524600207.config
+2026-10-11T07:29:41.2867590Z [command]/opt/homebrew/bin/git config --local --unset includeif.gitdir:/Users/runner/work/dd-run/dd-run/.git.path \/Users\/runner\/work\/_temp\/git\-credentials\-fa72140e\-12d0\-44b9\-a52b\-584524600207\.config
+2026-10-11T07:29:41.2928620Z [command]/opt/homebrew/bin/git config --local --get-all includeif.gitdir:/Users/runner/work/dd-run/dd-run/.git/worktrees/*.path
+2026-10-11T07:29:41.2975860Z /Users/runner/work/_temp/git-credentials-fa72140e-12d0-44b9-a52b-584524600207.config
+2026-10-11T07:29:41.2985360Z [command]/opt/homebrew/bin/git config --local --unset includeif.gitdir:/Users/runner/work/dd-run/dd-run/.git/worktrees/*.path \/Users\/runner\/work\/_temp\/git\-credentials\-fa72140e\-12d0\-44b9\-a52b\-584524600207\.config
+2026-10-11T07:29:41.3044100Z [command]/opt/homebrew/bin/git config --local --get-all includeif.gitdir:/github/workspace/.git.path
+2026-10-11T07:29:41.3095280Z /github/runner_temp/git-credentials-fa72140e-12d0-44b9-a52b-584524600207.config
+2026-10-11T07:29:41.3100470Z [command]/opt/homebrew/bin/git config --local --unset includeif.gitdir:/github/workspace/.git.path \/github\/runner_temp\/git\-credentials\-fa72140e\-12d0\-44b9\-a52b\-584524600207\.config
+2026-10-11T07:29:41.3153700Z [command]/opt/homebrew/bin/git config --local --get-all includeif.gitdir:/github/workspace/.git/worktrees/*.path
+2026-10-11T07:29:41.3199180Z /github/runner_temp/git-credentials-fa72140e-12d0-44b9-a52b-584524600207.config
+2026-10-11T07:29:41.3205020Z [command]/opt/homebrew/bin/git config --local --unset includeif.gitdir:/github/workspace/.git/worktrees/*.path \/github\/runner_temp\/git\-credentials\-fa72140e\-12d0\-44b9\-a52b\-584524600207\.config
+2026-10-11T07:29:41.3279380Z [command]/opt/homebrew/bin/git submodule foreach --recursive git config --local --show-origin --name-only --get-regexp remote.origin.url
+2026-10-11T07:29:41.3939200Z Removing credentials config '/Users/runner/work/_temp/git-credentials-fa72140e-12d0-44b9-a52b-584524600207.config'
+2026-10-11T07:29:41.4026590Z Cleaning up orphan processes
