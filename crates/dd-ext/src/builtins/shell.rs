@@ -134,6 +134,15 @@ mod sys {
         ("net", "user"),   // net user 改账号/口令
     ];
 
+    /// 嵌套 shell / 等价破坏力启动器（O9，2026-10-11，严审报告 P4）：段首词命中
+    /// 即整段过确认门——其参数中的危险命令（`cmd /C del …`、`call del …`、
+    /// `powershell -Command "Remove-Item …"` 等）无法靠词表逐词覆盖，整段确认
+    /// 是唯一可靠的保守面。含 `robocopy`（`/MIR` 可整目录镜像删除）与 `wmic`
+    /// （`process call delete` 等价杀进程）非严格意义的 shell，但同属
+    /// 「参数破坏力不进词表」一类。大小写不敏感、走既有扩展名剥离
+    /// （`cmd.exe` 自动覆盖）。定位不变式：只扩大确认触发面，不新增拦截。
+    const NESTED_SHELL_HEADS: &[&str] = &["cmd", "call", "powershell", "pwsh", "wmic", "robocopy"];
+
     /// 危险命令判定（纯函数，便于单测）：见 [`DANGEROUS_COMMANDS`] / [`DANGEROUS_SUBCOMMANDS`]。
     ///
     /// 取首个词作为命令名，按 `\` / `/` 去路径、按 `.` 去扩展名后比对；`reg delete`
@@ -151,6 +160,10 @@ mod sys {
         if DANGEROUS_COMMANDS.contains(&name) {
             return true;
         }
+        // O9：嵌套 shell 启动器整段过门（见 [`NESTED_SHELL_HEADS`]）。
+        if NESTED_SHELL_HEADS.contains(&name) {
+            return true;
+        }
         let sub = words.next().unwrap_or("");
         DANGEROUS_SUBCOMMANDS
             .iter()
@@ -165,10 +178,15 @@ mod sys {
     /// 切段刻意字符级（`&&` 会产生空段，空段判定恒 false）——不引入 shell
     /// 解析复杂度；引号内的 `&`/`|` 也会切段，属保守方向（宁可多问一次，
     /// 仍是「降低误触代价的护栏」而非沙箱边界的既定定位）。
+    ///
+    /// O9（2026-10-11）：含 `^`（cmd 转义符，执行期还原，如 `d^el`）的查询
+    /// 整体过确认门——「含转义符」本身即可疑信号；不做全文还原
+    /// （cmd 转义语义复杂，误报/漏报面不可控）。
     fn is_dangerous_query(query: &str) -> bool {
-        query
-            .split(['&', '|', '\r', '\n'])
-            .any(is_dangerous_command)
+        query.contains('^')
+            || query
+                .split(['&', '|', '\r', '\n'])
+                .any(is_dangerous_command)
     }
 
     pub fn handle_invoke(params: &InvokeParams) -> (CommandResult, Vec<Effect>) {
@@ -648,6 +666,40 @@ mod sys {
         fn r10_safe_single_no_confirm() {
             assert!(!is_dangerous_query("ipconfig /all"));
             assert!(!is_dangerous_query("git status && cargo test"));
+        }
+
+        /// O9（2026-10-11，严审报告 P4 + 补两类）：段首词为嵌套 shell 启动器时，
+        /// 其参数中的危险命令此前不触发确认——7 条绕过样例逐条断言过确认门。
+        #[test]
+        fn o9_nested_shell_heads_confirm() {
+            for bad in [
+                "cmd /C del /s /q C:\\x",                    // P4 补：cmd /C 借壳
+                "call del /s /q C:\\x",                      // P4：call 承载
+                "powershell -Command \"Remove-Item C:\\x\"", // P4：powershell -Command
+                "pwsh -Command \"Remove-Item C:\\x\"",       // 本文补：pwsh
+                "wmic process call delete pid=123",          // P4：wmic
+                "robocopy C:\\a C:\\b /MIR",                 // P4：/MIR 镜像删除
+                "cmd.exe /C rd /s /q C:\\x",                 // 扩展名剥离后命中
+            ] {
+                assert!(is_dangerous_query(bad), "嵌套 shell 应过确认门：{bad}");
+            }
+        }
+
+        /// O9：含 `^`（cmd 转义符，`d^el` 执行期还原为 `del`）的查询整体过确认门。
+        #[test]
+        fn o9_caret_escape_confirm() {
+            assert!(is_dangerous_query("d^el /s /q C:\\x"), "^ 转义应过确认门");
+        }
+
+        /// O9 负例：既有非危险命令回归不弹确认。
+        #[test]
+        fn o9_safe_queries_no_confirm() {
+            assert!(!is_dangerous_query("echo hello"));
+            assert!(!is_dangerous_query("git status"));
+            assert!(
+                !is_dangerous_query("robust_check.exe --flag"),
+                "前缀相近不误伤"
+            );
         }
 
         #[test]
