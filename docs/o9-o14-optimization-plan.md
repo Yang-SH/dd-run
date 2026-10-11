@@ -1,9 +1,10 @@
 # dd-run 优化方向规划（O9–O14）
 
-> **状态**：v1.3 校订稿（待评审）｜ **日期**：2026-10-10 ｜ **输入**：独立第三轮严审 + **同日仓库逐项复核三轮**（HEAD `7606900`）
+> **状态**：v1.4 落地稿｜ O9 / O10（=F4）/ O11 已收口（2026-10-11）；O12 待下一常规批次；O13、O14 维持原节奏 ｜ **日期**：2026-10-10（v1.4 落地记录 2026-10-11）｜ **输入**：独立第三轮严审 + **同日仓库逐项复核三轮**（HEAD `7606900`）
 > **v1.1 校订记录**：① 删除原 O15（内存长会话真机复验）——经核实**已于 2026-10-03 由 V-13 基线收口**（见 §4），v1.0 将其列为待办属误判；② 移除对严审报告"R-1/R-2/N-1~N-3"的悬空编号引用（严审报告实际无此编号体系，且 `R-xx` 已被项目内部修订号占用，见 shell.rs R-10 / trust.rs R-12 注释）；③ O9 机制描述按源码修正为"切段后**每段**首词判定"；④ O12 前置核对已完成并给出结论；⑤ O13 文档计数按实际口径修正。
 > **v1.2 校订记录**：① O9 链路类型名修正：实际为 `CommandResult::Confirm`（v1.1 误写 `ConfirmIntent`，全仓无此类型）；② O9 证据归属修正：绕过面为严审报告 **P4 已确认**发现（非本文新取证），本文补 `cmd /C`、`pwsh` 两类并做源码行级核实；③ §4 LRU 行修正：**已由 N4 落地**（2026-10-03），v1.1 误标"未立项"；④ §5 性能表述归属核准：冷启动基线不属 V-13 口径（V-13 为内存台账），改为"V 系列真机走查实测台账"；v1.0 曾误写"冷启动 200 ms"已废弃（查无该实测口径）；⑤ O10 设计要点按实际工程结构修正：`[workspace.package]` 节当前不存在、crate 为独立 `[package]` 声明；⑥ O14 补编号衔接：修复实施方案已预留 **F12（扩展签名）"单独立项"**，本文 O14 即其立项载体；⑦ §7 "O1–O8 均已闭环"表述修正为分项状态。
 > **v1.3 校订记录**：① **O10 降级为 F4 落地跟踪**：查证修复实施方案 **F4 = "MSRV 声明 + 清单解析拒绝 `.cmd`/`.bat`"**，与本文 O10 事项同一且 F4 设计更全（含 manifest.rs 侧）；经 git log 逐条核实，F4 是 F 系列唯一未落地项（HEAD `7606900` 实测全仓仍无 `rust-version`、`manifest.rs:303` 仍在补全 `.cmd`/`.bat`）→ O10 不再另立方案，改为衔接跟踪，设计以 F4 为准；② 关联行与 §7 "F1–F11 已全部落地"修正为分项状态（F1–F3、F5–F11 已落地，F4 待实施）；③ §5 体积表述修正：**O5-a（default_fonts 移除）已于 2026-10-07 落地**（宿主单件 −1.35 MiB，字形穷举闭环无 tofu），不再表述为"有 tofu 风险"；不做的是 O5-b/O5-c 与 `panic=abort`；④ §4 I3 状态措辞对齐 INDEX §5 口径"保留不做（视真机）"。
+> **v1.4 落地记录（2026-10-11）**：**O9 + F4（经 O10）+ O11 按 §6 验收总标准一个批次收口**——① O9 落地：`NESTED_SHELL_HEADS`（cmd/call/powershell/pwsh/wmic/robocopy 六词，段首词命中即整段过确认门）+ 含 `^` 转义查询整体确认，新增单测 3 组 11 断言（7 条绕过样例 + `^` 例 + 回归负例）；② O10/F4 落地：6 crate 声明 `rust-version`——**声明值实测修正为 1.95**（依赖图 eframe/egui 0.36.2 要求 1.95、自有源码用 1.88 API `as_chunks`，1.77.2 为不可兑现声明；安全不变式 ≥ BatBadBut 修复线 1.77.2 仍满足，偏差说明见修复实施方案 §F4 实施版）+ `manifest.rs` 裸名只补 `.exe` + 新测试 `resolve_executable_no_longer_completes_cmd_bat` + manifest-schema.md §4 同步；③ O11 落地：两个 workflow 全部 action SHA pin（`actions/checkout@3d3c42e…`、`Swatinem/rust-cache@6323deb…`、`taiki-e/install-action@ab68953…`、`softprops/action-gh-release@efb3536…`）+ job `timeout-minutes`（check/audit 30、release 45）+ 根目录 3 个设计稿 HTML 移入 `docs/archive/`（README/文档活链接同步改写）；随批修复存量 clippy `explicit_auto_deref`（panel.rs，干净 HEAD 即触发，非本批引入）。**验收**：`cargo test --workspace` 611 passed / `clippy --workspace --all-targets -- -D warnings` 全绿 / `fmt --check` 零差异。
 > **关联**：[optimization-plan.md](./optimization-plan.md)（O1–O8）· [future-features-plan.md](./future-features-plan.md)（N1–N5，已全部落地）· [dd-run-代码严审报告.md](./dd-run-代码严审报告.md) · [dd-run-修复实施方案.md](./dd-run-修复实施方案.md)（F1–F3、F5–F11 已落地；**F4 待实施，由本文 O10 跟踪**；F12 预留）· [security-audit-2026-09-23.md](./security-audit-2026-09-23.md)（S-01~S-11）· [refactor-layering-plan.md](./refactor-layering-plan.md) · [memory-optimization-plan.md](./memory-optimization-plan.md) · [INDEX.md](./INDEX.md)
 > **立项判据**（沿用 future-features-plan §1 同款硬判据）：**可行**（零冻结契约改动、有既有代码惯例可复用、依赖克制、可通过单测与真机走查验收）与**无冲突**（不与冻结协议 v1.0、README 非目标、既有方案在途项、已证伪项、已占用编号空间冲突）。逐项冲突核查见 §2。
 
@@ -43,6 +44,8 @@
 
 ### O9 — 确认门覆盖嵌套 shell（P1）
 
+> ✅ **已落地（2026-10-11）**：按本节设计实施，单测 3 组全绿；见 v1.4 落地记录。
+
 **动机与证据**（严审报告 **P4 已确认**该绕过面，本文补两类并做源码行级核实）：`is_dangerous_query`（`crates/dd-ext/src/builtins/shell.rs:168`）自 R-10（2026-09-29）起按 `&`/`|`/`\r`/`\n` **切段后每段**各自过 `is_dangerous_command`（shell.rs:170–173），每段取**首词**（含扩展名剥离归一，`cmd.exe` → `cmd`）查 `DANGEROUS_COMMANDS`（12 词）与 `DANGEROUS_SUBCOMMANDS`。已知绕过面——**段首词本身是嵌套 shell 启动器时，其参数中的危险命令不触发确认**（P4 已确认 `call del`、`d^el`、`powershell -Command`、`wmic`、`robocopy /MIR` 五类；本文补 `cmd /C`、`pwsh` 两类）：
 
 - `cmd /C del /s /q C:\x`（段首词 `cmd` 不在表内，实际执行 `del`）
@@ -67,6 +70,8 @@
 
 ### O10 — MSRV（P1）＝修复实施方案 F4 落地跟踪
 
+> ✅ **已落地（2026-10-11，O10 随之销项）**：F4 实施完成；MSRV 声明值经实测修正为 1.95（详见修复实施方案 §F4 实施版注记与 v1.4 落地记录），安全不变式 ≥1.77.2 仍满足。
+
 > **v1.3 变更**：查证后确认本事项与修复实施方案 **F4（"MSRV 声明 + 清单解析拒绝 `.cmd`/`.bat`"，§231 起）为同一事项**，且 F4 设计更完整（含 manifest.rs 侧）。按"不重复立项"判据，本文**不再另立方案**，O10 降级为 F4 的落地跟踪索引，设计、批次与 commit 均以 F4 为准。
 
 **落地状态核实（2026-10-10，HEAD `7606900`）**：F 系列经 git log 逐条核对——F1（`9640b3b`）、F2/F5/F6（`de081f8`）、F3（`8e0eb88`）、F7（`2afa214`）、F8（`18e85e8`）、F9/F10/F11（`7606900`）均已落地；**F4 无对应提交，为 F 系列唯一未落地项**。源码佐证：全仓仍无 `rust-version`（根 `Cargo.toml` 与各 crate manifest 均无），`manifest.rs:303` 仍按 `[".exe", ".cmd", ".bat"]` 补全。
@@ -78,6 +83,8 @@
 ---
 
 ### O11 — CI/仓库卫生三件套（P2）
+
+> ✅ **已落地（2026-10-11）**：SHA pin（4 个 action 取 deref 后 commit SHA + 行尾版本注释）+ `timeout-minutes`（check/audit 30、release 45）+ 3 个 HTML 归档 `docs/archive/`（README/文档活链接同步改写、INDEX §3.G 注记更新）。
 
 依据（本文新取证，workflows 与仓库根目录核实）：
 
@@ -161,7 +168,7 @@
 ## 7. 与既有文档关系
 
 - O9 证据归属：绕过面已在严审报告 P4 确认、本文补两类并核实到行级；O10＝F4 跟踪（收口动作在修复实施方案 F4 节回写）；O11 为本文新取证——收口后在严审报告追加落地注记；
-- **F 系列状态（git 逐条核实，2026-10-10）**：F1–F3、F5–F11 已落地；**F4（MSRV + 拒绝 `.cmd`/`.bat`）待实施，由本文 O10 跟踪**；F12（扩展签名）预留"单独立项"，由本文 O14 承接。N1–N5 已全部落地且真机走查收口；O1–O4/O7/O8 已落地、O5-a 已落地而 O5-b/c 与 `panic=abort` 不做/证伪（§5）、O6 战略在途（§4）——本文不重开任何已收口项；
+- **F 系列状态（git 逐条核实，2026-10-10；v1.4 落地后 2026-10-11 更新）**：**F1–F11 已全部落地（F4 于 2026-10-11 收口）**；F12（扩展签名）预留"单独立项"，由本文 O14 承接。N1–N5 已全部落地且真机走查收口；O1–O4/O7/O8 已落地、O5-a 已落地而 O5-b/c 与 `panic=abort` 不做/证伪（§5）、O6 战略在途（§4）——本文不重开任何已收口项；
 - O14 若立项，即 F12 的立项载体，security-audit 附录续编号入账（沿用 S-xx 续位）。
 
 ---

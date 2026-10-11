@@ -21,7 +21,7 @@
 | M7 发布工程 | ✅ 已关闭 | 2026-09-10 `v0.1.1` | CI / 256px 图标 / sidecar 定案 / tag 演练发版（安装器取消） | [§2 M7](#m7--发布工程2026-09-08-立项) |
 | M8 扩展生态验证 | ✅ 已关闭 | 2026-09-10 | 非 Rust 扩展走通协议全链路（10 项全 ✓），指南 + conformance | [§2 M8](#m8--扩展生态验证2026-09-10-立项) |
 | M9 内置扩展进程内化 | ✅ 已关闭 | 2026-09-11 | 5 内置扩展改 in-process，单文件分发，进程隔离仅第三方 | [m9-inprocess-builtins](./archive/m9-inprocess-builtins.md) |
-| v5.2 UI 优化 B1–B8 | ✅ 已关闭 | 2026-09-13 `815e212..da0589c` | 字重/强调色/滚动条/下划线/结果行/设置页/悬停/自适应 | [cmdpal-ui-optimization-v5.html](../cmdpal-ui-optimization-v5.html) |
+| v5.2 UI 优化 B1–B8 | ✅ 已关闭 | 2026-09-13 `815e212..da0589c` | 字重/强调色/滚动条/下划线/结果行/设置页/悬停/自适应 | [cmdpal-ui-optimization-v5.html](./archive/cmdpal-ui-optimization-v5.html) |
 | 图标与字体优化 I1/I2/F1/F2 | ✅ 已关闭 | 2026-09-12 `3545d3f` | 占位 glyph / I2 显式色 / F1 token 化 / F2 密度三档（I3 未做） | [icons-typography-plan](./icons-typography-plan.md) |
 | O2 协议方法名常量层 | ✅ 已落地 | 2026-09-14（已提交 `6ee4931`） | 12 个方法名收敛为 `dd-protocol::methods` 单一来源，全仓生产代码改用常量 + 一致性测试锁 SSOT | [§2 O2](#o2--协议方法名常量层2026-09-14-落地) |
 | O1 协议错误码接线 | ✅ 已落地 | 2026-09-15（已提交 `c26035e`） | `-32600`/`-32700` 处置收口为 `dd-protocol::envelope` 单一来源；超限帧由静默丢弃改为「回错 + 关连接」（协议 §2.3/§9.3 补齐，v1.0 零改动） | [§2 O1](#o1--协议错误码接线2026-09-15-落地) |
@@ -283,7 +283,7 @@
 
 ### v5.2 — UI 优化 B1–B8（2026-09-13 落地）
 
-设计稿：[`cmdpal-ui-optimization-v5.html`](../cmdpal-ui-optimization-v5.html)。八批增量优化，每批独立可交付、可回退；B1–B8 已全部实现（commit 区间 `815e212..da0589c`）。配套真实机反馈修复（进页回填查询、返回聚焦、搜索引擎配置失效）于 `3545d3f` / `da0589c` 落地。
+设计稿：[`cmdpal-ui-optimization-v5.html`](./archive/cmdpal-ui-optimization-v5.html)。八批增量优化，每批独立可交付、可回退；B1–B8 已全部实现（commit 区间 `815e212..da0589c`）。配套真实机反馈修复（进页回填查询、返回聚焦、搜索引擎配置失效）于 `3545d3f` / `da0589c` 落地。
 
 | 批次 | 内容 | commit |
 |---|---|---|
@@ -817,7 +817,7 @@ Flowframes；改动前基线同为 1 failed，非本次回归）；`cargo build 
 
 **范围**：纯视觉批次——零行为变更、零协议改动、零设置字段变更。方案（真机截图 + 源码/像素双取证）、
 K-T1~K-T4 任务清单与 V-1~V-7 校验标准见 [`settings-keys-typography-plan.md`](./settings-keys-typography-plan.md)（v1.1，含落地勘误）；
-设计稿 D42 / v4.19 入稿见 [`../cmdpal-ui-mockups.html`](../cmdpal-ui-mockups.html)。
+设计稿 D42 / v4.19 入稿见 [`../cmdpal-ui-mockups.html`](./archive/cmdpal-ui-mockups.html)。
 
 | 项 | 改动 | 单测 |
 |---|---|---|
@@ -964,7 +964,7 @@ K-T1~K-T4 任务清单与 V-1~V-7 校验标准见 [`settings-keys-typography-pla
 > 以下仅保留每里程碑**最终结论 + 关键决策 + 遗留项**；过程细节、真机修复与踩坑记档一律见对应 `mX-record.md` / 设计稿 / CHANGELOG，不在本文件重复叙述。
 
 - **M0–M9**：全部 ✅ 已关闭（2026-09-01 ～ 2026-09-11）。结论见 §2 各节与里程碑状态总表。
-- **v5.2 UI 优化 B1–B8**：✅ 已关闭（2026-09-13）。八批增量优化全落地，含进页回填/返回聚焦/搜索引擎配置失效三项真机修复。详情见 [`cmdpal-ui-optimization-v5.html`](../cmdpal-ui-optimization-v5.html)。
+- **v5.2 UI 优化 B1–B8**：✅ 已关闭（2026-09-13）。八批增量优化全落地，含进页回填/返回聚焦/搜索引擎配置失效三项真机修复。详情见 [`cmdpal-ui-optimization-v5.html`](./archive/cmdpal-ui-optimization-v5.html)。
 - **图标与字体优化 I1/I2/F1/F2**：✅ 已关闭（2026-09-12）。I3 未做。详情见 [`icons-typography-plan.md`](./icons-typography-plan.md)。
 - **遗留项**：见 §6.1 台账——L1/L2/L3/L4/L5/L6/L7/L8/L9/L10 全部 ✅ 销项，无开放项。
 - **版本与发版**：crates 版本 `dd-gui`/`dd-host`/`dd-ext`/`dd-ext-sample`/`dd-run-cli` = **0.2.0**，`dd-protocol` = **1.0.0**；已发布 tag `v0.1.0`、`v0.1.1`、`v0.2.0`，分支 `main`。
@@ -1065,4 +1065,5 @@ K-T1~K-T4 任务清单与 V-1~V-7 校验标准见 [`settings-keys-typography-pla
 | 2026-10-07 | **用户真机走查首批（N1 path 腿 ✅ + 热键捕获回落实证）**：① **N1 自定义直达命令 path 腿通过**——用户复测（config：keyword `dr` → `G:\AI\dd-run\dist`）+ stderr 日志两次记录「自定义命令 path 打开（keyword=dr）」零失败告警，ShellExecute 成功；② **热键捕获「无法录入 Ctrl+Space」定性**——用户截图实证回落 toast 上屏（本机钩子被安全软件拦截，捕获恒为基础模式）：当前已注册组合被自家 `RegisterHotKey` 截走（WM_HOTKEY 不达 egui 键盘事件）+ 候选 == 当前组合保存禁用（未改动语义）——均非缺陷，9-30 记档「系统行为」口径成立；「捕获期解注册当前组合」记入 stability-plan §7 缓办占位备立项；seq 冲突协议腿改口径（可录入组合 + PowerToys 占用）。零代码改动 | ✅ 工作副本（详见 stability-plan v1.24、future-features-plan v1.8） |
 | 2026-10-07 | **用户真机走查批量收口**：用户确认「真机走查基本无问题」——本机可做腿全部按批量确认口径收口：R-22（IME 回车）/ R-23（超长粘贴）/ seq 冲突协议替代腿 / S-03·S-07·S-08·S-05 走查 / K 批 V-1~V-7 / N1–N5 用户腿 / T9·T11 剩余腿 / A-33-03（`%`/`#` 打开）。**记档口径注**：批量确认为用户总体结论，非逐腿判据 + 截图记录，发现问题单项重开。**仍待办**：E2E 首屏采样（需日志数据出 p50/p95）、V-14 多屏腿（需硬件）、R-21 黄线腿（需他机）。零代码改动 | ✅ 工作副本（详见 stability-plan v1.25、future-features-plan v1.9、personalization-plan v1.5、keys-typography-plan v1.2、search-file v3.12 注记） |
 | 2026-10-07 | **v0.2.0 发版（tag `v0.2.0` + GitHub Release）**：版本号 0.1.1 → **0.2.0**（5 crate；`dd-protocol` 维持 1.0.0）+ CHANGELOG `[Unreleased]` 收敛为 `[0.2.0] - 2026-10-07` 并补「自 0.1.1 起累计变更」摘要（7 条含行为变更提示）。本地 `bash tools/package.sh` exit 0 → `dist/dd-run-0.2.0.exe` **8,670,720 B**（dist 与 release sha256 一致 `655b0044…`）/ sidecar 832,000 B / 便携 zip **4,321,035 B**（3 成员、正斜杠条目名）；分发级冒烟：conformance 内置 calc 9 步 + bookmarks 9 步 exit 0、GUI 6 s 存活（WS 108.1 MB、冷启动 **862 ms**、6 内置 + filesearch 全 warm）；三关 596/0 + fmt 零差异 + clippy 0 告警 + docscan 0 漂移。同批修 `.github/workflows/release.yml` 的 zip 步骤（`Compress-Archive` 反斜杠条目名 → .NET `ZipArchive` 显式正斜杠）并补 Release 说明正文（本次亮点 + 行为变更） | ✅ 已发布（Release run #3 全绿：构建 5m40s → zip → 附着；asset 下载复验 4,318,452 B / sha256 `3a8fa028…`、3 成员正斜杠、解压布局正确；同推 CI run #67 双 job 全绿——build/test/clippy `-D warnings`/fmt + audit/machete） |
+| 2026-10-11 | **O9 + F4（O10）/ O11 收口批次**（《O9–O14 优化方向规划》v1.4 首批，严审 P4 + 卫生项 MSRV 闭合，**F 系列 F1–F11 至此全部落地**）：① **O9 确认门覆盖嵌套 shell**——`shell.rs` 新增 `NESTED_SHELL_HEADS`（cmd/call/powershell/pwsh/wmic/robocopy，段首词命中整段过确认门）+ 含 `^` 转义查询整体确认，+3 组 11 断言单测（7 条 P4 绕过样例逐条可复现）；② **F4 MSRV + 拒绝 `.cmd`/`.bat`**——6 crate 声明 `rust-version = "1.95"`（**实测修正**：依赖图 eframe/egui 0.36.2 下限 1.95、自有源码用 1.88 API，原稿 1.77.2 为不可兑现声明；≥ BatBadBut 修复线不变式满足，偏差见修复实施方案 §F4 实施版）+ `resolve_executable` 裸名只补 `.exe` + 新测试 `resolve_executable_no_longer_completes_cmd_bat` + manifest-schema.md §4 同步；③ **O11 CI/仓库卫生**——ci.yml/release.yml 全部 action SHA pin（4 个，deref commit + 行尾版本注释）+ job `timeout-minutes`（check/audit 30、release 45）+ 根目录 3 个设计稿 HTML 归档 `docs/archive/`（README/文档活链接同步改写）；④ 随批修存量 clippy `explicit_auto_deref`（panel.rs，干净 HEAD 即触发）。规划文档更名登记：`docs/dd-run 优化方向规划（O9–O14）v1.md` → `o9-o14-optimization-plan.md`（INDEX §D 登记） | ✅ 工作副本（611 passed / clippy `-D warnings` / fmt 零差异 / docscan 0 漂移；O9 正向 + 绕过真机走查待用户会话） |
 > 构建环境记档：本机 windows-gnu 链接需补 `as.exe`（与 dlltool 同目录）与 `libshlwapi.a`（2026-09-03 修复）；跑测试前须 `export APPDATA`（否则 apps 图标抽取测试必失败，见 CHANGELOG）。

@@ -4,6 +4,7 @@
 - **目标版本**：v0.2.1（缺陷修复为主）；F12（扩展签名）单独立项，不在本版范围
 - **约定**：所有路径相对仓库根；所有"验收标准"均为可执行命令或可复现操作；每项标注**影响面与冲突**，按批次给出合并顺序以保证无冲突
 - **修订 v1.1（2026-10-09）**：按代码核对（核对基线同为 `b40ced9`）修正 F1/F4/F5/F6/F7/F8/F9/F10/F11 共 7 类断言错误与行号漂移——F7 类型名 `ListState`→`PanelState`（全仓无 `ListState`）、F8 影响面扩至 icons.rs（`resolve_icons` 为 `&mut self` + owned 参数，原草稿双重编译失败）、F10 草稿 `lock()` 写法与"既有测试"表述更正、F4 MSRV 1.77→1.77.2、F11 测试更新 4→5 处、F5 已完成子项标注、F1 导入位置更正。各节内标注"2026-10-09 核对"处即本轮修正。
+- **落地回写（2026-10-11）**：**F4 实施落地，F 系列至此 F1–F11 全部闭环**（F12 扩展签名由《O9–O14 优化方向规划》O14 承接）。实施时发现 MSRV 声明值需由 1.77.2 修正为 **1.95**（原稿声明值为不可兑现的假声明，偏差说明见 §F4 实施版注记）；同批随 O9–O14 规划收口 O9（嵌套 shell 确认门）与 O11（CI/仓库卫生），见该规划 v1.4 落地记录与 CHANGELOG。
 
 ## 0. 全局门禁（每个批次合并前必须全绿）
 
@@ -265,6 +266,12 @@ fn resolve_executable_no_longer_completes_cmd_bat() {
 **验收标准**：`cargo test -p dd-host` 全绿；`cargo build -p dd-protocol` 在旧工具链（<1.77.2）上因 `rust-version` 报 MSRV 错误（可选验证）；文档 diff 与注释口径一致。
 
 **工作量**：2 小时。
+
+**实施版（2026-10-11）**：已落地，与原稿有两处偏差，其余按原稿执行——
+1. **MSRV 声明值 1.77.2 → 1.95**（原稿声明值为**不可兑现的假声明**）：`cargo metadata` 实测依赖图最大 `rust-version` = **1.95**（eframe/egui 0.36.2 全族），自有源码亦使用 1.88 稳定 API（`shell_icon.rs` 的 `as_chunks`/`as_chunks_mut`，clippy `incompatible_msrv` 全图实查）——任何 <1.95 工具链都会在依赖编译期失败，与声明值无关。改声明 `rust-version = "1.95"` 后本项安全不变式仍满足（≥ BatBadBut 修复线 1.77.2），验收"旧工具链构建被拒"口径同步为 <1.95；
+2. **原稿 `for ext in [".exe"]` 触发 clippy `single_element_loop`**：改为直写 `.exe` 补全（语义等价，注释口径不变）。
+
+其余：新测试 `resolve_executable_no_longer_completes_cmd_bat`（裸名只剩 `.cmd`/`.bat` → None；存在 `foo.exe` → 命中；清单直写完整 `.cmd` 路径 → 原样命中不变）；`docs/manifest-schema.md` §4 已同步（含行号修正至 `manifest.rs:297-313`）。批次验收：`cargo test --workspace` 611 passed / `clippy --workspace --all-targets -- -D warnings` 全绿 / `fmt --check` 零差异。
 
 ---
 
