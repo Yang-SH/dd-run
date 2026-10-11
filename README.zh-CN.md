@@ -74,7 +74,7 @@
 | 文档 | 内容 | 读者 |
 |---|---|---|
 | [`cmdpal-platform-agnostic-design.md`](./cmdpal-platform-agnostic-design.md) | **设计参考（上游来源）**：CmdPal 的 UI 模型、扩展契约、宿主模型、内置扩展清单、Rust 参照实现、验收标准 A1–A12 | 想理解"为什么这样设计" |
-| [`cmdpal-ui-mockups.html`](./cmdpal-ui-mockups.html) | **交互设计稿**（v4.18）：亮暗双主题组件库——根视图 / 搜索 / 列表与详情页 / 设置卡片 / 上下文菜单 / Dialog / Toast / Loading 骨架，可键盘走查；v4.18 回同步**文件搜索 `Ctrl+F` 直达 / 面板键位总表（§6.5）/ Shell 真实图标 / placeholder 文案**（决策 D39–D41、验收 I 组）。行为型批次 v4.14–v4.17a **未入稿**（无视觉规格变更，见 `docs/implementation.md` §7） | 想看界面长什么样 |
+| [`cmdpal-ui-mockups.html`](./docs/archive/cmdpal-ui-mockups.html) | **交互设计稿**（v4.18）：亮暗双主题组件库——根视图 / 搜索 / 列表与详情页 / 设置卡片 / 上下文菜单 / Dialog / Toast / Loading 骨架，可键盘走查；v4.18 回同步**文件搜索 `Ctrl+F` 直达 / 面板键位总表（§6.5）/ Shell 真实图标 / placeholder 文案**（决策 D39–D41、验收 I 组）。行为型批次 v4.14–v4.17a **未入稿**（无视觉规格变更，见 `docs/implementation.md` §7） | 想看界面长什么样 |
 | [`docs/implementation.md`](./docs/implementation.md) | **实施方案**：里程碑 M0–M9、ADR 决策记录、A1–A12 验收映射、当前进度与遗留项台账 | 要动手写代码 |
 | [`docs/protocol.md`](./docs/protocol.md) | **dd-run Extension Protocol v1.0**：NDJSON 成帧、JSON-RPC 信封、方法、错误码、生命周期状态机、超时与崩溃恢复 | 写宿主或写扩展 |
 | [`docs/manifest-schema.md`](./docs/manifest-schema.md) | **扩展清单 schema**：字段表、三平台配置目录、最小可拷贝示例 | 写扩展 |

@@ -1,7 +1,7 @@
 # 设置页「按键与交互」排版与控件字号统一优化方案
 
 > **状态**：**已落地**（K-T1~K-T4 ✅，2026-09-27；真机走查 V-1~V-7 收口——2026-10-07 用户批量确认通过） ｜ **版本**：v1.2 ｜ **最后更新**：2026-10-07
-> **关联**：[settings_view.rs](../crates/dd-gui/src/ui/settings_view.rs) · [theme.rs](../crates/dd-gui/src/theme.rs) · [text.rs](../crates/dd-gui/src/text.rs) · [settings-personalization-plan.md](./settings-personalization-plan.md) · [icons-typography-plan.md](./icons-typography-plan.md) · [`cmdpal-ui-mockups.html`](../cmdpal-ui-mockups.html)（设计稿权威） · [INDEX.md](./INDEX.md)
+> **关联**：[settings_view.rs](../crates/dd-gui/src/ui/settings_view.rs) · [theme.rs](../crates/dd-gui/src/theme.rs) · [text.rs](../crates/dd-gui/src/text.rs) · [settings-personalization-plan.md](./settings-personalization-plan.md) · [icons-typography-plan.md](./icons-typography-plan.md) · [`cmdpal-ui-mockups.html`](./archive/cmdpal-ui-mockups.html)（设计稿权威） · [INDEX.md](./INDEX.md)
 
 ---
 

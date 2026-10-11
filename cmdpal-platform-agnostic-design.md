@@ -152,7 +152,7 @@ CmdPal 采用 **宿主（Host）+ 多扩展进程（Extension）** 的隔离架�
 
 ### 4.6 UI 设计图
 
-各界面（Root View / 搜索过滤态 / ListPage / DetailPage / FormPage / MarkdownPage / **Grid 渲染模式** / 上下文菜单 / Confirm+Toast / EmptyContent / Loading 共 11 屏）的**交互式设计稿**见同目录 [`cmdpal-ui-mockups.html`](./cmdpal-ui-mockups.html)——真实 DOM+CSS 组件（暗色主题，含选中/hover/焦点态与微交互，**支持键盘走查**），浏览器打开即可逐个浏览；页首附设计令牌（accent/panel/字体）供实现取用。
+各界面（Root View / 搜索过滤态 / ListPage / DetailPage / FormPage / MarkdownPage / **Grid 渲染模式** / 上下文菜单 / Confirm+Toast / EmptyContent / Loading 共 11 屏）的**交互式设计稿**交互式设计稿见 [`docs/archive/cmdpal-ui-mockups.html`](./docs/archive/cmdpal-ui-mockups.html)——真实 DOM+CSS 组件（暗色主题，含选中/hover/焦点态与微交互，**支持键盘走查**），浏览器打开即可逐个浏览；页首附设计令牌（accent/panel/字体）供实现取用。
 
 ---
 

@@ -18,8 +18,9 @@ jobs:
   release:
     name: build + portable zip + GitHub Release
     runs-on: windows-latest
+    timeout-minutes: 45
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       # tag（ vX.Y.Z）必须与 crates/dd-gui/Cargo.toml 的 version 一致，防错发。
       - name: Verify tag matches Cargo.toml version
@@ -38,7 +39,7 @@ jobs:
           rustup default stable-x86_64-pc-windows-gnu
 
       - name: Cache cargo
-        uses: Swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
 
       # 仓库 .cargo/config.toml 默认 target = x86_64-pc-windows-gnu；gnu 工具链自带
       # self-contained 链接器（package.sh 对 self-contained 仅作 PATH 兜底追加）。
@@ -79,7 +80,7 @@ jobs:
           $z.Dispose()
 
       - name: Attach to GitHub Release
-        uses: softprops/action-gh-release@v3
+        uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3
         with:
           files: dist/dd-run-*-portable.zip
           body: |

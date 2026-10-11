@@ -12,8 +12,9 @@ jobs:
   check:
     name: build / test / clippy / fmt (windows-gnu)
     runs-on: windows-latest
+    timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: Install toolchain (stable-x86_64-pc-windows-gnu)
         run: |
@@ -22,7 +23,7 @@ jobs:
           rustup component add clippy rustfmt
 
       - name: Cache cargo
-        uses: Swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
 
       # 仓库 .cargo/config.toml 默认 target = x86_64-pc-windows-gnu，
       # rustup 的 gnu 工具链自带 self-contained 链接器，runner 无需外部 mingw。
@@ -50,11 +51,12 @@ jobs:
   audit:
     name: dependencies (audit + machete)
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: Install cargo-audit & cargo-machete (prebuilt)
-        uses: taiki-e/install-action@v2
+        uses: taiki-e/install-action@ab6895351a88b908e96a4697860d4ffea5e57dbe # v2
         with:
           tool: cargo-audit,cargo-machete
 

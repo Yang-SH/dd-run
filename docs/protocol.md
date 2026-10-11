@@ -17,7 +17,7 @@
 
 **本协议不定义**：
 
-- 宿主的 UI 实现（见设计文档 §4 与 [`cmdpal-ui-mockups.html`](../cmdpal-ui-mockups.html)）；
+- 宿主的 UI 实现（见设计文档 §4 与 [`cmdpal-ui-mockups.html`](./archive/cmdpal-ui-mockups.html)）；
 - 扩展如何被发现（见 [`manifest-schema.md`](./manifest-schema.md)）；
 - 扩展的内部实现（任何能读写 stdin/stdout 的语言均可）。
 
