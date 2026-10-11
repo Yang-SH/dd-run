@@ -31,7 +31,7 @@ chrono = "0.4"
 # `FontDefinitions::default()` 在无该特性时返回空集，platform.rs 以其作基底
 # 的叠加逻辑不受影响。副作用：用户数据（书签/结果标题）中的 emoji 不再有
 # NotoEmoji 兜底，属接受的取舍（真机走查腿复核）。
-eframe = { version = "0.36", default-features = false, features = ["glow"] }
+eframe = { version = "0.36", default-features = false, features = ["glow", "x11", "wayland"] } # x11/wayland：Linux 后端（O6 首批，Windows/macOS 目标无作用）
 windows-sys = { version = "0.61", features = [
     "Win32_Foundation",
     "Win32_UI_Input_KeyboardAndMouse",

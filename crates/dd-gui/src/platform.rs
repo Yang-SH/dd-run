@@ -815,6 +815,7 @@ pub fn set_immersive_dark(_hwnd: isize, _dark: bool) -> bool {
 /// 两属性均为 Win11 文档化 DWM 属性；失败（Win10 / 22621 以下）仅记日志
 /// 跳过，行为与既往一致。首次调用由 `refresh_backdrop` 以 `chrome_applied`
 /// 旗标执行，与材质选择无关（无材质/不透明路径同样圆角）。
+#[cfg(windows)]
 pub fn apply_window_chrome(hwnd: isize, corner: crate::settings::CornerPref) {
     use crate::settings::CornerPref;
     use windows_sys::Win32::Foundation::HWND;
@@ -868,6 +869,7 @@ pub fn apply_window_chrome(_hwnd: isize, _corner: crate::settings::CornerPref) {
 /// `DWMWA_BORDER_COLOR_NONE`（0xFFFFFFFE）停画。注意 COLORREF 无 alpha
 /// （0x00BBGGRR，传入色的 alpha 被忽略）；Win10 无此属性失败跳过。
 /// 幂等：材质/主题切换时由 `refresh_backdrop`/`apply_theme_pref` 重设。
+#[cfg(windows)]
 pub fn set_window_border(hwnd: isize, color: Option<egui::Color32>) {
     use windows_sys::Win32::Foundation::HWND;
     use windows_sys::Win32::Graphics::Dwm::{DwmSetWindowAttribute, DWMWA_BORDER_COLOR};
