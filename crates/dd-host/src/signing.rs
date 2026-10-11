@@ -26,7 +26,7 @@
 
 use crate::manifest::LoadedExtension;
 use crate::trust::sha256_file;
-use ed25519_dalek::{Signature, Verifier, VerifyingKey};
+use ed25519_dalek::{Signature, VerifyingKey};
 use std::path::{Path, PathBuf};
 
 /// 发行方公钥（Ed25519 公钥，32 字节小写 hex）。
