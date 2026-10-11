@@ -31,7 +31,7 @@ Its architecture and extension contracts are **distilled from Microsoft PowerToy
 - **Settings pages** (open with `Ctrl+,`): appearance (light/dark theme, Mica/Acrylic material), general (autostart, customizable global hotkey — default `Win+Alt+Space`), search-engine management (preset + custom engines with `{q}` templates), extension management (enable/disable per extension).
 - **Localized UI**: the panel follows the system display language.
 - **Fast & isolated**: built-in extensions are always ready (in-process, no launch cost); third-party and the file-search sidecar launch lazily via frozen/stub/LRU; the file-search sidecar runs in its own process, so its crash can't take the host down.
-- **Portable distribution**: `dist/dd-run-0.2.1.exe` (~8.4 MB, 8,778,752 bytes; `strip = "symbols"`) is a single file bundling the host and the five built-in extensions in-process (no embedded exes since M9). The file-search extension ships as a sidecar in `dist/extensions.d/` and is discovered automatically next to the executable. No installer: unzip the release zip and run. macOS / Linux get portable `tar.gz` builds (single binary + runtime-dependency README; file search absent by design).
+- **Portable distribution**: `dist/dd-run-0.2.1.exe` (~8.4 MB, 8,722,944 bytes; `strip = "symbols"`) is a single file bundling the host and the five built-in extensions in-process (no embedded exes since M9). The file-search extension ships as a sidecar in `dist/extensions.d/` and is discovered automatically next to the executable. No installer: unzip the release zip and run. macOS / Linux get portable `tar.gz` builds (single binary + runtime-dependency README; file search absent by design).
 
 ## Goals and non-goals
 
@@ -58,7 +58,7 @@ Its architecture and extension contracts are **distilled from Microsoft PowerToy
 
 | Item | Detail |
 |---|---|
-| Entry artifact | `dist/dd-run-0.2.1.exe` (Windows, ~8.4 MB / 8,778,752 bytes; version tracks `crates/dd-gui/Cargo.toml`) |
+| Entry artifact | `dist/dd-run-0.2.1.exe` (Windows, ~8.4 MB / 8,722,944 bytes; version tracks `crates/dd-gui/Cargo.toml`) |
 | Non-Windows packages (O6) | `dist/dd-run-<ver>-linux-<arch>.tar.gz` / `dist/dd-run-<ver>-macos-<arch>.tar.gz`: single `dd-run` binary + `README-dist.txt` (runtime system-library list, data dir, notes). File-search sidecar is Windows-only and not bundled; no signing surface on these packages |
 | Bundling (M9) | The five built-in extensions are compiled in-process: the host drives `dd_ext::serve_line` directly, so no extension exes are embedded. `dd-gui/build.rs` embeds an empty table; `assets/embed/` is a leftover scratch dir and is gitignored |
 | Sidecar | The file-search extension (`dd-ext-search.exe` + `com.ddrun.filesearch.json`) ships in `dist/extensions.d/`; the host scans an `extensions.d/` next to the executable (batch 7.5), so the zip is unzip & run — precedence: user data dir > sidecar > built-ins |
