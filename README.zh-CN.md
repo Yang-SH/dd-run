@@ -2,9 +2,9 @@
 
 [English](./README.md) | [简体中文](./README.zh-CN.md)
 
-> **状态**：生效中 ｜ **版本**：v0.2.0 ｜ **最后更新**：2026-10-07
+> **状态**：生效中 ｜ **版本**：v0.2.0 ｜ **最后更新**：2026-10-11
 
-**用 Rust 从零构建的命令面板 / 启动器，核心与平台无关。** 当前仅发行 **Windows** 版（macOS / Linux 计划 v0.2+）。设计参考自 [PowerToys Command Palette（CmdPal）](https://github.com/microsoft/PowerToys/tree/main/src/modules/cmdpal) 模块。
+**用 Rust 从零构建的命令面板 / 启动器，核心与平台无关。** **Windows** 为主力支持平台；macOS / Linux 提供免安装绿色包（三平台阻塞 CI 门禁同源构建的预览版，真机验收进行中）。设计参考自 [PowerToys Command Palette（CmdPal）](https://github.com/microsoft/PowerToys/tree/main/src/modules/cmdpal) 模块。
 
 > **当前状态**：MVP 里程碑 **M0–M9 已全部关闭**并通过真机验收（M0–M6 核心面板与设置；M7 发布工程；M8 扩展生态验证；M9 内置扩展进程内化）；**v0.2.0** 已于 2026-10-07 发布（上一版 v0.1.1，2026-09-10）——自 0.1.1 起的累计变更与**一处行为变更**（Steam 游戏默认不参与搜索）见 [`CHANGELOG.md`](./CHANGELOG.md) `[0.2.0]` 段。里程碑进度见 [`docs/implementation.md`](./docs/implementation.md) §5，遗留项台账见其 §6.1。
 
@@ -12,7 +12,7 @@
 
 ## 这是什么
 
-`dd-run` 是一个**用 Rust 从零构建的命令面板 / 启动器**，核心与平台无关：全局热键唤起，输入即搜，键盘直达，靠扩展生态扩展能力。**当前仅发行 Windows 版**——macOS / Linux 的平台层为占位实现，计划 v0.2 落地。
+`dd-run` 是一个**用 Rust 从零构建的命令面板 / 启动器**，核心与平台无关：全局热键唤起，输入即搜，键盘直达，靠扩展生态扩展能力。**Windows 为主力平台**；macOS / Linux 为 CI 门禁预览版——全局热键（`global-hotkey` crate）、单实例互斥、信任哈希与扩展签名已跨平台可用，托盘、DWM 窗口材质、IME 捕获钩子与 Everything 文件搜索 sidecar 仍为 Windows 专属（其余平台优雅降级）。
 
 它的架构与扩展契约**提炼自微软 PowerToys 的 CmdPal 模块**，但不是 CmdPal 的移植——CmdPal 深度绑定 Windows（WinRT / COM / XAML），`dd-run` 把其中的平台无关部分（UI 模型、扩展契约、宿主生命周期）抽象出来，换成 Rust 生态的等价实现：
 
@@ -31,13 +31,13 @@
 - **设置页**（`Ctrl+,` 打开）：外观（亮暗主题、Mica/Acrylic 材质）、常规（开机自启、自定义全局热键——默认 `Win+Alt+Space`）、搜索引擎管理（预设 + 自定义 `{q}` 模板引擎）、扩展管理（按扩展启停）。
 - **多语言**：面板 UI 跟随系统显示语言。
 - **快且隔离**：内置扩展常驻就绪（进程内化，无启动开销）；第三方与文件搜索 sidecar 经 frozen / stub / LRU 懒加载；文件搜索 sidecar 以独立进程运行，其崩溃不影响宿主。
-- **便携分发**：`dist/dd-run-0.2.0.exe`（约 8.3 MB，8,670,720 字节，`strip = "symbols"`）是单文件，宿主与 5 个内置扩展进程内化打包（M9 起不再内嵌 exe）。文件搜索扩展以 sidecar 形态随 `dist/extensions.d/` 携带，宿主自动扫描可执行文件同目录。无安装器：解压发版 zip 即用。
+- **便携分发**：`dist/dd-run-0.2.0.exe`（约 8.4 MB，8,778,752 字节，`strip = "symbols"`）是单文件，宿主与 5 个内置扩展进程内化打包（M9 起不再内嵌 exe）。文件搜索扩展以 sidecar 形态随 `dist/extensions.d/` 携带，宿主自动扫描可执行文件同目录。无安装器：解压发版 zip 即用。macOS / Linux 另有免安装 `tar.gz`（单二进制 + 运行时依赖 README；文件搜索按设计缺席）。
 
 ## 目标与非目标
 
 ### 目标
 
-1. **跨平台**（计划中，v0.2+；**当前仅 Windows**）：三平台同一套契约与代码，平台差异收敛在适配层。
+1. **跨平台**（进行中；**Windows 为主力，macOS/Linux 为 CI 门禁预览**）：三平台同一套契约与代码，平台差异收敛在适配层。
 2. **键盘优先**：核心路径 100% 可纯键盘完成（验收 A11）。
 3. **快**：冷启动走磁盘缓存的"命令桩"，扩展进程懒加载（frozen / stub 机制，见设计文档 §6.3）。
 4. **可扩展**：第三方扩展是独立进程，崩溃不影响宿主，用文本协议即可接入。
@@ -58,12 +58,13 @@
 
 | 项 | 说明 |
 |---|---|
-| 入口产物 | `dist/dd-run-0.2.0.exe`（Windows，约 8.3 MB / 8,670,720 字节；版本随 `crates/dd-gui/Cargo.toml` 升） |
+| 入口产物 | `dist/dd-run-0.2.0.exe`（Windows，约 8.4 MB / 8,778,752 字节；版本随 `crates/dd-gui/Cargo.toml` 升） |
+| 非 Windows 包（O6） | `dist/dd-run-<ver>-linux-<arch>.tar.gz` / `dist/dd-run-<ver>-macos-<arch>.tar.gz`：单二进制 `dd-run` + `README-dist.txt`（运行时系统库清单 / 数据目录 / 使用说明）。文件搜索 sidecar 为 Windows 专属不随包；这些包无签名面 |
 | 打包方式（M9） | 5 个内置扩展进程内化编译：宿主直接驱动 `dd_ext::serve_line`，不再内嵌任何扩展 exe；`dd-gui/build.rs` 内嵌空表，`assets/embed/` 为遗留临时目录，已 gitignore |
 | Sidecar | 文件搜索扩展（`dd-ext-search.exe` + `com.ddrun.filesearch.json`）随 `dist/extensions.d/` 携带；宿主扫描可执行文件同目录的 `extensions.d/`（批次 7.5），zip 解压即用——优先级：用户数据目录 > sidecar > 内置 |
 | 入口命名 | `dd-run.exe` = GUI 宿主（crate 名仍 `dd-gui`）；M0 CLI 改名 `dd-run-cli.exe`（保留自检能力、让出产物名） |
-| 一键出包 | `bash tools/package.sh`（使用 `+stable-x86_64-pc-windows-gnu` 工具链：先 build `dd-ext` → build `dd-gui --bin dd-run` → 单文件产物与 sidecar 归集到 `dist/`；裸 `cargo` 在 MSVC 下会找不到 `std`） |
-| 发版自动化 | tag 推送 → `.github/workflows/release.yml`：校验 tag 与 crate 版本一致 → `package.sh` → 打 zip `dd-run-<ver>.exe + extensions.d/` → 附着 GitHub Release |
+| 一键出包 | `bash tools/package.sh`——按平台分支：Windows 使用 `+stable-x86_64-pc-windows-gnu` 工具链（先 build `dd-ext` → build `dd-gui --bin dd-run` → 单文件产物与 sidecar 归集到 `dist/`；裸 `cargo` 在 MSVC 下会找不到 `std`）；Linux/macOS 以显式 `--target` 宿主三元组构建（覆盖仓库默认 windows-gnu）并打 `tar.gz` |
+| 发版自动化 | tag 推送 → `.github/workflows/release.yml`（三平台 job + 手动 `workflow_dispatch` 构建验证）：校验 tag 与 crate 版本一致 → `package.sh` → zip/tar 产物 → 附着同一 GitHub Release |
 | 仓库纯净度 | 源码树不含任何二进制（`/dist/`、`/crates/dd-gui/assets/embed/*.exe` 均 gitignore） |
 | 验证口径 | `cargo fmt --check` / `cargo clippy --workspace --all-targets` / `cargo test --workspace` **全绿** + 脱离源码树冒烟（内置进程内化就绪 + sidecar 被发现 → warm 握手） |
 
@@ -112,4 +113,4 @@
 - **M7 已关闭**（发布工程，2026-09-10）：GitHub Actions CI（windows-gnu 上 build / test / clippy `-D warnings` / fmt 四关绿灯）、`assets/app.ico` 增 256px 档。分发定案：**仅免安装单文件绿色版**（曾探索 Inno Setup 安装器后按决策放弃，不留安装器代码）；文件搜索扩展以 sidecar 形态随 `dist/extensions.d/` 携带，宿主会扫描**可执行文件同目录的** `extensions.d/`，绿色 zip **解压即用**。tag → GitHub Release 演练已完成（**v0.1.1** 已于 2026-09-10 发布）。
 - **M8 已关闭**（扩展生态验证，2026-09-10）：非 Rust（Python）扩展走通协议全链路（`--conformance` 10 项全 ✓）；扩展开发指南 + 一致性自检随指南发布。
 - **M9 已关闭**（内置扩展进程内化，2026-09-11）：5 个内置扩展改为**宿主进程内**调用（不再 spawn / 内嵌扩展 exe）——单文件分发；第三方 / sidecar 扩展保留进程隔离。协议 v1.0 零改动。
-- **候选方向**：A2 冷启动 GUI 瓶颈（异步字体修复前 wgpu + 22MB 字体 ~2.8s）、跨平台。完整进度与遗留项台账见 [`docs/implementation.md`](./docs/implementation.md) §5 / §6.1。
+- **跨平台（O6，进行中）**：三平台阻塞 CI 门禁（build / test / conformance / roundtrip）全绿运行；全局热键、单实例互斥、信任哈希与签名已跨平台实现；macOS/Linux 发布产物随 Windows zip 同发。托盘、DWM 材质、IME 捕获钩子与 Everything sidecar 仍为 Windows 专属（优雅降级）。剩余为真机验收腿。A2 冷启动 GUI 瓶颈已由异步 CJK 字体修复收口（implementation.md L10，2026-09-05——数据就绪 < 200 ms 达标；仅回归再现时再剖析）。完整进度与遗留项台账见 [`docs/implementation.md`](./docs/implementation.md) §5 / §6.1。

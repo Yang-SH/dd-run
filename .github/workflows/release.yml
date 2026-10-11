@@ -7,6 +7,9 @@ name: Release
 on:
   push:
     tags: ['v*']
+  # O6 批次四：无 tag 手动触发（三平台构建验证；attach 步骤按事件类型跳过，
+  # 不会创建/修改 Release）。
+  workflow_dispatch:
 
 permissions:
   contents: write
@@ -27,6 +30,7 @@ jobs:
 
       # tag（ vX.Y.Z）必须与 crates/dd-gui/Cargo.toml 的 version 一致，防错发。
       - name: Verify tag matches Cargo.toml version
+        if: github.event_name == 'push'
         shell: bash
         run: |
           VER=$(grep -m1 '^version' crates/dd-gui/Cargo.toml | sed -E 's/.*"([^"]+)".*/\1/')
@@ -43,6 +47,19 @@ jobs:
 
       - name: Cache cargo
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+
+      # O14 密钥仪式配套（核对产出修正）：secret DDRUN_SIGN_KEY 存的是 64 字符
+      # hex 种子**内容**，而 package.sh §6.5 签名钩子按**文件路径**消费（-f 判定
+      # + --key 传参）——故先把 secret 落为 RUNNER_TEMP 下的临时文件（随 runner
+      # 自动清理，不入产物、不打日志），再把 DDRUN_SIGN_KEY 重指为该路径。
+      # secret 未配置时此步为空操作（package.sh 自动跳过签名，构建照常）。
+      - name: Materialize signing key (secret content → temp file)
+        if: env.DDRUN_SIGN_KEY != ''
+        shell: bash
+        run: |
+          KEY_FILE="${RUNNER_TEMP}/ddrun-sign-key.hex"
+          printf '%s' "${DDRUN_SIGN_KEY}" > "${KEY_FILE}"
+          echo "DDRUN_SIGN_KEY=${KEY_FILE}" >> "$GITHUB_ENV"
 
       # 仓库 .cargo/config.toml 默认 target = x86_64-pc-windows-gnu；gnu 工具链自带
       # self-contained 链接器（package.sh 对 self-contained 仅作 PATH 兜底追加）。
@@ -83,6 +100,7 @@ jobs:
           $z.Dispose()
 
       - name: Attach to GitHub Release
+        if: github.event_name == 'push'
         uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3
         with:
           files: dist/dd-run-*-portable.zip
@@ -101,3 +119,76 @@ jobs:
             - 解压后直接运行 `dd-run-<版本>.exe`（单文件，5 个内置扩展以 in-process 方式内置于宿主进程，无安装器）
             - `extensions.d/` 为文件搜索扩展 sidecar：与 exe 保持相对位置即可被自动发现（需本机装有 [Everything](https://www.voidtools.com/)）
             - 数据目录：`%APPDATA%\dd-run\`（设置 / 扩展清单 / 缓存）；开机自启在应用内设置页开启
+
+  # O6 批次四（2026-10-11）：Linux/macOS 发布产物——免安装单二进制 tar.gz
+  # （optimization-plan §2.6.3）。filesearch sidecar 为 Windows 专属不随包
+  # → 无签名面（package.sh 签名钩子仅 Windows 分支）。attach 按事件类型
+  # 跳过（workflow_dispatch 仅验证构建，不创建/修改 Release）。
+  release-linux:
+    name: build + tar.gz (linux) + GitHub Release
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Verify tag matches Cargo.toml version
+        if: github.event_name == 'push'
+        shell: bash
+        run: |
+          VER=$(grep -m1 '^version' crates/dd-gui/Cargo.toml | sed -E 's/.*"([^"]+)".*/\1/')
+          echo "crate version = ${VER}, tag = ${GITHUB_REF_NAME}"
+          if [ "v${VER}" != "${GITHUB_REF_NAME}" ]; then
+            echo "::error::tag ${GITHUB_REF_NAME} 与 crates/dd-gui/Cargo.toml 版本 v${VER} 不一致"
+            exit 1
+          fi
+
+      - name: Install toolchain (stable)
+        run: rustup toolchain install stable --profile minimal && rustup default stable
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+
+      # package.sh 非 Windows 分支：显式 --target 宿主三元组（覆盖 config.toml
+      # 的 windows-gnu 硬编码，与 ci.yml 门禁 CARGO_BUILD_TARGET 同语义），
+      # 产出 dist/dd-run-<ver>-linux-<arch>.tar.gz。
+      - name: Build & package (linux tar.gz)
+        run: bash tools/package.sh
+
+      - name: Attach to GitHub Release
+        if: github.event_name == 'push'
+        uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3
+        with:
+          files: dist/dd-run-*-linux-*.tar.gz
+
+  release-macos:
+    name: build + tar.gz (macOS) + GitHub Release
+    runs-on: macos-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Verify tag matches Cargo.toml version
+        if: github.event_name == 'push'
+        shell: bash
+        run: |
+          VER=$(grep -m1 '^version' crates/dd-gui/Cargo.toml | sed -E 's/.*"([^"]+)".*/\1/')
+          echo "crate version = ${VER}, tag = ${GITHUB_REF_NAME}"
+          if [ "v${VER}" != "${GITHUB_REF_NAME}" ]; then
+            echo "::error::tag ${GITHUB_REF_NAME} 与 crates/dd-gui/Cargo.toml 版本 v${VER} 不一致"
+            exit 1
+          fi
+
+      - name: Install toolchain (stable)
+        run: rustup toolchain install stable --profile minimal && rustup default stable
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+
+      - name: Build & package (macOS tar.gz)
+        run: bash tools/package.sh
+
+      - name: Attach to GitHub Release
+        if: github.event_name == 'push'
+        uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3
+        with:
+          files: dist/dd-run-*-macos-*.tar.gz

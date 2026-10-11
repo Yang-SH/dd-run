@@ -1,6 +1,6 @@
 # dd-run 项目可优化方案（总览）
 
-> **状态**：规划中 ｜ **版本**：v1.9 ｜ **最后更新**：2026-10-07
+> **状态**：规划中 ｜ **版本**：v1.10 ｜ **最后更新**：2026-10-11
 > **进度**：**Phase 1 四项全部落地**（O2 09-14 / O1 09-15 / O3 09-15 / O8 09-15）；**Phase 2：O4 ✅（09-15）、O7 两轮真机验收完成**（09-15 首轮 + **09-17 补 `es.exe` 基线与回落分支**：A-33-05 / A-33-06 / A-33-07 / A-33-10 **通过**，A-33-08 ⚠️ 部分 —— 见 [验收报告](./search-file-p2-acceptance-2026-09-15.md) v1.3）。其余项状态见 §1 状态列。
 > **关联**：[implementation.md](./implementation.md) · [INDEX.md](./INDEX.md) · [optimization-plan-review-2026-09-14.md](./archive/optimization-plan-review-2026-09-14.md) · [doc-audit-2026-09-13.md](./archive/doc-audit-2026-09-13.md) · [doc-code-diff-2026-09-13.md](./archive/doc-code-diff-2026-09-13.md) · [memory-optimization-plan.md](./memory-optimization-plan.md)
 
@@ -25,7 +25,7 @@
 | O3 | 依赖治理/安全 | 未接入 `cargo audit`/`udeps`/`outdated` | 漏洞与死依赖可观测 | 小（CI + 本地） | 低 | 中 | ✅ **已落地**（2026-09-15，§2.5） |
 | O4 | 可观测性/日志 | 无 `log`/`tracing` 框架，散落 `eprintln!` | 真机排障与复现效率 | 中（多模块） | 低（stdout 协议纯净已天然满足） | 中 | ✅ **已落地**（2026-09-15，§2.4） |
 | O5 | 体积再压缩 | 评估移除 `eframe default_fonts`；`panic=abort` 证伪 | 边际体积下降 | 小→中 | 中（tofu 风险） | 低 | 新发现（含证伪） |
-| O6 | 跨平台（macOS/Linux） | **Phase 3 首批+批次二已落地（2026-10-11）**：首批（CI 三平台**阻塞门禁** + D2 哈希收口 + 两处缺口修复，CI #96 四作业全绿）；批次二（spawn 类 roundtrip smoke 接入三平台门禁 + **运行时收敛清单**——六面守卫审计结论与真机腿清单，见 §2.6.1）；余打包链 / 真机腿 / 全局热键跨平台选型 | 平台覆盖 | 大（独立里程碑 M10） | 高 | 战略 | 已知（INDEX §5） |
+| O6 | 跨平台（macOS/Linux） | **Phase 3 首批+批次二+批次三+批次四已落地（2026-10-11）**：首批（CI 三平台**阻塞门禁** + D2 哈希收口，CI #96 四作业全绿）；批次二（spawn roundtrip 门禁 + 运行时收敛清单，§2.6.1）；批次三（全局热键 `global-hotkey` 接入 + 单实例 Unix socket 互斥，§2.6.2）；批次四（打包链平台化——三平台发布产物 + dlopen 运行时依赖清单，§2.6.3）；**余仅真机腿（④）** | 平台覆盖 | 大（独立里程碑 M10） | 高 | 战略 | 已知（INDEX §5） |
 | O7 | 文件搜索 P2 真机验收 | 两轮完成（2026-09-15 首轮；**09-17 补 `es.exe`**）：A-33-05/06/07/10 **✅ 通过**（基线降幅 91.27%、回落分支 3/3）、A-33-08 ⚠️ 部分（跨环境矩阵）；**同批修掉 `es.exe` 失败静默为空结果的产品缺陷** | 兑现用户承诺 | 中（真机） | 中 | 高 | ✅ **已落地**（[验收报告](./search-file-p2-acceptance-2026-09-15.md) v1.3） |
 | O8 | 文档卫生 | CHANGELOG 缺日期、`examples/python-minimal/README.md` 行尾 LF、I3 32px 回退未做、LRU 容量不可配 | 一致性 | 小 | 极低 | 低 | ✅ **已落地**（2026-09-15，§2.7.1：CHANGELOG 已补日期、行尾已合规；I3 按设计文档保留「视真机」、LRU 判定属功能项，均不在本项范围） |
 
@@ -272,17 +272,60 @@
 
 | 运行时面 | 实现 | 非 Windows 语义（当前） | 真机腿（M10 验收时逐项） |
 |---|---|---|---|
-| 全局热键（`RegisterHotKey` 线程） | `hotkey.rs` gated | 无系统热键——面板内 `Ctrl+F` 直达/页内导航不依赖系统热键，功能可用 | 热键缺席提示是否可见、捕获对话框行为 |
+| 全局热键（`RegisterHotKey` 线程） | `hotkey.rs` gated | **批次三起为真实现**：`global-hotkey` crate（Linux 仅 X11，Wayland → manager 创建 Err 走启动降级路径）；见 §2.6.2 | 热键实按 toggle（X11/Wayland/macOS 三腿）、Wayland 降级提示可见性、捕获对话框行为 |
 | 托盘（`Shell_NotifyIcon`） | `tray.rs` gated | 无托盘图标 | 启动/退出无托盘不报错；设置页「托盘」项语义 |
 | DWM 材质/圆角/边框/强调色 | `platform.rs` gated | 材质恒关、system accent 回落 `Palette::accent` | 外观三档不崩、不闪 |
-| 单实例互斥（`CreateMutexW` + MessageBox） | `main.rs` gated | 允许多开（无互斥） | **决策点**：跨平台互斥替代（lock 文件）待真机验证后排期 |
+| 单实例互斥（`CreateMutexW` + MessageBox） | `main.rs` gated | **批次三起为 Unix socket bind 互斥**（探活 + 死链清理 + 并发窗口处置）；见 §2.6.2 | 双开第二实例提示形态（stderr vs 图形）、`$XDG_RUNTIME_DIR` / `$TMPDIR` 路径腿、崩溃残留死链自愈 |
 | 捕获钩子（WH_KEYBOARD_LL + IME 守卫） | `capture_hook.rs` gated | 无钩子（IME/吞键守卫随之缺席） | 面板内输入/IME 正常 |
 | 文件搜索 sidecar（Everything/es.exe + IPC） | Windows 专属工具链 | sidecar 产物不随 Linux/macOS 分发 → 文件搜索类别整体缺席（聚合层优雅降级） | 无 sidecar 时启动零报错 |
 | reveal / file:// 打开（explorer 链路） | `platform.rs` gated | reveal 缺席；`open_url` 的 file:// 语义为 Windows 形态 | `open_url` 三 scheme 在非 Windows 的回落 |
 
 **批次二随批门禁扩展**：spawn 类 `--roundtrip`（协议全链路 + 真实子进程）接入三平台门禁（conformance calc 之外），证明协议栈与子进程管理在非 Windows 可用。
 
-**后续批次（需决策/真机）**：① 全局热键跨平台选型（`global-hotkey` crate，M1 已规划依赖面）；② 打包链平台化（产物形态 + 运行时 dlopen 依赖清单）；③ 互斥替代方案；④ 真机腿（上表逐项）。
+**后续批次（需决策/真机）**：~~① 全局热键跨平台选型~~ ✅ **批次三落地**（`global-hotkey` crate，§2.6.2）；~~② 打包链平台化~~ ✅ **批次四落地**（三平台发布产物 + dlopen 清单，§2.6.3）；~~③ 互斥替代方案~~ ✅ **批次三落地**（Unix socket bind，§2.6.2）；④ 真机腿（上表逐项，含批次三新增腿）。**O6 剩余 = 仅 ④ 真机腿。**
+
+#### 2.6.2 批次三：非 Windows 运行时对齐第一批——全局热键 + 单实例互斥（2026-10-11 落地）
+
+承接 §2.6.1 后续批次 ①③（②打包链与④真机腿不动）。两项均为**纯 non-Windows 分支改造**——`#[cfg(windows)]` 现行实现零字节改动，Windows 构建无新依赖、无行为变化。
+
+**① 全局热键接入 `global-hotkey` crate（选型决策落地）**：
+
+- **选型**：`global-hotkey` 0.8（Tauri 系维护，Apache-2.0 OR MIT）。平台注记：Linux 仅 X11（x11rb 后端），**Wayland 不支持**——manager 创建即 Err，走既有「启动注册失败降级」路径（无热键运行 + 设置页可换键重试）；macOS 官方注记 manager 宜在主线程创建，本实现仍在专用线程创建，包 `catch_unwind` + `Err` 双护栏降级（macOS 腿归 ④ 真机验证）。
+- **依赖面**：仅登记 `[target.'cfg(not(windows))'.dependencies]`——Windows 构建不编译、不进依赖树；传递依赖 crossbeam-channel / keyboard-types / once_cell / thiserror + 平台后端（Linux x11rb、macOS objc2 系），由 cargo audit / machete 既有门禁覆盖。
+- **位掩码口径不变**：`settings.hotkey_mods` 仍为 Windows 惯例（ALT=1/CONTROL=2/SHIFT=4/WIN=8），新增非 Windows 纯函数 `mods_mask_to_modifiers`（WIN 位 → SUPER：Linux=Super 键、macOS=Cmd）与 `vk_to_code`（VK 码 → `keyboard_types::Code`，覆盖 `hotkey_vk_label` 全键集 + 未知码 → None），单测锚定（随 Linux/macOS 门禁执行）。
+- **线程模型**：沿用「专用线程 + 事件回发」骨架，`PostThreadMessageW` 换 std mpsc 命令通道；循环 = 非阻塞清空命令（重注册：unregister 旧 → register 新，失败回滚旧键并回发 `ReRegistered{ok=false, rolled_back}`，seq 协议与 Windows 逐位一致）→ 非阻塞轮询 `GlobalHotKeyEvent::receiver().try_recv()`（过滤 `Pressed` 发 `Toggle` + `request_repaint`）→ `cmd_rx.recv_timeout(25ms)` 节拍兜底（命令/热键延迟上限 25ms，唤醒频率 40/s 量级）。通道断开（`HotkeyThread` drop，进程退出）即退出循环。
+- **启动降级语义**：manager 创建失败（Wayland / 无显示）或初始注册失败 → `ReRegistered{seq=0, ok=false}`，与 Windows 启动失败逐位一致（lifecycle 既有 R-15/未注册位处理，零 UI 改动）。
+
+**③ 单实例互斥：Unix socket bind 替代（std-only，零新依赖）**：
+
+- **机制**：`UnixListener::bind` 占位——进程存活期间独占路径，进程退出内核关 fd 即释放，**无 lock 文件崩溃残留问题**（Windows `CreateMutexW` 的同语义 std 替代）。路径 `$XDG_RUNTIME_DIR/dd-run.sock`（Linux 桌面会话 per-user 运行时目录）；回落 `$TMPDIR/dd-run-{$USER}.sock`（macOS 无 XDG_RUNTIME_DIR，其 $TMPDIR 本身 per-user）。
+- **死链处理**：bind 不清理残留 socket 文件，故先 `UnixStream::connect` 探活——能连 = 有活实例（提示后 exit）；连不上 = 死链/无实例，`remove_file` 后 bind；bind 报 `AddrInUse` = 并发窗口第二实例，按已在运行处理。
+- **对齐口径**：listener 有意 `mem::forget` 泄漏至进程退出（= Windows 不 CloseHandle）；创建失败降级不互斥照常启动；第二实例提示暂为 stderr 双语文本（此阶段无 GUI——Windows 用 `MessageBoxW`，非 Windows 提示形态待 ④ 真机腿评估）。
+
+**验收**：Windows 侧 fmt/clippy/test 全绿零差异；Linux/macOS 门禁 build --all-targets + test（映射单测）+ conformance/roundtrip 照跑；运行时行为腿（热键实按、双开提示、Wayland 降级）归 ④ 真机。
+
+#### 2.6.3 批次四：打包链平台化——三平台发布产物 + 运行时依赖清单（2026-10-11 落地）
+
+承接 §2.6.1 后续批次 ②（④真机腿仍不动）。原则：**release.yml 三平台矩阵 + 单一脚本单一来源**——`tools/package.sh` 平台分支化（uname 检测），非 Windows 分支产出免安装单二进制包；Windows 分支逻辑逐字节不动。
+
+**产物形态（定案）**：
+
+| 平台 | 产物 | 内容 |
+|---|---|---|
+| Windows | `dd-run-<ver>-portable.zip`（既有） | `dd-run-<ver>.exe` + `extensions.d/`（filesearch sidecar + `.sig` 可选） |
+| Linux | `dd-run-<ver>-linux-x86_64.tar.gz` | `dd-run-<ver>/dd-run`（单二进制）+ `README-dist.txt` |
+| macOS | `dd-run-<ver>-macos-aarch64.tar.gz` | 同上（runner = macos-latest = arm64，与 CI 门禁同三元组） |
+
+- **sidecar 不随非 Windows 包**（§2.6.1 已定：Everything/es.exe 为 Windows 专属工具链，filesearch 类别在非 Windows 整体缺席、聚合层优雅降级）→ 非 Windows 包**无签名面**（O14 签名钩子仅 Windows 分支）。
+- **不做 .app bundle / AppImage / deb**（后续可选）：.app 需图标与 Info.plist 资产且未签名公证分发意义有限；先以 tar.gz 单二进制对齐「免安装绿色包」定位。
+- **数据目录**（README-dist.txt 记载，`manifest::dd_run_dir` 三平台对称）：Linux `$XDG_CONFIG_HOME/dd-run`（缺省 `~/.config/dd-run`）、macOS `~/Library/Application Support/dd-run`。
+
+**运行时 dlopen 依赖清单（README-dist.txt 承载）**：依赖树实证（winit 0.30.13 = `x11-dl` 2.21 dlopen 仅 xlib/xlib_xcb/xcursor/xinput2 五模块 + `x11rb` libloading 特性 dlopen libxcb + `xkbcommon-dl` 0.4.2 dlopen libxkbcommon(-x11)；glutin = `glutin_egl_sys`(libEGL) / `glutin_glx_sys`(libGL)；`wayland-backend` dlopen 特性 → libwayland-client）——Linux 需系统装有（Debian/Ubuntu 包名，**按会话类型二选一**）：X11 会话 `libx11-6 libx11-xcb1 libxcb1 libxcursor1 libxi6 libxkbcommon0 libxkbcommon-x11-0 libegl1 libgl1`；Wayland 会话 `libwayland-client0 libxkbcommon0 libegl1 libgl1`。macOS 无外部 dlopen（系统框架自足）。缺库表现为启动报错（winit dlopen 失败），非静默。**核对产出修正**：初版清单含 libxrandr2/libxinerama1/libxrender1/libxtst6 为旧版 winit 的面——winit 0.30 的 randr 走 x11rb 纯 Rust 协议、不加载额外库，已按源码实证收窄。
+
+**工具链口径**：仓库 `.cargo/config.toml` 硬编码 `build.target = windows-gnu`（单机开发口径）——非 Windows 分支显式 `--target <rustc host 三元组>` 覆盖（与 CI 门禁 `CARGO_BUILD_TARGET` env 同语义，O6 首批 E0463 的既有修复口径）。
+
+**release.yml 扩展**：新增 `release-linux` / `release-macos` 两 job（ubuntu-latest / macos-latest，timeout 45，action 复用既有 SHA pin），各自「tag↔Cargo.toml 版本校验 → package.sh → tar.gz attach 同一 Release」（softprops 多次调用 = 追加 assets）；加 `workflow_dispatch` 触发器供无 tag 验证三平台构建（产物不 attach）。**发布链真跑验证归下一次 tag**（或 dispatch 手动验证），本批验证口径 = 脚本语法 + Windows 分支回归跑 + linux/apple 双目标 release 编译可链接性（CI 门禁 debug 构建已证编译面，release 链接面随首次发布验证）。
+
 ### 2.7 已知未闭环项收敛（重排优先级）
 
 | 项 | 优先级 | 备注 |

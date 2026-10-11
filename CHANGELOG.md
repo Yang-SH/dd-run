@@ -4,6 +4,26 @@
 
 ## [Unreleased]
 
+### O14 密钥仪式完成：发行方真钥轮换（2026-10-11）
+
+- `PUBLISHER_PUBLIC_KEY_HEX` 占位公钥轮换为**发行方真钥公钥**（`signing.rs` 常量与模块头注释同步）；真钥种子仅存于 Release 工作流 secret `DDRUN_SIGN_KEY` 与发行方离线保管，永不入库。占位期无任何有效 `.sig`，兼容面为零。
+- **随仪式修正**：① release.yml 补「Materialize signing key」步——secret 内容落 `RUNNER_TEMP` 临时文件供 package.sh 签名钩子按路径消费（原配置 CI 会静默跳过签名）；② package.sh dev 工具（dd-run-cli/dd-ext-sample）拷贝前先构建（原拷 target 残留，曾为缺签名子命令的旧版）。
+- 端到端预演通过（2026-10-11）：真钥签发随包 `.sig`（双 SHA256 锚格式逐位符合设计），新内置公钥离线校验 ✅（exit 0）；篡改/换钥拒绝腿批量确认。CI 自动签发与真包验证归发版。
+
+### O6 批次四：打包链平台化（三平台发布产物，2026-10-11）
+
+- **Linux/macOS 免安装发布包**：release.yml 三平台矩阵——新增 `dd-run-<ver>-linux-<arch>.tar.gz` 与 `dd-run-<ver>-macos-<arch>.tar.gz`（单二进制 + README-dist.txt：运行时系统库清单 / 数据目录 / filesearch 缺席说明），附着至同一 GitHub Release；`tools/package.sh` 平台分支化单一来源（Windows 分支逐字节不动）；加 `workflow_dispatch` 供无 tag 构建验证。
+- **运行时依赖清单**（README-dist 承载，源码实证 winit 0.30 dlopen 面：x11-dl 四模块 + libxcb + xkbcommon-dl + glutin libEGL/libGL）：Linux **按会话类型二选一**——X11 会话需 `libx11-6 libx11-xcb1 libxcb1 libxcursor1 libxi6 libxkbcommon0 libxkbcommon-x11-0 libegl1 libgl1`，Wayland 会话需 `libwayland-client0 libxkbcommon0 libegl1 libgl1`（Debian/Ubuntu 包名）；macOS 系统框架自足。缺库启动即报错、非静默。
+- **发布链验证口径**：本批 = 脚本/YAML 校验 + Windows 分支全量回归 + 双目标交叉 check；三平台发布 job 真跑归下一次 tag（或 workflow_dispatch 手动验证）。
+- **README 平台口径同步（英中两份）**：「仅发行 Windows 版 / 平台层占位」改为「Windows 主力 + macOS/Linux CI 门禁预览」（注明已跨平台的组件与 Windows 专属降级面）；构建与打包表补非 Windows 产物行与 package.sh 平台分支说明；Windows 单件尺寸实测修正 8,670,720 → **8,778,752 字节**（O14 签名链增量此前未同步）。
+- **随批修复（O14 批次二集成缺口，核对产出轮发现）**：release.yml 注入的 `DDRUN_SIGN_KEY` 是 secret **内容**（hex 串），而 package.sh 签名钩子按**文件路径**消费（`-f` 判定 + `--key` 传参）——真钥仪式按原配置执行时 CI 会**静默跳过签名**。已在 release 补「Materialize signing key」步：secret → `RUNNER_TEMP` 临时文件（随 runner 自动清理、不入产物）后经 `GITHUB_ENV` 重指路径；secret 未配置时零操作。
+- **随批修复（密钥仪式踩坑）**：`dist/dev/` 的 dd-run-cli.exe 是 O14 批次二之前的旧产物（缺 `--gen-sign-key` 等子命令）——package.sh 的 dev 工具拷贝步从不构建、直接拷 target/release 残留。已改为拷贝前先 `cargo build --release -p dd-run-cli -p dd-ext-sample`；并实测裸 `cargo build --release` 在 PowerShell 下因 windows-gnu 工具链不在 PATH 报 dlltool 缺失（已知环境坑，package.sh 的 PATH 兜底即为此设），本机直跑须先补 self-contained PATH 或用 Git Bash。
+
+### O6 批次三：非 Windows 运行时对齐第一批（全局热键 + 单实例互斥，2026-10-11）
+
+- **全局热键跨平台落地**（optimization-plan §2.6.2）：非 Windows 从「无系统热键占位」升级为 `global-hotkey` crate 0.8 真实现——专用线程 + mpsc 命令通道，事件/seq 协议/失败回滚语义与 Windows 逐位一致；Linux 仅 X11（Wayland 走既有「启动降级为无热键」路径），依赖仅登记 non-Windows target（Windows 构建零影响）。设置页位掩码口径不变（Win 位在 Linux 映射 Super、macOS 映射 Cmd），新增映射纯函数 + 3 条单测随 Linux/macOS 门禁执行。真机腿（热键实按 / Wayland 降级提示）归 O6 ④。
+- **单实例互斥跨平台落地**：非 Windows 从「允许双开」升级为 Unix domain socket `bind` 互斥（std-only 零新依赖）——`connect` 探活判活实例、崩溃残留死链自动清理、`AddrInUse` 并发窗口按已在运行处理；路径 `$XDG_RUNTIME_DIR/dd-run.sock`（回落 per-user `$TMPDIR`）；listener 有意泄漏至进程退出（与 Windows 不 CloseHandle 同口径）。第二实例提示暂为 stderr 双语文本。
+
 ### 安全与卫生（O9 + F4/O10 + O11 收口批次，2026-10-11）
 
 批次依据《dd-run 优化方向规划（O9–O14）》v1.4 与修复实施方案 F4；验收 `cargo test --workspace` 611 passed / `clippy --workspace --all-targets -- -D warnings` / `fmt --check` 全绿。

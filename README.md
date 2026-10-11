@@ -2,9 +2,9 @@
 
 [English](./README.md) | [简体中文](./README.zh-CN.md)
 
-> **状态**：生效中 ｜ **版本**：v0.2.0 ｜ **最后更新**：2026-10-07
+> **状态**：生效中 ｜ **版本**：v0.2.0 ｜ **最后更新**：2026-10-11
 
-**A command palette / launcher written in Rust, built on a platform-agnostic core.** Currently shipping on **Windows** only (macOS / Linux are planned from v0.2). Design inspired by the [PowerToys Command Palette (CmdPal)](https://github.com/microsoft/PowerToys/tree/main/src/modules/cmdpal) module.
+**A command palette / launcher written in Rust, built on a platform-agnostic core.** **Windows** is the primary supported platform; macOS / Linux portable builds ship as CI-gated previews (same codebase, all three platforms under blocking CI gates; real-device acceptance in progress). Design inspired by the [PowerToys Command Palette (CmdPal)](https://github.com/microsoft/PowerToys/tree/main/src/modules/cmdpal) module.
 
 > **Status**: MVP milestones **M0–M9 are all closed** and verified on real hardware (M0–M6 core panel & settings; M7 release engineering; M8 extension ecosystem validation; M9 in-process built-ins). **v0.2.0** published 2026-10-07 (previous: v0.1.1, 2026-09-10) — see the [CHANGELOG](./CHANGELOG.md) `[0.2.0]` section for the highlights since v0.1.1, including one behaviour change (Steam games are no longer searched by default). See [`docs/implementation.md`](./docs/implementation.md) §5 for milestone progress and §6.1 for the follow-ups ledger.
 
@@ -12,7 +12,7 @@
 
 ## What is it
 
-`dd-run` is a **command palette / launcher built from scratch in Rust** with a **platform-agnostic core**: summoned by a global hotkey, type-to-search, keyboard-first, extensible through an extension ecosystem. **Current builds run on Windows only** — the macOS / Linux platform layer is stubbed out and is planned for v0.2.
+`dd-run` is a **command palette / launcher built from scratch in Rust** with a **platform-agnostic core**: summoned by a global hotkey, type-to-search, keyboard-first, extensible through an extension ecosystem. **Windows is the primary platform**; macOS / Linux builds are CI-gated previews — global hotkey (`global-hotkey` crate), the single-instance guard, trust hashing and extension signing already work cross-platform, while tray, DWM window materials, the IME capture hook and the Everything file-search sidecar remain Windows-only and degrade gracefully elsewhere.
 
 Its architecture and extension contracts are **distilled from Microsoft PowerToys' CmdPal module** — but it is not a port. CmdPal is deeply bound to Windows (WinRT / COM / XAML); `dd-run` abstracts the platform-independent parts (UI model, extension contracts, host lifecycle) and replaces them with Rust-ecosystem equivalents:
 
@@ -31,13 +31,13 @@ Its architecture and extension contracts are **distilled from Microsoft PowerToy
 - **Settings pages** (open with `Ctrl+,`): appearance (light/dark theme, Mica/Acrylic material), general (autostart, customizable global hotkey — default `Win+Alt+Space`), search-engine management (preset + custom engines with `{q}` templates), extension management (enable/disable per extension).
 - **Localized UI**: the panel follows the system display language.
 - **Fast & isolated**: built-in extensions are always ready (in-process, no launch cost); third-party and the file-search sidecar launch lazily via frozen/stub/LRU; the file-search sidecar runs in its own process, so its crash can't take the host down.
-- **Portable distribution**: `dist/dd-run-0.2.0.exe` (~8.3 MB, 8,670,720 bytes; `strip = "symbols"`) is a single file bundling the host and the five built-in extensions in-process (no embedded exes since M9). The file-search extension ships as a sidecar in `dist/extensions.d/` and is discovered automatically next to the executable. No installer: unzip the release zip and run.
+- **Portable distribution**: `dist/dd-run-0.2.0.exe` (~8.4 MB, 8,778,752 bytes; `strip = "symbols"`) is a single file bundling the host and the five built-in extensions in-process (no embedded exes since M9). The file-search extension ships as a sidecar in `dist/extensions.d/` and is discovered automatically next to the executable. No installer: unzip the release zip and run. macOS / Linux get portable `tar.gz` builds (single binary + runtime-dependency README; file search absent by design).
 
 ## Goals and non-goals
 
 ### Goals
 
-1. **Cross-platform** (planned for v0.2+; **Windows-only today**): one contract and one codebase for all three platforms; platform differences are confined to adapter layers.
+1. **Cross-platform** (in progress; **Windows primary, macOS/Linux CI-gated previews**): one contract and one codebase for all three platforms; platform differences are confined to adapter layers.
 2. **Keyboard-first**: the core paths are 100% keyboard-completable (acceptance A11).
 3. **Fast**: cold start reads on-disk command stubs; extension processes load lazily.
 4. **Extensible**: third-party extensions are independent processes that talk a plain text protocol; their crashes never affect the host.
@@ -58,12 +58,13 @@ Its architecture and extension contracts are **distilled from Microsoft PowerToy
 
 | Item | Detail |
 |---|---|
-| Entry artifact | `dist/dd-run-0.2.0.exe` (Windows, ~8.3 MB / 8,670,720 bytes; version tracks `crates/dd-gui/Cargo.toml`) |
+| Entry artifact | `dist/dd-run-0.2.0.exe` (Windows, ~8.4 MB / 8,778,752 bytes; version tracks `crates/dd-gui/Cargo.toml`) |
+| Non-Windows packages (O6) | `dist/dd-run-<ver>-linux-<arch>.tar.gz` / `dist/dd-run-<ver>-macos-<arch>.tar.gz`: single `dd-run` binary + `README-dist.txt` (runtime system-library list, data dir, notes). File-search sidecar is Windows-only and not bundled; no signing surface on these packages |
 | Bundling (M9) | The five built-in extensions are compiled in-process: the host drives `dd_ext::serve_line` directly, so no extension exes are embedded. `dd-gui/build.rs` embeds an empty table; `assets/embed/` is a leftover scratch dir and is gitignored |
 | Sidecar | The file-search extension (`dd-ext-search.exe` + `com.ddrun.filesearch.json`) ships in `dist/extensions.d/`; the host scans an `extensions.d/` next to the executable (batch 7.5), so the zip is unzip & run — precedence: user data dir > sidecar > built-ins |
 | Naming | `dd-run.exe` = GUI host (crate stays `dd-gui`); the M0 CLI is renamed `dd-run-cli.exe` (keeps self-check ability, yields the artifact name) |
-| One-command package | `bash tools/package.sh` (uses the `+stable-x86_64-pc-windows-gnu` toolchain: build `dd-ext` → build `dd-gui --bin dd-run` → copy single-file artifact + collect sidecar into `dist/`; a bare `cargo` on MSVC fails to find `std`) |
-| Release automation | tag push → `.github/workflows/release.yml`: verify tag = crate version → `package.sh` → zip `dd-run-<ver>.exe + extensions.d/` → attach to GitHub Release |
+| One-command package | `bash tools/package.sh` — platform-branched: on Windows it uses the `+stable-x86_64-pc-windows-gnu` toolchain (build `dd-ext` → build `dd-gui --bin dd-run` → copy single-file artifact + collect sidecar into `dist/`; a bare `cargo` on MSVC fails to find `std`); on Linux/macOS it builds the host with an explicit `--target <host triple>` (overriding the repo's windows-gnu default) and packs the `tar.gz` |
+| Release automation | tag push → `.github/workflows/release.yml` (three platform jobs + manual `workflow_dispatch` for build-only verification): verify tag = crate version → `package.sh` → zip/tar artifacts → attach to the same GitHub Release |
 | Repo hygiene | No binaries in the source tree (`/dist/` and `/crates/dd-gui/assets/embed/*.exe` are gitignored) |
 | Verification bar | `cargo fmt --check` / `cargo clippy --workspace --all-targets` / `cargo test --workspace` all green, plus an out-of-tree smoke test (built-ins ready in-process + sidecar discovered → warm handshakes) |
 
@@ -112,4 +113,4 @@ Full records and rationale live in the ADR section of [`docs/implementation.md`]
 - **M7 closed** (release engineering, 2026-09-10): GitHub Actions CI (build / test / clippy `-D warnings` / fmt on windows-gnu), 256px icon tier in `assets/app.ico`. Distribution: **portable single-file only** (an Inno Setup installer was explored and then dropped — no installer code is kept); the file-search extension ships as a sidecar in `dist/extensions.d/`; the host scans an `extensions.d/` next to the executable, so the green zip is **unzip & run**. **v0.1.1** published 2026-09-10 via tag → GitHub Release.
 - **M8 closed** (extension ecosystem validation, 2026-09-10): a non-Rust (Python) extension walks the full protocol chain (`--conformance` 10/10 ✓); extension authoring guide + conformance self-check shipped.
 - **M9 closed** (in-process built-ins, 2026-09-11): the five built-in extensions now run **inside the host process** (no extension exes spawned or embedded) — single-file distribution; process isolation kept for third-party / sidecar extensions. Protocol v1.0 unchanged.
-- **Candidate next steps**: cross-platform work (macOS/Linux, planned v0.2+; platform layer currently a placeholder). The A2 cold-start GUI bottleneck was closed by the async CJK font fix (implementation.md L10, 2026-09-05 — data-ready < 200 ms met; further profiling only if new regressions appear). Full progress and the follow-ups ledger: [`docs/implementation.md`](./docs/implementation.md) §5 / §6.1.
+- **Cross-platform (O6, in progress)**: all three platforms run under blocking CI gates (build / test / conformance / roundtrip); global hotkey, single-instance guard, trust hashing and signing are implemented cross-platform; release artifacts for macOS/Linux ship alongside the Windows zip. Tray, DWM materials, IME capture hook and the Everything sidecar remain Windows-only (graceful degradation). Real-device acceptance is the remaining leg. The A2 cold-start GUI bottleneck was closed by the async CJK font fix (implementation.md L10, 2026-09-05 — data-ready < 200 ms met; further profiling only if new regressions appear). Full progress and the follow-ups ledger: [`docs/implementation.md`](./docs/implementation.md) §5 / §6.1.
