@@ -107,14 +107,12 @@ jobs:
           body: |
             dd-run ${{ github.ref_name }} — 免安装绿色版（portable）
 
-            **本次亮点（自 v0.1.1 起的累计变更）**
+            **本次亮点（自 v0.2.0 起）**
 
-            - 文件搜索：`Ctrl+F` 直达 + Shell 真实文件图标；「输入到首屏」真机采样 p95 **102 ms**（≤ 200 ms 门禁内）
-            - 安全与稳定性：安全审计 S-01–S-11 **11/11 闭环** + R 系列 **26 项**加固（扩展信任门禁 / 危险命令二次确认 / 单实例互斥 / panic 取证落盘 / IME Enter 守卫等）
-            - 设置与个性化：材料注册表化 + 云母 Alt + 着色三模式、背景图通道、热键捕获对话框（seq 确认协议，根治冲突假成功）
-            - 新增能力：自定义直达命令、内置扩展配置通道、Chrome/Edge 书签搜索、warm 容量可配置、设置导出/导入
-            - 体积：宿主单件较 0.1.1 基线 **−14%**（移除 eframe 默认字体，字形穷举 943/944 覆盖）
-            - ⚠️ **行为变更**：Steam 游戏默认不参与搜索——设置 → 搜索 → 「Steam 游戏」开关打开即恢复
+            - **跨平台（O6）**：macOS / Linux 免安装包首发（`dd-run-<ver>-linux-<arch>.tar.gz` / `dd-run-<ver>-macos-<arch>.tar.gz`，单二进制 + 运行时依赖说明，CI 门禁预览版）；三平台阻塞 CI 门禁（build / test / conformance / roundtrip）；全局热键接入 `global-hotkey`（Linux 仅 X11，Wayland 降级）、单实例互斥（Unix socket）
+            - **扩展签名（O14）全链落地**：发行方 Ed25519 真钥——本包 `extensions.d/` 内随附有效 `.sig`，随包扩展验签通过即免信任同意（`.sig` 与清单保持相对位置即可）
+            - 修复：热键重注册降级分支事件契约偏差；CI 签名 secret 错配；`dist/dev` 自检工具陈旧
+            - ⚠️ Windows 便携包单件较 0.2.0 约 **+1.2%**（扩展签名链增量）；文件搜索扩展仍需 [Everything](https://www.voidtools.com/)（仅 Windows）
 
             - 解压后直接运行 `dd-run-<版本>.exe`（单文件，5 个内置扩展以 in-process 方式内置于宿主进程，无安装器）
             - `extensions.d/` 为文件搜索扩展 sidecar：与 exe 保持相对位置即可被自动发现（需本机装有 [Everything](https://www.voidtools.com/)）

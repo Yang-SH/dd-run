@@ -2,7 +2,14 @@
 
 本文件记录 dd-run 的版本变更。
 
-## [Unreleased]
+## [0.2.1] - 2026-10-11
+
+### 发布摘要（自 0.2.0 起的变更）
+
+- **跨平台（O6 代码侧收口）**：三平台阻塞 CI 门禁（windows / linux / macOS：build / test / conformance / roundtrip）；macOS / Linux 运行时对齐第一批——全局热键接入 `global-hotkey` crate（Linux 仅 X11，Wayland 优雅降级）、单实例互斥（Unix socket bind）；**打包链平台化**：发布新增 `dd-run-<ver>-linux-<arch>.tar.gz` 与 `dd-run-<ver>-macos-<arch>.tar.gz`（单二进制 + 运行时依赖 README；文件搜索 sidecar 为 Windows 专属不随包）。真机验收腿进行中。
+- **扩展签名（O14）全链落地**：发行方 Ed25519 真钥轮换 + 种子入 CI secret + CI 自动签发实证——发版便携包随附有效 `.sig`，随包扩展「签名 Valid → 免同意」；清单 schema v1.0 零改动。
+- **随批修复**：热键重注册降级分支 `rolled_back` 事件契约偏差（防 UI 误报「未注册」）；release.yml 签名 secret 内容/路径错配（原会静默跳过签名）；`dist/dev` 自检工具陈旧；hotkey 重注册 `result` 初始化告警。
+- **升级注意**：无行为变更（Steam 搜索等 0.2.0 行为不变）；Windows 单件约 +1.2%（扩展签名链增量）；macOS / Linux 包为 CI 门禁预览版（热键/双开提示等运行时腿待真机验收）。
 
 ### O14 密钥仪式完成：发行方真钥轮换（2026-10-11）
 

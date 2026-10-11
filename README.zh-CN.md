@@ -2,7 +2,7 @@
 
 [English](./README.md) | [简体中文](./README.zh-CN.md)
 
-> **状态**：生效中 ｜ **版本**：v0.2.0 ｜ **最后更新**：2026-10-11
+> **状态**：生效中 ｜ **版本**：v0.2.1 ｜ **最后更新**：2026-10-11
 
 **用 Rust 从零构建的命令面板 / 启动器，核心与平台无关。** **Windows** 为主力支持平台；macOS / Linux 提供免安装绿色包（三平台阻塞 CI 门禁同源构建的预览版，真机验收进行中）。设计参考自 [PowerToys Command Palette（CmdPal）](https://github.com/microsoft/PowerToys/tree/main/src/modules/cmdpal) 模块。
 
@@ -31,7 +31,7 @@
 - **设置页**（`Ctrl+,` 打开）：外观（亮暗主题、Mica/Acrylic 材质）、常规（开机自启、自定义全局热键——默认 `Win+Alt+Space`）、搜索引擎管理（预设 + 自定义 `{q}` 模板引擎）、扩展管理（按扩展启停）。
 - **多语言**：面板 UI 跟随系统显示语言。
 - **快且隔离**：内置扩展常驻就绪（进程内化，无启动开销）；第三方与文件搜索 sidecar 经 frozen / stub / LRU 懒加载；文件搜索 sidecar 以独立进程运行，其崩溃不影响宿主。
-- **便携分发**：`dist/dd-run-0.2.0.exe`（约 8.4 MB，8,778,752 字节，`strip = "symbols"`）是单文件，宿主与 5 个内置扩展进程内化打包（M9 起不再内嵌 exe）。文件搜索扩展以 sidecar 形态随 `dist/extensions.d/` 携带，宿主自动扫描可执行文件同目录。无安装器：解压发版 zip 即用。macOS / Linux 另有免安装 `tar.gz`（单二进制 + 运行时依赖 README；文件搜索按设计缺席）。
+- **便携分发**：`dist/dd-run-0.2.1.exe`（约 8.4 MB，8,778,752 字节，`strip = "symbols"`）是单文件，宿主与 5 个内置扩展进程内化打包（M9 起不再内嵌 exe）。文件搜索扩展以 sidecar 形态随 `dist/extensions.d/` 携带，宿主自动扫描可执行文件同目录。无安装器：解压发版 zip 即用。macOS / Linux 另有免安装 `tar.gz`（单二进制 + 运行时依赖 README；文件搜索按设计缺席）。
 
 ## 目标与非目标
 
@@ -58,7 +58,7 @@
 
 | 项 | 说明 |
 |---|---|
-| 入口产物 | `dist/dd-run-0.2.0.exe`（Windows，约 8.4 MB / 8,778,752 字节；版本随 `crates/dd-gui/Cargo.toml` 升） |
+| 入口产物 | `dist/dd-run-0.2.1.exe`（Windows，约 8.4 MB / 8,778,752 字节；版本随 `crates/dd-gui/Cargo.toml` 升） |
 | 非 Windows 包（O6） | `dist/dd-run-<ver>-linux-<arch>.tar.gz` / `dist/dd-run-<ver>-macos-<arch>.tar.gz`：单二进制 `dd-run` + `README-dist.txt`（运行时系统库清单 / 数据目录 / 使用说明）。文件搜索 sidecar 为 Windows 专属不随包；这些包无签名面 |
 | 打包方式（M9） | 5 个内置扩展进程内化编译：宿主直接驱动 `dd_ext::serve_line`，不再内嵌任何扩展 exe；`dd-gui/build.rs` 内嵌空表，`assets/embed/` 为遗留临时目录，已 gitignore |
 | Sidecar | 文件搜索扩展（`dd-ext-search.exe` + `com.ddrun.filesearch.json`）随 `dist/extensions.d/` 携带；宿主扫描可执行文件同目录的 `extensions.d/`（批次 7.5），zip 解压即用——优先级：用户数据目录 > sidecar > 内置 |
