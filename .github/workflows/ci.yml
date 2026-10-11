@@ -76,6 +76,11 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     continue-on-error: true
+    env:
+      # 仓库 .cargo/config.toml 硬编码 build.target = x86_64-pc-windows-gnu
+      # （本地单平台开发口径）——CI 探索批用 env 覆盖回宿主三元组，否则
+      # 非 Windows runner 上连 windows-gnu 的 std 都没有（E0463）。
+      CARGO_BUILD_TARGET: x86_64-unknown-linux-gnu
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
@@ -96,6 +101,9 @@ jobs:
     runs-on: macos-latest
     timeout-minutes: 30
     continue-on-error: true
+    env:
+      # 同上：覆盖 config.toml 的 windows-gnu 默认目标。
+      CARGO_BUILD_TARGET: aarch64-apple-darwin
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
