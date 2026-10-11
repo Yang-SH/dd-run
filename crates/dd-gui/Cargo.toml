@@ -69,3 +69,10 @@ nucleo = "0.5.0"
 # M5 UI 批次 2（§8.6 path 图标）：本地 PNG/ICO 解码 → egui 纹理。仅启用两种
 # 常见应用图标格式；默认格式全家桶（gif/webp/avif 等）不开，控制编译与体积。
 image = { version = "0.25", default-features = false, features = ["png", "ico", "jpeg", "webp"] }
+
+# O6 批次三（2026-10-11）：非 Windows 全局热键（optimization-plan §2.6.2）。
+# 仅登记 non-Windows target——Windows 构建不编译、不进依赖树。Linux 仅 X11
+# （Wayland 不支持 → 运行时 Err 走既有启动降级路径）；macOS 管理器创建包
+# catch_unwind 双护栏。选型依据见 §2.6.2。
+[target.'cfg(not(windows))'.dependencies]
+global-hotkey = "0.8"

@@ -242,6 +242,65 @@ fn enforce_single_instance() {
     // 首实例：持句柄至进程退出（不 CloseHandle，见函数文档），互斥体保持占用。
 }
 
-/// 非 Windows 占位（与 hotkey/tray 的跨平台占位同口径）：无互斥，行为不变。
-#[cfg(not(windows))]
+/// 非 Windows 单实例互斥（O6 批次三，2026-10-11；与 Windows `CreateMutexW`
+/// 同语义，std-only 零新依赖）：Unix domain socket `bind` 占位——进程存活
+/// 期间独占路径，进程退出内核关 fd 即释放（崩溃自动解锁，无 lock 文件残留
+/// 问题）。
+///
+/// **路径**：`$XDG_RUNTIME_DIR/dd-run.sock`（Linux 桌面会话 per-user 运行时
+/// 目录，与 per-user 数据目录口径一致）；无 `XDG_RUNTIME_DIR`（macOS 惯常
+/// 如此）回落 `$TMPDIR/dd-run-{$USER}.sock`（macOS 的 `$TMPDIR` 本身
+/// per-user；`$USER` 缺失用 `shared` 占位——互斥是防误排障护栏，非安全边界）。
+///
+/// **第二实例判定**：bind 不清理残留 socket 文件，故先 `UnixStream::connect`
+/// 探活——能连 = 有活实例（stderr 双语提示后退出）；连不上 = 死链或无实例，
+/// `remove_file` 后 bind；bind 报 `AddrInUse` = 并发窗口第二实例，按已在
+/// 运行处理。提示形态说明：此阶段 GUI 未创建，非 Windows 用 stderr（Windows
+/// 用 `MessageBoxW`）；真机腿归 O6 ④ 评估是否需升级为图形提示。
+///
+/// **listener 生命周期**：取得后**有意 `mem::forget` 泄漏**——fd 存活 =
+/// 实例存活（与 Windows 侧不 CloseHandle 同口径），提前 drop 会让后续双开
+/// 误判「无实例运行」。创建失败（路径不可写等极少情形）降级为不互斥照常
+/// 启动——互斥不应成为启动失败的新单点。
+#[cfg(unix)]
+fn enforce_single_instance() {
+    use std::io::ErrorKind;
+    use std::os::unix::net::{UnixListener, UnixStream};
+
+    const ALREADY_RUNNING: &str = "dd-run 已在运行（请用托盘图标或热键唤起面板），无需重复启动。\n\
+         dd-run is already running (use the tray icon or the hotkey) — no need to start it again.";
+
+    let path = match std::env::var("XDG_RUNTIME_DIR") {
+        Ok(dir) if !dir.is_empty() => std::path::PathBuf::from(dir).join("dd-run.sock"),
+        _ => std::env::temp_dir().join(format!(
+            "dd-run-{}.sock",
+            std::env::var("USER").unwrap_or_else(|_| "shared".into())
+        )),
+    };
+
+    // 活实例探活：能 connect = 已有实例在运行（崩溃残留的死链连不上）
+    if UnixStream::connect(&path).is_ok() {
+        log::warn!("[dd-gui] 已有 dd-run 实例在运行（socket 探活命中），提示后退出");
+        eprintln!("{ALREADY_RUNNING}");
+        std::process::exit(0);
+    }
+
+    // 死链清理（活实例已被 connect 排除；文件不存在时静默通过）后 bind 占位
+    let _ = std::fs::remove_file(&path);
+    match UnixListener::bind(&path) {
+        Ok(listener) => std::mem::forget(listener), // 有意泄漏：fd 存活 = 实例存活
+        Err(e) if e.kind() == ErrorKind::AddrInUse => {
+            // 并发窗口：探活之后、bind 之前对方已占位——按已在运行处理
+            log::warn!("[dd-gui] socket bind AddrInUse（并发窗口命中），按已在运行处理");
+            eprintln!("{ALREADY_RUNNING}");
+            std::process::exit(0);
+        }
+        Err(e) => {
+            log::warn!("[dd-gui] 单实例 socket bind 失败（{e}），降级为不互斥启动（照常运行）");
+        }
+    }
+}
+
+/// 非 Windows 且非 Unix 的其余目标占位（与 hotkey/tray 的跨平台占位同口径）。
+#[cfg(not(any(windows, unix)))]
 fn enforce_single_instance() {}

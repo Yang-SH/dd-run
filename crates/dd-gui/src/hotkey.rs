@@ -13,6 +13,12 @@
 //! 假成功」，见 lifecycle.rs）——UI 按 seq 匹配，过期/未知事件一律忽略。
 //! **启动注册失败不再 panic**（旧实现的快速失败正式废除）：降级为「无全局
 //! 热键」运行 + 一次事件通知（seq=0），可在设置页换键修复。
+//!
+//! **非 Windows（O6 批次三，2026-10-11）**：`global-hotkey` crate 真实现替换
+//! 早期跨平台编译占位——专用线程 + std mpsc 命令通道（Windows 的
+//! `PostThreadMessageW` 对应物），事件/回发/seq 协议/回滚语义与 Windows
+//! 逐位一致；Linux 仅 X11（Wayland 不支持 → manager 创建 Err 走既有降级
+//! 路径）。位掩码口径不变（settings 约定），经纯函数映射为 crate 类型。
 
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::thread;
@@ -99,6 +105,10 @@ pub struct HotkeyThread {
     _handle: Option<thread::JoinHandle<()>>,
     /// 热键线程 id（PostThreadMessageW 目标；非 Windows = 0）。
     thread_id: u32,
+    /// 非 Windows：重注册命令发送端（Windows 走 PostThreadMessageW，无此字段；
+    /// 线程创建失败时发送端对端已死，send 静默失败由 UI 确认超时兜底）。
+    #[cfg(not(windows))]
+    cmd_tx: Option<Sender<HotkeyCommand>>,
 }
 
 impl HotkeyThread {
@@ -158,20 +168,55 @@ impl HotkeyThread {
         }
     }
 
-    /// 非 Windows 平台：不注册热键，事件通道永远为空（跨平台编译占位）。
+    /// 非 Windows 平台：经 `global-hotkey` 注册热键并启动轮询线程（O6 批次三
+    /// 真实现，语义与 Windows 侧逐位对齐——启动失败降级发
+    /// [`HotkeyEvent::ReRegistered`](false)，线程创建失败同口径 R-05）。
     #[cfg(not(windows))]
-    pub fn spawn(_ctx: eframe::egui::Context, _mods: u32, _vk: u32) -> Self {
-        let (_tx, rx) = mpsc::channel::<HotkeyEvent>();
-        Self {
-            events: rx,
-            _handle: dummy_handle("dd-hotkey-dummy"),
-            thread_id: 0,
+    pub fn spawn(ctx: eframe::egui::Context, mods: u32, vk: u32) -> Self {
+        let (tx, rx) = mpsc::channel::<HotkeyEvent>();
+        let (cmd_tx, cmd_rx) = mpsc::channel::<HotkeyCommand>();
+        // 失败通知用克隆（tx 随闭包移交线程，创建失败时闭包被丢弃）
+        let fail_tx = tx.clone();
+        match thread::Builder::new()
+            .name("dd-hotkey".into())
+            .spawn(move || message_loop_unix(tx, ctx, cmd_rx, mods, vk))
+        {
+            Ok(handle) => Self {
+                events: rx,
+                _handle: Some(handle),
+                thread_id: 0,
+                cmd_tx: Some(cmd_tx),
+            },
+            Err(e) => {
+                log::error!("[dd-gui] 热键线程创建失败：{e} —— 降级为无全局热键运行");
+                let _ = fail_tx.send(HotkeyEvent::ReRegistered {
+                    seq: HOTKEY_SEQ_STARTUP,
+                    ok: false,
+                    rolled_back: false, // 无旧键可回滚
+                });
+                Self {
+                    events: rx,
+                    _handle: None,
+                    thread_id: 0,
+                    // 对端闭包已随 spawn 失败丢弃，re_register 静默失败（UI
+                    // 确认超时兜底），字段留 Some 保接口一致。
+                    cmd_tx: Some(cmd_tx),
+                }
+            }
         }
     }
 
-    /// 非 Windows 平台：重注册为空操作。
+    /// 非 Windows 平台：重注册命令经 std mpsc 发往热键线程（Windows 的
+    /// `PostThreadMessageW` 对应物）；结果带原 seq 经
+    /// [`HotkeyEvent::ReRegistered`] 回发，seq 协议一致。
     #[cfg(not(windows))]
-    pub fn re_register(&self, _cmd: HotkeyCommand) {}
+    pub fn re_register(&self, cmd: HotkeyCommand) {
+        // 对端已关闭（线程退出）时 send 返回 Err——静默放弃，UI 侧确认
+        // 超时兜底（与 Windows 侧 PostThreadMessageW 返回 0 的忽略同口径）。
+        if let Some(tx) = &self.cmd_tx {
+            let _ = tx.send(cmd);
+        }
+    }
 
     /// 测试用桩：不注册热键、无事件（`make_app` 注入用）。
     pub fn dummy() -> Self {
@@ -180,6 +225,8 @@ impl HotkeyThread {
             events: rx,
             _handle: dummy_handle("dd-hotkey-dummy"),
             thread_id: 0,
+            #[cfg(not(windows))]
+            cmd_tx: None,
         }
     }
 
@@ -190,6 +237,8 @@ impl HotkeyThread {
             events: rx,
             _handle: dummy_handle("dd-hotkey-test"),
             thread_id: 0,
+            #[cfg(not(windows))]
+            cmd_tx: None,
         }
     }
 }
@@ -330,6 +379,271 @@ fn message_loop(
     // 注：进程退出时线程随之终止；不主动 UnregisterHotKey（生命周期同进程）。
 }
 
+/// 设置位掩码 → `keyboard_types::Modifiers`（非 Windows；位值与 settings.rs
+/// 约定一致：ALT=1/CONTROL=2/SHIFT=4/WIN=8）。WIN 位映射 SUPER——Linux 上
+/// 为 Super 键、macOS 上为 Cmd。
+#[cfg(not(windows))]
+fn mods_mask_to_modifiers(mask: u32) -> global_hotkey::hotkey::Modifiers {
+    use global_hotkey::hotkey::Modifiers;
+    let mut m = Modifiers::empty();
+    if mask & 0b0001 != 0 {
+        m |= Modifiers::ALT;
+    }
+    if mask & 0b0010 != 0 {
+        m |= Modifiers::CONTROL;
+    }
+    if mask & 0b0100 != 0 {
+        m |= Modifiers::SHIFT;
+    }
+    if mask & 0b1000 != 0 {
+        m |= Modifiers::SUPER;
+    }
+    m
+}
+
+/// F1–F12 的 Code 表（VK 0x70..=0x7B 与 F1..=F12 顺序一一对应）。
+#[cfg(not(windows))]
+const F_KEY_CODES: [global_hotkey::hotkey::Code; 12] = [
+    global_hotkey::hotkey::Code::F1,
+    global_hotkey::hotkey::Code::F2,
+    global_hotkey::hotkey::Code::F3,
+    global_hotkey::hotkey::Code::F4,
+    global_hotkey::hotkey::Code::F5,
+    global_hotkey::hotkey::Code::F6,
+    global_hotkey::hotkey::Code::F7,
+    global_hotkey::hotkey::Code::F8,
+    global_hotkey::hotkey::Code::F9,
+    global_hotkey::hotkey::Code::F10,
+    global_hotkey::hotkey::Code::F11,
+    global_hotkey::hotkey::Code::F12,
+];
+
+/// A–Z 的 Code 表（VK 0x41..=0x5A 与 KeyA..=KeyZ 顺序一一对应）。
+#[cfg(not(windows))]
+const LETTER_KEY_CODES: [global_hotkey::hotkey::Code; 26] = [
+    global_hotkey::hotkey::Code::KeyA,
+    global_hotkey::hotkey::Code::KeyB,
+    global_hotkey::hotkey::Code::KeyC,
+    global_hotkey::hotkey::Code::KeyD,
+    global_hotkey::hotkey::Code::KeyE,
+    global_hotkey::hotkey::Code::KeyF,
+    global_hotkey::hotkey::Code::KeyG,
+    global_hotkey::hotkey::Code::KeyH,
+    global_hotkey::hotkey::Code::KeyI,
+    global_hotkey::hotkey::Code::KeyJ,
+    global_hotkey::hotkey::Code::KeyK,
+    global_hotkey::hotkey::Code::KeyL,
+    global_hotkey::hotkey::Code::KeyM,
+    global_hotkey::hotkey::Code::KeyN,
+    global_hotkey::hotkey::Code::KeyO,
+    global_hotkey::hotkey::Code::KeyP,
+    global_hotkey::hotkey::Code::KeyQ,
+    global_hotkey::hotkey::Code::KeyR,
+    global_hotkey::hotkey::Code::KeyS,
+    global_hotkey::hotkey::Code::KeyT,
+    global_hotkey::hotkey::Code::KeyU,
+    global_hotkey::hotkey::Code::KeyV,
+    global_hotkey::hotkey::Code::KeyW,
+    global_hotkey::hotkey::Code::KeyX,
+    global_hotkey::hotkey::Code::KeyY,
+    global_hotkey::hotkey::Code::KeyZ,
+];
+
+/// 虚拟键码 → `keyboard_types::Code`（非 Windows）。覆盖设置页可捕获的全键集
+/// （与 `settings::hotkey_vk_label` 的 match 域一致）；未知码 → `None`
+/// （调用侧按注册失败处置，不做静默猜测）。
+#[cfg(not(windows))]
+fn vk_to_code(vk: u32) -> Option<global_hotkey::hotkey::Code> {
+    use global_hotkey::hotkey::Code;
+    Some(match vk {
+        0x20 => Code::Space,
+        0x21 => Code::PageUp,
+        0x22 => Code::PageDown,
+        0x2D => Code::Insert,
+        0x30..=0x39 => match vk {
+            0x30 => Code::Digit0,
+            0x31 => Code::Digit1,
+            0x32 => Code::Digit2,
+            0x33 => Code::Digit3,
+            0x34 => Code::Digit4,
+            0x35 => Code::Digit5,
+            0x36 => Code::Digit6,
+            0x37 => Code::Digit7,
+            0x38 => Code::Digit8,
+            _ => Code::Digit9,
+        },
+        0x41..=0x5A => LETTER_KEY_CODES[(vk - 0x41) as usize],
+        0x70..=0x7B => F_KEY_CODES[(vk - 0x70) as usize],
+        0xBA => Code::Semicolon,
+        0xBB => Code::Equal,
+        0xBC => Code::Comma,
+        0xBD => Code::Minus,
+        0xBE => Code::Period,
+        0xBF => Code::Slash,
+        0xC0 => Code::Backquote,
+        0xDB => Code::BracketLeft,
+        0xDC => Code::Backslash,
+        0xDD => Code::BracketRight,
+        0xDE => Code::Quote,
+        _ => return None,
+    })
+}
+
+/// (mods 位掩码, vk) → crate [`HotKey`]；主键不可映射 → `None`。
+#[cfg(not(windows))]
+fn to_hotkey(mods: u32, vk: u32) -> Option<global_hotkey::hotkey::HotKey> {
+    use global_hotkey::hotkey::{HotKey, Modifiers};
+    let code = vk_to_code(vk)?;
+    let m = mods_mask_to_modifiers(mods);
+    Some(if m.is_empty() {
+        HotKey::new(None, code)
+    } else {
+        HotKey::new(Some(m), code)
+    })
+}
+
+/// 热键线程主体（非 Windows，O6 批次三）：manager 创建 → 初始注册 → 轮询
+/// 循环（重注册命令 + 全局热键事件）。降级语义与 Windows 侧逐位一致。
+#[cfg(not(windows))]
+fn message_loop_unix(
+    tx: Sender<HotkeyEvent>,
+    ctx: eframe::egui::Context,
+    cmd_rx: Receiver<HotkeyCommand>,
+    mods: u32,
+    vk: u32,
+) {
+    use global_hotkey::{GlobalHotKeyEvent, GlobalHotKeyManager, HotKeyState};
+    use std::time::Duration;
+
+    // manager 创建：Linux 仅 X11（Wayland / 无显示 → Err）；macOS 实现可能
+    // 主线程断言 panic——catch_unwind 双护栏，两路均降级为「无 manager」。
+    let manager = match std::panic::catch_unwind(GlobalHotKeyManager::new) {
+        Ok(Ok(m)) => Some(m),
+        Ok(Err(e)) => {
+            log::warn!("[dd-gui] 全局热键 manager 创建失败：{e} —— 降级为无热键运行");
+            None
+        }
+        Err(_) => {
+            log::warn!("[dd-gui] 全局热键 manager 创建 panic —— 降级为无热键运行");
+            None
+        }
+    };
+
+    // 当前生效组合（重注册失败回滚源；None = 当前无生效热键）
+    let mut current: Option<(u32, u32)> = None;
+    if let Some(m) = &manager {
+        if let Some(hk) = to_hotkey(mods, vk) {
+            match m.register(hk) {
+                Ok(()) => {
+                    current = Some((mods, vk));
+                    log::info!(
+                        "[dd-gui] 全局热键注册成功：{}",
+                        dd_gui::settings::hotkey_combo_label(mods, vk)
+                    );
+                }
+                Err(e) => log::debug!(
+                    "[dd-gui] 全局热键注册失败（{e}），降级为无热键运行——可在设置页更换"
+                ),
+            }
+        }
+    }
+    if current.is_none() {
+        // 启动失败降级（不 panic）：与 Windows 侧启动失败事件逐位一致
+        let _ = tx.send(HotkeyEvent::ReRegistered {
+            seq: HOTKEY_SEQ_STARTUP,
+            ok: false,
+            rolled_back: false, // 无旧键可回滚
+        });
+    }
+
+    loop {
+        // 1) 重注册命令（非阻塞清空）：解旧键注册新键；失败自动回滚旧键并
+        //    回发失败事件——与 Windows 侧 message_loop 的 seq 协议一致。
+        while let Ok(cmd) = cmd_rx.try_recv() {
+            let old = current;
+            let mut result = (false, false); // (ok, rolled_back)
+            match (&manager, to_hotkey(cmd.mods, cmd.vk)) {
+                (Some(m), Some(hk)) => {
+                    if let Some(cur) = old {
+                        if let Some(old_hk) = to_hotkey(cur.0, cur.1) {
+                            // 解注册失败仅忽略（键可能已失效）；回滚成败由
+                            // 后续 register 判定
+                            let _ = m.unregister(old_hk);
+                        }
+                    }
+                    match m.register(hk) {
+                        Ok(()) => {
+                            current = Some((cmd.mods, cmd.vk));
+                            // 诊断日志：与 Windows 侧同口径（seq 供 UI 对账）
+                            log::info!(
+                                "[dd-gui] 全局热键注册成功（seq={}）：{}",
+                                cmd.seq,
+                                dd_gui::settings::hotkey_combo_label(cmd.mods, cmd.vk)
+                            );
+                            result = (true, true); // 成功时 rolled_back 无意义，恒 true
+                        }
+                        Err(e) => {
+                            log::warn!(
+                                "[dd-gui] 新热键注册失败（seq={}，{}+{}，{e}），回滚旧键",
+                                cmd.seq,
+                                cmd.mods,
+                                cmd.vk
+                            );
+                            let mut rolled_back = false;
+                            if let Some(cur) = old {
+                                if let Some(old_hk) = to_hotkey(cur.0, cur.1) {
+                                    rolled_back = m.register(old_hk).is_ok();
+                                    if !rolled_back {
+                                        current = None; // 旧键回滚也失败：无任何生效热键
+                                    }
+                                } else {
+                                    current = None; // 旧键不可再映射：视同回滚失败
+                                }
+                            }
+                            result = (false, rolled_back);
+                        }
+                    }
+                }
+                // manager 缺席（Wayland/无显示降级中）或新键不可映射：请求不
+                // 执行。与 (Some, Some) 分支不同，此处**未解注册旧键**——旧键
+                // 仍生效，rolled_back 依事件契约如实回发（旧键缺席 = 本就无
+                // 生效热键；不变式：current 为 Some 蕴含 manager 为 Some）。
+                _ => {
+                    log::warn!(
+                        "[dd-gui] 重注册请求无法执行（seq={}，manager 缺席或键不可映射）",
+                        cmd.seq
+                    );
+                    result = (false, old.is_some());
+                }
+            }
+            let _ = tx.send(HotkeyEvent::ReRegistered {
+                seq: cmd.seq,
+                ok: result.0,
+                rolled_back: result.1,
+            });
+            ctx.request_repaint();
+        }
+
+        // 2) 全局热键事件：crate 按按下/释放各发一次，仅取按下（Toggle 语义
+        //    与 Windows WM_HOTKEY 一致）；窗口隐藏时 request_repaint 唤醒 egui。
+        while let Ok(ev) = GlobalHotKeyEvent::receiver().try_recv() {
+            if ev.state() == HotKeyState::Pressed {
+                let _ = tx.send(HotkeyEvent::Toggle);
+                ctx.request_repaint();
+            }
+        }
+
+        // 3) 节拍兜底：命令通道 25ms 超时等待——命令/热键事件延迟上限 25ms、
+        //    唤醒频率 40/s 量级（Windows 侧为事件驱动，此处为跨平台 crate 的
+        //    轮询型消费面的对价）。通道断开 = HotkeyThread 已 drop（进程退出）。
+        match cmd_rx.recv_timeout(Duration::from_millis(25)) {
+            Ok(_) => {} // 留待下轮步骤 1) 非阻塞清空统一处理
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
+            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -364,5 +678,60 @@ mod tests {
             let (w, l) = cmd.pack();
             assert_eq!(HotkeyCommand::unpack(w, l), cmd);
         }
+    }
+
+    /// vk → Code 映射：设置页可捕获全键集（与 `settings::hotkey_vk_label`
+    /// 的 match 域同域）逐键 Some；域外代表键码（含 VK_LWIN 等 Windows 专属
+    /// 不可捕获键）一律 None——映射域收窄在测试里钉死。
+    #[cfg(not(windows))]
+    #[test]
+    fn vk_to_code_covers_label_key_set() {
+        let mut labeled: Vec<u32> = vec![0x20, 0x21, 0x22, 0x2D];
+        labeled.extend(0x70..=0x7B);
+        labeled.extend(0x30..=0x39);
+        labeled.extend(0x41..=0x5A);
+        labeled.extend([
+            0xBA, 0xBB, 0xBC, 0xBD, 0xBE, 0xBF, 0xC0, 0xDB, 0xDC, 0xDD, 0xDE,
+        ]);
+        for vk in labeled {
+            assert!(vk_to_code(vk).is_some(), "VK_{vk:02X} 应可映射");
+        }
+        for vk in [0x00, 0x03, 0x14, 0x5B, 0x6F, 0x7C, 0xE2, 0xFF] {
+            assert!(vk_to_code(vk).is_none(), "VK_{vk:02X} 不应可映射");
+        }
+    }
+
+    /// 修饰键位掩码 → Modifiers 逐位映射（含空掩码与全掩码边界）。
+    #[cfg(not(windows))]
+    #[test]
+    fn mods_mask_to_modifiers_maps_all_bits() {
+        use global_hotkey::hotkey::Modifiers;
+        assert!(mods_mask_to_modifiers(0).is_empty());
+        assert!(mods_mask_to_modifiers(0b0001).contains(Modifiers::ALT));
+        assert!(mods_mask_to_modifiers(0b0010).contains(Modifiers::CONTROL));
+        assert!(mods_mask_to_modifiers(0b0100).contains(Modifiers::SHIFT));
+        assert!(mods_mask_to_modifiers(0b1000).contains(Modifiers::SUPER));
+        let all = mods_mask_to_modifiers(0b1111);
+        assert!(all.contains(Modifiers::ALT));
+        assert!(all.contains(Modifiers::CONTROL));
+        assert!(all.contains(Modifiers::SHIFT));
+        assert!(all.contains(Modifiers::SUPER));
+    }
+
+    /// to_hotkey 组合：默认 Win+Alt+Space 可构造；空掩码走 None modifiers
+    /// 分支；不可映射主键整体返回 None。
+    #[cfg(not(windows))]
+    #[test]
+    fn to_hotkey_combines_mask_and_key() {
+        use global_hotkey::hotkey::{Code, Modifiers};
+        let hk = to_hotkey(0b1001, 0x20).expect("Win+Alt+Space 应可构造");
+        assert_eq!(hk.mods, mods_mask_to_modifiers(0b1001));
+        assert_eq!(hk.key, Code::Space);
+        // 空掩码：HotKey::new(None, _) 分支
+        let bare = to_hotkey(0, 0x41).expect("裸键应可构造");
+        assert_eq!(bare.mods, Modifiers::empty());
+        assert_eq!(bare.key, Code::KeyA);
+        // 主键不可映射 → None
+        assert!(to_hotkey(0b1001, 0x5B).is_none());
     }
 }
