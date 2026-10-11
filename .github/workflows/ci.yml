@@ -107,6 +107,9 @@ jobs:
       - name: Conformance smoke (calc, in-process)
         run: cargo run -p dd-run-cli -- --conformance --ext-id com.ddrun.calc
 
+      - name: Roundtrip smoke (spawn, sample extension)
+        run: cargo run -p dd-run-cli -- --roundtrip
+
   check-macos:
     name: build / test (macos, O6 gate)
     runs-on: macos-latest
@@ -141,3 +144,6 @@ jobs:
 
       - name: Conformance smoke (calc, in-process)
         run: cargo run -p dd-run-cli -- --conformance --ext-id com.ddrun.calc
+
+      - name: Roundtrip smoke (spawn, sample extension)
+        run: cargo run -p dd-run-cli -- --roundtrip

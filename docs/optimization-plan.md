@@ -25,7 +25,7 @@
 | O3 | 依赖治理/安全 | 未接入 `cargo audit`/`udeps`/`outdated` | 漏洞与死依赖可观测 | 小（CI + 本地） | 低 | 中 | ✅ **已落地**（2026-09-15，§2.5） |
 | O4 | 可观测性/日志 | 无 `log`/`tracing` 框架，散落 `eprintln!` | 真机排障与复现效率 | 中（多模块） | 低（stdout 协议纯净已天然满足） | 中 | ✅ **已落地**（2026-09-15，§2.4） |
 | O5 | 体积再压缩 | 评估移除 `eframe default_fonts`；`panic=abort` 证伪 | 边际体积下降 | 小→中 | 中（tofu 风险） | 低 | 新发现（含证伪） |
-| O6 | 跨平台（macOS/Linux） | **Phase 3 首批已落地（2026-10-11）**：CI 三平台构建矩阵（ubuntu/macOS **阻塞门禁**：build/test/conformance smoke，CI #96 四作业全绿）+ D2 哈希缺口跨平台收口（非 Windows sha2，lock 零新增）+ 两处平台缺口修复（O5-a 连带后端缺失 / DWM 实现缺门）；余打包链 / 真机腿 / GUI 系统依赖运行时收敛 | 平台覆盖 | 大（独立里程碑 M10） | 高 | 战略 | 已知（INDEX §5） |
+| O6 | 跨平台（macOS/Linux） | **Phase 3 首批+批次二已落地（2026-10-11）**：首批（CI 三平台**阻塞门禁** + D2 哈希收口 + 两处缺口修复，CI #96 四作业全绿）；批次二（spawn 类 roundtrip smoke 接入三平台门禁 + **运行时收敛清单**——六面守卫审计结论与真机腿清单，见 §2.6.1）；余打包链 / 真机腿 / 全局热键跨平台选型 | 平台覆盖 | 大（独立里程碑 M10） | 高 | 战略 | 已知（INDEX §5） |
 | O7 | 文件搜索 P2 真机验收 | 两轮完成（2026-09-15 首轮；**09-17 补 `es.exe`**）：A-33-05/06/07/10 **✅ 通过**（基线降幅 91.27%、回落分支 3/3）、A-33-08 ⚠️ 部分（跨环境矩阵）；**同批修掉 `es.exe` 失败静默为空结果的产品缺陷** | 兑现用户承诺 | 中（真机） | 中 | 高 | ✅ **已落地**（[验收报告](./search-file-p2-acceptance-2026-09-15.md) v1.3） |
 | O8 | 文档卫生 | CHANGELOG 缺日期、`examples/python-minimal/README.md` 行尾 LF、I3 32px 回退未做、LRU 容量不可配 | 一致性 | 小 | 极低 | 低 | ✅ **已落地**（2026-09-15，§2.7.1：CHANGELOG 已补日期、行尾已合规；I3 按设计文档保留「视真机」、LRU 判定属功能项，均不在本项范围） |
 
@@ -266,6 +266,23 @@
 
 **机会（建议立为 M10 独立里程碑）**：补全 `target.{macos,linux}` 平台守卫、egui `wgpu`/`glow` 后端选择、全局热键（`rdev`/`global-hotkey`，M1 已规划）、托盘与材质仅 Win 生效的降级。属高投入、需真机，单独排期。
 
+#### 2.6.1 批次二：运行时收敛清单（2026-10-11，守卫审计结论）
+
+三平台编译门禁（首批）已实证平台守卫**编译级完备**；本批逐面审计 `windows_sys` 消费点的**运行时降级语义**与非 Windows 缺席行为——全部有 `#[cfg(not(windows))]` stub（hotkey.rs:162/173、tray.rs:184/195、platform.rs:29/405），编译期零裸奔：
+
+| 运行时面 | 实现 | 非 Windows 语义（当前） | 真机腿（M10 验收时逐项） |
+|---|---|---|---|
+| 全局热键（`RegisterHotKey` 线程） | `hotkey.rs` gated | 无系统热键——面板内 `Ctrl+F` 直达/页内导航不依赖系统热键，功能可用 | 热键缺席提示是否可见、捕获对话框行为 |
+| 托盘（`Shell_NotifyIcon`） | `tray.rs` gated | 无托盘图标 | 启动/退出无托盘不报错；设置页「托盘」项语义 |
+| DWM 材质/圆角/边框/强调色 | `platform.rs` gated | 材质恒关、system accent 回落 `Palette::accent` | 外观三档不崩、不闪 |
+| 单实例互斥（`CreateMutexW` + MessageBox） | `main.rs` gated | 允许多开（无互斥） | **决策点**：跨平台互斥替代（lock 文件）待真机验证后排期 |
+| 捕获钩子（WH_KEYBOARD_LL + IME 守卫） | `capture_hook.rs` gated | 无钩子（IME/吞键守卫随之缺席） | 面板内输入/IME 正常 |
+| 文件搜索 sidecar（Everything/es.exe + IPC） | Windows 专属工具链 | sidecar 产物不随 Linux/macOS 分发 → 文件搜索类别整体缺席（聚合层优雅降级） | 无 sidecar 时启动零报错 |
+| reveal / file:// 打开（explorer 链路） | `platform.rs` gated | reveal 缺席；`open_url` 的 file:// 语义为 Windows 形态 | `open_url` 三 scheme 在非 Windows 的回落 |
+
+**批次二随批门禁扩展**：spawn 类 `--roundtrip`（协议全链路 + 真实子进程）接入三平台门禁（conformance calc 之外），证明协议栈与子进程管理在非 Windows 可用。
+
+**后续批次（需决策/真机）**：① 全局热键跨平台选型（`global-hotkey` crate，M1 已规划依赖面）；② 打包链平台化（产物形态 + 运行时 dlopen 依赖清单）；③ 互斥替代方案；④ 真机腿（上表逐项）。
 ### 2.7 已知未闭环项收敛（重排优先级）
 
 | 项 | 优先级 | 备注 |
