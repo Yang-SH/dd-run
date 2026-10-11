@@ -1,0 +1,55 @@
+name: ci-log-relay
+
+# 临时诊断工作流（O6 探索批，用后即删）：CI 失败时把失败 job 的构建错误
+# 片段提交回仓，供无 API 凭据的维护会话匿名读取（2026-10-06 O9 CI #58 先例）。
+
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+
+permissions:
+  actions: read
+  contents: write
+
+jobs:
+  relay:
+    if: >-
+      github.event.workflow_run.conclusion == 'failure' &&
+      github.event.workflow_run.head_branch == 'main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Extract failed-job build errors
+        env:
+          GH_TOKEN: ${{ github.token }}
+          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          mkdir -p .ci-logs
+          RUNS=$(curl -sf -H "Authorization: Bearer $GH_TOKEN" \
+            "https://api.github.com/repos/${{ github.repository }}/actions/runs?head_sha=${HEAD_SHA}&per_page=5")
+          RUN_ID=$(echo "$RUNS" | grep -o '"id": *[0-9]*' | head -1 | grep -o '[0-9]*')
+          echo "run_id=$RUN_ID"
+          JOBS=$(curl -sf -H "Authorization: Bearer $GH_TOKEN" \
+            "https://api.github.com/repos/${{ github.repository }}/actions/runs/${RUN_ID}/jobs")
+          echo "$JOBS" | grep -o '"id": *[0-9]*' | grep -o '[0-9]*' | while read -r JOB_ID; do
+            CONCL=$(echo "$JOBS" | python3 -c "import json,sys; d=json.load(sys.stdin); print(next((j['conclusion'] for j in d['jobs'] if j['id']==$JOB_ID),''))" 2>/dev/null || echo "")
+            if [ "$CONCL" != "failure" ]; then continue; fi
+            NAME=$(echo "$JOBS" | python3 -c "import json,sys; d=json.load(sys.stdin); print(next((j['name'] for j in d['jobs'] if j['id']==$JOB_ID),'job').replace(' ','_').replace('/','-'))" 2>/dev/null || echo "job-$JOB_ID")
+            curl -sfL -H "Authorization: Bearer $GH_TOKEN" \
+              "https://api.github.com/repos/${{ github.repository }}/actions/jobs/${JOB_ID}/logs" -o raw.log
+            # 提取 error 上下文 + 尾部 120 行（链接错误多在尾部）
+            { grep -nE "error(\[|:)" -A4 raw.log | head -120; echo "---- tail ----"; tail -n 60 raw.log; } > ".ci-logs/${NAME}.txt" || true
+          done
+          ls -la .ci-logs/ || true
+
+      - name: Commit relayed logs
+        run: |
+          git config user.name "ci-log-relay"
+          git config user.email "noreply@github.com"
+          git add .ci-logs || true
+          if git diff --cached --quiet; then echo "no logs relayed"; exit 0; fi
+          git commit -m "chore(temp): CI 失败日志搬运（[skip ci]，诊断后删除）"
+          git push
