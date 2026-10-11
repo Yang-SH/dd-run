@@ -573,7 +573,7 @@ impl PaletteApp {
                         for (idx, item) in group_items {
                             let resp = draw_item_row(
                                 ui,
-                                *item,
+                                item,
                                 Some(*idx) == selected,
                                 icon_views.get(idx),
                                 hover_visual,
