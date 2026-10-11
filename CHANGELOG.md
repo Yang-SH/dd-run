@@ -11,7 +11,7 @@
 - **O9 确认门覆盖嵌套 shell**（严审报告 P4 闭合）：Shell 运行确认门新增嵌套 shell 启动器词表 `cmd` / `call` / `powershell` / `pwsh` / `wmic` / `robocopy`——段首词命中即整段过确认门，闭合 `cmd /C del …`、`call del …`、`powershell -Command "Remove-Item …"`、`robocopy /MIR` 等"借壳执行"绕过面；含 `^` 转义符（`d^el` 类，执行期还原）的查询整体弹确认。新增 7 条绕过样例 + 回归负例单测。定位不变：只扩大确认触发面，不新增拦截（护栏非沙箱）。
 - **F4（O10 跟踪）MSRV 声明 + 清单不再补全 `.cmd`/`.bat`**：6 个 crate 声明 `rust-version = "1.95"`（实测依赖图 eframe/egui 0.36.2 下限；≥ BatBadBut/CVE-2024-24576 修复线 1.77.2，安全不变式满足）——旧工具链构建被显式拒绝；`resolve_executable` 裸名只补 `.exe`，清单需要批处理时直写完整路径或 `cmd.exe /C xxx.bat`。**行为变更**：裸名只剩同名 `.cmd`/`.bat` 的第三方清单从"可用"变"扫描跳过 + 设置页可见原因"（fail-closed）；内置扩展全部指向 `.exe` 不受影响。新增测试 `resolve_executable_no_longer_completes_cmd_bat`。
 - **O11 CI/仓库卫生三件套**：`ci.yml` / `release.yml` 全部 action SHA pin（`actions/checkout`、`Swatinem/rust-cache`、`taiki-e/install-action`、`softprops/action-gh-release`，均取 deref 后 commit SHA + 行尾版本注释，防 tag 强推）+ 各 job 补 `timeout-minutes`（check/audit 30、release 45，防挂起占满 6 小时配额）；根目录 3 个设计稿 HTML（`cmdpal-ui-mockups` / `cmdpal-ui-optimization-v5` / `cmdpal-window-material-effects`）归档至 `docs/archive/`，README 与文档活链接同步改写。
-- **O12 巨型文件拆分（同日第二批）**：`ui/settings_view.rs`（4104 行）、`settings.rs`（2299 行）、`app/keys.rs`（1330 行）目录化拆为 15 个文件（最大 977 行），纯搬运 + 重导出、零行为改动（行级 multiset 核对 + conformance/roundtrip 自检）；`crate::settings::*` 等 27 处外部引用路径不变。三个独立 commit，不与功能改动混批。
+- **O12 巨型文件拆分（同日第二批）**：`ui/settings_view.rs`（4104 行）、`settings.rs`（2299 行）、`app/keys.rs`（1330 行）目录化拆为 15 个文件（最大 976 行），纯搬运 + 重导出、零行为改动（行级 multiset 核对 + conformance/roundtrip 自检）；`crate::settings::*` 等 27 处外部引用路径不变。三个独立 commit，不与功能改动混批。
 - **随批修复**：存量 clippy `explicit_auto_deref`（`panel.rs:576`，干净 HEAD 即触发，非本批引入，挡验收门禁顺手收口；该问题亦为推送前 CI #71/#72 连续两轮红灯的根因）。
 
 ## [0.2.0] - 2026-10-07

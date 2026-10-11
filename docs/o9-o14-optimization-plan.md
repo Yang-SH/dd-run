@@ -101,7 +101,7 @@
 
 ### O12 — 巨型文件拆分（P2，前置核对已完成）
 
-> ✅ **已落地（2026-10-11）**：三文件全部拆分——settings_view.rs 4104→7 文件（mod 488 + appearance 839 / widgets 774 / general 764 / search 557 / extensions 497 / hotkey_dialog 262）、settings.rs 2299→4 文件（mod 754 + prefs 540 / tests 977 / search 52）、keys.rs 1330→4 文件（mod 176 + settings_actions 728 / navigation 254 / hotkey_capture 202）。零行为改动（行级 multiset 核对），外部路径经重导出不变；每文件独立 commit。验收：611 passed / clippy `-D warnings` / fmt / docscan 全绿 + conformance（calc/bookmarks）与 roundtrip 自检通过。
+> ✅ **已落地（2026-10-11）**：三文件全部拆分——settings_view.rs 4104→7 文件（mod 486 + appearance 843 / widgets 772 / general 762 / search 556 / extensions 496 / hotkey_dialog 260）、settings.rs 2299→4 文件（mod 759 + prefs 534 / tests 976 / search 52）、keys.rs 1330→4 文件（mod 176 + settings_actions 728 / navigation 254 / hotkey_capture 202；行数为 cargo fmt 后终态）。零行为改动（行级 multiset 核对），外部路径经重导出不变；每文件独立 commit。验收：611 passed / clippy `-D warnings` / fmt / docscan 全绿 + conformance（calc/bookmarks）与 roundtrip 自检通过。
 
 **动机**（两轮严审一致结论，行数已核实）：`crates/dd-gui/src/ui/settings_view.rs` 4104 行、`crates/dd-gui/src/settings.rs` 2299 行、`crates/dd-gui/src/app/keys.rs` 1330 行。函数级组织尚可，但检索、评审、合并冲突成本随行数上涨。
 
