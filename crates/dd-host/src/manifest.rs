@@ -293,19 +293,20 @@ fn is_relative(raw: &str) -> bool {
 }
 
 /// 解析可执行文件：§7 规则 8 只做**存在性检查**（可执行性留给首次 spawn 失败时判定，
-/// 见 §7 脚注）。Windows 上按 `PATHEXT` 习惯补 `.exe`（cargo 产物带该后缀）。
+/// 见 §7 脚注）。Windows 上补 `.exe`（cargo 产物带该后缀）。
 pub fn resolve_executable(path: &Path) -> Option<PathBuf> {
     if path.is_file() {
         return Some(path.to_path_buf());
     }
     if cfg!(windows) {
         if let Some(name) = path.file_name().and_then(|s| s.to_str()) {
-            for ext in [".exe", ".cmd", ".bat"] {
-                let mut candidate = path.to_path_buf();
-                candidate.set_file_name(format!("{name}{ext}"));
-                if candidate.is_file() {
-                    return Some(candidate);
-                }
+            // BatBadBut（CVE-2024-24576）纵深防御（F4，2026-10-11）：.cmd/.bat 经
+            // cmd.exe 承载，参数存在二次解析歧义面（与 S-01 同类关切）。清单作者
+            // 需要批处理时自行写 cmd.exe /C xxx.bat 并自担转义责任；宿主不再代为补全。
+            let mut candidate = path.to_path_buf();
+            candidate.set_file_name(format!("{name}.exe"));
+            if candidate.is_file() {
+                return Some(candidate);
             }
         }
     }
@@ -675,6 +676,34 @@ mod tests {
         assert_eq!(parse_semver("1.2"), None);
         assert_eq!(parse_semver("1.2.3.4"), None);
         assert_eq!(parse_semver("1.2.x"), None);
+    }
+
+    /// F4（2026-10-11）：裸名不再补全 `.cmd`/`.bat`——目录里只有 foo.cmd/foo.bat
+    /// 时 `resolve_executable` 返回 None（fail-closed，扫描跳过 + 设置页可见原因）；
+    /// 同目录存在 foo.exe 时仍正常命中。
+    #[cfg(windows)]
+    #[test]
+    fn resolve_executable_no_longer_completes_cmd_bat() {
+        let tmp = TempDir::new("f4-cmd-bat");
+        tmp.write("foo.cmd", "@echo off\r\n");
+        tmp.write("foo.bat", "@echo off\r\n");
+        let bare = tmp.path().join("foo");
+        assert!(
+            resolve_executable(&bare).is_none(),
+            "裸名不应再补全 .cmd/.bat"
+        );
+
+        tmp.write("foo.exe", "MZ");
+        assert_eq!(
+            resolve_executable(&bare),
+            Some(tmp.path().join("foo.exe")),
+            "存在 foo.exe 时仍应命中"
+        );
+        assert_eq!(
+            resolve_executable(&tmp.path().join("foo.cmd")),
+            Some(tmp.path().join("foo.cmd")),
+            "清单直写完整 .cmd 路径仍按原样路径命中（§7 规则 8 语义不变）"
+        );
     }
 
     #[test]
