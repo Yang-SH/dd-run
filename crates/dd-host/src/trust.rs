@@ -651,7 +651,8 @@ fn sha256_hex(reader: &mut impl std::io::Read) -> Result<String, String> {
     Ok(out.iter().map(|b| format!("{b:02x}")).collect())
 }
 
-/// 非 Windows 占位：返回 `Err`（模块文档「已声明的缺口」）。
+/// 非 Windows 实现（O6 首批）：纯 Rust `sha2`——与 Windows CNG 路径共用
+/// [`sha256_file`] / [`sha256_bytes`] 入口，三态门禁全平台同语义。
 #[cfg(not(windows))]
 fn sha256_hex(reader: &mut impl std::io::Read) -> Result<String, String> {
     use sha2::Digest;
