@@ -94,7 +94,12 @@ impl PaletteApp {
                             // （列表空 → 骨架 / 非空 → 保留旧结果），并重武装去抖
                             // 按最新 query 补拉。非过期结果走下方正常落地。
                             let landing_query = self.stack.current().list.query().to_owned();
-                            if landing_is_stale(&landing_query, req_search.as_deref()) {
+                            let landing_search =
+                                (!landing_query.is_empty()).then_some(landing_query.as_str());
+                            let query_scroll_pending = self.stack.current().scroll_to_top_pending;
+                            if landing_is_stale(&landing_query, req_search.as_deref())
+                                || (query_scroll_pending && landing_search != req_search.as_deref())
+                            {
                                 log::debug!(
                                     "[dd-gui] get_items 结果过期：req={req_search:?} cur={landing_query:?} → 不落地 + 重武装补拉"
                                 );
@@ -122,6 +127,7 @@ impl PaletteApp {
                                 if !prev_query.is_empty() {
                                     page.list.set_query(prev_query.clone());
                                 }
+                                page.finish_query_scroll(is_loading);
                                 // E2E：建样本（page 借用至此已结束）——本帧 draw_panel
                                 // 完成时由 `e2e_report` 结算输出。
                                 if let Some((input_at, dispatch_at)) = e2e_times {
@@ -186,8 +192,12 @@ impl PaletteApp {
                             // 重武装去抖按最新 query 补拉（与 Ok 分支对称；
                             // 否则补拉期间输入的字符会被失败态吞掉不再触发）。
                             let cur_query = self.stack.current().list.query().to_owned();
-                            if !cur_query.is_empty() && Some(cur_query) != req_search {
+                            let cur_search = (!cur_query.is_empty()).then_some(cur_query.as_str());
+                            let stale = cur_search != req_search.as_deref();
+                            if stale {
                                 self.schedule_page_query_debounce();
+                            } else {
+                                self.stack.current_mut().cancel_query_scroll();
                             }
                         }
                     }

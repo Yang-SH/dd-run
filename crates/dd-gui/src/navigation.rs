@@ -42,6 +42,10 @@ pub struct PageState {
     /// 到期仍未落地 → 渲染骨架；快速补拉在到期前落地 → 全程无骨架闪烁。
     /// `None` = 无延迟骨架（首拉由 `is_loading` 承担 / 有旧结果保留展示）。
     pub skeleton_after: Option<Instant>,
+    /// 当前查询变化后，等待非加载态结果落地再回顶。
+    pub scroll_to_top_pending: bool,
+    /// 列表下一次绘制时执行的一次性回顶请求。
+    pub scroll_to_top: bool,
     /// M5 批次 4.0：是否为**宿主设置页**（GUI 本地页，非扩展嵌套页）。
     /// 渲染层据此切换到设置视图（不走 searchbar/列表/兜底链路），
     /// 数据仍由 `list`（空列表）承载以复用键盘状态机。
@@ -59,6 +63,8 @@ impl PageState {
             is_loading: false,
             empty: None,
             skeleton_after: None,
+            scroll_to_top_pending: false,
+            scroll_to_top: false,
             is_settings: false,
         }
     }
@@ -81,8 +87,35 @@ impl PageState {
             is_loading: false,
             empty: None,
             skeleton_after: None,
+            scroll_to_top_pending: false,
+            scroll_to_top: false,
             is_settings: false,
         }
+    }
+
+    /// 查询变化后，丢弃旧回顶请求，等待新结果落地。
+    pub fn mark_query_scroll_pending(&mut self) {
+        self.scroll_to_top = false;
+        self.scroll_to_top_pending = true;
+    }
+
+    /// 当前查询加载完成后，将非空结果转换为一次性回顶请求。
+    pub fn finish_query_scroll(&mut self, is_loading: bool) {
+        if self.scroll_to_top_pending && !is_loading {
+            self.scroll_to_top_pending = false;
+            self.scroll_to_top = self.list.visible_count() > 0;
+        }
+    }
+
+    /// 当前查询失败时清除待处理回顶。
+    pub fn cancel_query_scroll(&mut self) {
+        self.scroll_to_top_pending = false;
+        self.scroll_to_top = false;
+    }
+
+    /// 绘制当前页列表时消费一次性回顶请求。
+    pub fn take_scroll_to_top(&mut self) -> bool {
+        std::mem::take(&mut self.scroll_to_top)
     }
 
     /// 页内补拉发起前的状态预备（两轮真机反馈合并语义）。
@@ -123,6 +156,8 @@ impl PageState {
             is_loading: false,
             empty: None,
             skeleton_after: None,
+            scroll_to_top_pending: false,
+            scroll_to_top: false,
             is_settings: true,
         }
     }
@@ -298,6 +333,36 @@ mod tests {
         page.is_loading = true;
         page.begin_refetch(Instant::now());
         assert!(page.is_loading, "首拉 Loading 不被预备逻辑改动");
+    }
+
+    #[test]
+    fn query_scroll_waits_for_final_results_and_is_consumed_once() {
+        let mut page =
+            PageState::nested("p1", "文件搜索", "com.ddrun.filesearch", vec![item("f1")]);
+        page.mark_query_scroll_pending();
+
+        page.finish_query_scroll(true);
+        assert!(page.scroll_to_top_pending, "加载中的结果不能提前触发回顶");
+        assert!(!page.scroll_to_top);
+
+        page.finish_query_scroll(false);
+        assert!(!page.scroll_to_top_pending);
+        assert!(page.take_scroll_to_top());
+        assert!(!page.take_scroll_to_top(), "回顶请求只能消费一次");
+    }
+
+    #[test]
+    fn query_scroll_does_not_request_top_for_empty_results_or_failure() {
+        let mut page = PageState::nested("p1", "文件搜索", "com.ddrun.filesearch", vec![]);
+        page.mark_query_scroll_pending();
+        page.finish_query_scroll(false);
+        assert!(!page.scroll_to_top_pending);
+        assert!(!page.take_scroll_to_top(), "空列表不需要回顶");
+
+        page.mark_query_scroll_pending();
+        page.cancel_query_scroll();
+        assert!(!page.scroll_to_top_pending);
+        assert!(!page.take_scroll_to_top(), "失败不得遗留回顶请求");
     }
 
     #[test]

@@ -229,6 +229,7 @@ impl PaletteApp {
                 // set_query 内部 q == self.state.query 时早退，故 query 未变（非按键帧）
                 // 不会误触发；连续打字会持续刷新去抖到期时刻。
                 if is_nested && query_changed {
+                    self.stack.current_mut().mark_query_scroll_pending();
                     self.e2e_input_at = Some(Instant::now()); // E2E：页内输入变化 = 感知计时起点
                     self.schedule_page_query_debounce();
                 }
@@ -467,6 +468,7 @@ impl PaletteApp {
                 page.list.query().is_empty(),
             )
         };
+        let scroll_to_top = self.stack.current().scroll_to_top;
         // 延迟骨架未到期 → 预约到点重绘（无输入事件时也能按时切骨架）。
         if let Some(deadline) = self.stack.current().skeleton_after {
             let now = std::time::Instant::now();
@@ -545,6 +547,13 @@ impl PaletteApp {
         // 而实际选中是第一项（键盘流）。一旦鼠标真正动过即恢复常驻 hover。
         let hover_visual = self.mouse_hide.as_ref().is_none_or(|s| s.pointer_engaged());
         egui::ScrollArea::vertical().show(ui, |ui| {
+            if scroll_to_top {
+                let content_top = ui.min_rect().min;
+                ui.scroll_to_rect(
+                    egui::Rect::from_min_size(content_top, egui::Vec2::ZERO),
+                    Some(egui::Align::TOP),
+                );
+            }
             // `.results` 容器：padding 6px 6px 8px（CSS 简写 = 上 6 / 左右 6 /
             // 下 8；行相对搜索栏再内收 6px、列表底部留 8px。egui Frame
             // inner_margin 承担——与顶行 padding-bottom 4 合计 10px，同设计稿）。
@@ -582,7 +591,7 @@ impl PaletteApp {
                             );
                             row_rects.push((*idx, resp.rect));
                             if Some(*idx) == selected {
-                                if scroll_follow {
+                                if scroll_follow && !scroll_to_top {
                                     // 选中项滚入可视区（仅键盘选中时跟随；鼠标选中不滚动，
                                     // 避免内容在静止指针下移动造成高亮与光标错位）
                                     resp.scroll_to_me(None);
@@ -614,6 +623,9 @@ impl PaletteApp {
                     }
                 });
         });
+        if scroll_to_top {
+            self.stack.current_mut().take_scroll_to_top();
+        }
         self.ctx_row_rects = row_rects;
         // F8：图标缓存写落盘（items 借用已随 ScrollArea 闭包结束，`&mut self` 合法）
         self.ingest_icon_writes(icon_writes);
