@@ -801,6 +801,15 @@ impl eframe::App for PaletteApp {
         }
         let ctx = ui.ctx().clone();
         self.poll_invoke(&ctx);
+        // invoke 在途轮询唤醒：egui 按需重绘，invoke 结果经 channel 返回不会自动
+        // 触发重绘——若此刻无输入事件，Dismiss 等裁决会滞留到下一次外部事件
+        // （典型：被启动应用夺焦）或过滤框光标 blink 节拍（≤0.5s，附带依赖、
+        // 失焦即消失）才应用，表现为「回车启动应用后面板卡一段时间才关闭」。
+        // 在途期间以 30ms 间隔预约重绘（与列表 Loading 态 33ms 轮询同范式），
+        // 结果消费后自动停止；面板隐藏期 ui() 早返回，不会空转。
+        if self.invoke_rx.is_some() {
+            ctx.request_repaint_after(std::time::Duration::from_millis(30));
+        }
         self.poll_page();
         self.poll_notifications();
         self.poll_host_requests(); // M4 P2：host/* 副作用（Toast/剪贴板/开 URL）

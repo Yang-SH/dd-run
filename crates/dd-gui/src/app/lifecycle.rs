@@ -26,6 +26,12 @@ impl PaletteApp {
             // Toggle）后再次唤起，必须回到首屏而非停留在设置页（真机反馈）。
             self.stack.go_home();
             self.stack.root_mut().list.reset();
+            // 复位后选中已归零，恢复滚动跟随：首帧 `scroll_to_me(选中项 0)` 把
+            // 列表滚回顶部。否则 egui ScrollArea 状态按 widget Id 跨隐藏周期
+            // 持久化，上次鼠标滚动/悬停选留下的 `scroll_follow=false` 会让重开
+            // 面板停留在旧滚动位置（真机反馈 2026-10-16）。扩展 `Hide`（保留
+            // 状态，`reset_on_show=false`）不进此分支，滚动保留语义不变。
+            self.scroll_follow = true;
         }
         // 每次唤起都在**光标所在屏居中**（grill 决策 A1；PowerToys Run 行为）。
         // 不能复用 egui `center_on_screen`：它按窗口**当前所在 monitor** 居中，
