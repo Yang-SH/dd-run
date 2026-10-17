@@ -2,6 +2,23 @@
 
 本文件记录 dd-run 的版本变更。
 
+## [Unreleased]
+
+### 便携包产物链接口 + 文档收口门（2026-10-17 收口批）
+
+- **`tools/package.sh`（Windows 分支）现在直接产出便携包** `dist/dd-run-<ver>-portable.zip`：新增**单一来源** `tools/portable_zip.ps1`（`package.sh` 与 `release.yml` 同调），消除此前「本地重打包只出 exe + sidecar、zip 靠 CI 补」的成员集合不一致——本地可交付件与 Release 附件自此同口径。zip 条目名一律正斜杠由脚本内 .NET `ZipArchive` 显式指定，并自带反斜杠条目断言（fail-closed）。
+- **O13 文档一致性 CI 扫描落地**：`tools/docscan.mjs` 在既有「跨文件链接可达 + INDEX 行数登记」两项之外，新增第③项「**文档引用文件存在性**」机检——只看反引号包裹的**仓库根相对路径**（`crates/` `tools/` `docs/` `examples/` `.github/` 前缀 + 已知扩展名），刻意不判简写源码路径与上游/外部引用以保高精度；`ci.yml` Windows job 增 `node tools/docscan.mjs` 收口门（与项目「文档回写六处」第⑥步同源）。首跑即实修 4 处归档后未更新的链接标签（详见本段「文档状态校正」与 O13 落地记录）。
+
+### 面板滚动与在途重绘修复（2026-10-16 真机反馈两项）
+
+- **回车启动应用后面板滞留才关闭**：egui 按需重绘，invoke 结果经 channel 返回不触发重绘，`Dismiss` 裁决滞留到下一次外部事件。修复 = 在途期间以 30ms 间隔 `request_repaint_after`（与列表 Loading 的 33ms 轮询同范式），结果消费后自动停止。
+- **滚动后重开面板不回顶**：egui `ScrollArea` 状态按 widget Id 跨隐藏周期持久化，鼠标滚动留下的 `scroll_follow=false` 使重开停在旧位置。修复 = `show()` 复位分支补 `scroll_follow = true`（扩展 `Hide` 保留状态、`reset_on_show=false` 语义不变）。
+- **嵌套页（文件搜索）改查询后停在旧滚动位置**：新增 `PageState.scroll_to_top_pending` / `scroll_to_top` 两态——查询变化丢弃旧回顶请求，非加载态结果落地转一次性回顶，失败/空结果取消；回顶期间抑制选中项 `scroll_to_me` 跟随避免打架，绘制后 `take` 消费（仅一次）。
+
+### 文档状态校正（2026-10-17）
+
+- `implementation.md`「产物与分发」与「§5 版本与发版」由 v0.2.0 校正为 **v0.2.1**（含三平台产物口径）；`INDEX.md` §5「macOS / Linux 实际构建与验收」由「仅设计层，无产物」更正为「已发布 `linux-x86_64` / `macos-aarch64` tar.gz，真机验收腿进行中」。
+
 ## [0.2.1] - 2026-10-11
 
 ### 发布摘要（自 0.2.0 起的变更）
@@ -770,7 +787,7 @@
 
 ### 文档（文档 ↔ 代码差异清单修复：71 条差异经三路复核验真后逐条落实，2026-09-13）
 
-- **核对与修复记录**：新增 [`docs/doc-code-diff-2026-09-13.md`](./docs/archive/doc-code-diff-2026-09-13.md)（v1.1，已登记 INDEX.md）——P/M/E/I/D/R/S 七系列 71 条差异，三路独立复核验真（修正清单自身 9 处）后按「文档对齐代码」落实约 84 处修复。规范类文档未实现契约**保留条文**、加「⚠️ 实现现状」注记；含 3 处纯注释代码修正（search.rs 超时注释、builtin.rs / aggregator.rs 陈旧注册注释），无行为变更。
+- **核对与修复记录**：新增 [`docs/archive/doc-code-diff-2026-09-13.md`](./docs/archive/doc-code-diff-2026-09-13.md)（v1.1，已登记 INDEX.md）——P/M/E/I/D/R/S 七系列 71 条差异，三路独立复核验真（修正清单自身 9 处）后按「文档对齐代码」落实约 84 处修复。规范类文档未实现契约**保留条文**、加「⚠️ 实现现状」注记；含 3 处纯注释代码修正（search.rs 超时注释、builtin.rs / aggregator.rs 陈旧注册注释），无行为变更。
 - **要点**：`search.md` 移除与 A-33 红线冲突的「无需 es.exe」承诺（高严重度 S-01）；`protocol.md` §9.2 `-32002` 归因更正（兜底在各扩展 handler，Python 示例确实回该码）；`extensions.md` Python 示例补 `stdin.reconfigure(utf-8)`（中文 query 乱码隐患）；README 双语 M7–M9 关账同步；release.yml 「内嵌」表述改「in-process」。
 - **遗留待人工确认**：超限消息「回 `-32600` + 关连接」是否补实现（P-01）、方法名常量层（P-18）等，见 INDEX.md §5。
 

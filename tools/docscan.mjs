@@ -55,13 +55,50 @@ for (const line of idxLines) {
   if (String(real) !== cm[1]) drifts.push(`${full}  INDEX=${cm[1]}  real=${real}`);
 }
 
+// ── ③ 文档引用文件存在性（O13 粗一致性机检，2026-10-17） ──
+// 定位：只做「符号存在性」最粗一层，高精度优先——宁可漏检也不误报卡 CI。
+// 规则：只看**反引号包裹**的**仓库根相对路径**——即以 `crates/` `tools/` `docs/`
+// `examples/` `.github/` 开头、带已知文件扩展名、不含通配符/变量/空格的 token。
+// 刻意不判「简写源码路径」（如 `ui/panel.rs`、`builtins/shell.rs`）与上游/外部
+// 引用（`src/modules/cmdpal/…`、`file://…`、`~/.config/…`）——这些在文档里是
+// 惯用简写或外部锚点，判存在性必然误报。构建产物前缀（`dist/` `target/`，
+// gitignored）本就不在上列前缀内，CI 上必不存在故天然排除。
+const REF_ROOT_PREFIX_RE = /^(crates|tools|docs|examples|\.github)\//;
+const REF_EXT_RE = /\.(rs|md|json|ya?ml|toml|sh|ps1|mjs|py|txt|html|svg|ico|hex)$/i;
+const refBases = [ROOT];
+const refBad = [];
+const refSeen = new Set();
+let refChecked = 0;
+for (const p of files) {
+  const rel = relative(ROOT, p).replaceAll("\\", "/");
+  const txt = readFileSync(p, "utf-8");
+  for (const m of txt.matchAll(/`([^`\n]+)`/g)) {
+    const tok = m[1].trim();
+    if (!REF_ROOT_PREFIX_RE.test(tok)) continue;
+    if (/[*{}$\s]/.test(tok)) continue;
+    if (!REF_EXT_RE.test(tok)) continue;
+    if (refSeen.has(tok)) continue;
+    refSeen.add(tok);
+    refChecked++;
+    const hit = refBases.some((b) => existsSync(join(b, tok)));
+    if (!hit) refBad.push(`${rel}  ->  \`${tok}\``);
+  }
+}
+
 let report = "== broken links ==\n" + (broken.length ? broken.join("\n") + "\n" : "(none)\n\n");
 report += "== INDEX line counts ==\n";
 report += drifts.length ? drifts.join("\n") + "\n" : `(${checked} rows checked, 0 drift)\n\n`;
+report += "== referenced file paths (O13) ==\n";
+report += refBad.length ? refBad.join("\n") + "\n" : `(${refChecked} unique paths checked, 0 missing)\n\n`;
 report += "== outbound link counts ==\n";
 for (const [k, v] of Object.entries(links).sort()) report += `${k.padEnd(44)} -> ${v} unique\n`;
 writeFileSync(join(ROOT, ".doclinks.txt"), report);
 
-const fail = broken.length + drifts.length;
-console.log(`links: ${broken.length ? `BROKEN ${broken.length}` : "OK (0 broken)"}  |  index counts: ${drifts.length ? `DRIFT ${drifts.length}` : `OK (${checked} rows)`}`);
+const fail = broken.length + drifts.length + refBad.length;
+console.log(
+  `links: ${broken.length ? `BROKEN ${broken.length}` : "OK (0 broken)"}  |  ` +
+    `index counts: ${drifts.length ? `DRIFT ${drifts.length}` : `OK (${checked} rows)`}  |  ` +
+    `referenced paths: ${refBad.length ? `MISSING ${refBad.length}` : `OK (${refChecked} unique)`}`,
+);
+if (refBad.length) console.log(refBad.join("\n"));
 process.exitCode = fail ? 1 : 0;

@@ -42,6 +42,12 @@ jobs:
       - name: Format check
         run: cargo fmt --all --check
 
+      # O13（2026-10-17）：文档一致性收口门——跨文件链接可达 + INDEX 行数登记 +
+      # 文档引用文件存在性（仓库根相对路径，高精度低噪音）。与项目「文档回写
+      # 六处」第⑥步同源，任一漂移 exit 1。
+      - name: Docs consistency (docscan)
+        run: node tools/docscan.mjs
+
   # O3 依赖治理（docs/optimization-plan.md §2.5）：与平台无关，放 linux runner 最快。
   # - cargo-audit：RustSec 漏洞扫描，发现 vulnerability 即失败（默认门槛；unmaintained/
   #   informational 只警告不阻塞，避免第三方仓库的软性告警卡死 CI）。

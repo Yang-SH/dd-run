@@ -74,7 +74,7 @@ CmdPal 采用 **宿主（Host）+ 多扩展进程（Extension）** 的隔离架�
 - 宿主通过 **包目录（AppExtensionCatalog）** 或（未打包时）**注册表**发现扩展，见 §6.1。
 - 扩展契约是**语言无关接口**（指 CmdPal 原生契约的事实属性，见 §1 ✅ 引文）：只要某语言能实现该接口并通过 IPC 编组，就能写扩展。本文实现目标为 Rust，故改用"子进程 + JSON-RPC"（第三方/sidecar 扩展的 MVP 默认，见 §6.2）或"宿主进程内 in-process"（内置扩展，见 §6.2）表达同一意图（§8），因为这是非 Windows / 非 COM 环境下更自然的等价物。
 
-> **dd-run 进程模型（已落地，与上游不同）**：上游每个扩展独立进程；dd-run 的 **第三方 / sidecar 扩展**沿用子进程 + JSON-RPC（ADR-1 对其仍生效），而 **5 个内置扩展（apps/calc/system/websearch/shell）M9 起改为宿主进程内 in-process**（不再各自 spawn 子进程），协议逻辑零重写。详见 §6.2 与 [`docs/m9-inprocess-builtins.md`](./docs/archive/m9-inprocess-builtins.md)。
+> **dd-run 进程模型（已落地，与上游不同）**：上游每个扩展独立进程；dd-run 的 **第三方 / sidecar 扩展**沿用子进程 + JSON-RPC（ADR-1 对其仍生效），而 **5 个内置扩展（apps/calc/system/websearch/shell）M9 起改为宿主进程内 in-process**（不再各自 spawn 子进程），协议逻辑零重写。详见 §6.2 与 [`docs/archive/m9-inprocess-builtins.md`](./docs/archive/m9-inprocess-builtins.md)。
 
 ---
 
@@ -260,7 +260,7 @@ IListItem（列表项）
 
 dd-run 参照实现（**与上游不同，已落地**）：
 - **第三方 / sidecar 扩展**（含文件搜索 `dd-ext-search`）：独立子进程 + stdin/stdout JSON-RPC（MVP 默认，ADR-1 对其仍生效）；零沙箱运行时、跨平台直出、调试简单。
-- **5 个内置扩展（apps/calc/system/websearch/shell）**：**M9 起改为宿主进程内 in-process**——宿主直接调 `dd_ext::serve_line`，不再各自 spawn 子进程；崩溃以 `std::panic::catch_unwind` 兜底（单扩展 panic → 该扩展标 Failed、宿主存活）。**协议 v1.0 零改动**（DDD 见 [`docs/m9-inprocess-builtins.md`](./docs/archive/m9-inprocess-builtins.md)）。
+- **5 个内置扩展（apps/calc/system/websearch/shell）**：**M9 起改为宿主进程内 in-process**——宿主直接调 `dd_ext::serve_line`，不再各自 spawn 子进程；崩溃以 `std::panic::catch_unwind` 兜底（单扩展 panic → 该扩展标 Failed、宿主存活）。**协议 v1.0 零改动**（DDD 见 [`docs/archive/m9-inprocess-builtins.md`](./docs/archive/m9-inprocess-builtins.md)）。
 - **WASM 实例** ⚠️ **未实施**：隔离更强、启动更快，但需宿主实现沙箱运行时。
 
 ### 6.3 缓存策略（frozen / fresh / stub）
