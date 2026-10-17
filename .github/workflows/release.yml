@@ -70,34 +70,13 @@ jobs:
 
       # zip 布局（解压即用）：dd-run-<ver>.exe + extensions.d/（清单 ${EXT_DIR}
       # 解析到本目录，自动定位 dd-ext-search.exe）。
-      # 条目名一律正斜杠：Compress-Archive 写反斜杠，被解压工具当成文件名字符
-      # （出现 `extensions.d\com.ddrun.filesearch.json` 这类条目），故改用 .NET
-      # ZipArchive 显式指定（与 T11 批本地便携包同口径，3 成员）。
+      # 2026-10-17 收口批：内联 pwsh 逻辑抽出为**单一来源** tools/portable_zip.ps1
+      # （package.sh Windows 分支亦调用它）——消除「本地只出 exe、zip 靠 CI 补」的
+      # 成员集合漂移。条目名一律正斜杠（脚本内 .NET ZipArchive 显式指定，并自带
+      # 反斜杠条目断言）。CI 保留显式一步，避免依赖 package.sh 内的 pwsh 探测。
       - name: Zip portable bundle
         shell: pwsh
-        run: |
-          $ver = (Select-String -Path crates/dd-gui/Cargo.toml -Pattern '^version = "(.+)"').Matches[0].Groups[1].Value
-          $zip = "dist/dd-run-$ver-portable.zip"
-          if (Test-Path $zip) { Remove-Item $zip -Force }
-          Add-Type -AssemblyName System.IO.Compression
-          Add-Type -AssemblyName System.IO.Compression.FileSystem
-          $archive = [System.IO.Compression.ZipFile]::Open($zip, [System.IO.Compression.ZipArchiveMode]::Create)
-          try {
-            [System.IO.Compression.ZipFileExtensions]::CreateEntryFromFile(
-              $archive, "dist/dd-run-$ver.exe", "dd-run-$ver.exe",
-              [System.IO.Compression.CompressionLevel]::Optimal) | Out-Null
-            Get-ChildItem "dist/extensions.d" -File | ForEach-Object {
-              [System.IO.Compression.ZipFileExtensions]::CreateEntryFromFile(
-                $archive, $_.FullName, "extensions.d/$($_.Name)",
-                [System.IO.Compression.CompressionLevel]::Optimal) | Out-Null
-            }
-          } finally {
-            $archive.Dispose()
-          }
-          Get-ChildItem dist -Filter *.zip | Select-Object Name, Length
-          $z = [System.IO.Compression.ZipFile]::OpenRead((Resolve-Path $zip).Path)
-          $z.Entries | ForEach-Object { "  {0}  {1} B" -f $_.FullName, $_.Length }
-          $z.Dispose()
+        run: pwsh -NoProfile -File tools/portable_zip.ps1
 
       - name: Attach to GitHub Release
         if: github.event_name == 'push'

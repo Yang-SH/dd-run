@@ -180,3 +180,20 @@ cargo ${TOOLCHAIN} build --release -p dd-run-cli -p dd-ext-sample
 cp "${REL}/dd-run-cli.exe"   "$DEV/" 2>/dev/null || true
 cp "${REL}/dd-ext-sample.exe" "$DEV/" 2>/dev/null || true
 echo "（可选自检工具已放 $DEV/：dd-run-cli.exe、dd-ext-sample.exe）"
+
+# 7) 便携包 zip（2026-10-17 收口批）：**单一来源** tools/portable_zip.ps1——
+#    与 release.yml 同一脚本，消除「本地只出 exe、zip 靠 CI 补」的成员集合
+#    不一致（此前每次本地重打包都要手工补 zip）。放在签名（§6.5）之后，
+#    故随包 .sig 若已生成会一并入包。pwsh/powershell 均不可用时仅告警跳过，
+#    不使整个打包失败（exe + sidecar 仍已就绪）。
+ZIP_PS="tools/portable_zip.ps1"
+PS_BIN=""
+for __b in pwsh powershell; do
+  if command -v "$__b" >/dev/null 2>&1; then PS_BIN="$__b"; break; fi
+done
+if [ -n "$PS_BIN" ]; then
+  echo "==> 生成便携包 dist/dd-run-${VER}-portable.zip（$PS_BIN）"
+  "$PS_BIN" -NoProfile -File "$ZIP_PS"
+else
+  echo "⚠️ 未找到 pwsh/powershell，跳过便携包生成（可手动跑见 tools/portable_zip.ps1 头注）" >&2
+fi
