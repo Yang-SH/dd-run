@@ -1,6 +1,6 @@
 # dd-run 文档索引
 
-> **状态**：生效中 ｜ **版本**：v1.40 ｜ **最后更新**：2026-10-21
+> **状态**：生效中 ｜ **版本**：v1.41 ｜ **最后更新**：2026-10-21
 > **用途**：全部文档的**唯一导航入口**——按模块分组、标注状态与读者，并定义文档格式规约。
 > **关联**：（本文即导航入口——全部文档见 §3 清单并回链本文）
 
@@ -33,7 +33,7 @@ flowchart TD
     MANIFEST --> EXT["extensions.md<br/>扩展开发指南"]
     PROTO --> EXT
 
-    PLAN["专题方案<br/>search-file / refactor / apps / memory / icons / optimization / settings / future-features / stability-usability-security"] --> IMPL
+    PLAN["专题方案<br/>search-file / refactor / structure / apps / memory / icons / optimization / settings / future-features / stability-usability-security"] --> IMPL
     REVIEW["archive/ 时点性核查与评审<br/>doc-audit-0913 / doc-code-diff / plan-review 等"] --> PLAN
     FIX["dd-run-修复实施方案.md<br/>F1–F12 修复判据与验收"] --> PLAN
     REV3["dd-run-代码严审报告.md<br/>第三轮严审（v2 · 已归档）"] --> FIX
@@ -91,6 +91,7 @@ flowchart TD
 | [`extension-signing-plan.md`](./extension-signing-plan.md) | 已落地（批次一 / 三 + 密钥仪式 + CI 自动签发 + v0.2.1 真包验签收口；v1.4） | 141 | **扩展签名立项与选型（O14 / F12 立项载体）**：ed25519 发行方公钥 + 清单旁挂 `.sig`（清单字节与 exe 双 SHA256 锚）+ 三态降级（通过免同意 / 失败 fail-closed / 无签名走同意流）；决策点 D1–D5 与三批次实施 |
 | [`user-session-walkthrough-checklist.md`](./user-session-walkthrough-checklist.md) | 已落地（本机腿 2026-10-07 收口；余 R-21 / V-14 / O5-a 待特定环境） | 75 | **用户会话真机走查清单**：合成输入被本机安全软件过滤、物理键盘为唯一通路，集中承载无法自动化的腿（N1–N5 / T9 / 安全回归 / E2E 采样 / V-14 / O5-a tofu / T11），每腿含步骤、预期与记录位置 |
 | [`stability-usability-security-plan.md`](./stability-usability-security-plan.md) | 已落地（R1–R26 代码与可做真机腿收口；余 V-7 / R-21 / V-14；v1.25） | 481 | **S 审计闭环后新一轮加固（R 系列 26 项）**：稳定 R1–R9 + R25/R26、安全 R10–R14、可用 R15–R24；含量化验收口径 V-1~V-16、零冻结契约改动、四批实施顺序与不做清单 |
+| [`refactor-structure-2026-10-21.md`](./refactor-structure-2026-10-21.md) | 执行中（批次 A 已落地 + 真机冒烟通过；v1.3） | 309 | **代码结构整理方案（仅 dd-gui）**：实测体检（99 文件 / 45,251 非空行，dd-gui 占 58%）→ 问题清单 A 巨型单文件 / B 分层渗漏 / C 命名重叠 / D 别名 hack（lib 内 135 处 `dd_gui::` 自引用）→ 五批次纯搬运清单（`platform` / `aggregator` / `theme` 目录化 + 命名消歧 + 别名清理）与验收判据；§10 记批次 A 实测（627 passed、体积零漂移、行守恒）与自动化真机冒烟（含热键取值 / Job 连带杀进程 / DPI 虚拟化三个方法论坑）；`PaletteApp` 95 字段拆分、`state` 改名、跨 crate 分层搬迁均列不做项 |
 
 > ⚠️ **V 编号空间提示**：`settings-keys-typography-plan.md` 的 V-1~V-7（其真机走查待做）与 `stability-usability-security-plan.md` 的 V-1~V-16（V-6/V-7 已完成或定性收口）是**两套独立编号空间**，同名编号互不指代，交叉阅读时以所属文档为准。
 
