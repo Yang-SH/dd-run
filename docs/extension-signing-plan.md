@@ -1,6 +1,6 @@
 # dd-run 扩展签名立项与选型（O14 / F12）
 
-> **状态**：v1.4｜ **批次一已落地**（`63750f1`）；**批次三（可独立部分）已落地**（manifest-schema §9 + audit S-12 v1.9 + 设置页告警行）；**批次二工具链已就绪**（同日：`dd-run-cli --gen-sign-key/--sign-ext/--verify-ext-sig` + package.sh 签名钩子 + release.yml secret env）；**密钥仪式已完成（2026-10-11）**：真钥离线生成 → 种子入仓库 secret `DDRUN_SIGN_KEY` → `PUBLISHER_PUBLIC_KEY_HEX` 轮换真公钥 → release.yml 补「Materialize signing key」步（secret 内容 → RUNNER_TEMP 临时文件，修 CI 静默跳签缺口）→ **本机端到端预演通过**（真钥签发 `.sig`，双哈希锚校验 ✅ 复核 exit 0；篡改/换钥拒绝腿批量确认）→ **CI 自动签发已实证（2026-10-11 Release dispatch run 38139151768 三作业全绿）**：Materialize 步执行 → 签名钩子 `✅ 已签发：...com.ddrun.filesearch.json.sig`——**仅余正式发版腿**（版本提升 + tag，真包 verify 随发版抽查）｜ **日期**：2026-10-11 ｜ **输入**：《O9–O14 优化方向规划》O14 节 · 修复实施方案 **F12 纲要** · `dd-host/src/trust.rs`（S-05 / R-12 / D2 源码级核对）· security-audit §4.4.2「明确不做①」
+> **状态**：已落地 ｜ **版本**：v1.4 ｜ **三批次与密钥仪式全部收口**——批次一验签分支（`63750f1`）、批次二签发 CLI 与 `package.sh` 钩子、批次三设置页告警 + `manifest-schema` §9 + `audit` S-12；CI 自动签发已实证，**v0.2.1 真实发行包内 `.sig` 经 `--verify-ext-sig` 真公钥校验 exit 0**（逐批过程见 §8）｜ **最后更新**：2026-10-11 ｜ **输入**：《O9–O14 优化方向规划》O14 节 · 修复实施方案 **F12 纲要** · `dd-host/src/trust.rs`（S-05 / R-12 / D2 源码级核对）· security-audit §4.4.2「明确不做①」
 > **定位**：本文是 **F12 的立项载体**（《O9–O14 规划》§7 预留）——只做**动机、边界取证、选型决策表与验收框架**，不含实现；各决策点（D1–D5）给出推荐但不锁死，评审拍板后按 §8 批次实施。
 > **立项判据**（沿用 future-features-plan §1 硬判据）：**可行**（零冻结契约改动 / 有既有代码惯例可复用 / 依赖克制 / 可通过单测与真机走查验收）× **无冲突**（不与协议 v1.0 冻结、README 非目标、在途项、已证伪项冲突）。逐项核查见 §2。
 

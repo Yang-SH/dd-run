@@ -1,6 +1,6 @@
 # dd-run 设置 / 个性化 / 材料样式优化方案（参照 PowerToys CmdPal）
 
-> **状态**：**B1–B4 已落地**（T1–T8 ✅）；**T9 已落地（2026-10-05，见 §5 落地注记）**；**T11 已落地（2026-10-07，搜索 Steam 游戏开关）**；**T9/T11 用户真机走查收口（2026-10-07 批量确认）**；T10 另行立项；K 批（D42）已落地（2026-09-27，见 [settings-keys-typography-plan.md](./settings-keys-typography-plan.md)）｜ **版本**：v1.5 ｜ **最后更新**：2026-10-07
+> **状态**：已落地（B1–B4 / T1–T8 ✅；T9 2026-10-05、T11 2026-10-07 搜索 Steam 游戏开关、K 批 D42 均已落地；T9/T11 真机走查 2026-10-07 批量确认收口；T10 另行立项）｜ **版本**：v1.5 ｜ **最后更新**：2026-10-07
 > **关联**：[settings.rs](../crates/dd-gui/src/settings.rs) · [settings_view.rs](../crates/dd-gui/src/ui/settings_view.rs) · [theme.rs](../crates/dd-gui/src/theme.rs) · [platform.rs](../crates/dd-gui/src/platform.rs) · [cmdpal-window-material-effects.html](./archive/cmdpal-window-material-effects.html) · [cmdpal-ui-mockups.html](./archive/cmdpal-ui-mockups.html) · [INDEX.md](./INDEX.md)
 > **参照来源**：`microsoft/PowerToys` 仓库 `src/modules/cmdpal/`（`SettingsModel.cs` / `BackdropStyles.cs` / `BackdropStyleConfig.cs` / `AppearanceSettingsViewModel.cs` / `AppearancePage.xaml` / `BackdropControllerKind.cs`，main 分支）与 Microsoft Learn「Command Palette settings」文档。
 

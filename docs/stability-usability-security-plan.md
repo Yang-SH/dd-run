@@ -1,6 +1,6 @@
 # dd-run 稳定性 · 可用性 · 安全性加固方案（R 系列）
 
-> **状态**：实施中 ｜ **版本**：v1.25 ｜ **最后更新**：2026-10-07
+> **状态**：已落地（R1–R26 代码与可做真机腿已收口；余 V-7 真实 IME / R-21 他机腿 / V-14 多屏腿待特定硬件）｜ **版本**：v1.25 ｜ **最后更新**：2026-10-07
 > **关联**：[security-audit-2026-09-23.md](./security-audit-2026-09-23.md)（S-01–S-11 已闭环，本文不重复）· [future-features-plan.md](./future-features-plan.md)（N1–N5 功能向，本文不重叠）· [optimization-plan.md](./optimization-plan.md) · [search-file.md](./search-file.md) · [search.md](./search.md) · [implementation.md](./implementation.md) · [protocol.md](./protocol.md) · [manifest-schema.md](./manifest-schema.md) · [INDEX.md](./INDEX.md)
 
 ---
