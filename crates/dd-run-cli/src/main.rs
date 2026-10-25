@@ -35,6 +35,8 @@ use dd_protocol::methods::{
 };
 use serde_json::Value;
 
+mod scaffold;
+
 /// 协议版本（§5.1：宿主发送它支持的**最高**版本）。
 const PROTOCOL_VERSION: &str = "1.0";
 /// 宿主版本，用于清单校验规则 6 与 `initialize` 的 `host.version`。
@@ -64,6 +66,9 @@ enum Command {
     SignExt,
     /// O14/F12 批次二：离线校验 `.sig`（指定公钥 hex，内置钥轮换前可预演）。
     VerifyExtSig,
+    /// §5.4（dd-run-改进分析.md）：扩展开发脚手架——生成清单 + 最小实现 +
+    /// 双平台启动器 + conformance CI 模板（flag 式子命令，与既有解析风格一致）。
+    ExtNew,
 }
 
 /// O14/F12 批次二签名子命令的共享参数（清单 / exe / 密钥或公钥）。
@@ -86,6 +91,7 @@ fn main() -> ExitCode {
     let mut ext_id: Option<String> = None;
     let mut do_invoke = false;
     let mut sig_args = SigArgs::default();
+    let mut ext_new_id: Option<String> = None;
     let mut iter = args.iter();
 
     while let Some(arg) = iter.next() {
@@ -100,6 +106,18 @@ fn main() -> ExitCode {
             "--gen-sign-key" => command = Some(Command::GenSignKey),
             "--sign-ext" => command = Some(Command::SignExt),
             "--verify-ext-sig" => command = Some(Command::VerifyExtSig),
+            // §5.4：`--ext-new <ID>` 生成扩展脚手架（目标目录 = `--extensions-dir`
+            // 或当前目录；布局与宿主扫描同构——清单平铺在目录根部）。
+            "--ext-new" => match iter.next() {
+                Some(value) => {
+                    command = Some(Command::ExtNew);
+                    ext_new_id = Some(value.clone());
+                }
+                None => {
+                    log::warn!("错误：`--ext-new` 缺少扩展 id");
+                    return ExitCode::FAILURE;
+                }
+            },
             // §6.5 `invoke` 有真实副作用（改剪贴板 / 开浏览器 / 关机…）
             // → `--conformance` 默认**不**调用它，必须显式打开。
             "--invoke" => do_invoke = true,
@@ -175,6 +193,15 @@ fn main() -> ExitCode {
         Command::GenSignKey => gen_sign_key(sig_args.key_file.as_deref()),
         Command::SignExt => sign_ext_cmd(&sig_args),
         Command::VerifyExtSig => verify_ext_sig_cmd(&sig_args),
+        // §5.4：脚手架目标目录 = 显式 `--extensions-dir`（此时不作扫描目录语义，
+        // 仅作落点）或当前工作目录——**不**用默认示例目录（那是自检扫描语境）。
+        Command::ExtNew => {
+            let Some(id) = ext_new_id.as_deref() else {
+                log::warn!("错误：`--ext-new` 缺少扩展 id");
+                return ExitCode::FAILURE;
+            };
+            ext_new_cmd(id, explicit_dir.then_some(dir.as_path()))
+        }
     }
 }
 
@@ -291,6 +318,36 @@ fn verify_ext_sig_cmd(args: &SigArgs) -> ExitCode {
     }
 }
 
+/// §5.4：`--ext-new <ID>` —— 生成扩展脚手架并打印三步上手指引。
+/// 落点 = 显式 `--extensions-dir <DIR>` 或当前工作目录（**不**用默认示例目录
+/// ——那是自检扫描语境，与"生成到哪"是两回事）。
+fn ext_new_cmd(id: &str, out_dir: Option<&Path>) -> ExitCode {
+    let target = out_dir
+        .map(|p| p.to_path_buf())
+        .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
+    match scaffold::ext_new(id, &target) {
+        Ok(dir) => {
+            println!("✅ 脚手架已生成：{}", dir.display());
+            println!("\n自检（三步）：");
+            println!(
+                "  1) Linux/macOS：dd-run-cli --conformance --extensions-dir {} --ext-id {id}",
+                dir.display()
+            );
+            println!(
+                "     Windows    ：python install.py ./installed && dd-run-cli --conformance --extensions-dir ./installed --ext-id {id}"
+            );
+            println!("  2) 本机试用：python install.py（装到用户数据 extensions.d，重启 dd-run）");
+            println!("  3) CI：把 conformance.yml 拷到仓库 .github/workflows/");
+            println!("\n文件说明、扩展面与已知坑见生成的 README.md；实现从 main.py 开始。");
+            ExitCode::SUCCESS
+        }
+        Err(e) => {
+            log::warn!("错误：{e}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
 fn print_usage() {
     println!(
         "dd-run {HOST_VERSION}（扩展自检 CLI）\n\
@@ -299,11 +356,14 @@ fn print_usage() {
          \x20 dd-run --list-extensions    [--extensions-dir <DIR>]\n\
          \x20 dd-run --roundtrip          [--extensions-dir <DIR>]\n\
          \x20 dd-run --conformance        [--extensions-dir <DIR>] [--ext-id <ID>] [--invoke]\n\
+         \x20 dd-run --ext-new <ID>        [--extensions-dir <DIR>]\n\
          \x20 dd-run --help\n\
          \n\
          \x20 --list-extensions   扫描扩展目录，打印可用扩展与校验错误\n\
          \x20 --roundtrip         spawn 首个可用扩展，走 initialize → top_level_commands → close\n\
          \x20 --conformance       全表面一致性自检（补 fallback / get_command / get_items / invoke / host/*）\n\
+         \x20 --ext-new <ID>      扩展脚手架（§5.4）：清单 + 最小实现（Python）+ 启动器/安装器\n\
+         \x20                     + conformance CI 模板；落点 = --extensions-dir 或当前目录\n\
          \x20 --invoke            --conformance 时也执行一次 invoke（**有真实副作用**，默认跳过）\n\
          \x20 --ext-id <ID>       指定要自检的扩展 id（目录内有多个时用；内置 id 如\n\
          \x20                     com.ddrun.calc → --conformance 走 in-process，不 spawn 子进程）\n\
