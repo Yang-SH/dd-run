@@ -34,6 +34,11 @@
 
 ## 1. 10 分钟上手
 
+> **脚手架捷径（§5.4）**：不想从零手写？`dd-run-cli --ext-new com.example.hello`
+> 一键生成「清单 + Python 最小实现 + 双平台启动器 + `install.py` 绝对路径
+> 安装器 + conformance CI 模板」，Windows 上 `python install.py` 后即可通过
+> `--conformance`（POSIX 仓库清单直接绿）。下面从零讲解每件生成物对应什么。
+
 ### 第 1 步：选一个目录
 
 宿主扫描两处（[`manifest-schema.md`](./manifest-schema.md) §2），同名 id 时**用户目录覆盖 sidecar**：
@@ -137,7 +142,7 @@ manifest["entry"] = {
 > Windows 上这远非默认（Store 版 / 未勾选 Add-to-PATH / IDE 自带解释器都不在 PATH），
 > 而且 dd-run 从**资源管理器启动时继承的是系统 PATH**（与你敲命令行的环境不同）。
 > 典型症状：**终端里自检全绿，双击 dd-run 却显示扩展"暂时不可用"** —— 实测踩过：
-> `.cmd` 里的 `python` 在 GUI 环境下找不到，扩展显示"暂时不可用"。⚠️ **实现现状（核对至 2026-09-13）**：spawn 失败只置 `SourceStatus::Failed`、**不进崩溃计数**（`aggregator.rs:359-360`）；「连续 3 次 spawn 失败熔断」当前未实现——`crash_guards` 仅在运行期进程退出时计数。
+> `.cmd` 里的 `python` 在 GUI 环境下找不到，扩展显示"暂时不可用"。⚠️ **实现现状（核对至 2026-09-13）**：spawn 失败只置 `SourceStatus::Failed`、**不进崩溃计数**（`aggregator.rs`：`load_one` 产出 `ExtOutcome::Failed` → `collect_top_level` 收集 → `flatten` 落 `SourceStatus::Failed`，全程不触崩溃计数）；「连续 3 次 spawn 失败熔断」当前未实现——`crash_guards` 仅在运行期进程退出时计数。
 >
 > 若已确认 `where python` 有输出，`.cmd` 桥接也可用：清单写
 > `{"command": "${EXT_DIR}/hello"}`，宿主会依次补 `.exe` / `.cmd` / `.bat` 解析到 `hello.cmd`。
@@ -432,7 +437,7 @@ dd-run-cli --conformance      --extensions-dir <DIR> --ext-id <ID>  # 目录内�
 | `8) host/*` | §7 | 实际用到的能力是否都已声明 |
 | `9) close` | §6.6 | 优雅退出 |
 
-> ⚠️ **in-process 扩展（内置）**在自检中第 1 项标签为 `1) open`（进程内直调、无 spawn 步骤，`main.rs:646`）；子进程扩展为 `1) spawn`。其余 12 项标签两侧一致。
+> ⚠️ **in-process 扩展（内置）**在自检中第 1 项标签为 `1) open`（进程内直调、无 spawn 步骤，`dd-run-cli` `main.rs` 的 in-process 自检标签 `"1) open"`）；子进程扩展为 `1) spawn`。其余 12 项标签两侧一致。
 
 > **为什么 `invoke` 默认跳过**：它会**真的产生副作用**——写剪贴板、开浏览器、
 > 甚至关机。要跑就显式加 `--invoke`。

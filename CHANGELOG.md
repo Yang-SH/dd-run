@@ -4,6 +4,118 @@
 
 ## [Unreleased]
 
+### 改进分析批次 P2-5.2（检查更新）（2026-10-25）
+
+- **`update_check.rs` 新模块**：读 GitHub Releases `latest`（`tag_name`）与当前产品版本比较——纯逻辑（`parse_tag_name` / `normalize_tag` / `classify` 三段数值比较）+ 系统 `curl` 拉取（`-fsSL --max-time 3` + User-Agent `dd-run/<ver>`）。**HTTP 方案决策记档：不引 HTTP crate**（运行时面 lock 新增 + 二进制体积税；ureq/WinHTTP 弃选）——curl 在 Windows 10 1803+ 为系统组件、POSIX 普遍可用，**lock 零新增**。版本比较**近似记档**：预发布后缀（`-beta`）比较时忽略、展示保留完整 tag；解析失败 → `Failed` 给可读原因不静默。
+- **应用装配**：后台线程 + mpsc 回传（与 invoke 轮询同范式，`UiViewState.update_rx`）；`logic()` 轮询转 toast（最新 / 有 v{version} / 失败原因）；**不做自动安装**（原案口径：便携版静默替换 exe 风险大于收益）。
+- **设置页「关于」卡**（常规栏，使用数据卡之后）：当前版本 + 「检查更新」按钮 + 「启动时检查更新」开关。**"可关"落实为启动检查开关且默认关**（便携工具隐私优先，记档偏差）——手动按钮常驻不受开关影响。
+- **验收**：单测 +4（tag 解析三分支 / 版本比较含预发布与解析失败 / `v` 剥离 / poll 状态机——空轮询保持、断开清位；真实 curl 不进测试）→ **679 passed / 0 failed / 7 ignored**；**真机腿达成**：本机 `curl` 实测 GitHub API **1.05 s 返回 `v0.2.1`** → 分类 UpToDate——「点击后 3 s 内显示」由 `--max-time 3` 硬约束 + 实测背书。匿名限额 60 次/时/IP（手动频度远低）记档。
+- 门禁：clippy 三目标零告警、fmt 零差异、金图 6/6（关于卡在 General 分类，Appearance 金图无影响）、docscan 全绿。
+
+### 改进分析批次 P2-5.4（扩展开发脚手架 --ext-new）（2026-10-25）
+
+- **`dd-run-cli --ext-new <ID> [--extensions-dir <DIR>]`**（新模块 `scaffold.rs`）：一键生成「清单 + 最小实现 + 启动器/安装器 + conformance CI 模板」，落点 = 显式 `--extensions-dir` 或当前目录（**不**用默认示例目录——那是自检扫描语境）；已存在同名文件拒绝覆盖（fail-closed）。**偏差记档**：flag 式而非原案的子命令 `ext new`——CLI 是全 flag 手写解析器（文档明言不引 clap），子命令语法不适配既有风格。
+- **生成物 7 件**：`<ID>.json`（entry = `${EXT_DIR}/start`，POSIX/CI 直接可用）/ `main.py`（最小实现，**只覆盖必选表面** initialize/top_level_commands/get_command/invoke/close——has_fallback=false、无 page、capabilities=[]，面越窄绿灯语义越干净）/ `start` + `start.cmd`（双平台启动器）/ `install.py`（pymin 同款绝对路径安装器）/ `conformance.yml`（ubuntu CI 模板，CLI 经 `cargo install --git` 获取）/ `README.md`。
+- **关键发现记档（实跑暴露）**：首版设计「宿主把 `start` 补全为 `start.cmd`」在 Windows 上**必挂**（`os error 193`）——F4 口径（BatBadBut 纵深防御）可执行补全为「原样优先 → 仅 `.exe`」，**不补 `.cmd`**；且 `entry.args` 不支持 `${EXT_DIR}` 展开。故 Windows 宿主启动一律走 `install.py` 写**绝对路径**清单（pymin 既有模式，零 PATH 依赖）；`start.cmd` 降级为手工调试用。
+- **验收**：单测 +3（id 反向域名校验 / **生成物经 dd_host 真实扫描器加载**（清单合法性由权威校验器判定，不靠脚手架自证）/ 覆盖保护）→ **675 passed / 0 failed / 7 ignored**；本机实跑 = 生成 OK + 扫描加载 + 生成物渲染逐文件检视（f-string/`${EXT_DIR}` 转义正确）。**待真机腿**：conformance 端到端实跑需真 Python——本机仅 WindowsApps Store 占位 stub（`python`/`python3` 均非解释器，exit 49）；CI 模板用 ubuntu（自带 Python），首用即验。
+- 门禁：clippy 三目标 `-D warnings` 零告警、fmt 零差异、docscan 全绿。
+- **核对轮记档（同日）**：① **CI 模板缺 Rust 安装步骤**——GitHub 托管 runner 不预装 Rust，`cargo install --git` 必挂；conformance.yml 补 `actions-rust-lang/setup-rust-toolchain@v1`（版本 tag 而非 SHA 钉扎：模板进的是用户仓库，随上游更新即可），生成物经 js-yaml 校验合法；② `docs/extensions.md` §1 补脚手架捷径指引（可发现性）；③ 声明逐项实证：`entry.args` 不展开 `${EXT_DIR}`（`expand_path` 仅用于 command/cwd，manifest.rs:418/424）、Store stub exit 49 复现、扫描平铺（scan_dir 读目录下 `*.json` 不递归）、conformance 三分支条件（has_fallback=false 跳过调用 / 无 page = warn 非 fail / capabilities=[] 无反向请求属正常）。修正后全量门禁复绿（675 / 0 / 7）。
+
+### 改进分析批次 P2-5.7（config.toml 去 pin build.target）（2026-10-25）
+
+- **`[build] target` 钉扎移除**（`.cargo/config.toml` 重写）：此前硬编码 `x86_64-pc-windows-gnu` 迫使 CI 三处（linux/macos/bench 的 `CARGO_BUILD_TARGET`）与 package.sh 显式覆盖、非 Windows 贡献者 `cargo test` 开箱即坏（O6 首批 E0463 的根因）。去 pin 后 Linux/macOS 贡献者零配置（`rust-toolchain.toml` channel 1.95.0 按平台解析宿主三元组），CI 的 env 覆盖**保留为显式声明**（语义不变，注释更新）。
+- **Windows 本机口径不变**：channel 1.95.0 在 Windows 解析为 msvc 宿主（无链接器，2026-09-01 环境事实），日常构建仍用 `RUSTUP_TOOLCHAIN=stable-x86_64-pc-windows-gnu`（与 CI Windows job 同款）或 `cargo +stable-gnu`——与去 pin 前的可用路径逐字相同。CONTRIBUTING 环境搭建节改写（Linux/macOS 提前为第 2 条开箱项，Windows 覆盖机制为第 3 条）。
+- **偏差记档**：分析文档建议的 `[alias] build-win` **未加**——从 1.95.0-msvc 工具链交叉 windows-gnu 缺 dlltool（B2 记档实测），alias 必挂；机制上等价且已验证的是工具链覆盖。
+- **本机实证**：① bare 解析 = `1.95.0-x86_64-pc-windows-msvc`（rustup show，Windows 需覆盖的事实不变）；② 文档化流程 `RUSTUP_TOOLCHAIN=stable-gnu cargo build` 通过（warm）；③ package.sh Windows 分支 `cargo +stable-gnu build --release` 产物路径 `target/x86_64-pc-windows-gnu/release` **不变**（TOOLCHAIN 为 gnu 宿主 ⇒ 宿主三元组 = 原 pin 值）；④ 三个 workflow/package.sh 语法校验过。
+- 门禁：`cargo test --workspace --no-fail-fast` **672 passed / 0 failed / 7 ignored**、clippy 三目标零告警、fmt 零差异。**待验**：CI 真实行为（env 均保留，理论零变化，下次 push 实证）。
+- **核对轮记档（同日）**：残留陈旧表述两处清零——① `rust-toolchain.toml` 注释仍写「.cargo/config.toml 的 windows-gnu 目标」（已改写为去 pin 后口径）；② README 中英「一键出包」行仍写「覆盖仓库默认 windows-gnu / overriding the repo's windows-gnu default」（已改写）。全仓终扫（README*/CONTRIBUTING/.github/tools）无其他残留；`portable_zip.ps1` 无硬编码 target 路径（从 dist/ 取件，不受影响）。修正后全量测试与 docscan 复绿。
+
+### 改进分析批次 P2-5.1（使用频次 frecency 排序）（2026-10-25）
+
+- **`usage.json` 使用频次表**（新模块 `dd-gui/src/usage.rs`）：数据形态 = `{id: {count, last_ts}}`（分析文档 §5.1 口径），键 = `扩展 id \u{1f} 命令 id`（与 `select_by_identity` 的 `(ext_id, id)` 身份对齐）；文件 = 数据目录 `config.json` 同目录 `usage.json`，缺失/损坏/更高版本 → 空表 + warn（R-05 同口径，本地统计缺失不阻塞面板）。写入复用 settings 的 `atomic_write`（提为 `pub(crate)`，R-02 同一原子写语义）。
+- **排序接线**：`PanelState` 新增 `set_usage(Option<UsageScores>)` 快照注入——**空查询**按 count 降序稳定排序（未使用项保持聚合原序，常用项上浮首屏）；**有查询**得分恒优先、同分以 count 降序 tiebreak；**嵌套页 passthrough 不受影响**（扩展返回序即权威序）。快照 `None`（未启用/重置后）时排序行为与本功能引入前逐字节一致——**金图 6/6 逐字节不变**的根据。
+- **记录点 = `confirm_selected`**（Root/嵌套页、键盘/鼠标共用的激活中枢；记录在分派之前——invoke 失败不影响计数）；记录即原子落盘（激活为低频人工动作）。自定义直达命令与嵌套页条目同样计数。
+- **装配**：`PaletteApp::new` 保持 8 参数纯注入（B1 实证口径不变），使用数据在 bin 入口 `load_usage()` 装载（usage.json → `pool.usage` 权威副本 → `view.usage_scores` 快照 → Root 列表）；聚合整包替换 Root 列表的两处重建点之后重新同步快照。
+- **设置页「使用数据」卡**（常规栏，导入/导出卡之后、键位行为卡之前）：说明（数据仅存本机）+「重置使用数据」按钮——清表 + 落盘 + 快照回退 + 确认 toast；i18n +4 键。
+- **依赖记档**：dd-gui 新增 `serde`（derive）直接依赖——`serde`/`serde_derive` 已在树（dd-protocol 传递），**lock 零新增**（核对轮实证：serde/serde_core/serde_derive 均在 HEAD lock）。
+- **核对轮记档（同日）**：① **测试污染缺陷即修**——`record_usage`/`reset_usage_data` 的 `save()` 原先无条件执行，`make_app` 夹具下会把开发者**真实** `usage.json` 清空（reset 测试写空表；本机因功能刚落地无实际损失，md5 前后比对已实证修复）；修复 = 落盘调用 `#[cfg(not(test))]` 门控，生产语义不变。② 激活后 Root 列表**立即重排**（`set_usage` → 重算 + 选中夹紧）——非 Dismiss 结果面板未隐藏时可见"常用项即时上浮"，属预期行为记档。③ 其余声明逐项复核成立：记录点唯一（`confirm_selected`，鼠标/键盘、Root/嵌套共用）、聚合两处 Root 重建点（aggregate.rs:290/356）均同步快照、`keys.rs` 的 root 重建为测试夹具、测试 +9 构成（usage 3 + state 4 + app 2）。
+- 测试 +9（usage 3 + state 4 + app 2）→ **672 passed / 0 failed / 7 ignored**；金图 6/6；clippy `--all-targets -D warnings` 三目标零告警；fmt 零差异。**验收口径记档**：「连续使用一周 Top5 命中率 ≥ 80%」无法短期实测——由排序结构测试承接（空查询 count 降序 / 同分 tiebreak / None 回退 / passthrough 不变四条），真机腿留给用户日常使用验证。
+
+### 改进分析批次 P2-4.5（性能门槛 bench + CI 趋势回归）（2026-10-25）
+
+- **criterion 三组 bench 落地**（分析文档 §4.5 验收「3 个 bench 有基线数据」）：`dd-gui/benches/hot_paths.rs`（`fuzzy_score_2000`：`FuzzyMatcher::score` 2000 项 × 8 字符查询；`set_query_2000`：`PanelState::set_query` 完整击键路径——`recompute_visible` 为私有方法，`set_query` 是其唯一公共入口，含 matcher 构建 + 打分 + 稳定排序；`flatten_5ext`：5 扩展 × 100 命令合并）+ `dd-protocol/benches/decoder.rs`（`decoder_push_64x1kib`：64 行 × 1 KiB NDJSON 单次 push 切帧，覆盖增量缓冲 / P3 单遍扫描 / UTF-8 校验）。本机基线（release，默认参数）：decoder ≈ 40.4 µs / fuzzy ≈ 294 µs / set_query ≈ 184 µs / flatten ≈ 218 µs。
+- **`FuzzyMatcher` 可见性放宽 `pub(crate)` → `pub`**（连带偏差记档，分析文档原案未提）：bench target 是独立 crate，无法触及 `pub(crate)` 项——纯逻辑零副作用封装与 `aggregator::flatten` 同理对外开放，模块文档注明 bench/测试消费口径。
+- **口径修正（核对轮）**：`recompute_visible` 为私有，但其**公共入口有多个**（`set_query` / `set_empty_view` / `set_apps_hidden` / `set_steam_hidden` / `reset`）；bench 取用户击键驱动的 `set_query`（含 matcher 构建 + 打分 + 稳定排序的完整路径），非"唯一公共入口"。
+- **CI `bench` job（PR-only，观察模式）**：PR base 与 head 各跑一遍 bench（fast 参数压时长：warm-up 1 s / measure 2 s / 20 样本），共享 `CARGO_TARGET_DIR` 后由新工具 `tools/bench_compare.mjs` 比中位数——**退化 > 20% 才红**（runner 裸机噪音大，高阈值防误报，§4.5 口径）；单侧缺失的 bench（新增/删除）只提示不判红。`continue-on-error: true` 与 B1 snapshot 同节奏，首绿观察后转阻塞；push 事件不跑（main 上的回归由 PR 阶段拦下，不双份烧时间）。
+- **lock 偏差记档**：`criterion 0.5.1` 及传递依赖进 lock——**仅 dev 面**（与 B1 egui_kittest 同口径，不进产物）；精确计数 = criterion 本体 + 18 个新包名（anes/anstyle/cast/ciborium 三件/clap 三件/is-terminal/oorandom/plotters 三件/regex 三件/tinytemplate）。
+- **本机环境记档（核对轮修正归因）**：criterion dev 链（`is-terminal`/`winapi-util` → windows-sys **0.61.2**）要求该包以**新 feature 组合**全新编译，触发 rustc 对 windows-gnu 的 raw-dylib 导入库生成 → 需 `dlltool.exe`；本机 gnu 工具链的 dlltool 位于 `lib/rustlib/<target>/bin/self-contained/` 而 rustc（1.98.0）查找失败（2026-09-03 手工补的工具随工具链升级丢失，既往缓存掩盖）→ 本地构建/测试需把该目录加入 `PATH`（实测即解）。windows-sys 0.61.2 本体在 HEAD lock 已存在且 CI 全绿（runner 工具链可编译该包）；本批新增的 feature 组合在 CI 的首次编译**待下次 push 实证**——已在 CI Windows job 加防御步（见下）。
+- **CI 防御步**：`check` / `snapshot` 两 Windows job 在装完工具链后把 gnu 工具链 `bin/self-contained` 目录追加进 `GITHUB_PATH`（rustc 对 raw-dylib 的 dlltool 查找覆盖；若 runner 工具链本就无需 dlltool 则为无害 no-op，与本机 PATH 修复同一机制实证）。
+- 门禁：`cargo test --workspace --no-fail-fast` **663 passed / 0 failed / 7 ignored**（数不减）、clippy `--all-targets -D warnings` 零告警（三平台目标交叉验证）、fmt 零差异；`bench_compare.mjs` 绿/红两路自测通过（反向 5% 阈值即红）。
+
+### 改进分析批次 P2-5.3（日志落盘 + 诊断卡）（2026-10-24）
+
+- **① 日志落盘**（`file_log.rs`，仅 bin 入口装配，dd-protocol 零改动）：全局后端从单 stderr 升级为 **Tee 双后端**——stderr 口径逐字不变（`DDRUN_LOG` 显式设置时双腿跟随），文件腿默认 `%APPDATA%\dd-run\logs\dd-run.log`、级别默认 **Info**（Debug 落盘涨得快，§5.3 口径）、滚动保留 **5×1 MB**（超限 shift，Windows rename 不覆盖 → 先移除目标位；滚动/超限/空目录三条单测）。全链路失败降级：目录不可建 → 文件腿退场（stderr-only，R-05 同口径）——release GUI 子系统无控制台，用户日志自此**留存**。
+- **② 「打开日志目录」**：设置 → 常规新增「诊断」卡（Fluent 卡 + 双按钮，E9D9 glyph）；目录不存在先创建再打开，失败 toast。
+- **③ 导出诊断报告**：单 JSON 落 logs 目录（文件名含时间戳），内容 = 宿主元信息 + 设置 + 扩展清单摘要（id/版本/frozen/启用）+ 信任判定 + 源状态 + 解析失败清单 + **最近 200 行日志尾**。**偏差记档**：原案 zip → 单 JSON 文件（zip 需新 crate，违背 lock 零新增；单文件可直接阅读/附件）。
+- **5.6 cargo deny 记入遗留**：本机无 cargo-deny 二进制，deny.toml 许可证清单无法本地验证——不做 CI-only 盲改，待工具可用或下次会话补。
+- 测试 +5（file_log 3 + diagnostic 2）→ **663 passed / 0 failed / 7 ignored**；金图 6/6（诊断卡在 General 分类，Appearance 金图无影响）；clippy/fmt/docscan 全绿。**待真机腿**：启动后确认 `logs/dd-run.log` 生成且级别 Info（单测不覆盖 bin 入口装配）。
+
+### 改进分析批次 C3–C5（错误三边界 + 配置前向兼容 + 死字段收口）（2026-10-24）
+
+- **C3 错误类型三边界**（§4.6；`thiserror 2.0.20` 已在依赖树 → lock 零新增）：
+  - `dd_host::error::LoadError`（清单/信任/spawn 边界）：`Untrusted` / `NoRegistration` / `Spawn` / `Initialize` 四变体，`Display` 与原拼接文案**逐字一致**（日志与设置页失败行零变化）；`ext_client::open` / `spawn_and_initialize*` 链路换型，调用方测试改结构化匹配（不再对文案做 contains 判型）。
+  - `ProtocolErrorKind`（调用失败分类，dd-host `process.rs`）：`Timeout` / `Crashed` / `Other`——分类在错误产生点（`ProtocolError` 强类型处），不再事后判串；invoke 失败 toast 按类分流：超时 →「可稍后重试」、崩溃 →「回落 stub」、其余沿用透传详情（新增 `toast.invoke_timeout` / `toast.invoke_crashed` 双语键）。
+  - `SettingsImportError`（设置边界）：`NotJson` / `NotAnObject`，`import_backup` 换型，toast `{e}` 占位文案不变。
+  - 口径：只在三边界引入，**不全仓铺开**（`Result<_, String>` 48 → 42，余量为非边界路径）。
+- **C4 settings 前向兼容**（§4.8）：① 写盘落 `"schema_version": 1`；读到**更高**版本 → 只读模式（保存被拒 + toast「配置来自更高版本的 dd-run，已禁用写入」，`save_settings_with_feedback` 统一拦截）；② **未知字段保真**——`parse_json` 把未知顶层字段（JSON 编码文本）存进 `Settings.unknown`，`to_json_string` 先写它们再被已知键覆盖：新版本字段在「旧版回退保存一次」场景下不再被永久抹掉（对象/数组/数字/布尔类型均保真，往返稳定）。验收测试 4 条（往返保真 / 已知键不误收 / 版本门禁三分支 / 写盘戳版本）。
+- **C5 协议死字段收口**（§4.7）：`Manifest.icon` → **deprecated**（v1.0 冻结面保留解析兼容，宿主不展开不读取——`manifest-schema.md` §5 强提示改写，`doc_contract` 新增锚点断言 icon 原样保留、与 `entry.command` 展开形成对照；启用消费时同步文档）；`has_more_items` → **保持**（非死字段：协议要求扩展回传、CLI conformance 校验其存在，宿主端不消费是 §6.3 既定语义「v1.0 未定义分页参数」）。
+
+### 改进分析批次 C2（首屏流式聚合：先到先渲染）（2026-10-24）
+
+- **聚合改三段式事件流**（`AggregateEvent`）：`Meta`（扫描期即得——清单 / 信任表 / 规格表，设置页先于任何进程拉取就绪）→ `Ext`×N（每扩展**完成即发**，完成序——`collect_top_level_streaming` 以 mpsc 通道回传，快扩展不再被 spawn 序里靠前的慢扩展扣住；线程 panic 转 `Failed` 兜底保持）→ `Done`（收尾计时 / LRU / A2 日志）。旧 `collect_top_level` 重实现为流式包装保留（批量语义兼容）。
+- **UI 侧逐事件落地**：每收到 `Ext` 并入已到达集合后**全量重跑纯函数 `flatten`** 重建 Root 列表（扩展数个位数、微秒级，不写增量合并）；选中项按 `(ext_id, id)` 身份恢复——增量到达不打断键盘/鼠标选中。加载骨架只挡**零项期**（`aggregating && visible_count==0`），部分结果到达即画列表。
+- **重启轮次无空窗**：旧轮进程在**新轮首个结果**到达时作废（等价旧「整包替换」语义，零项期之前旧列表 / 旧进程照常服务）；A2「数据就绪」口径改为首个结果可交互时刻（`mark_first_interactive` 幂等）。
+- **验收**：结构化测试 3 条（首到达即渲染且 `Done` 前保持加载态 / 选中身份恢复 / 旧进程替换时机）；「首项 < 300 ms」由机制保证（完成序通道 + 零项期判定）+ 结构断言承接——不引入 2.5 s 慢扩展夹具进 CI；`frozen`+桩回归由 B2 锚点测试覆盖（仍不 spawn）；**金图 6/6 逐字节不变**（`Full` 变体 = 旧单包语义逐字保留，快照夹具直构列表不经 flatten）。
+- 附带：`spawn_aggregation` 去掉 `custom_commands` 参数（UI 侧每次重建时追加，聚合线程不再需要）。
+
+### 改进分析批次 C1（PaletteApp 六片拆分，零行为变更）（2026-10-24）
+
+- **`PaletteApp` 95 字段 → 6 个子结构**（`OverlayState` 5 / `HotkeyState` 11 / `SettingsDraft` 18 / `UiViewState` 13 / `ExtPool` 22 / `WindowState` 26，合计恰 95 无遗漏无重叠）：按「谁拥有谁」分组，每片独立可编译、独立验证，按 5→11→18→13→22→26 顺序分六批落地（每批后 `cargo test -p dd-gui --lib` 300 全绿才进下一批）。访问路径变为 `self.overlay.toast` / `self.window.visible` / `self.pool.processes` 等显式前缀——子模块方法能碰哪片状态由类型系统可读。
+- **验收全达成**：直接字段 = 6（≤ 8）；`cargo test --workspace` **650 passed / 0 failed**（测试数与拆分前一致）；`git diff -w` 抽查 = 纯前缀插入（被移动逻辑零改写）；未新增 `pub(crate)` 可见性（字段随片移动，可见性不变）。
+- **像素级零行为证明**：6 张 UI 金图拆分后**逐字节不变**（`snapshot -- --ignored` 6/6 过）——比「测试全绿」更强的回归证据。
+- **同名字段误伤即编译器拦下**（记档）：`FallbackStore.exts` / 设置页 `ExtRow.trust` / `PanelState.visible` 三处非 PaletteApp 同名字段被批量改写波及，全部在编译期 E0609 当场暴露、逐一回退——与「拆片后越界访问由编译器挡住」的设计意图互为印证。跨行链式访问（`self\n.field`）17 处（view 7 + pool 9 + window 1）由 CRLF 感知的补丁脚本收口。
+
+### 改进分析批次 B2 收尾（现状注断言化第二批，24 处全覆盖）（2026-10-24）
+
+- **契约文档「实现现状」注断言化收尾**：B2 验收口径「✅/⚠️ 两类各覆盖 ≥ 70%」达成（✅ 类 5/5、⚠️ 类 16/19 有运行时断言，其余 3 处为标注原因的 `no-assert`——负向结构性断言无运行时载体；总注 24 = ✅5 + ⚠️19）。新增 19 条契约锚点测试（测试名即文档锚点，实现漂移即红）：
+  - `dd-protocol/tests/doc_contract.rs`（5 条）：信封校验表逐条 reason kind 与 §9.1 形状（id 可解析回带 / 否则 null）、批处理数组 `-32600` 非 `-32700`、超限帧 `Frame::TooLarge` + `message_too_large` 线上形状（端到端由既有 roundtrip 测试覆盖）、`GetCommandResult.command: None` 整体省略、`timeouts` 单字段 `get_items_ms`。
+  - `dd-ext/tests/doc_contract.rs`（3 条）：`initialize` 无视 `params.protocol_version` 恒回 `"1.0"` 且无 `-32004` 产出、未注册/缺失 `page_id` 统一 `-32005` 非 `-32602`、共享运行时全方法面无 `-32002` 抛出点。
+  - `dd-host/tests/doc_contract.rs`（+3 条，首批 3 条同批复核）：`version` 只收三段纯数字（prerelease 判非法）、可执行补全「原样优先 → 仅 `.exe`、不补 `.cmd`/`.bat`」（F4 fail-closed）、内置 `host_frozen()` 对 calc/websearch/shell 三兜底提供者降级。
+  - `dd-gui`（8 条，`src/doc_contract_tests.rs` + aggregator 就近 2 条）：`host/show_status` 的 `state` 解析后渲染侧忽略（四种取值一律 Info kind）、`duration_ms = 0` 过期时间即 `now + 0`（下一帧清空、非常驻）、不可见页通知直接丢弃（无脏标记）、命中进 100ms 合并窗口非「立即」、`poll_notifications` 消费式取走（二次 poll 必空）、进程退出码 0（EOF）回落 stub 但**不**进崩溃计数（§11 口径）、frozen 落盘门禁读**清单**侧（`frozen=true` 桩命中不 spawn / `=false` 桩被无视）、spawn 失败产出 `Failed` 且带被尝试命令路径（extensions.md §5）。
+- **核对结论记档**：protocol.md §7.2 现状注（state 渲染侧忽略 + duration 0 非常驻）**经锚定核实仍准确**（C 组批次 C3 的 ToastKind 仅宿主自身路径使用，扩展 `ShowToast`/`show_status` 恒 Info）——未发现新漂移。
+- **B1 自证实验**（验收「故意把行高 +1px，测试必须失败」）：`ROW_H` 40→41 后 **5/6 金图即红**（含列表行的 empty_query 暗/亮、results_selected、nested_page、ctx_menu 全命中；settings_appearance 无列表行、通过是正确行为），还原后 6/6 绿——金图对 1px 级布局回归的检出力实证。
+
+### 改进分析批次 B3（docscan --write-index）+ B1（UI 快照金图全量）+ B4（git-cliff）（2026-10-24）
+
+- **`tools/docscan.mjs` 新增 `--write-index`**（B3）：行数漂移不再手工回填 INDEX——自动把各登记行的行数列改写为实测值后重校验（「文件不存在」类漂移不可自动修，仍 exit 1）；**CI 门禁不带此参数**（回填仅本地使用，门禁语义不变）。人只维护状态/读者列。
+- **快照测试基建**：新增 `egui_kittest 0.36`（wgpu + snapshot + eframe）dev-dependency——UI 改动的布局 / 间距 / 配色 / 层级回归自此可机器判定，替代「改 UI 必三平台手测」的人肉路径。**仅 dev 面**：`Cargo.lock` +93 包全部为测试编译用，不进任何产物（release 面依赖树零变化）。
+- **确定性设计**（金图跨机器逐字节稳定）：字体 = dev 面重开 eframe `default_fonts`（egui 内置字体随 epaint 源码分发，不依赖 runner 系统字体；无 CJK → 中文方块但同样确定）；`ui_animations = false`；聚合通道预发完整 `AggregatePayload`（免 Loading 逐帧变化）；固定 650×440 / `pixels_per_point = 1.0`。
+- **6 张金图全量落地**（`crates/dd-gui/tests/snapshots/`）：空查询暗/亮、有结果+选中第三行（5 项夹具，选中经 `state_mut` 首帧后摆放——payload 首帧重置 Root 列表）、嵌套页（placeholder/扩展徽标/页脚差异面）、设置-外观（主题卡/材质 pill/滑杆基线）、右键菜单（分隔线/快捷键右对齐）。两轮比对全过（确定性实证）。
+- **CI**：新增 `snapshot` job（windows，`-- --ignored` 显式运行；快照测试标 `#[ignore]` 不进常规三关——linux runner 无 GPU 保障）。**continue-on-error 观察模式先行**：金图为本地 GPU 生成，WARP 像素一致性待首跑验证，首绿后转阻塞门禁。
+- **Release body 自动化（B4）**：根 `cliff.toml`（Conventional Commits 七分组）；release.yml 的 body 由静态文本改为生成文件——人写 Release Highlights + `git-cliff --unreleased` 提交明细（失败不阻塞发版）；checkout 加 `fetch-depth: 0` 供其读取 tag 历史。仓库内 CHANGELOG.md 保持人工详账不被覆盖。
+- 出图 / 更新：`UPDATE_SNAPSHOTS=1 cargo test -p dd-gui --lib snapshot -- --ignored`（快照测试已标 `#[ignore]`，必须带该参数）。
+- **契约文档治理（B2 第一批）**：protocol / manifest-schema / extensions 三份契约文档的 16 处 `.rs:行号` 锚全部改为「文件 + 符号名」锚（行号随代码漂移，治理前多处已失效；manifest-schema「静默丢弃」过时表述一并校正为「跳过并上报」）；`docscan` 新增第④项机检「契约文档出现行号锚即 fail」进 CI；新增 `dd-host/tests/doc_contract.rs` 把「实现现状」注变成断言（首批 3 条，`no-assert` 者标注原因）。
+
+### 改进分析批次 A（地基）+ 批次 D（跨平台补正）（2026-10-24）
+
+- **构建可复现**：新增 `rust-toolchain.toml`（钉扎 1.95.0 = MSRV，含 clippy/rustfmt，clone 后零手动步骤）。CI 三 job 以 `RUSTUP_TOOLCHAIN` 环境变量显式覆盖该文件，工具链选择零变化（Windows job 必须保持 gnu 宿主自带 self-contained 链接器）。
+- **workspace 版本继承**：产品版本 / edition / rust-version / license 收敛到根 `Cargo.toml` `[workspace.package]`，5 个产品 crate 改 `*.workspace = true` 继承，发版 bump 只改一处；`dd-protocol` 保持独立 1.0.0 版本线。`release.yml` 与 `tools/package.sh` / `tools/portable_zip.ps1` 的版本读取全部改指根 `Cargo.toml`（继承后 crate 内清单不再含字面 version）。
+- **发布产物可验证**：Release 新增 `release-sums` job——统一生成 `SHA256SUMS.txt`（覆盖三平台全部资产，`sha256sum -c` 可验）+ `actions/attest-build-provenance` 构建出处证明（`gh attestation verify` 可验来源）。
+- **三平台 clippy 同门禁**：清零非 Windows 侧 41 条死代码/未用导入告警（Windows 专属项补同名 cfg；被测试引用项用 `#[cfg(any(windows, test))]`）；`check-linux` / `check-macos` 增 `cargo clippy --workspace --all-targets -- -D warnings`（两目标实测 0 告警）。
+- **写盘失败注入去 OS 权限化**：dd-host / dd-gui 各拆出 `atomic_write_with(path, bytes, writer)`（生产路径不变），r02 / r17 三个失败注入测试改恒 `Err` writer 桩——root 容器（无视 `chmod`）与非 Windows 不再必挂，`share_mode(0)` / `chmod` 注入分支删除。
+- **非 Windows 字体修复**：O5-a 移除内置字体后非 Windows 构建的字体集**必然为空**（界面文字不可读）——新增系统字体发现（标准目录扫描，CJK 命中优先、无 CJK 回落任意系统字体并 warn、空集 warn），空字体降级日志 debug → warn，新增字体非空回归锚单测。README（中英）与 README-dist 补「中文需系统 CJK 字体（建议 fonts-noto-cjk）」运行时依赖。
+- **社区基建**：新增 CONTRIBUTING.md（环境 / 三关命令 / 仓库纪律）、SECURITY.md（私密漏洞报告渠道 + 信任模型简述）、3 个 issue 模板（Bug / 扩展开发 / 功能建议）。
+
 ### 便携包产物链接口 + 文档收口门（2026-10-17 收口批）
 
 - **`tools/package.sh`（Windows 分支）现在直接产出便携包** `dist/dd-run-<ver>-portable.zip`：新增**单一来源** `tools/portable_zip.ps1`（`package.sh` 与 `release.yml` 同调），消除此前「本地重打包只出 exe + sidecar、zip 靠 CI 补」的成员集合不一致——本地可交付件与 Release 附件自此同口径。zip 条目名一律正斜杠由脚本内 .NET `ZipArchive` 显式指定，并自带反斜杠条目断言（fail-closed）。

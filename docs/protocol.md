@@ -89,7 +89,7 @@
 3. 编码为 **UTF-8**。
 4. 不允许 pretty-print 的多行 JSON（会被解析成多条不完整的行）。
 5. 空行应被**忽略**（不视为错误），以便对端写入容错。
-6. 非 UTF-8 的行**视同无效帧**：实现产出 `Frame::InvalidUtf8`（`framing.rs:20`，无对应 JSON-RPC 错误码）——宿主 `call` 路径向调用方返回 `InvalidUtf8` 错误，通知路径静默丢弃。
+6. 非 UTF-8 的行**视同无效帧**：实现产出 `Frame::InvalidUtf8`（`dd-protocol` `framing.rs` 的该枚举变体，无对应 JSON-RPC 错误码）——宿主 `call` 路径向调用方返回 `InvalidUtf8` 错误，通知路径静默丢弃。
 
 > **为什么选 NDJSON**：协议 payload 全是几十到几百字节的文本，无二进制附件需求；NDJSON 让两端的 I/O 循环都简化为"按行读写"，调试时 `tail -f` 即可肉眼读协议流。日后若有二进制需求，可在握手时协商升级（见 §5.1 的 `transport` 字段）。
 
@@ -202,7 +202,7 @@ discovered → spawned → initializing → ready ⇄ busy ─┤
 
 > **并发**：MVP 阶段宿主对每个扩展**串行化请求**（同一时刻最多 1 个 in-flight 请求）。扩展侧可不保证串行，但宿主串行化能让超时与重连语义保持简单。
 >
-> ⚠️ **实现现状（核对至 2026-09-13）**：代码**无**对应状态枚举，状态隐含于进程生命周期与 in-flight 集合；`busy` 的宿主侧载体为 `ext_busy` Toast（`invoke.rs:120,152`、`page.rs:232,265`）。运行期崩溃（有磁盘缓存）回退 **stub**（`pool.rs:68-79`）；启动期聚合失败则该扩展不产出 items。崩溃计数口径见 §11 现状。
+> ⚠️ **实现现状（核对至 2026-09-13）**：代码**无**对应状态枚举，状态隐含于进程生命周期与 in-flight 集合；`busy` 的宿主侧载体为 `ext_busy` Toast（`invoke.rs` 的 `confirm_selected` / `dispatch_invoke`、`page.rs` 的 `go_back_focused` / `open_page`）。运行期崩溃（有磁盘缓存）回退 **stub**（`app/pool.rs` 的 `drop_source_to_stub`——进程退出（崩溃或正常）时源状态回落；LRU 驱逐的同型回落在 `evict_warm`）；启动期聚合失败则该扩展不产出 items。崩溃计数口径见 §11 现状。
 
 ---
 
@@ -268,7 +268,7 @@ discovered → spawned → initializing → ready ⇄ busy ─┤
 4. 若扩展回的版本宿主**不认识**（高于宿主所发，或格式非法），宿主应回 `close`、终止进程，并把该扩展标记为不可用。
 5. **`MAJOR` 不兼容递增，`MINOR` 向后兼容递增**：1.0 → 1.1 时，只新增可选方法/可选字段，老扩展无需改动。
 
-> ⚠️ **实现现状（核对至 2026-09-13）**：扩展侧共享运行时的 `initialize` 不读取 `params.protocol_version`，恒回 `"1.0"`；`-32004 version_mismatch` 在 `dd-ext` 共享运行时**无任何产出点**（宿主侧 in-process 路径有版本校验，`ext_inprocess.rs:97-106`）。规则 3 的扩展侧实现待接线。
+> ⚠️ **实现现状（核对至 2026-09-13）**：扩展侧共享运行时的 `initialize` 不读取 `params.protocol_version`，恒回 `"1.0"`；`-32004 version_mismatch` 在 `dd-ext` 共享运行时**无任何产出点**（宿主侧 in-process 路径有版本校验，`ext_inprocess.rs` 的 `initialize`）。规则 3 的扩展侧实现待接线。
 
 ---
 
@@ -292,7 +292,7 @@ discovered → spawned → initializing → ready ⇄ busy ─┤
 
 > **缓存语义**：仅当 `provider.frozen == true` 时，宿主才会把该结果缓存到磁盘并在冷启动时作为**桩**渲染（设计文档 §6.3）。缓存必须带扩展版本号，扩展升级即失效。
 >
-> ⚠️ **实现现状（核对至 2026-09-13）**：落盘门禁实际读取**清单**的 `frozen` 字段（`crates/dd-gui/src/aggregator.rs:394,411-435`），握手回传的 `provider.frozen` 当前不被消费。两者在正常清单下取值一致。
+> ⚠️ **实现现状（核对至 2026-09-13）**：落盘门禁实际读取**清单**的 `frozen` 字段（`aggregator.rs` 的 `load_one` frozen 桩分流段），握手回传的 `provider.frozen` 当前不被消费。两者在正常清单下取值一致。
 
 ### 6.2 `fallback_commands`
 
@@ -325,7 +325,7 @@ discovered → spawned → initializing → ready ⇄ busy ─┤
 | `page_id`     | string | ✅  | 页标识，来自 `CommandItem.command.page_id` 或 `GoToPage` 结果 |
 | `search_text` | string | ❌  | 当前搜索词；扩展自行决定是否过滤                                     |
 
-> ⚠️ **实现现状（核对至 2026-09-13）**：`page_id` 缺失或未注册时，扩展共享运行时统一回 `-32005 page_not_found`（`lib.rs:294-309`），不回 `-32602`。
+> ⚠️ **实现现状（核对至 2026-09-13）**：`page_id` 缺失或未注册时，扩展共享运行时统一回 `-32005 page_not_found`（`dd-ext` `lib.rs` 的 `serve_line`），不回 `-32602`。
 
 ```json
 {"jsonrpc":"2.0","id":4,"result":{"items":[{"id":"h1","title":"3.14159","subtitle":"π","command":{"kind":"invoke"}}],"has_more_items":false,"is_loading":false}}
@@ -357,7 +357,7 @@ discovered → spawned → initializing → ready ⇄ busy ─┤
 {"jsonrpc":"2.0","id":5,"result":{"command":null}}
 ```
 
-> ⚠️ **实现现状（核对至 2026-09-13）**：`GetCommandResult.command` 带 `skip_serializing_if`（`messages.rs:146-148`），`command: null` 在线上序列化为 `{"result":{}}`（字段整体省略）；接收方不得假设该字段必然出现。
+> ⚠️ **实现现状（核对至 2026-09-13）**：`GetCommandResult.command` 带 `skip_serializing_if`（`dd-protocol` `messages.rs` 的 `GetCommandResult` 定义），`command: null` 在线上序列化为 `{"result":{}}`（字段整体省略）；接收方不得假设该字段必然出现。
 
 > **复热链路**：用户点击 frozen 桩 → 宿主 spawn 进程 → `initialize` → `get_command` → 取回真实命令后执行。失败或超时则回退 stub 状态并向用户报错（验收 A6）。
 
@@ -426,7 +426,7 @@ discovered → spawned → initializing → ready ⇄ busy ─┤
 - 不可见 → 标记脏，待该页可见时再拉；
 - 顶层变化 → 重新 `top_level_commands`。
 
-> ⚠️ **实现现状（核对至 2026-09-14）**：宿主**无脏标记机制**——不可见页的通知被直接丢弃（`refresh.rs:43`）；命中当前页的通知也进入 100 ms 合并窗口，并非「立即」拉取。（2026-09-14 更正：in-process 路径的通知队列此前只增不清、同一 `page_id` 会被反复上报；现 `poll_notifications` 已改为**消费式取走**（`std::mem::take`），与子进程路径的一次性消费一致。）
+> ⚠️ **实现现状（核对至 2026-09-14）**：宿主**无脏标记机制**——不可见页的通知被直接丢弃（`app/refresh.rs` 的 `poll_notifications`）；命中当前页的通知也进入 100 ms 合并窗口，并非「立即」拉取。（2026-09-14 更正：in-process 路径的通知队列此前只增不清、同一 `page_id` 会被反复上报；现 `poll_notifications` 已改为**消费式取走**（`std::mem::take`），与子进程路径的一次性消费一致。）
 
 > **限流**：宿主应对高频 `items_changed` 做合并（如 100ms 窗口内的多次通知合并为一次拉取）。
 
@@ -442,7 +442,7 @@ discovered → spawned → initializing → ready ⇄ busy ─┤
 | `state`       | string  | ❌  | `"info"`（默认）/ `"success"` / `"warning"` / `"error"` |
 | `duration_ms` | integer | ❌  | 显示时长；`0` 表示常驻直到被替换                                  |
 
-> ⚠️ **实现现状（核对至 2026-09-13）**：宿主解析 `state` 后**渲染侧忽略**，四种取值一律按 Info 样式展示（`toast.rs:83-85`）；`duration_ms = 0` 未实现「常驻」——原样写入过期时间导致**下一帧即清空**（`toast.rs:104`、`app/mod.rs:637`）。
+> ⚠️ **实现现状（核对至 2026-09-13）**：宿主解析 `state` 后**渲染侧忽略**，四种取值一律按 Info 样式展示（`ui/toast.rs` 的 `draw_toast`）；`duration_ms = 0` 未实现「常驻」——原样写入过期时间导致**下一帧即清空**（`ui/toast.rs` 的 `draw_toast` 过期时间写入；调用点如 `app/mod.rs` 的 `report_settings_save_failure`）。
 
 ```json
 {"jsonrpc":"2.0","id":1,"method":"host/show_status","params":{"message":"Copied to clipboard","state":"success","duration_ms":2000}}
@@ -584,7 +584,7 @@ discovered → spawned → initializing → ready ⇄ busy ─┤
 | `"list_item"`    | 从嵌套列表页的某一项触发 |
 | `"context_menu"` | 从上下文菜单项触发    |
 
-> ⚠️ **实现现状（核对至 2026-09-13）**：宿主生产路径当前仅产出 `"top_level"`（`confirm_selected` 对所有 Invoke 项一律按顶层触发，`invoke.rs:100-108`）与 `"context_menu"`（`ctx_menu.rs:201`）；`"list_item"` 已定义但仅单测覆盖，无生产产出点。
+> ⚠️ **实现现状（核对至 2026-09-13）**：宿主生产路径当前仅产出 `"top_level"`（`confirm_selected` 对所有 Invoke 项一律按顶层触发，`invoke.rs` 的 `confirm_selected`）与 `"context_menu"`（`ctx_menu.rs` 的 `activate_ctx_menu`）；`"list_item"` 已定义但仅单测覆盖，无生产产出点。
 
 ### 8.5 Page
 
@@ -712,7 +712,7 @@ discovered → spawned → initializing → ready ⇄ busy ─┤
 | `invoke`             | 10000 ms | 命令可能耗时（如启动应用）    |
 | `close`              | 1000 ms  | 超时即强杀。⚠️ 实现为两段各 1000 ms（等 result + 等进程退出），最坏 2000 ms |
 
-- 数值为**默认建议值**，宿主可配置；扩展可在 `initialize` 的 `result.timeouts` 中建议更宽的值。⚠️ **实现现状（核对至 2026-09-13）**：`result.timeouts` 仅 `get_items_ms` 一个字段且宿主从不读取；「宿主可配置」当前亦未实现（数值为编译期常量，见 `process.rs:30-42`）。
+- 数值为**默认建议值**，宿主可配置；扩展可在 `initialize` 的 `result.timeouts` 中建议更宽的值。⚠️ **实现现状（核对至 2026-09-13）**：`result.timeouts` 仅 `get_items_ms` 一个字段且宿主从不读取；「宿主可配置」当前亦未实现（数值为编译期常量 `TIMEOUT_INITIALIZE` / `TIMEOUT_TOP_LEVEL_COMMANDS`，`dd-host` `process.rs`）。
 - 超时即视为失败：宿主应答 `-32001 extension_timeout` 给调用方（UI 层），并**丢弃**该请求——但若之后收到迟到的响应，应记日志后忽略。
 - **心跳**：v1.0 **不做心跳**。进程存活以"子进程是否退出"为准，协议层不引入 `ping`。
 
@@ -726,7 +726,7 @@ discovered → spawned → initializing → ready ⇄ busy ─┤
 
 1. 读取 stdout 遇 **EOF**，或等待子进程退出得到非 0 退出码 → 判定崩溃。
 
-> ⚠️ **实现现状（核对至 2026-09-13）**：周期巡检仅以**非 0 退出码**计崩溃（`health.rs:27`）；invoke/get_items 失败路径在进程已退出（含 EOF/正常退出，`process.rs:442-443`）时同样计入（`invoke.rs:73`、`page.rs:134`）。「EOF 单独计崩溃」仅在巡检路径不成立。
+> ⚠️ **实现现状（核对至 2026-09-13）**：周期巡检仅以**非 0 退出码**计崩溃（`app/health.rs` 的 `refresh_health`）；invoke/get_items 失败路径在进程已退出（含 EOF/正常退出，判定 = `dd-host` `process.rs` 的 `has_exited`）时同样计入（`invoke.rs` 的 `poll_invoke`、`page.rs` 的 `poll_page`）。「EOF 单独计崩溃」仅在巡检路径不成立。
 2. 所有 in-flight 请求**立即**以 `-32003 provider_unavailable` 失败，UI 不得卡住。
 3. 若该 provider 为 `frozen` **且有磁盘缓存** → 命令项回退为 **stub**，保留在列表中；  
    若无缓存 → 从当前列表移除该 provider 的项（不删除 manifest）。
