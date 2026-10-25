@@ -151,6 +151,11 @@ pub struct PanelState {
     /// ScrollArea 可视高 / 行高（密度三档 `metrics.row_h`）实测回写；未回写时
     /// 默认 10。私有字段，经 [`Self::set_page_step`] 更新。
     page_step: usize,
+    /// §5.1 使用频次排序快照（`usage.json` 的 count 表，`None` = 未启用）：
+    /// 空查询按 count 降序稳定排序、非空查询同分 tiebreak。应用侧经
+    /// [`Self::set_usage`] 注入；`None` 时排序行为与本功能引入前逐字节一致
+    /// （快照金图与既有测试不受影响的关键）。
+    usage: Option<crate::usage::UsageScores>,
 }
 
 impl PanelState {
@@ -186,6 +191,8 @@ impl PanelState {
             passthrough: false,
             // F7：PgUp/PgDn 页步长默认 10（panel.rs 每帧按可视行高实测回写覆盖）。
             page_step: 10,
+            // §5.1：默认未启用（应用侧启动加载 usage.json 后注入）。
+            usage: None,
         };
         s.recompute_visible();
         s.reset_selection();
@@ -222,6 +229,18 @@ impl PanelState {
             return;
         }
         self.steam_hidden = hidden;
+        self.recompute_visible();
+        self.clamp_selection();
+    }
+
+    /// §5.1：注入使用频次排序快照（应用侧在启动加载 / 记录 / 重置后调用）。
+    /// 快照内容变化才重算——同一 Arc 重复注入是 no-op。空查询分支按 count
+    /// 降序稳定重排；非空查询仅作同分 tiebreak（得分恒优先）。
+    pub fn set_usage(&mut self, scores: Option<crate::usage::UsageScores>) {
+        if self.usage == scores {
+            return;
+        }
+        self.usage = scores;
         self.recompute_visible();
         self.clamp_selection();
     }
@@ -331,6 +350,22 @@ impl PanelState {
     pub fn selected_item(&self) -> Option<&PanelItem> {
         self.selected_index()
             .and_then(|i| self.filtered().nth(i).map(|(_, it)| it))
+    }
+
+    /// 按 `(ext_id, id)` 身份恢复选中（C2 流式聚合：增量到达触发列表重建，
+    /// 下标会漂移、身份不变）。命中 → 选中并返回 `true`；未命中（项被过滤
+    /// 或尚未到达）→ 保持替换后的默认选中，返回 `false`。
+    pub fn select_by_identity(&mut self, ext_id: &str, id: &str) -> bool {
+        // 先把位置算成独立值（`filtered()` 的借用随语句结束），再赋选中。
+        let hit = self
+            .filtered()
+            .position(|(_, it)| it.ext_id == ext_id && it.id == id);
+        if let Some(i) = hit {
+            self.selected = Selected::Some(i);
+            true
+        } else {
+            false
+        }
     }
 
     /// `↓`：下移一个；已在末尾时回到开头（环绕）。空列表无操作。
@@ -451,7 +486,7 @@ impl PanelState {
             // 空查询：按首屏视图过滤（WithoutApps = 隐藏「应用」类项，
             // 默认功能视图——应用仍可通过输入查询命中）；「搜索应用」关时
             // 应用类项在空查询下同样排除（2026-09-12）。
-            self.visible = (0..n)
+            let mut vis: Vec<usize> = (0..n)
                 .filter(|&i| self.apps_shown(i))
                 .filter(|&i| self.steam_shown(i))
                 .filter(|&i| {
@@ -459,6 +494,21 @@ impl PanelState {
                         || self.items[i].result_category.as_deref() != Some("应用")
                 })
                 .collect();
+            // §5.1 frecency：使用计数降序**稳定**排序——未使用项（count=0）
+            // 保持聚合原序，常用项上浮首屏（面板每次打开 reset() 都会走到这里）。
+            if let Some(u) = self.usage.clone() {
+                vis.sort_by(|&a, &b| {
+                    u.get(&crate::usage::usage_key(
+                        &self.items[b].ext_id,
+                        &self.items[b].id,
+                    ))
+                    .cmp(&u.get(&crate::usage::usage_key(
+                        &self.items[a].ext_id,
+                        &self.items[a].id,
+                    )))
+                });
+            }
+            self.visible = vis;
             return;
         }
         let mut fm = crate::fuzzy::FuzzyMatcher::new(&self.query);
@@ -474,8 +524,23 @@ impl PanelState {
             .filter(|&(i, _)| self.steam_shown(i))
             .filter_map(|(i, it)| fm.score(it).map(|s| (i, s)))
             .collect();
-        // `sort_by_key` 为稳定排序：同分项保持原始顺序（切片 2 行为测试守卫）
-        scored.sort_by_key(|&(_, s)| std::cmp::Reverse(s));
+        // 得分降序（稳定排序）；§5.1：得分同分时以使用计数降序 tiebreak，
+        // 仍同分保持原始顺序。`usage = None` 时行为与本功能引入前逐字节一致。
+        let usage = self.usage.clone();
+        scored.sort_by(|a, b| {
+            b.1.cmp(&a.1).then_with(|| match &usage {
+                Some(u) => u
+                    .get(&crate::usage::usage_key(
+                        &self.items[b.0].ext_id,
+                        &self.items[b.0].id,
+                    ))
+                    .cmp(&u.get(&crate::usage::usage_key(
+                        &self.items[a.0].ext_id,
+                        &self.items[a.0].id,
+                    ))),
+                None => std::cmp::Ordering::Equal,
+            })
+        });
         self.visible = scored.into_iter().map(|(i, _)| i).collect();
         #[cfg(debug_assertions)]
         log::debug!(
@@ -733,6 +798,80 @@ mod tests {
         s.set_query("open"); // 两项同为前缀命中 → 同分
         let titles: Vec<&str> = s.filtered().map(|(_, it)| it.title.as_str()).collect();
         assert_eq!(titles, vec!["Open A", "Open B"], "同分应保持原始顺序");
+    }
+
+    // ── §5.1 frecency（2026-10-25）──────────────────────────────────────
+
+    /// 空查询：使用计数降序**稳定**排序——常用项上浮首屏，未使用项（count=0）
+    /// 保持聚合原序。
+    #[test]
+    fn empty_query_orders_by_usage_count_desc() {
+        let mut s = PanelState::new(sample_items());
+        let mut map = std::collections::BTreeMap::new();
+        map.insert(dd_gui::usage::usage_key("ext.a", "copy"), 5u32);
+        map.insert(dd_gui::usage::usage_key("ext.a", "file"), 2u32);
+        s.set_usage(Some(std::sync::Arc::new(map)));
+        let order: Vec<&str> = s.filtered().map(|(_, it)| it.id.as_str()).collect();
+        assert_eq!(
+            order,
+            vec!["copy", "file", "settings"],
+            "count 降序：copy(5) > file(2) > settings(0，未使用保持原序)"
+        );
+    }
+
+    /// 有查询：得分恒优先，**同分**才以使用计数降序 tiebreak（仍同分保原序）。
+    #[test]
+    fn equal_score_tiebreak_by_usage() {
+        let mut items = sample_items();
+        let mut twin = items[0].clone(); // 同标题 → 与 settings 同分
+        twin.id = "settings2".into();
+        items.push(twin);
+        let mut s = PanelState::new(items);
+        let mut map = std::collections::BTreeMap::new();
+        map.insert(dd_gui::usage::usage_key("ext.a", "settings2"), 7u32);
+        s.set_query("open");
+        let order: Vec<&str> = s.filtered().map(|(_, it)| it.id.as_str()).collect();
+        assert_eq!(
+            order.first(),
+            Some(&"settings"),
+            "无使用记录时同分保原序（settings 在前）"
+        );
+        s.set_usage(Some(std::sync::Arc::new(map)));
+        let order: Vec<&str> = s.filtered().map(|(_, it)| it.id.as_str()).collect();
+        assert_eq!(
+            order.first(),
+            Some(&"settings2"),
+            "同分 tiebreak：高使用项应上浮"
+        );
+    }
+
+    /// `set_usage(None)` 回退：快照撤除后排序行为与本功能引入前逐字节一致
+    ///（重置使用数据 / 快照金图零影响的回归锚）。
+    #[test]
+    fn unsetting_usage_restores_pre_frecency_order() {
+        let mut s = PanelState::new(sample_items());
+        let mut map = std::collections::BTreeMap::new();
+        map.insert(dd_gui::usage::usage_key("ext.a", "copy"), 5u32);
+        s.set_usage(Some(std::sync::Arc::new(map)));
+        s.set_usage(None);
+        let order: Vec<&str> = s.filtered().map(|(_, it)| it.id.as_str()).collect();
+        assert_eq!(order, vec!["settings", "file", "copy"], "应回到聚合原序");
+    }
+
+    /// 嵌套页 passthrough 不受 frecency 影响（扩展返回序即权威序，A11）。
+    #[test]
+    fn passthrough_ignores_usage() {
+        let mut s = PanelState::new(sample_items());
+        let mut map = std::collections::BTreeMap::new();
+        map.insert(dd_gui::usage::usage_key("ext.a", "copy"), 5u32);
+        s.set_passthrough();
+        s.set_usage(Some(std::sync::Arc::new(map)));
+        let order: Vec<&str> = s.filtered().map(|(_, it)| it.id.as_str()).collect();
+        assert_eq!(
+            order,
+            vec!["settings", "file", "copy"],
+            "直通模式保持扩展序"
+        );
     }
 
     /// 2026-09-19（真机反馈「搜 `steam` 时 Steam 不在第一个」）：标题命中恒优先于
