@@ -12,7 +12,7 @@
 
 ## 这是什么
 
-`dd-run` 是一个**用 Rust 从零构建的命令面板 / 启动器**，核心与平台无关：全局热键唤起，输入即搜，键盘直达，靠扩展生态扩展能力。**Windows 为主力平台**；macOS / Linux 为 CI 门禁预览版——全局热键（`global-hotkey` crate）、单实例互斥、信任哈希与扩展签名已跨平台可用，托盘、DWM 窗口材质、IME 捕获钩子与 Everything 文件搜索 sidecar 仍为 Windows 专属（其余平台优雅降级）。
+`dd-run` 是一个**用 Rust 从零构建的命令面板 / 启动器**，核心与平台无关：全局热键唤起，输入即搜，键盘直达，靠扩展生态扩展能力。**Windows 为主力平台**；macOS / Linux 为 CI 门禁预览版——全局热键（`global-hotkey` crate）、单实例互斥、信任哈希与扩展签名已跨平台可用，托盘、DWM 窗口材质、IME 捕获钩子与 Everything 文件搜索 sidecar 仍为 Windows 专属（其余平台优雅降级）。界面文字使用系统字体（无内嵌字体）：中文显示需系统装有 CJK 字体（建议 Noto Sans CJK / `fonts-noto-cjk`），缺失时拉丁文字可读、中文显示为方块。
 
 它的架构与扩展契约**提炼自微软 PowerToys 的 CmdPal 模块**，但不是 CmdPal 的移植——CmdPal 深度绑定 Windows（WinRT / COM / XAML），`dd-run` 把其中的平台无关部分（UI 模型、扩展契约、宿主生命周期）抽象出来，换成 Rust 生态的等价实现：
 
@@ -59,11 +59,11 @@
 | 项 | 说明 |
 |---|---|
 | 入口产物 | `dist/dd-run-0.2.1.exe`（Windows，约 8.4 MB / 8,722,944 字节；版本随 `crates/dd-gui/Cargo.toml` 升） |
-| 非 Windows 包（O6） | `dist/dd-run-<ver>-linux-<arch>.tar.gz` / `dist/dd-run-<ver>-macos-<arch>.tar.gz`：单二进制 `dd-run` + `README-dist.txt`（运行时系统库清单 / 数据目录 / 使用说明）。文件搜索 sidecar 为 Windows 专属不随包；这些包无签名面 |
+| 非 Windows 包（O6） | `dist/dd-run-<ver>-linux-<arch>.tar.gz` / `dist/dd-run-<ver>-macos-<arch>.tar.gz`：单二进制 `dd-run` + `README-dist.txt`（运行时系统库清单 / 数据目录 / 使用说明）。文件搜索 sidecar 为 Windows 专属不随包；这些包无签名面。运行需系统字体（中文需 CJK 字体，如 `fonts-noto-cjk`） |
 | 打包方式（M9） | 5 个内置扩展进程内化编译：宿主直接驱动 `dd_ext::serve_line`，不再内嵌任何扩展 exe；`dd-gui/build.rs` 内嵌空表，`assets/embed/` 为遗留临时目录，已 gitignore |
 | Sidecar | 文件搜索扩展（`dd-ext-search.exe` + `com.ddrun.filesearch.json`）随 `dist/extensions.d/` 携带；宿主扫描可执行文件同目录的 `extensions.d/`（批次 7.5），zip 解压即用——优先级：用户数据目录 > sidecar > 内置 |
 | 入口命名 | `dd-run.exe` = GUI 宿主（crate 名仍 `dd-gui`）；M0 CLI 改名 `dd-run-cli.exe`（保留自检能力、让出产物名） |
-| 一键出包 | `bash tools/package.sh`——按平台分支：Windows 使用 `+stable-x86_64-pc-windows-gnu` 工具链（先 build `dd-ext` → build `dd-gui --bin dd-run` → 单文件产物与 sidecar 归集到 `dist/`；裸 `cargo` 在 MSVC 下会找不到 `std`）；Linux/macOS 以显式 `--target` 宿主三元组构建（覆盖仓库默认 windows-gnu）并打 `tar.gz` |
+| 一键出包 | `bash tools/package.sh`——按平台分支：Windows 使用 `+stable-x86_64-pc-windows-gnu` 工具链（先 build `dd-ext` → build `dd-gui --bin dd-run` → 单文件产物与 sidecar 归集到 `dist/`；裸 `cargo` 在 MSVC 下会找不到 `std`）；Linux/macOS 以显式 `--target` 宿主三元组构建（§5.7 去 pin 后与宿主默认一致，保留为显式声明）并打 `tar.gz` |
 | 发版自动化 | tag 推送 → `.github/workflows/release.yml`（三平台 job + 手动 `workflow_dispatch` 构建验证）：校验 tag 与 crate 版本一致 → `package.sh` → zip/tar 产物 → 附着同一 GitHub Release |
 | 仓库纯净度 | 源码树不含任何二进制（`/dist/`、`/crates/dd-gui/assets/embed/*.exe` 均 gitignore） |
 | 验证口径 | `cargo fmt --check` / `cargo clippy --workspace --all-targets` / `cargo test --workspace` **全绿** + 脱离源码树冒烟（内置进程内化就绪 + sidecar 被发现 → warm 握手） |

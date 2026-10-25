@@ -81,7 +81,7 @@ pub fn setup_cjk_fonts(ctx: &egui::Context) {
                         started.elapsed().as_millis()
                     );
                 }
-                None => log::debug!("[dd-gui] 未找到任何 CJK 字体，中文可能显示为方块"),
+                None => log::warn!("[dd-gui] 未找到任何 CJK 字体，中文可能显示为方块"),
             }
         })
     {
@@ -131,6 +131,7 @@ fn load_font_file(path: &str) -> Option<egui::FontData> {
 /// Geometric Shapes/PUA 的回退路由与重排前逐一相同；缺文件的成员被剔除
 /// （降级安全，如无 segoe → 回到旧观感）。Ubuntu-Light 移出 Proportional
 /// （Hack 仍留在 Monospace 族——该族全仓无调用者，零行为变化）。
+#[cfg(windows)]
 fn load_cjk_font_definitions() -> Option<egui::FontDefinitions> {
     let cjk_candidates = [
         // 优先 msyh.ttc（YaHei，Win7+ 必装且完整含 U+2713 ✓ 与 CJK）
@@ -286,8 +287,206 @@ fn load_cjk_font_definitions() -> Option<egui::FontDefinitions> {
     );
 
     if !any_loaded {
-        log::debug!("[dd-gui] 未找到任何 CJK 字体，中文可能显示为方块");
+        log::warn!("[dd-gui] 未找到任何 CJK 字体，中文可能显示为方块");
         return None;
     }
     Some(fonts)
+}
+
+/// 非 Windows 系统字体发现（D1，dd-run-改进分析.md §4.9）：O5-a 移除 egui
+/// 内置字体三件套后，`FontDefinitions::default()` 在非 Windows 上是**空集**
+/// （Windows 侧有 msyh/segoeui 兜底，非 Windows 侧此前界面文字必然不可读）。
+/// 本实现扫描标准字体目录：CJK 命中优先（至多 3 个，egui 回退链按序查找）；
+/// 无 CJK 时回落任意系统字体（拉丁可读、中文方块）并 warn；空集 = 极端
+/// 精简环境，warn 后维持 `None`（首帧默认字体，与 Windows 降级口径一致）。
+/// 与 O5-a 不冲突：O5-a 移除的是 Windows 产物内嵌三件套；本实现只读系统
+/// 目录，不内嵌任何字体。
+#[cfg(not(windows))]
+fn load_cjk_font_definitions() -> Option<egui::FontDefinitions> {
+    let mut candidates = Vec::new();
+    for dir in system_font_dirs() {
+        collect_font_files(&dir, &mut candidates, 0);
+    }
+    if candidates.is_empty() {
+        log::warn!("[dd-gui] 未在标准目录找到任何系统字体——界面文字将不可读（空字体集）");
+        return None;
+    }
+    let (cjk, rest): (Vec<_>, Vec<_>) = candidates.into_iter().partition(|p| {
+        p.file_name()
+            .and_then(|n| n.to_str())
+            .is_some_and(is_cjk_font_name)
+    });
+
+    let mut fonts = egui::FontDefinitions::default();
+    let mut any_loaded = false;
+    for (i, path) in cjk.iter().take(3).enumerate() {
+        register_font(&mut fonts, &format!("cjk{i}"), path, &mut any_loaded);
+    }
+    if !any_loaded {
+        if let Some(path) = rest.first() {
+            register_font(&mut fonts, "sys-fallback", path, &mut any_loaded);
+            log::warn!(
+                "[dd-gui] 未找到 CJK 系统字体，回落 {}（拉丁可读，中文可能显示为方块）——建议安装 Noto Sans CJK",
+                path.display()
+            );
+        }
+    }
+
+    // semibold 语义族（B1 撤销加粗后恒指 regular 链）：与 Windows 侧同款
+    // 显式注册——热替换会整体重建 FontDefinitions，不注册则引用该族的
+    // 文本在替换后无字形；显式兜底，防任何历史 FontId 引用未知族。
+    fonts.families.insert(
+        egui::FontFamily::Name(crate::theme::SEMIBOLD_FAMILY.into()),
+        fonts
+            .families
+            .get(&egui::FontFamily::Proportional)
+            .cloned()
+            .unwrap_or_default(),
+    );
+
+    if !any_loaded {
+        log::warn!("[dd-gui] 标准目录有字体文件但全部读取失败——界面文字不可读（空字体集）");
+        return None;
+    }
+    Some(fonts)
+}
+
+/// 非 Windows 标准字体目录（发行版目录 → 用户目录）。
+#[cfg(not(windows))]
+fn system_font_dirs() -> Vec<std::path::PathBuf> {
+    let mut dirs = Vec::new();
+    #[cfg(target_os = "macos")]
+    {
+        dirs.push(std::path::PathBuf::from("/System/Library/Fonts"));
+        dirs.push(std::path::PathBuf::from(
+            "/System/Library/Fonts/Supplemental",
+        ));
+        dirs.push(std::path::PathBuf::from("/Library/Fonts"));
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        dirs.push(std::path::PathBuf::from("/usr/share/fonts"));
+        dirs.push(std::path::PathBuf::from("/usr/local/share/fonts"));
+    }
+    if let Some(home) = std::env::var_os("HOME") {
+        let home = std::path::PathBuf::from(home);
+        #[cfg(target_os = "macos")]
+        dirs.push(home.join("Library").join("Fonts"));
+        #[cfg(not(target_os = "macos"))]
+        {
+            dirs.push(home.join(".local").join("share").join("fonts"));
+            dirs.push(home.join(".fonts"));
+        }
+    }
+    dirs
+}
+
+/// CJK 字体文件名命中判定（小写包含任一已知标识即认为提供 CJK 字形）。
+#[cfg(not(windows))]
+fn is_cjk_font_name(name: &str) -> bool {
+    let n = name.to_ascii_lowercase();
+    [
+        "noto sans cjk",
+        "notoserifcjk",
+        "noto sans sc",
+        "source han",
+        "sourcehansans",
+        "sourcehanserif",
+        "wenquanyi",
+        "wqy",
+        "droidsansfallback",
+        "pingfang",
+        "hiragino",
+        "heiti",
+        "simhei",
+        "yahei",
+        "msyh",
+        "ukai",
+        "uming",
+        "arphic",
+    ]
+    .iter()
+    .any(|k| n.contains(k))
+}
+
+/// 递归收集字体文件（`.ttf` / `.otf` / `.ttc`）。上限防护：深度 ≤ 6、
+/// 至多 512 个文件（防御异常大的字体树拖慢启动；512 远超注册上限 3+1）。
+#[cfg(not(windows))]
+fn collect_font_files(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>, depth: u8) {
+    if depth > 6 || out.len() >= 512 {
+        return;
+    }
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            collect_font_files(&path, out, depth + 1);
+        } else if matches!(
+            path.extension()
+                .and_then(|e| e.to_str())
+                .map(|e| e.to_ascii_lowercase())
+                .as_deref(),
+            Some("ttf") | Some("otf") | Some("ttc")
+        ) {
+            out.push(path);
+            if out.len() >= 512 {
+                return;
+            }
+        }
+    }
+}
+
+/// 注册单个字体到 Proportional + Monospace 两个族（族末追加，回退链按序
+/// 查找）；读盘失败静默跳过（调用方按 `any_loaded` 汇总判定降级路径）。
+#[cfg(not(windows))]
+fn register_font(
+    fonts: &mut egui::FontDefinitions,
+    key: &str,
+    path: &std::path::Path,
+    any_loaded: &mut bool,
+) {
+    if let Some(data) = load_font_file(&path.to_string_lossy()) {
+        fonts
+            .font_data
+            .insert(key.to_owned(), std::sync::Arc::new(data));
+        for family in [egui::FontFamily::Proportional, egui::FontFamily::Monospace] {
+            fonts
+                .families
+                .entry(family)
+                .or_default()
+                .push(key.to_owned());
+        }
+        *any_loaded = true;
+        log::info!("[dd-gui] 已加载系统字体：{key} = {}", path.display());
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// D1（dd-run-改进分析.md §4.9 验收①）：字体加载器在三平台都必须产出
+    /// **非空**字体集——Windows 走 msyh/segoeui 系统栈；非 Windows 走系统
+    /// 字体发现。空集 = 界面文字不可读（探针实测 `default()` 为 0 的回归
+    /// 锚）。设字体后 `set_fonts` 语义不变，此处直接断言加载器产物。
+    #[test]
+    fn d1_font_definitions_nonempty_on_all_platforms() {
+        let fonts = load_cjk_font_definitions().expect(
+            "标准机器必有系统字体：Windows = C:\\Windows\\Fonts，非 Windows = 标准字体目录",
+        );
+        assert!(
+            !fonts.font_data.is_empty(),
+            "字体集为空 = 界面文字不可读（D1 回归锚）"
+        );
+        // Proportional 主族必须有成员（首帧渲染依赖）。
+        assert!(
+            !fonts
+                .families
+                .get(&egui::FontFamily::Proportional)
+                .is_none_or(|v| v.is_empty()),
+            "Proportional 族为空"
+        );
+    }
 }
