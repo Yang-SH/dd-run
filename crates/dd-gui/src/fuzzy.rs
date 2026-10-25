@@ -17,7 +17,10 @@ use nucleo::pattern::{CaseMatching, Normalization, Pattern};
 use nucleo::{Config, Matcher, Utf32Str};
 
 /// 一次查询的匹配器（`PanelState::set_query` 时构建，重算可见列表用）。
-pub(crate) struct FuzzyMatcher {
+///
+/// `pub`（§4.5）：纯逻辑零副作用，与 [`crate::aggregator::flatten`] 同理
+/// 对外可构造——criterion bench（`benches/hot_paths.rs`）与单测直达。
+pub struct FuzzyMatcher {
     pattern: Pattern,
     matcher: Matcher,
     /// [`Utf32Str::new`] 的复用缓冲（避免每字段每次分配）。
@@ -27,7 +30,7 @@ pub(crate) struct FuzzyMatcher {
 }
 
 impl FuzzyMatcher {
-    pub(crate) fn new(query: &str) -> Self {
+    pub fn new(query: &str) -> Self {
         Self {
             pattern: Pattern::parse(query, CaseMatching::Ignore, Normalization::Smart),
             matcher: Matcher::new(Config::DEFAULT),
@@ -53,7 +56,7 @@ impl FuzzyMatcher {
     /// `steam://rungameid/588650`（Steam 游戏副标题，140 分）**完全同分**，
     /// `recompute_visible` 的稳定排序遂回落到扩展侧字母序，把标题精确匹配的
     /// Steam 挤到第 5。分层后标题命中恒先于副标题命中，同层内仍按匹配质量排。
-    pub(crate) fn score(&mut self, item: &PanelItem) -> Option<u64> {
+    pub fn score(&mut self, item: &PanelItem) -> Option<u64> {
         if self.blank {
             return Some(0);
         }
