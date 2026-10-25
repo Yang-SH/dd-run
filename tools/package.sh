@@ -38,9 +38,9 @@ cd "$(dirname "$0")/.."   # 仓库根
 # 形态与运行时依赖清单见 docs/optimization-plan.md §2.6.3。要点：
 # - 单二进制 dd-run（内置扩展 in-process）+ README-dist.txt 打 tar.gz；
 #   filesearch sidecar 为 Windows 专属不随包（聚合层优雅降级）→ 无签名面。
-# - .cargo/config.toml 硬编码 build.target = windows-gnu（单机开发口径），
-#   此处显式 --target 宿主三元组覆盖（与 CI 门禁 CARGO_BUILD_TARGET 同语义，
-#   O6 首批 E0463 的既有修复口径）。
+# - 显式 --target 宿主三元组（§5.7 去 pin 后与宿主默认一致，保留为显式声明；
+#   与 CI 门禁 CARGO_BUILD_TARGET 同语义。历史：config.toml 曾硬编码
+#   windows-gnu，O6 首批 E0463 的既有修复口径）。
 # Windows 分支在下方原样保留（本分支结束即 exit 0，逐字节不动）。
 # ============================================================
 OS_NAME="$(uname -s)"
@@ -53,7 +53,7 @@ if [ "$OS_NAME" = "Linux" ] || [ "$OS_NAME" = "Darwin" ]; then
   echo "==> [1/3] 构建宿主 dd-gui（→ dd-run 单文件；内置扩展 in-process）"
   cargo build --release --target "$HOST_TRIPLE" -p dd-gui --bin dd-run
 
-  VER=$(grep -m1 '^version' crates/dd-gui/Cargo.toml | sed -E 's/.*"([^"]+)".*/\1/')
+  VER=$(grep -m1 '^version' Cargo.toml | sed -E 's/.*"([^"]+)".*/\1/')
   case "$OS_NAME" in
     Linux)  TAG="linux-${ARCH}" ;;
     Darwin) TAG="macos-${ARCH}" ;;
@@ -95,6 +95,9 @@ dd-run ${VER} (${TAG}) — portable single-file build
 说明：
   - 5 个内置扩展（apps/calc/system/websearch/shell）in-process 内置于宿主
     进程，单文件即全部；第三方扩展放数据目录 extensions.d/ 即被发现。
+  - 字体：界面文字使用系统字体（不内嵌）。中文显示需系统装有 CJK 字体
+    （Debian/Ubuntu：fonts-noto-cjk；macOS 系统自带苹方）；缺失时拉丁
+    文字可读、中文显示为方块。
   - 文件搜索扩展（Everything sidecar）为 Windows 专属，不随本包分发；
     面板内该类别自动缺席，其余功能不受影响。
   - Linux 下 Wayland 会话不支持全局热键（应用内降级为无热键并提示），
@@ -145,7 +148,7 @@ cargo ${TOOLCHAIN} build --release -p dd-gui --bin dd-run
 
 # 5) 归集单文件到 dist/
 echo "==> [4/4] 产出单文件到 dist/"
-VER=$(grep -m1 '^version' crates/dd-gui/Cargo.toml | sed -E 's/.*"([^"]+)".*/\1/')
+VER=$(grep -m1 '^version' Cargo.toml | sed -E 's/.*"([^"]+)".*/\1/')
 OUT="dist/dd-run-${VER}.exe"
 mkdir -p dist
 cp "${REL}/dd-run.exe" "$OUT"

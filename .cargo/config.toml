@@ -1,15 +1,27 @@
 # dd-run 仓库级工具链配置（免 VS / Windows SDK，对应设计文档 §8.3）
 #
+# §5.7（dd-run-改进分析.md，2026-10-25）：**不再钉扎 build.target**——
+# 此前 `[build] target = "x86_64-pc-windows-gnu"` 迫使 CI 三处（ci.yml linux/
+# macos/bench）与 package.sh 用 CARGO_BUILD_TARGET / --target 显式覆盖，且
+# 非 Windows 贡献者 `cargo test` 开箱即坏。去 pin 后：
+# - Linux/macOS 贡献者：`cargo test` 直接用宿主三元组（rust-toolchain.toml
+#   的 channel 1.95.0 按平台解析），零配置；
+# - Windows（本机口径）：仍用 gnu 宿主工具链——`RUSTUP_TOOLCHAIN=
+#   stable-x86_64-pc-windows-gnu`（与 CI Windows job 同款）或
+#   `cargo +stable-x86_64-pc-windows-gnu build`。原因见下「环境事实」①：
+#   默认按 channel 解析出的 1.95.0-msvc 无链接器。
+# - **偏差记档**：分析文档建议的 `[alias] build-win` 未加——从 1.95.0-msvc
+#   工具链交叉 windows-gnu 缺 dlltool（B2 记档实测），alias 必挂；
+#   机制上等价且已验证的是工具链覆盖。
+#
 # 环境事实（2026-09-01 实测，rustup 阿里云镜像 + NO_PROXY 直连安装）：
-# 1. 默认 target x86_64-pc-windows-msvc 无法链接——本机未安装 VS Build Tools，
-#    且 PATH 里的 link.exe 是 Git Bash 自带的 coreutils link（非 MSVC 链接器）。
-# 2. 宿主工具链已整体切换为 stable-x86_64-pc-windows-gnu（rustc 1.96.0，
-#    `rustup default`），自带 windows-gnu std 与自足链接器，无需交叉编译配置。
+# 1. channel 1.95.0 在 Windows 解析为 msvc 宿主，其产物无法链接——本机未安装
+#    VS Build Tools，且 PATH 里的 link.exe 是 Git Bash 自带的 coreutils link
+#   （非 MSVC 链接器）。Windows 本机开发须用 gnu 宿主工具链覆盖（见上）。
+# 2. stable-x86_64-pc-windows-gnu 自带 windows-gnu std 与自足链接器，无需交叉
+#    编译配置；其 raw-dylib 导入库生成需 dlltool（工具链 bin/self-contained/
+#    内，部分 rustc 版本只按 PATH 查找——CI 已加 GITHUB_PATH 防御步）。
 # 3. 本仓库构建工具链通过国内代理时须 NO_PROXY 直连 mirrors.aliyun.com，
 #    否则下载会经海外代理出口而极慢/卡死。
 #
-# 如需交叉编译产物 .exe（Linux/macOS 产出），改用 cargo-xwin（§8.3 备选路径），
-# 不要改回 msvc 目标。
-
-[build]
-target = "x86_64-pc-windows-gnu"
+# 如需交叉编译产物 .exe（Linux/macOS 产出），改用 cargo-xwin（§8.3 备选路径）。
