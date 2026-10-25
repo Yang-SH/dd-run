@@ -63,7 +63,7 @@ impl PaletteApp {
     /// 帧尾结算：本帧 `draw_panel` 已把落地样本绘制完成 → 输出一条 E2E 日志。
     /// 无待结算样本时零成本早退。
     pub(crate) fn e2e_report(&mut self) {
-        let Some(s) = self.e2e_pending.take() else {
+        let Some(s) = self.view.e2e_pending.take() else {
             return;
         };
         let painted_at = Instant::now();

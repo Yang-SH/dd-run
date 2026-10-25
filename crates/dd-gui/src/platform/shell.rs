@@ -44,6 +44,7 @@ pub(crate) fn run_as_admin(_path: &str) -> Result<(), String> {
 /// 与 0x7F）/ `%` / `^`。explorer 参数为单 arg 直传（无 shell 中间层），但
 /// 参数仍会被 explorer 二次解析（`%VAR%` 展开、`^` 转义），纵深防御与其对齐。
 /// 规则收敛候选（归属 `dd-protocol` 纯函数）留待后续，本轮不跨 crate 重构。
+#[cfg(windows)]
 pub(super) fn reveal_path_allowed(path: &str) -> bool {
     !path.is_empty()
         && !path

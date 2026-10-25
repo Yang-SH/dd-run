@@ -65,13 +65,13 @@ mod tests {
     #[test]
     fn n4_warm_capacity_consumed_at_construction() {
         let app = crate::test_support::make_app();
-        assert_eq!(app.lru.capacity(), 8, "默认配置 → LRU 容量 8");
+        assert_eq!(app.pool.lru.capacity(), 8, "默认配置 → LRU 容量 8");
         let settings = dd_gui::settings::Settings {
             warm_capacity: 2,
             ..dd_gui::settings::Settings::default()
         };
         let app = crate::test_support::make_app_with_settings(settings);
-        assert_eq!(app.lru.capacity(), 2, "构造点读配置容量");
+        assert_eq!(app.pool.lru.capacity(), 2, "构造点读配置容量");
     }
 
     /// R-22：IME 组词期回车守卫——① 同帧 Ime(Preedit/Commit) + Enter → 不激活
@@ -88,8 +88,8 @@ mod tests {
                     page_id: "sub".to_string(),
                 },
             );
-            *app.stack.root_mut() = dd_gui::navigation::PageState::root(vec![item]);
-            app.stack.current_mut().list.move_down(); // 选中唯一项
+            *app.view.stack.root_mut() = dd_gui::navigation::PageState::root(vec![item]);
+            app.view.stack.current_mut().list.move_down(); // 选中唯一项
             app
         };
         // ① 同帧 Preedit + Enter：不激活（栈深不变）。
@@ -103,7 +103,7 @@ mod tests {
         });
         press_enter(&ctx);
         app.handle_keys(&ctx);
-        assert_eq!(app.stack.depth(), 1, "组词帧回车不得激活选中项");
+        assert_eq!(app.view.stack.depth(), 1, "组词帧回车不得激活选中项");
         assert!(
             !key_enter_in_queue(&ctx),
             "该 Enter 应被吞掉（不留给输入框重复上屏）"
@@ -119,14 +119,18 @@ mod tests {
         });
         press_enter(&ctx);
         app.handle_keys(&ctx);
-        assert_eq!(app.stack.depth(), 1, "上屏帧回车不得激活选中项");
+        assert_eq!(app.view.stack.depth(), 1, "上屏帧回车不得激活选中项");
 
         // ② 无 Ime 帧 Enter：正常激活（回归锚——非 IME 环境行为不变）。
         let mut app = make_app_with_item();
         let ctx = crate::test_support::ctx();
         press_enter(&ctx);
         app.handle_keys(&ctx);
-        assert_eq!(app.stack.depth(), 2, "无组词帧回车应正常激活（推入嵌套页）");
+        assert_eq!(
+            app.view.stack.depth(),
+            2,
+            "无组词帧回车应正常激活（推入嵌套页）"
+        );
 
         // ③ 下一帧恢复：组词帧吞掉一次后，后续无 Ime 帧 Enter 正常激活。
         // （headless 队列无真实帧边界——手动清空事件模拟「下一帧」，生产中
@@ -142,7 +146,7 @@ mod tests {
         ctx.input_mut(|i| i.events.clear()); // 帧边界
         press_enter(&ctx);
         app.handle_keys(&ctx);
-        assert_eq!(app.stack.depth(), 2, "下一帧恢复正常激活");
+        assert_eq!(app.view.stack.depth(), 2, "下一帧恢复正常激活");
     }
 
     /// headless 注入 Enter 按下事件（同 `press_key`）。

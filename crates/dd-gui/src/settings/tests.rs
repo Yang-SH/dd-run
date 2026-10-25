@@ -663,8 +663,8 @@ fn r14_config_over_limit_defaults() {
 
 /// R-02：写入失败 → 返回 `Err`、原文件保持完整旧内容、无 `.tmp` 残留。
 ///
-/// 失败注入：Windows 下以 `share_mode(0)` 独占打开目标文件，使
-/// `MoveFileExW(REPLACE_EXISTING)` 因共享冲突失败；Unix 下把目录置只读。
+/// 失败注入（A4）：writer 桩恒 `Err`——不再依赖 OS 权限语义（root 容器
+/// 无视 `chmod`、`share_mode(0)` 仅 Windows 可用），root/非 root 一致。
 #[test]
 fn r02_atomic_write_failure_keeps_old() {
     let dir = r02_temp_dir("failure");
@@ -672,23 +672,20 @@ fn r02_atomic_write_failure_keeps_old() {
     let target = dir.join("config.json");
     std::fs::write(&target, b"original").unwrap();
 
-    #[cfg(windows)]
-    {
-        use std::os::windows::fs::OpenOptionsExt;
-        let _lock = std::fs::OpenOptions::new()
-            .read(true)
-            .share_mode(0)
-            .open(&target)
-            .unwrap();
-        assert!(atomic_write(&target, b"new").is_err());
-    }
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o555)).unwrap();
-        assert!(atomic_write(&target, b"new").is_err());
-        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o755)).unwrap();
-    }
+    let seen_tmp = std::cell::RefCell::new(None);
+    let err = atomic_write_with(&target, b"new", |tmp, _| {
+        *seen_tmp.borrow_mut() = Some(tmp.to_path_buf());
+        Err(std::io::Error::other("injected"))
+    })
+    .unwrap_err();
+    assert_eq!(err.kind(), std::io::ErrorKind::Other);
+    assert!(
+        seen_tmp
+            .borrow()
+            .as_deref()
+            .is_some_and(|p| p.to_string_lossy().ends_with(".tmp")),
+        "writer 收到的必须是 .tmp 路径（目标本体不可被触碰）"
+    );
 
     assert_eq!(std::fs::read(&target).unwrap(), b"original");
     assert!(!dir.join("config.json.tmp").exists(), "无 .tmp 残留");
@@ -696,8 +693,8 @@ fn r02_atomic_write_failure_keeps_old() {
 }
 
 /// R-17：`save` 返回**是否持久化成功**——可写目录 `true`（成功路径零变化，
-/// 回归锚定）；写盘失败 `false`（Windows 用 `share_mode(0)` 独占锁注入，
-/// 与 r02 同款）。调用方据此做「每会话首次失败」一次性反馈。
+/// 回归锚定）；写盘失败 `false`（A4：writer 桩恒 `Err` 注入，与 r02 同源，
+/// 不再依赖 OS 权限语义）。调用方据此做「每会话首次失败」一次性反馈。
 #[test]
 fn r17_save_to_reports_persisted_and_failure() {
     let dir = r02_temp_dir("r17");
@@ -705,27 +702,24 @@ fn r17_save_to_reports_persisted_and_failure() {
     let target = dir.join("config.json");
     assert!(Settings::default().save_to(&target), "可写目录应返回 true");
     assert!(target.exists(), "写盘真实发生");
+    let persisted = std::fs::read(&target).unwrap();
 
-    #[cfg(windows)]
-    {
-        use std::os::windows::fs::OpenOptionsExt;
-        let _lock = std::fs::OpenOptions::new()
-            .read(true)
-            .share_mode(0)
-            .open(&target)
-            .unwrap();
-        assert!(
-            !Settings::default().save_to(&target),
-            "写盘失败应返回 false（而非静默「看似成功」）"
-        );
-    }
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o555)).unwrap();
-        assert!(!Settings::default().save_to(&target));
-        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o755)).unwrap();
-    }
+    let ok = Settings::default().save_to_with(&target, |tmp, bytes| std::fs::write(tmp, bytes));
+    assert!(ok, "注入成功 writer 应与真实路径同语义返回 true");
+
+    assert!(
+        !Settings::default().save_to_with(&target, |_, _| Err(std::io::Error::other("injected"))),
+        "写盘失败应返回 false（而非静默「看似成功」）"
+    );
+    assert_eq!(
+        std::fs::read(&target).unwrap(),
+        persisted,
+        "失败注入后目标保持完整旧内容"
+    );
+    assert!(
+        !dir.join("config.json.tmp").exists(),
+        "失败注入无 .tmp 残留"
+    );
     std::fs::remove_dir_all(&dir).unwrap();
 }
 
@@ -973,4 +967,73 @@ fn t9_background_image_defaults_clamp_and_roundtrip() {
     assert_eq!(roundtrip.background_image_opacity, 55);
     assert_eq!(roundtrip.background_image_fit, BgImageFit::Stretch);
     assert_eq!(roundtrip.background_image_tint_intensity, 10);
+}
+
+// ── C4（dd-run-改进分析.md §4.8）：schema_version + 未知字段保真 ─────────
+
+/// 验收①：写入未知字段 → 读→写一轮后文件仍含该字段（对象/数字/布尔类型保真）。
+#[test]
+fn c4_unknown_fields_survive_read_write_roundtrip() {
+    let raw = r#"{"future_field":1,"future_obj":{"a":[true,null]},"theme":"dark"}"#;
+    let parsed = Settings::parse_json(raw);
+    assert_eq!(
+        parsed.unknown.get("future_field").map(String::as_str),
+        Some("1"),
+        "未知标量进 unknown（JSON 编码文本）"
+    );
+    assert_eq!(
+        parsed.unknown.get("future_obj").map(String::as_str),
+        Some(r#"{"a":[true,null]}"#)
+    );
+    assert_eq!(parsed.theme, ThemePref::Dark, "已知键照常解析");
+
+    // 读→写一轮：未知字段回到线上（且类型还原，不是字符串包裹）
+    let out = parsed.to_json_string();
+    let v: serde_json::Value = serde_json::from_str(&out).unwrap();
+    assert_eq!(v["future_field"], 1, "数字类型还原");
+    assert_eq!(v["future_obj"]["a"][0], true, "对象/数组/布尔还原");
+    assert_eq!(v["theme"], "dark");
+
+    // 二轮解析仍保真（往返稳定）
+    let again = Settings::parse_json(&out);
+    assert_eq!(again.unknown, parsed.unknown);
+}
+
+/// 验收①对照：已知键不进 unknown。
+#[test]
+fn c4_known_keys_not_captured_as_unknown() {
+    let raw = r#"{"theme":"light","warm_capacity":5,"exported_from":"9.9.9"}"#;
+    let parsed = Settings::parse_json(raw);
+    assert!(
+        parsed.unknown.is_empty(),
+        "已知键与导出标记不得进 unknown，实际 {:?}",
+        parsed.unknown
+    );
+}
+
+/// 验收②：schema_version 高于当前支持值 → 只读模式；同值/缺失/更低 → 正常。
+#[test]
+fn c4_higher_schema_version_enters_read_only() {
+    let future = Settings::parse_json(r#"{"schema_version":99,"theme":"dark"}"#);
+    assert!(future.read_only, "更高版本 → 只读（防旧版保存抹字段）");
+    assert_eq!(future.theme, ThemePref::Dark, "只读模式仍解析（渲染正常）");
+
+    for (label, raw) in [
+        ("同值", r#"{"schema_version":1}"#),
+        ("缺失", r#"{"theme":"dark"}"#),
+        ("更低", r#"{"schema_version":0}"#),
+    ] {
+        assert!(
+            !Settings::parse_json(raw).read_only,
+            "{label} schema_version 必须放行"
+        );
+    }
+}
+
+/// 验收②：写盘恒落当前 `schema_version`（升级路径的锚）。
+#[test]
+fn c4_write_stamps_current_schema_version() {
+    let out = Settings::default().to_json_string();
+    let v: serde_json::Value = serde_json::from_str(&out).unwrap();
+    assert_eq!(v["schema_version"], Settings::SCHEMA_VERSION);
 }

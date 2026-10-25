@@ -26,6 +26,7 @@
 //! - 捕获生命周期由 `CaptureHookGuard` 的 Drop 严格兜底（hide / Esc / 完成 /
 //!   30s 超时 / Failed 五条路径全部触发卸载，见 keys.rs）。
 
+#[cfg(windows)]
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
 use std::sync::Mutex;
@@ -37,6 +38,7 @@ pub const CAPTURE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(
 /// 自回声验证主键：VK_F15（0x7E）。不在捕获白名单（0x70..=0x7B）→ 即使
 /// `GetAsyncKeyState` 读到 Alt 修饰也**不会**产生 `Combo` 事件，对 UI 零副作用；
 /// 无任何系统绑定，注入完全无害。
+#[cfg(windows)]
 const SELFTEST_VK: u32 = 0x7E;
 
 /// 钩子发送端（static 存放，供回调读取；同一时刻至多一个捕获钩子）。
@@ -44,6 +46,7 @@ const SELFTEST_VK: u32 = 0x7E;
 static CAPTURE_TX: Mutex<Option<mpsc::Sender<CaptureEvent>>> = Mutex::new(None);
 
 /// 自回声命中旗标：hook_proc 看到 `SELFTEST_VK` keydown 即置位。
+#[cfg(windows)]
 static SELFTEST_HIT: AtomicBool = AtomicBool::new(false);
 
 /// 钩子线程 id（安装线程回发后由 [`CaptureHookGuard`].drop 用于投递 WM_QUIT）。
@@ -76,12 +79,14 @@ pub enum CaptureEvent {
 
 /// 修饰键组合 → settings/MOD_* 编码（纯函数，单测锚定）。
 /// ALT=1 / CONTROL=2 / SHIFT=4 / WIN=8；与 `settings::HOTKEY_MODS_MASK`（0b1111）一致。
+#[cfg(any(windows, test))]
 pub(crate) fn mods_from_keys(ctrl: bool, alt: bool, shift: bool, win: bool) -> u32 {
     (ctrl as u32) << 1 | alt as u32 | (shift as u32) << 2 | (win as u32) << 3
 }
 
 /// 捕获主键白名单（原生虚拟键码）：字母 / 数字 / F1–F12 / Space。
 /// 与 egui 路径的 `capture_vk` 映射集完全一致（两路径同一键集约束）。
+#[cfg(any(windows, test))]
 pub(crate) fn capture_vk_allowed(vk: u32) -> bool {
     (0x41..=0x5A).contains(&vk)        // A–Z
         || (0x30..=0x39).contains(&vk) // 0–9
@@ -90,6 +95,7 @@ pub(crate) fn capture_vk_allowed(vk: u32) -> bool {
 }
 
 /// 键是否为修饰键本身（修饰键按下只更新修饰状态，不作为组合主键）。
+#[cfg(windows)]
 fn is_modifier_vk(vk: u32) -> bool {
     (0x10..=0x12).contains(&vk)      // VK_SHIFT / VK_CONTROL / VK_MENU
         || (0xA0..=0xA5).contains(&vk) // L/R Shift·Control·Menu
@@ -232,13 +238,13 @@ impl Drop for CaptureHookGuard {
         if let Ok(mut tx) = CAPTURE_TX.lock() {
             *tx = None;
         }
-        let thread_id = THREAD_ID.lock().map(|g| *g).unwrap_or(0);
+        let _thread_id = THREAD_ID.lock().map(|g| *g).unwrap_or(0);
         #[cfg(windows)]
-        if thread_id != 0 {
+        if _thread_id != 0 {
             // SAFETY：线程 id 由安装线程回发，WM_QUIT 结束其消息循环。
             use windows_sys::Win32::UI::WindowsAndMessaging::{PostThreadMessageW, WM_QUIT};
             unsafe {
-                PostThreadMessageW(thread_id, WM_QUIT, 0, 0);
+                PostThreadMessageW(_thread_id, WM_QUIT, 0, 0);
             }
         }
         // 不 join：卸载路径在 UI 线程（Esc / hide / 超时），钩子线程 unhook

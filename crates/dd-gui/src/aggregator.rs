@@ -31,6 +31,7 @@
 
 use std::collections::{BTreeMap, HashMap};
 use std::path::PathBuf;
+use std::sync::mpsc;
 use std::thread;
 
 use dd_ext::ExtensionSpec;
@@ -519,12 +520,66 @@ enum ExtOutcome {
     },
 }
 
+/// 流式收集首屏（C2，dd-run-改进分析.md §4.1）：每扩展一个线程，**完成序**
+/// 回调——快扩展先回先渲染，不被 spawn 序里靠前的慢扩展阻塞（旧
+/// [`collect_top_level`] 按 spawn 序 `join`，任一慢扩展会扣住其后全部结果）。
+///
+/// 线程 panic 兜底与旧实现一致：转 `Failed`（id = unknown），不让缺失一条
+/// 结果错位整个流。回调在 scoped thread 全部结束后返回（父线程循环 recv）。
+pub fn collect_top_level_streaming(
+    exts: &[LoadedExtension],
+    specs: &HashMap<String, ExtensionSpec>,
+    cache: Option<&FrozenCache>,
+    mut on_result: impl FnMut(ExtItems, Option<ExtClient>),
+) {
+    thread::scope(|scope| {
+        let (tx, rx) = mpsc::channel::<ExtOutcome>();
+        for ext in exts {
+            let ext = ext.clone();
+            let tx = tx.clone();
+            scope.spawn(move || {
+                let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    load_one(ext, specs, cache)
+                }))
+                .unwrap_or_else(|_| ExtOutcome::Failed {
+                    id: "unknown".to_string(),
+                    name: "扩展线程".to_string(),
+                    error: "拉取线程 panic".to_string(),
+                });
+                let _ = tx.send(outcome);
+            });
+        }
+        drop(tx);
+        while let Ok(outcome) = rx.recv() {
+            match outcome {
+                ExtOutcome::Ready {
+                    proc,
+                    id,
+                    name,
+                    items,
+                } => {
+                    on_result(ExtItems::Ready { id, name, items }, Some(*proc));
+                }
+                ExtOutcome::Stub { id, name, items } => {
+                    on_result(ExtItems::Stub { id, name, items }, None);
+                }
+                ExtOutcome::Failed { id, name, error } => {
+                    on_result(ExtItems::Failed { id, name, error }, None);
+                }
+            }
+        }
+    });
+}
+
 /// 并行收集首屏：每扩展一个线程，客户端对象线程独占，join 回传。
 ///
 /// M3 分流（见模块文档，**仅子进程**）：frozen + 磁盘桩命中 → [`ExtOutcome::Stub`]
 /// （不 spawn）；frozen 无桩（首启）→ spawn 拉取并落盘；fresh → spawn 拉取不落盘。
 /// M9：内置扩展（`specs` 命中者）走 in-process，**无 spawn / 无桩**（纯函数调用恒瞬时）。
 /// `cache` 用 scoped thread 共享只读借用（`FrozenCache` 仅含目录路径，无内部状态）。
+///
+/// C2 起生产链路走 [`collect_top_level_streaming`]（完成序）；本函数保留作
+/// 批量语义兼容（一次性收集全部，`processes` 与 `per_ext` 的 Ready 顺序一一对应）。
 pub fn collect_top_level(
     exts: &[LoadedExtension],
     specs: &HashMap<String, ExtensionSpec>,
@@ -532,42 +587,19 @@ pub fn collect_top_level(
 ) -> CollectResult {
     let mut processes: Vec<ExtClient> = Vec::new();
     let mut per_ext = Vec::with_capacity(exts.len());
-    thread::scope(|scope| {
-        let mut handles = Vec::with_capacity(exts.len());
-        for ext in exts {
-            let ext = ext.clone();
-            handles.push(scope.spawn(move || load_one(ext, specs, cache)));
+    collect_top_level_streaming(exts, specs, cache, |item, proc| {
+        if let Some(proc) = proc {
+            processes.push(proc);
         }
-        for handle in handles {
-            match handle.join() {
-                Ok(ExtOutcome::Ready {
-                    proc,
-                    id,
-                    name,
-                    items,
-                }) => {
-                    processes.push(*proc);
-                    per_ext.push(ExtItems::Ready { id, name, items });
-                }
-                Ok(ExtOutcome::Stub { id, name, items }) => {
-                    per_ext.push(ExtItems::Stub { id, name, items });
-                }
-                Ok(ExtOutcome::Failed { id, name, error }) => {
-                    per_ext.push(ExtItems::Failed { id, name, error });
-                }
-                Err(_) => per_ext.push(ExtItems::Failed {
-                    id: "unknown".to_string(),
-                    name: "扩展线程".to_string(),
-                    error: "拉取线程 panic".to_string(),
-                }),
-            }
-        }
+        per_ext.push(item);
     });
     CollectResult { processes, per_ext }
 }
 
 /// spawn → `initialize`（握手+版本协商）。供首屏拉取与 **GUI 桩复热链路**复用。
-pub fn spawn_and_initialize(ext: &LoadedExtension) -> Result<ExtensionProcess, String> {
+pub fn spawn_and_initialize(
+    ext: &LoadedExtension,
+) -> Result<ExtensionProcess, dd_host::error::LoadError> {
     spawn_and_initialize_with_info(ext).map(|(proc, _)| proc)
 }
 
@@ -577,7 +609,7 @@ pub fn spawn_and_initialize(ext: &LoadedExtension) -> Result<ExtensionProcess, S
 /// （设计文档 §6.3：含兜底能力者一律视为 fresh，不落桩）。
 pub fn spawn_and_initialize_with_info(
     ext: &LoadedExtension,
-) -> Result<(ExtensionProcess, InitializeResult), String> {
+) -> Result<(ExtensionProcess, InitializeResult), dd_host::error::LoadError> {
     spawn_and_initialize_with(ext, assess_for_spawn)
 }
 
@@ -601,7 +633,7 @@ fn assess_for_spawn(ext: &LoadedExtension, origin: ExtOrigin) -> Assessment {
 pub(crate) fn spawn_and_initialize_with(
     ext: &LoadedExtension,
     assess: impl FnOnce(&LoadedExtension, ExtOrigin) -> Assessment,
-) -> Result<(ExtensionProcess, InitializeResult), String> {
+) -> Result<(ExtensionProcess, InitializeResult), dd_host::error::LoadError> {
     // S-05 信任门禁（**第二道，且是所有子进程 spawn 的唯一入口**）：未获信任者一律
     // 不拉起。第一道在 `load_extension_sources` 的 `active` 过滤（决定"谁进集合"）；
     // 此处兜底覆盖桩复热等一切路径——即使上游漏判也拦得住。
@@ -616,23 +648,27 @@ pub(crate) fn spawn_and_initialize_with(
             Trust::Blocked => "已被阻止",
             Trust::AutoTrusted => unreachable!("is_trusted() 为真时不会进入此分支"),
         };
-        return Err(format!(
-            "扩展未获信任（{label}）：{} —— 请在设置页「扩展」中允许该扩展",
-            ext.manifest.id
-        ));
+        return Err(dd_host::error::LoadError::Untrusted {
+            id: ext.manifest.id.clone(),
+            label,
+        });
     }
     // 失败信息一律带**可操作线索**：spawn 失败附被尝试的命令路径（PATH / 路径类
     // 问题一眼可见），握手失败附扩展 stderr 末行（根因通常就在那里）。
     // 2026-09-10 真机反馈驱动：此前只报「spawn 失败：os error 2」，排查只能靠猜。
-    let mut spawned = ExtensionProcess::spawn(ext)
-        .map_err(|e| format!("spawn 失败：{e}（命令：{}）", ext.command.display()))?;
+    // （C3：文案经 `LoadError::Display` 输出，与拼接版逐字一致。）
+    let mut spawned =
+        ExtensionProcess::spawn(ext).map_err(|e| dd_host::error::LoadError::Spawn {
+            reason: e.to_string(),
+            command: ext.command.display().to_string(),
+        })?;
     let init = match spawned.initialize(PROTOCOL_VERSION, HOST_VERSION) {
         Ok(init) => init,
         Err(e) => {
-            return Err(format!(
-                "initialize 失败：{e}{}",
-                detail_suffix(spawned.failure_detail())
-            ))
+            return Err(dd_host::error::LoadError::Initialize {
+                reason: e.to_string(),
+                detail: detail_suffix(spawned.failure_detail()),
+            })
         }
     };
     Ok((spawned, init))
@@ -672,7 +708,13 @@ fn load_one(
     // 无桩（frozen 首启）/ fresh / 内置 in-process：open → initialize → top_level_commands。
     let (mut client, init) = match crate::ext_client::open(specs.get(&id).cloned(), Some(&ext)) {
         Ok(pair) => pair,
-        Err(e) => return ExtOutcome::Failed { id, name, error: e },
+        Err(e) => {
+            return ExtOutcome::Failed {
+                id,
+                name,
+                error: e.to_string(),
+            }
+        }
     };
     // §6.3：含兜底能力者一律视为 fresh——不落桩；若历史桩存在则清除，
     // 避免下次冷启动读桩（无进程 → fallback_commands 拉不到）。
@@ -1295,14 +1337,14 @@ mod tests {
         let err = spawn_and_initialize_with_info(&ext)
             .map(|_| ())
             .expect_err("未获信任必须被拦下");
-        assert!(
-            err.contains("未获信任"),
-            "错误信息应指明是信任门禁拦下的，实得：{err}"
-        );
-        assert!(
-            err.contains("com.example.untrusted"),
-            "错误信息应含扩展 id，便于用户定位：{err}"
-        );
+        // C3：错误已结构化——按变体匹配（不再对 Display 文案做 contains 判型）。
+        let dd_host::error::LoadError::Untrusted { id, label } = &err else {
+            panic!("应为 Untrusted，实际 {err:?}");
+        };
+        assert_eq!(id, "com.example.untrusted", "错误应含扩展 id");
+        assert_eq!(*label, "待批准", "台账无记录 → 待批准");
+        // Display 文案契约（面向用户的设置页提示）仍逐字可查：
+        assert!(err.to_string().contains("未获信任"));
     }
 
     /// 对照：**随包首方**扩展（来源 = sidecar 目录 + 白名单）自动信任，门禁放行，
@@ -1327,12 +1369,16 @@ mod tests {
         .map(|_| ())
         .expect_err("exe 不存在 → 仍应失败");
         assert!(
-            err.contains("spawn 失败") || err.contains("initialize 失败"),
-            "首方扩展应通过信任门禁、失败于真实原因，实得：{err}"
+            matches!(
+                &err,
+                dd_host::error::LoadError::Spawn { .. }
+                    | dd_host::error::LoadError::Initialize { .. }
+            ),
+            "首方扩展应通过信任门禁、失败于真实原因（Spawn/Initialize），实际 {err:?}"
         );
         assert!(
-            !err.contains("未获信任"),
-            "首方 sidecar 不应被信任门禁拦下：{err}"
+            !matches!(&err, dd_host::error::LoadError::Untrusted { .. }),
+            "首方 sidecar 不应被信任门禁拦下：{err:?}"
         );
     }
 
@@ -1523,5 +1569,132 @@ mod tests {
             detail_suffix(Some("退出码 1；stderr: boom".to_string())),
             "（诊断：退出码 1；stderr: boom）"
         );
+    }
+
+    // ── doc 契约锚点（B2②，dd-run-改进分析.md §3.3）──────────────────
+    // `load_one` 为本模块私有函数，锚点测试就近放置（不提可见性）。
+
+    /// 构造子进程型 LoadedExtension（command 不存在；frozen 可调）。
+    fn ghost_ext(id: &str, frozen: bool) -> LoadedExtension {
+        LoadedExtension {
+            manifest: dd_host::manifest::Manifest {
+                schema_version: "1.0".to_string(),
+                id: id.to_string(),
+                name: "Ghost".to_string(),
+                version: "1.0.0".to_string(),
+                description: String::new(),
+                author: String::new(),
+                license: String::new(),
+                homepage: String::new(),
+                icon: None,
+                entry: dd_host::manifest::Entry {
+                    command: "dd-run-no-such-exe-ghost".to_string(),
+                    args: vec![],
+                    env: Default::default(),
+                    cwd: None,
+                },
+                frozen,
+                capabilities: vec![],
+                platforms: None,
+                min_host_version: None,
+            },
+            path: PathBuf::from("ghost.json"),
+            dir: PathBuf::from("."),
+            command: PathBuf::from("dd-run-no-such-exe-ghost"),
+            cwd: PathBuf::from("."),
+        }
+    }
+
+    /// 契约锚：docs/protocol.md §6.1 现状注（核对至 2026-09-13）。
+    ///
+    /// 现状注原文：落盘门禁实际读取**清单**的 `frozen` 字段（`load_one`
+    /// frozen 桩分流段），握手回传的 `provider.frozen` 当前不被消费。
+    ///
+    /// 断言：清单 `frozen=true` 且磁盘桩命中 → 直接 `Stub`（**不 spawn**——
+    /// command 指向不存在的 exe，若走了 open 路径必失败）；清单 `frozen=false`
+    /// 时**同样的桩被无视** → 走 open（失败，因为 exe 不存在）。
+    /// 有人把门禁改读握手回传值时此测试红，提示同步 protocol.md §6.1 注。
+    #[test]
+    fn frozen_gate_reads_manifest_frozen_not_handshake() {
+        let dir = std::env::temp_dir().join(format!(
+            "dd-gui-doc-contract-frozen-{}-{}",
+            std::process::id(),
+            std::time::Instant::now().elapsed().as_nanos()
+        ));
+        let cache = FrozenCache::new(&dir);
+        let snap = FrozenSnapshot {
+            ext_id: "com.ghost.frozen".to_string(),
+            version: "1.0.0".to_string(),
+            commands: vec![cmd("stub.item", "桩项", None)],
+        };
+        cache.save(&snap).expect("落桩");
+
+        let specs = HashMap::new();
+
+        // 清单 frozen=true + 桩命中 → Stub（不 spawn）
+        let outcome = load_one(ghost_ext("com.ghost.frozen", true), &specs, Some(&cache));
+        match outcome {
+            ExtOutcome::Stub { items, .. } => {
+                assert_eq!(items.len(), 1, "frozen=true 读桩不拉起（桩内 1 条命令）")
+            }
+            _ => panic!("frozen=true 且桩命中必须读桩（Stub），实际走了 open 路径"),
+        }
+
+        // 清单 frozen=false → 同一桩被无视，走 open（信任门禁/spawn 均可能失败，
+        // 但**不是 Stub**——证明读桩分流只看清单侧 frozen）
+        let outcome = load_one(ghost_ext("com.ghost.frozen", false), &specs, Some(&cache));
+        assert!(
+            matches!(outcome, ExtOutcome::Failed { .. }),
+            "frozen=false 时桩被无视（任何失败都证明没读桩），却产出了非 Failed"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 契约锚：docs/extensions.md §5 现状注（核对至 2026-09-13）前半。
+    ///
+    /// 现状注原文：spawn 失败只置 `SourceStatus::Failed`、**不进崩溃计数**
+    /// （`load_one` 产出 `ExtOutcome::Failed` → `collect_top_level` 收集 →
+    /// `flatten` 落 `SourceStatus::Failed`，全程不触崩溃计数）。
+    ///
+    /// 断言：注入信任放行（`spawn_and_initialize_with` 缝，与
+    /// `spawn_gate_passes_first_party_sidecar` 同款）后，spawn 失败（exe 不存在）
+    /// → `Err` 且错误带被尝试的命令路径（可操作线索）→ `flatten` 落
+    /// `SourceStatus::Failed`。「不触崩溃计数」为结构性保证（崩溃计数写点仅在
+    /// `record_crash`——巡检/invoke/page 三处运行期路径，聚合链路不可达）。
+    /// 「连续 3 次 spawn 失败熔断」未实现 = `no-assert`（负向能力断言无载体，
+    /// 补实现时同步 extensions.md §5 注）。
+    #[test]
+    fn spawn_failure_yields_failed_outcome() {
+        let ext = ghost_ext("com.ghost.dead", false);
+        let err = spawn_and_initialize_with(&ext, |_ext, _origin| Assessment {
+            id: ext.manifest.id.clone(),
+            trust: Trust::AutoTrusted,
+            origin: ExtOrigin::UserDir,
+            sidecar_tampered: false,
+            sig_invalid: false,
+        })
+        .map(|_| ())
+        .expect_err("exe 不存在 → spawn 失败");
+        // C3：结构化匹配 + Display 文案契约（命令路径线索保留）。
+        let dd_host::error::LoadError::Spawn { reason, command } = &err else {
+            panic!("应为 Spawn，实际 {err:?}");
+        };
+        assert!(
+            command.contains("dd-run-no-such-exe-ghost"),
+            "失败必须带被尝试的命令路径（可操作线索），实际 {command}"
+        );
+        assert!(
+            !reason.is_empty(),
+            "spawn 根因应透传（os error / program not found）"
+        );
+        // flatten 落 Failed（extensions.md §5 注的链路口径）
+        let per_ext = vec![ExtItems::Failed {
+            id: "com.ghost.dead".to_string(),
+            name: "Ghost".to_string(),
+            error: err.to_string(),
+        }];
+        let (_, sources) = flatten(&per_ext, Lang::ZhCn);
+        assert!(matches!(sources[0].status, SourceStatus::Failed { .. }));
     }
 }

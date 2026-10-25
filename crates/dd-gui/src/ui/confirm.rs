@@ -16,9 +16,9 @@ impl PaletteApp {
     ///
     /// 键盘语义不变（`handle_keys`：对话框活跃时 Enter=确认、Esc=取消、
     /// 其余键不穿透 → 遮罩期间列表键盘选择冻结）。鼠标点击确认同样触发。
-    /// 渲染只读借用 `self.confirm`，点击后再取走并真正发起请求。
+    /// 渲染只读借用 `self.overlay.confirm`，点击后再取走并真正发起请求。
     pub(crate) fn draw_confirm(&mut self, ctx: &egui::Context) {
-        let dialog = match self.confirm.as_ref() {
+        let dialog = match self.overlay.confirm.as_ref() {
             Some(d) => d,
             None => return,
         };
@@ -174,11 +174,11 @@ impl PaletteApp {
 
         if confirmed {
             // 取走对话框并真正重发 invoke（带 context.confirmed = true）
-            let taken = self.confirm.take().expect("对话框仍应在位");
+            let taken = self.overlay.confirm.take().expect("对话框仍应在位");
             let params = taken.pending.confirmed_params();
             self.dispatch_invoke(&taken.ext_id, params);
         } else if cancelled {
-            self.confirm = None;
+            self.overlay.confirm = None;
         }
     }
 }

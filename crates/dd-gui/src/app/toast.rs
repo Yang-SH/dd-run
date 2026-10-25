@@ -99,7 +99,7 @@ impl PaletteApp {
         duration_ms: Option<u64>,
     ) {
         let ms = toast_duration_ms(kind, duration_ms);
-        self.toast = Some(ToastState {
+        self.overlay.toast = Some(ToastState {
             message: message.into(),
             expires: Instant::now() + Duration::from_millis(ms),
             kind,

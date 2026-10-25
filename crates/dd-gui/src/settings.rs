@@ -89,6 +89,9 @@ pub struct Settings {
     pub hotkey_vk: u32,
     /// 开机自启（M6 批次 6.3：HKCU Run 键；默认关）。
     pub autostart: bool,
+    /// §5.2：启动时自动检查更新（读 GitHub Releases；默认关——便携工具隐私
+    /// 优先，手动「检查更新」按钮常驻不受此开关影响）。
+    pub check_updates: bool,
     /// 已停用扩展的清单 id 列表（M6 批次 6.3：聚合时跳过；默认空 = 全启用）。
     pub disabled_extensions: Vec<String>,
     /// 面板记忆尺寸（v4.12 D37：手动拉伸后的逻辑宽高，取整存储；
@@ -124,6 +127,22 @@ pub struct Settings {
     /// `serde_json::Value` 草型收窄——消费者当前只需字符串，且 `Value` 无
     /// `Eq` 会破坏 `Settings` 的 derive）；BTreeMap 保证序列化确定性。
     pub ext_settings: BTreeMap<String, BTreeMap<String, String>>,
+    /// C4（dd-run-改进分析.md §4.8）：`parse_json` 读到的**未知字段**原样
+    /// 保留——值存该字段的 **JSON 编码文本**（`Value::to_string()`；写盘时
+    /// `from_str` 还原真实类型，对象/数组/数字/布尔均保真）。读→写一轮后
+    /// 未知字段不再消失（新版本字段在旧版回退场景下保真）。BTreeMap 保证
+    /// 序列化顺序确定。
+    pub unknown: BTreeMap<String, String>,
+    /// C4：读到**更高** schema 版本 → 只读模式（设置页保存被拒 + 顶部黄条，
+    /// 由 UI 层按 `Settings::read_only` 提示）；防止旧版保存一次抹掉新字段。
+    /// 本字段不落盘（每轮 `parse_json` 重算）。
+    pub read_only: bool,
+}
+
+impl Settings {
+    /// C4：当前写入方支持的配置 schema 版本（`to_json_string` 落
+    /// `"schema_version"`；读到更高值进入只读模式）。
+    pub const SCHEMA_VERSION: u32 = 1;
 }
 
 /// 全局热键默认修饰键：Win + Alt（MOD_* 值：ALT=1/CONTROL=2/SHIFT=4/WIN=8，
@@ -233,6 +252,7 @@ impl Default for Settings {
             hotkey_mods: HOTKEY_MODS_DEFAULT,
             hotkey_vk: HOTKEY_VK_DEFAULT,
             autostart: false,
+            check_updates: false,
             disabled_extensions: Vec::new(),
             panel_size: None,
             lang: Lang::default(),
@@ -242,6 +262,8 @@ impl Default for Settings {
             warm_capacity: WARM_CAPACITY_DEFAULT,
             custom_commands: Vec::new(),
             ext_settings: BTreeMap::new(),
+            unknown: BTreeMap::new(),
+            read_only: false,
         }
     }
 }
@@ -295,12 +317,73 @@ pub fn hotkey_combo_label(mods: u32, vk: u32) -> String {
 }
 
 impl Settings {
+    /// 写盘时已知键的集合（C4 未知字段保真：其余顶层键进 `unknown`）。
+    fn known_keys() -> &'static [&'static str] {
+        &[
+            "schema_version",
+            "theme",
+            "open_view",
+            "search_engines",
+            "backdrop",
+            "material_opacity",
+            "corner_pref",
+            "border_mode",
+            "esc_behavior",
+            "backspace_go_back",
+            "colorization",
+            "custom_tint_color",
+            "custom_tint_intensity",
+            "single_click_activation",
+            "ui_animations",
+            "background_image_path",
+            "background_image_opacity",
+            "background_image_fit",
+            "background_image_tint_intensity",
+            "hotkey_mods",
+            "hotkey_vk",
+            "autostart",
+            "check_updates",
+            "disabled_extensions",
+            "panel_size",
+            "lang",
+            "density",
+            "search_apps",
+            "search_steam_games",
+            "warm_capacity",
+            "custom_commands",
+            "ext_settings",
+            // N5 导出物版本标记：随导出物写入、导入时由 parse_json 读走后
+            // 不再回写（写盘方是 config.json，不是备份文件）——归为已知键，
+            // 不进 unknown 保真集。
+            "exported_from",
+        ]
+    }
+
     /// 从 JSON 文本解析；空/损坏/字段未知 → 默认（防御性，永不失败）。
+    ///
+    /// C4（§4.8）：① 未知顶层字段原样保留进 `unknown`（JSON 编码文本，
+    /// `to_json_string` 回写）；② `schema_version` **高于**当前支持值 →
+    /// `read_only = true`（防旧版保存抹掉新字段）；缺失/同值/更低 → 正常
+    ///（更低 = 旧版本配置文件，逐字段读已知键即迁移）。
     pub fn parse_json(text: &str) -> Self {
         let mut s = Self::default();
         let Ok(v) = serde_json::from_str::<serde_json::Value>(text) else {
             return s;
         };
+        // C4①：未知顶层字段原样保留（已知键 / 元数据键除外）。
+        if let Some(obj) = v.as_object() {
+            for (k, val) in obj {
+                if !Self::known_keys().contains(&k.as_str()) {
+                    s.unknown.insert(k.clone(), val.to_string());
+                }
+            }
+        }
+        // C4②：schema 版本门禁（严格大于才只读——同值/缺失/更低都放行）。
+        if let Some(n) = v.get("schema_version").and_then(|x| x.as_u64()) {
+            if n > Self::SCHEMA_VERSION as u64 {
+                s.read_only = true;
+            }
+        }
         if let Some(t) = v.get("theme").and_then(|t| t.as_str()) {
             if let Some(pref) = ThemePref::parse(t) {
                 s.theme = pref;
@@ -420,6 +503,10 @@ impl Settings {
         if let Some(b) = v.get("autostart").and_then(|b| b.as_bool()) {
             s.autostart = b;
         }
+        // §5.2：启动时检查更新（字段缺失/类型损坏 → 默认关，零迁移）
+        if let Some(b) = v.get("check_updates").and_then(|b| b.as_bool()) {
+            s.check_updates = b;
+        }
         if let Some(arr) = v.get("disabled_extensions").and_then(|a| a.as_array()) {
             s.disabled_extensions = arr
                 .iter()
@@ -526,13 +613,28 @@ impl Settings {
     }
 
     /// 序列化为 JSON 文本（单行，便于人查）。
+    ///
+    /// C4（§4.8）：先落 `schema_version` 与**未知字段**（JSON 编码文本还原
+    /// 为真实类型），再由下方已知键覆盖——未知字段在「读→写」一轮后保真，
+    /// 高版本配置回退旧版保存不再抹掉新字段。
     pub fn to_json_string(&self) -> String {
         let engines: Vec<serde_json::Value> = self
             .search_engines
             .iter()
             .map(|e| serde_json::json!({ "name": e.name, "template": e.template }))
             .collect();
-        serde_json::json!({
+        // C4：未知字段还原（编码文本 → Value；损坏即丢弃——不该发生）。
+        let mut out = serde_json::Map::new();
+        out.insert(
+            "schema_version".to_string(),
+            serde_json::json!(Self::SCHEMA_VERSION),
+        );
+        for (k, encoded) in &self.unknown {
+            if let Ok(val) = serde_json::from_str::<serde_json::Value>(encoded) {
+                out.insert(k.clone(), val);
+            }
+        }
+        let known = serde_json::json!({
             "theme": self.theme.as_str(),
             "open_view": self.open_view.as_str(),
             "search_engines": engines,
@@ -554,6 +656,7 @@ impl Settings {
             "hotkey_mods": self.hotkey_mods,
             "hotkey_vk": self.hotkey_vk,
             "autostart": self.autostart,
+            "check_updates": self.check_updates,
             "disabled_extensions": self.disabled_extensions,
             "panel_size": match self.panel_size {
                 Some((w, h)) => serde_json::json!([w, h]),
@@ -577,8 +680,14 @@ impl Settings {
                 })
                 .collect::<Vec<_>>(),
             "ext_settings": self.ext_settings,
-        })
-        .to_string()
+        });
+        // 已知键覆盖同名未知键（正常不相交；防御键集漂移）
+        if let Some(known_obj) = known.as_object() {
+            for (k, v) in known_obj {
+                out.insert(k.clone(), v.clone());
+            }
+        }
+        serde_json::Value::Object(out).to_string()
     }
 
     /// 引擎表 → `DD_WEBSEARCH_ENGINES` 环境变量值（紧凑 JSON 数组）。
@@ -663,6 +772,27 @@ impl Settings {
         }
     }
 
+    /// [`save_to`] 的可注入形态（A4，仅测试编译）：`writer` 注入写盘失败，
+    /// 单测不再依赖 OS 权限语义（root 容器无视 `chmod`、`share_mode(0)` 仅
+    /// Windows）。生产路径恒 [`save_to`] → [`atomic_write`]。
+    #[cfg(test)]
+    fn save_to_with(
+        &self,
+        path: &std::path::Path,
+        writer: impl Fn(&std::path::Path, &[u8]) -> std::io::Result<()>,
+    ) -> bool {
+        match atomic_write_with(path, self.to_json_string().as_bytes(), writer) {
+            Ok(()) => {
+                log::info!("[dd-gui] 设置已保存：{}", path.display());
+                true
+            }
+            Err(e) => {
+                log::warn!("[dd-gui] 配置写入失败（{}）：{e}", path.display());
+                false
+            }
+        }
+    }
+
     /// N5（2026-10-04）：导出为**迁移备份** JSON 文本——全量字段减去机器态
     ///（`autostart`：注册表状态随机器；`panel_size`：分辨率相关——跨机无
     /// 意义），并写 [`BACKUP_VERSION_KEY`] = 宿主版本号。`trust.json` 永不在
@@ -703,11 +833,16 @@ impl Settings {
     /// **机器态一律保留本机现值**（不随导入）：`autostart`（注册表）、
     /// `panel_size`（分辨率）、`hotkey_mods`/`hotkey_vk`（改绑须走捕获流程，
     /// 导入期自动注册有冲突风险——v1 刻意不随导入，导出物仍含该字段供参考）。
-    pub fn import_backup(text: &str, current: &Settings) -> Result<Settings, String> {
-        let v: serde_json::Value =
-            serde_json::from_str(text).map_err(|e| format!("不是合法 JSON：{e}"))?;
+    /// 导入迁移备份（N5）：解析 + 覆盖导入（自述机器侧字段保留当前值）。
+    ///
+    /// C3（dd-run-改进分析.md §4.6）：错误类型从 `String` 收拢为
+    /// [`SettingsImportError`]（三边界之一的设置边界）——Display 与原拼接
+    /// 文案逐字一致（toast 键 `toast.settings_import_fail` 的 `{e}` 占位不变），
+    /// 调用方可按变体分流。
+    pub fn import_backup(text: &str, current: &Settings) -> Result<Settings, SettingsImportError> {
+        let v: serde_json::Value = serde_json::from_str(text)?;
         if !v.is_object() {
-            return Err("备份内容不是 JSON 对象".to_string());
+            return Err(SettingsImportError::NotAnObject);
         }
         let mut s = Settings::parse_json(text);
         s.autostart = current.autostart;
@@ -716,6 +851,15 @@ impl Settings {
         s.hotkey_vk = current.hotkey_vk;
         Ok(s)
     }
+}
+
+/// C3：[`Settings::import_backup`] 的错误（Display 与原 String 文案逐字一致）。
+#[derive(Debug, thiserror::Error)]
+pub enum SettingsImportError {
+    #[error("不是合法 JSON：{0}")]
+    NotJson(#[from] serde_json::Error),
+    #[error("备份内容不是 JSON 对象")]
+    NotAnObject,
 }
 
 /// N5：设置迁移备份文件名（数据根目录下，与 `config.json` 同目录——
@@ -733,7 +877,24 @@ pub const BACKUP_VERSION_KEY: &str = "exported_from";
 /// 删除 `.tmp` 残留。刻意不做 fsync：调用方（`persist_panel_size` 每次隐藏
 /// 面板都写盘）优先低延迟，崩溃窗口从「整个写入时长」缩到「一次 rename」。
 /// 与 `dd-host` 的同款助手各落一份（方案 R-02 口径：两 crate 各一）。
-fn atomic_write(path: &std::path::Path, bytes: &[u8]) -> std::io::Result<()> {
+/// `pub(crate)`（§5.1）：`usage::Usage::save` 复用同一原子写语义。
+pub(crate) fn atomic_write(path: &std::path::Path, bytes: &[u8]) -> std::io::Result<()> {
+    atomic_write_with(path, bytes, atomic_writer)
+}
+
+/// 生产写入器：整文件写入（`std::fs::write`）。
+fn atomic_writer(tmp: &std::path::Path, bytes: &[u8]) -> std::io::Result<()> {
+    std::fs::write(tmp, bytes)
+}
+
+/// [`atomic_write`] 的可注入形态（A4）：`writer` 负责把 `bytes` 落到传入的
+/// `.tmp` 路径。测试传恒 `Err` 的桩注入写盘失败——不再依赖 OS 权限语义，
+/// 注入分支（`share_mode` / `chmod`）已删，root/非 root 行为一致。
+fn atomic_write_with(
+    path: &std::path::Path,
+    bytes: &[u8],
+    writer: impl Fn(&std::path::Path, &[u8]) -> std::io::Result<()>,
+) -> std::io::Result<()> {
     if let Some(dir) = path.parent() {
         std::fs::create_dir_all(dir)?;
     }
@@ -743,7 +904,7 @@ fn atomic_write(path: &std::path::Path, bytes: &[u8]) -> std::io::Result<()> {
         .unwrap_or_default();
     tmp_name.push(".tmp");
     let tmp = path.with_file_name(tmp_name);
-    match std::fs::write(&tmp, bytes) {
+    match writer(&tmp, bytes) {
         Ok(()) => match std::fs::rename(&tmp, path) {
             Ok(()) => Ok(()),
             Err(e) => {

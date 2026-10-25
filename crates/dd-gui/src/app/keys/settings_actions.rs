@@ -9,12 +9,12 @@ impl PaletteApp {
     /// 设置页开机自启开关（M6 批次 6.3）：注册表先落，成功才持久化；
     /// 失败 Toast 错误并保持原状态。
     pub(crate) fn apply_autostart(&mut self, on: bool) {
-        if self.settings.autostart == on {
+        if self.draft.settings.autostart == on {
             return;
         }
         match crate::platform::set_autostart(on) {
             Ok(()) => {
-                self.settings.autostart = on;
+                self.draft.settings.autostart = on;
                 self.save_settings_with_feedback();
             }
             Err(e) => self.show_toast(self.tr("toast.autostart_fail").replace("{e}", &e), None),
@@ -25,15 +25,15 @@ impl PaletteApp {
     /// 菜单语言（菜单每次右键即席创建，读共享原子量，无需重建托盘）；
     /// egui immediate mode 下一帧全量重绘即生效。纯内存 + 落盘操作，无失败路径。
     pub(crate) fn apply_lang(&mut self, lang: dd_gui::settings::Lang) {
-        if self.settings.lang == lang {
+        if self.draft.settings.lang == lang {
             return;
         }
-        self.settings.lang = lang;
-        self.lang_effective = Self::resolve_lang(&self.settings);
+        self.draft.settings.lang = lang;
+        self.view.lang_effective = Self::resolve_lang(&self.draft.settings);
         self.save_settings_with_feedback();
-        crate::tray::set_tray_lang(self.lang_effective);
+        crate::tray::set_tray_lang(self.view.lang_effective);
         // 扩展进程须以新 DDRUN_LANG 重启才生效；离开设置页时重聚合消费。
-        self.lang_dirty = true;
+        self.draft.lang_dirty = true;
     }
 
     /// 设置页预热容量切换（N4，2026-10-03）：更新偏好 + 落盘 + 立即调整
@@ -41,12 +41,12 @@ impl PaletteApp {
     /// stub，走既有 `evict_warm` 路径；其内部 `lru.remove` 对已出队 id 为无操作）；
     /// 扩容不追补，后续触达照常入队。纯内存 + 落盘操作，无失败路径。
     pub(crate) fn apply_warm_capacity(&mut self, cap: u8) {
-        if self.settings.warm_capacity == cap {
+        if self.draft.settings.warm_capacity == cap {
             return;
         }
-        self.settings.warm_capacity = cap;
+        self.draft.settings.warm_capacity = cap;
         self.save_settings_with_feedback();
-        for victim in self.lru.set_capacity(cap as usize) {
+        for victim in self.pool.lru.set_capacity(cap as usize) {
             self.evict_warm(&victim);
         }
     }
@@ -56,7 +56,8 @@ impl PaletteApp {
     /// 当前屏蔽名单片段（`ext_settings["com.ddrun.apps"]["blocklist"]` 逗号
     /// 分隔解析；trim、去空）。
     pub(crate) fn apps_blocklist_fragments(&self) -> Vec<String> {
-        self.settings
+        self.draft
+            .settings
             .ext_settings
             .get("com.ddrun.apps")
             .and_then(|m| m.get("blocklist"))
@@ -72,28 +73,29 @@ impl PaletteApp {
     /// 名单变更统一落盘：写 `ext_settings` + 持久化 + 重聚合脏标记
     ///（离开设置页重聚合 → 内存通道重注入 + 首屏重拉，扩展侧即生效）。
     pub(crate) fn apply_apps_blocklist(&mut self, joined: String) {
-        self.settings
+        self.draft
+            .settings
             .ext_settings
             .entry("com.ddrun.apps".to_string())
             .or_default()
             .insert("blocklist".to_string(), joined);
         self.save_settings_with_feedback();
-        self.engines_dirty = true;
+        self.draft.engines_dirty = true;
     }
 
     /// 追加片段（输入缓冲 trim；空忽略；重复忽略）。
     pub(crate) fn apps_blocklist_add(&mut self) {
-        let frag = self.apps_blocklist_buf.trim().to_string();
+        let frag = self.draft.apps_blocklist_buf.trim().to_string();
         if frag.is_empty() {
             return;
         }
         let mut list = self.apps_blocklist_fragments();
         if list.iter().any(|x| x.eq_ignore_ascii_case(&frag)) {
-            self.apps_blocklist_buf.clear();
+            self.draft.apps_blocklist_buf.clear();
             return;
         }
         list.push(frag);
-        self.apps_blocklist_buf.clear();
+        self.draft.apps_blocklist_buf.clear();
         self.apply_apps_blocklist(list.join(", "));
     }
 
@@ -122,7 +124,7 @@ impl PaletteApp {
             );
             return;
         };
-        if self.settings.save_backup_to(&path) {
+        if self.draft.settings.save_backup_to(&path) {
             self.show_toast(
                 self.tr("toast.settings_export_ok")
                     .replace("{p}", &path.display().to_string()),
@@ -159,11 +161,15 @@ impl PaletteApp {
                 return;
             }
         };
-        let imported = match dd_gui::settings::Settings::import_backup(&text, &self.settings) {
+        let imported = match dd_gui::settings::Settings::import_backup(&text, &self.draft.settings)
+        {
             Ok(s) => s,
             Err(e) => {
                 log::warn!("[dd-gui] 备份导入校验失败：{e}");
-                self.show_error_toast(self.tr("toast.settings_import_fail").replace("{e}", &e));
+                self.show_error_toast(
+                    self.tr("toast.settings_import_fail")
+                        .replace("{e}", &e.to_string()),
+                );
                 return;
             }
         };
@@ -178,21 +184,25 @@ impl PaletteApp {
         self.apply_background_fit(imported.background_image_fit);
         self.apply_background_opacity(imported.background_image_opacity);
         self.apply_background_tint(imported.background_image_tint_intensity);
-        self.bg_path_buf = imported.background_image_path.clone().unwrap_or_default();
-        self.bg_err = None;
+        self.draft.bg_path_buf = imported.background_image_path.clone().unwrap_or_default();
+        self.draft.bg_err = None;
         self.apply_corner_pref(imported.corner_pref);
         self.apply_border_mode(ctx, imported.border_mode);
-        if self.settings.lang != imported.lang {
+        if self.draft.settings.lang != imported.lang {
             self.apply_lang(imported.lang);
         }
-        self.settings = imported;
+        self.draft.settings = imported;
         // warm 容量：走 apply_warm_capacity 的驱逐口径（缩容立即回落 stub）。
-        for victim in self.lru.set_capacity(self.settings.warm_capacity as usize) {
+        for victim in self
+            .pool
+            .lru
+            .set_capacity(self.draft.settings.warm_capacity as usize)
+        {
             self.evict_warm(&victim);
         }
         // 聚合类配置（搜索引擎 / 停用集 / 自定义命令 / ext_settings / 语言）
         // 统一脏标记——离开设置页重聚合消费（与逐项开关同路径）。
-        self.engines_dirty = true;
+        self.draft.engines_dirty = true;
         self.save_settings_with_feedback();
         ctx.request_repaint();
         log::info!("[dd-gui] 设置备份已导入并应用（{}）", path.display());
@@ -209,7 +219,7 @@ impl PaletteApp {
     /// 失败一律 toast（不静默）：用户点了「允许」却什么都没发生是最坏体验。
     /// 成功则**立即重聚合**——批准后首屏即出现其命令，阻止后立即停掉。
     pub(crate) fn set_extension_trust(&mut self, id: &str, decision: Decision) {
-        let Some(ext) = self.exts.iter().find(|e| e.manifest.id == id).cloned() else {
+        let Some(ext) = self.pool.exts.iter().find(|e| e.manifest.id == id).cloned() else {
             self.show_toast(self.tr("toast.ext_missing").to_string(), Some(3_000));
             return;
         };
@@ -241,30 +251,30 @@ impl PaletteApp {
     /// 设置页扩展启停（M6 批次 6.3）：更新停用表 + 落盘 + 置脏标记
     /// （离开设置页时重聚合，见 mod.rs 收口点）；幂等调用无副作用。
     pub(crate) fn apply_extension_enabled(&mut self, id: &str, enabled: bool) {
-        let mut next = self.settings.disabled_extensions.clone();
+        let mut next = self.draft.settings.disabled_extensions.clone();
         if enabled {
             next.retain(|x| x != id);
         } else if !next.iter().any(|x| x == id) {
             next.push(id.to_string());
         }
-        if next == self.settings.disabled_extensions {
+        if next == self.draft.settings.disabled_extensions {
             return; // 幂等
         }
-        self.settings.disabled_extensions = next;
+        self.draft.settings.disabled_extensions = next;
         self.save_settings_with_feedback();
-        self.exts_dirty = true;
+        self.draft.exts_dirty = true;
     }
 
     /// 打开设置页（批次 4.0）：推入页面栈（复用嵌套页语义，Esc 返回）。
     /// 已在设置页时幂等（不重复推栈）。每次进入重置左栏栏目到首栏「外观」
     /// （§08 v4.6 B5：栏目为纯视图状态，与 go_home 复位语义一致）。
     pub(crate) fn open_settings(&mut self) {
-        if self.stack.current().is_settings {
+        if self.view.stack.current().is_settings {
             return;
         }
         log::debug!("[dd-gui] 打开设置页（PageStack 推页）");
-        self.settings_category = SettingsCategory::default();
-        self.stack.push(PageState::settings());
+        self.draft.settings_category = SettingsCategory::default();
+        self.view.stack.push(PageState::settings());
     }
 
     /// 设置页改选主题（批次 4.0）：立即生效 + 持久化（best-effort）。
@@ -273,15 +283,15 @@ impl PaletteApp {
         ctx: &egui::Context,
         pref: dd_gui::settings::ThemePref,
     ) {
-        if self.settings.theme == pref {
+        if self.draft.settings.theme == pref {
             return;
         }
         log::debug!("[dd-gui] 主题偏好变更：{} → 立即生效并保存", pref.label());
-        self.settings.theme = pref;
+        self.draft.settings.theme = pref;
         ctx.set_theme(theme::theme_preference(pref));
         // v4.7 D31：材质生效时同步 DWM 明暗染色（跟随新主题；best-effort）
-        if self.backdrop_active {
-            if let Some(hwnd) = self.hwnd {
+        if self.window.backdrop_active {
+            if let Some(hwnd) = self.window.hwnd {
                 let dark = ctx.theme() == egui::Theme::Dark;
                 crate::platform::set_immersive_dark(hwnd, dark);
                 // M2 + P4：描边色随主题切换——与 refresh_backdrop 同一单点收口
@@ -300,11 +310,11 @@ impl PaletteApp {
         ctx: &egui::Context,
         backdrop: dd_gui::settings::Backdrop,
     ) {
-        if self.settings.backdrop == backdrop {
+        if self.draft.settings.backdrop == backdrop {
             return;
         }
         log::debug!("[dd-gui] 窗口材质：{} → 立即生效并保存", backdrop.label());
-        self.settings.backdrop = backdrop;
+        self.draft.settings.backdrop = backdrop;
         self.save_settings_with_feedback();
         self.refresh_backdrop(ctx);
     }
@@ -314,7 +324,7 @@ impl PaletteApp {
     /// 纹理缓存按 (路径, mtime) 门控，路径变更自动重载，无需显式失效。
     pub(crate) fn apply_background_path(&mut self, ctx: &egui::Context, path: Option<String>) {
         let path = path.map(|p| p.trim().to_string()).filter(|p| !p.is_empty());
-        if self.settings.background_image_path == path {
+        if self.draft.settings.background_image_path == path {
             return;
         }
         log::info!(
@@ -324,7 +334,7 @@ impl PaletteApp {
                 None => "清除",
             }
         );
-        self.settings.background_image_path = path;
+        self.draft.settings.background_image_path = path;
         self.save_settings_with_feedback();
         self.refresh_backdrop(ctx);
     }
@@ -334,21 +344,21 @@ impl PaletteApp {
     /// 不透明度口径）。
     pub(crate) fn apply_background_opacity(&mut self, pct: u8) {
         let pct = pct.clamp(0, 100);
-        self.settings.background_image_opacity = pct;
+        self.draft.settings.background_image_opacity = pct;
     }
 
     /// T9：背景图适应方式（Fill / Stretch）——纯设置项，绘制层每帧读值。
     pub(crate) fn apply_background_fit(&mut self, fit: dd_gui::settings::BgImageFit) {
-        if self.settings.background_image_fit == fit {
+        if self.draft.settings.background_image_fit == fit {
             return;
         }
-        self.settings.background_image_fit = fit;
+        self.draft.settings.background_image_fit = fit;
         self.save_settings_with_feedback();
     }
 
     /// T9：背景图着色强度（0–100）——拖动即时生效、松手落盘（同上）。
     pub(crate) fn apply_background_tint(&mut self, pct: u8) {
-        self.settings.background_image_tint_intensity = pct.clamp(0, 100);
+        self.draft.settings.background_image_tint_intensity = pct.clamp(0, 100);
     }
 
     /// 设置页「不透明度」滑杆（P2 v2，2026-09-13）：即时重算 egui 浓淡层
@@ -358,15 +368,15 @@ impl PaletteApp {
     /// 视觉可调，仅更新内存值（UI 层此时置灰，正常路径不会进来）。
     pub(crate) fn apply_material_opacity(&mut self, ctx: &egui::Context, pct: u8) {
         let pct = pct.clamp(0, 100);
-        if self.settings.material_opacity == pct {
+        if self.draft.settings.material_opacity == pct {
             return;
         }
-        self.settings.material_opacity = pct;
-        if self.backdrop_active {
+        self.draft.settings.material_opacity = pct;
+        if self.window.backdrop_active {
             let dark = ctx.theme() == egui::Theme::Dark;
             theme::apply_panel_tint(
                 ctx,
-                theme::panel_tint_with_opacity(dark, self.settings.backdrop, pct),
+                theme::panel_tint_with_opacity(dark, self.draft.settings.backdrop, pct),
                 self.colorization(),
             );
         }
@@ -376,13 +386,13 @@ impl PaletteApp {
     /// （属性幂等，与 egui 帧内容无关，无防闪面）。HWND 未捕获（首帧前）时
     /// 仅落盘——首帧 `refresh_backdrop` 会按设置应用。
     pub(crate) fn apply_corner_pref(&mut self, pref: dd_gui::settings::CornerPref) {
-        if self.settings.corner_pref == pref {
+        if self.draft.settings.corner_pref == pref {
             return;
         }
         log::debug!("[dd-gui] 窗口圆角：{} → 立即生效并保存", pref.label());
-        self.settings.corner_pref = pref;
+        self.draft.settings.corner_pref = pref;
         self.save_settings_with_feedback();
-        if let Some(hwnd) = self.hwnd {
+        if let Some(hwnd) = self.window.hwnd {
             crate::platform::apply_window_chrome(hwnd, pref);
         }
     }
@@ -394,14 +404,14 @@ impl PaletteApp {
         ctx: &egui::Context,
         mode: dd_gui::settings::BorderMode,
     ) {
-        if self.settings.border_mode == mode {
+        if self.draft.settings.border_mode == mode {
             return;
         }
         log::info!("[dd-gui] 面板边框：{} → 立即生效并保存", mode.label());
-        self.settings.border_mode = mode;
+        self.draft.settings.border_mode = mode;
         self.save_settings_with_feedback();
-        if self.backdrop_active {
-            if let Some(hwnd) = self.hwnd {
+        if self.window.backdrop_active {
+            if let Some(hwnd) = self.window.hwnd {
                 let dark = ctx.theme() == egui::Theme::Dark;
                 crate::platform::set_window_border(hwnd, self.border_color(dark));
             }
@@ -415,7 +425,7 @@ impl PaletteApp {
     /// 本就不画描边，本函数不判 `backdrop_active`。
     fn border_color(&self, dark: bool) -> Option<egui::Color32> {
         use dd_gui::settings::BorderMode;
-        match self.settings.border_mode {
+        match self.draft.settings.border_mode {
             BorderMode::Neutral => Some(theme::Palette::of(dark).border_strong),
             BorderMode::Accent => Some(
                 crate::platform::system_accent_color()
@@ -437,34 +447,34 @@ impl PaletteApp {
     /// 下一帧才画出不透明面板，间隙内桌面穿透一闪。改为置
     /// `backdrop_clear_countdown`，由 `ui()` 末尾在不透明帧呈现之后倒计时清材质。
     pub(crate) fn refresh_backdrop(&mut self, ctx: &egui::Context) {
-        let Some(hwnd) = self.hwnd else {
+        let Some(hwnd) = self.window.hwnd else {
             return;
         };
         // T9（2026-10-05）：背景图生效 → 材质链路整体按「无材质」走（互斥语义
         // ——设置值保持不动，清图后经 apply_background_path 重调本函数即恢复
         // 原材质），本函数内一律以 effective 判定。
-        let effective = if self.settings.background_image_path.is_some() {
+        let effective = if self.draft.settings.background_image_path.is_some() {
             dd_gui::settings::Backdrop::None
         } else {
-            self.settings.backdrop
+            self.draft.settings.backdrop
         };
         // M3/M4（2026-09-13）：窗口 chrome（圆角 + 禁过渡动画）一次性应用，
         // 与材质选择无关（无材质路径同样圆角）；P3 起圆角档来自设置，改选时
         // 经 `apply_corner_pref` 重调；Win10 无对应属性 → platform 层失败跳过。
-        if !self.chrome_applied {
-            self.chrome_applied = true;
-            crate::platform::apply_window_chrome(hwnd, self.settings.corner_pref);
+        if !self.window.chrome_applied {
+            self.window.chrome_applied = true;
+            crate::platform::apply_window_chrome(hwnd, self.draft.settings.corner_pref);
         }
         // ── 不透明化方向（backdrop = None）：先绘制不透明，后清材质 ──
         if effective == dd_gui::settings::Backdrop::None {
-            if self.backdrop_active {
-                self.backdrop_active = false;
+            if self.window.backdrop_active {
+                self.window.backdrop_active = false;
                 // M1：面板底回实色；M2：材质场景结束 → 停画描边。
                 theme::apply_panel_tint(ctx, None, self.colorization());
                 crate::platform::set_window_border(hwnd, None);
                 // 倒计时 3 帧：点击帧（旧透明视觉）→ 第 1 个不透明帧绘制并呈现
                 // → 第 2 个不透明帧呈现后清 DWM 材质。全程无透明帧暴露窗口。
-                self.backdrop_clear_countdown = 3;
+                self.window.backdrop_clear_countdown = 3;
             }
             return;
         }
@@ -486,12 +496,16 @@ impl PaletteApp {
             // M1 起语义不同）。
             theme::apply_panel_tint(
                 ctx,
-                theme::panel_tint_with_opacity(dark, effective, self.settings.material_opacity),
+                theme::panel_tint_with_opacity(
+                    dark,
+                    effective,
+                    self.draft.settings.material_opacity,
+                ),
                 self.colorization(),
             );
         }
-        if active != self.backdrop_active {
-            self.backdrop_active = active;
+        if active != self.window.backdrop_active {
+            self.window.backdrop_active = active;
             if !active {
                 // apply_system_backdrop 失败（Win10 / 22621 以下）→ 回退不透明
                 // 面板底 + 停描边，视觉与 v4.6 一致。
@@ -504,18 +518,18 @@ impl PaletteApp {
     /// B1（2026-09-20）：Esc 键行为。纯设置项（无附加副作用），照既有范式
     /// 「落盘 + 日志」即可——按键分支每次读取生效值。
     pub(crate) fn apply_esc_behavior(&mut self, b: dd_gui::settings::EscBehavior) {
-        if self.settings.esc_behavior == b {
+        if self.draft.settings.esc_behavior == b {
             return;
         }
         log::debug!("[dd-gui] Esc 键行为：{} → 立即生效并保存", b.label());
-        self.settings.esc_behavior = b;
+        self.draft.settings.esc_behavior = b;
         self.save_settings_with_feedback();
     }
 
     /// T7（2026-09-20）：单击激活开关（默认开 = 既有行为）。纯设置项：
     /// 行点击分支每次读取生效值。
     pub(crate) fn apply_single_click_activation(&mut self, on: bool) {
-        if self.settings.single_click_activation == on {
+        if self.draft.settings.single_click_activation == on {
             return;
         }
         log::debug!(
@@ -526,28 +540,28 @@ impl PaletteApp {
                 "关（单击选中、双击执行）"
             }
         );
-        self.settings.single_click_activation = on;
+        self.draft.settings.single_click_activation = on;
         self.save_settings_with_feedback();
     }
 
     /// T8（2026-09-20）：界面动效开关（默认开 = 既有行为）。纯设置项：
     /// 过渡调用点每次读取生效值（关闭 = 直出终态）。
     pub(crate) fn apply_ui_animations(&mut self, on: bool) {
-        if self.settings.ui_animations == on {
+        if self.draft.settings.ui_animations == on {
             return;
         }
         log::debug!(
             "[dd-gui] 界面动效：{} → 立即生效并保存",
             if on { "开" } else { "关" }
         );
-        self.settings.ui_animations = on;
+        self.draft.settings.ui_animations = on;
         self.save_settings_with_feedback();
     }
 
     /// T6（2026-09-20）：着色配置投影（设置 → `theme::Colorization`）——
     /// 所有 `apply_panel_tint` 调用点统一经此取值，避免各处重复拼装。
     pub(crate) fn colorization(&self) -> theme::Colorization {
-        theme::Colorization::from_settings(&self.settings)
+        theme::Colorization::from_settings(&self.draft.settings)
     }
 
     /// T6：着色模式（系统强调色 / 无 / 自定义）——即时重注册浓淡层 + 落盘。
@@ -556,11 +570,11 @@ impl PaletteApp {
         ctx: &egui::Context,
         mode: dd_gui::settings::ColorizationMode,
     ) {
-        if self.settings.colorization == mode {
+        if self.draft.settings.colorization == mode {
             return;
         }
         log::debug!("[dd-gui] 着色模式：{} → 立即生效并保存", mode.label());
-        self.settings.colorization = mode;
+        self.draft.settings.colorization = mode;
         self.save_settings_with_feedback();
         self.repaint_panel_tint(ctx);
     }
@@ -568,10 +582,10 @@ impl PaletteApp {
     /// T6：自定义浓淡色——即时生效；**指针未按下时**才落盘（色盘拖动期逐帧
     /// 触发，避免拖动期间频繁写盘）。
     pub(crate) fn apply_custom_tint_color(&mut self, ctx: &egui::Context, rgb: [u8; 3]) {
-        if self.settings.custom_tint_color == rgb {
+        if self.draft.settings.custom_tint_color == rgb {
             return;
         }
-        self.settings.custom_tint_color = rgb;
+        self.draft.settings.custom_tint_color = rgb;
         self.repaint_panel_tint(ctx);
         // 指钟未按下才落盘（色盘拖动期逐帧触发，避免频繁写盘）
         if !ctx.input(|i| i.pointer.any_down()) {
@@ -582,38 +596,38 @@ impl PaletteApp {
     /// T6：自定义着色强度（0–100）——拖动即时生效、松手落盘（同材质不透明度口径）。
     pub(crate) fn apply_custom_tint_intensity(&mut self, ctx: &egui::Context, pct: u8) {
         let pct = pct.min(100);
-        if self.settings.custom_tint_intensity == pct {
+        if self.draft.settings.custom_tint_intensity == pct {
             return;
         }
-        self.settings.custom_tint_intensity = pct;
+        self.draft.settings.custom_tint_intensity = pct;
         self.repaint_panel_tint(ctx);
     }
 
     /// T6：按当前设置重注册面板浓淡层（着色变更的统一出口；材质未生效时
     /// 无视觉可调，仅更新内存值）。
     pub(crate) fn repaint_panel_tint(&mut self, ctx: &egui::Context) {
-        if !self.backdrop_active {
+        if !self.window.backdrop_active {
             return;
         }
         let dark = ctx.theme() == egui::Theme::Dark;
         let tint = theme::panel_tint_with_opacity(
             dark,
-            self.settings.backdrop,
-            self.settings.material_opacity,
+            self.draft.settings.backdrop,
+            self.draft.settings.material_opacity,
         );
         theme::apply_panel_tint(ctx, tint, self.colorization());
     }
 
     /// B2（2026-09-20）：退格键返回开关（同上，纯设置项）。
     pub(crate) fn apply_backspace_go_back(&mut self, on: bool) {
-        if self.settings.backspace_go_back == on {
+        if self.draft.settings.backspace_go_back == on {
             return;
         }
         log::debug!(
             "[dd-gui] 退格键返回：{} → 立即生效并保存",
             if on { "开" } else { "关" }
         );
-        self.settings.backspace_go_back = on;
+        self.draft.settings.backspace_go_back = on;
         self.save_settings_with_feedback();
     }
 
@@ -630,12 +644,12 @@ impl PaletteApp {
         self.apply_background_fit(d.background_image_fit);
         self.apply_background_opacity(d.background_image_opacity);
         self.apply_background_tint(d.background_image_tint_intensity);
-        self.bg_path_buf.clear();
-        self.bg_err = None;
+        self.draft.bg_path_buf.clear();
+        self.draft.bg_err = None;
         self.apply_corner_pref(d.corner_pref);
         self.apply_border_mode(ctx, d.border_mode);
-        if self.settings.density != d.density {
-            self.settings.density = d.density;
+        if self.draft.settings.density != d.density {
+            self.draft.settings.density = d.density;
         }
         self.save_settings_with_feedback();
         log::info!("[dd-gui] 外观已恢复默认（主题/材质/浓淡/圆角/边框/密度）");
@@ -649,12 +663,12 @@ impl PaletteApp {
         } else {
             dd_gui::settings::OpenView::Default
         };
-        if self.settings.open_view == view {
+        if self.draft.settings.open_view == view {
             return;
         }
         log::debug!("[dd-gui] 首屏视图变更：{}", view.label());
-        self.settings.open_view = view;
-        self.stack.root_mut().list.set_empty_view(if show_all {
+        self.draft.settings.open_view = view;
+        self.view.stack.root_mut().list.set_empty_view(if show_all {
             dd_gui::state::EmptyQueryView::All
         } else {
             dd_gui::state::EmptyQueryView::WithoutApps
@@ -666,12 +680,12 @@ impl PaletteApp {
     /// 设置页改「搜索应用」（2026-09-12）：立即重算根页可见表（空查询与
     /// 关键词匹配两条分支都在 `set_apps_hidden` 内重算）+ 持久化。
     pub(crate) fn apply_search_apps(&mut self, ctx: &egui::Context, on: bool) {
-        if self.settings.search_apps == on {
+        if self.draft.settings.search_apps == on {
             return;
         }
         log::debug!("[dd-gui] 搜索应用：{on}");
-        self.settings.search_apps = on;
-        self.stack.root_mut().list.set_apps_hidden(!on);
+        self.draft.settings.search_apps = on;
+        self.view.stack.root_mut().list.set_apps_hidden(!on);
         self.save_settings_with_feedback();
         ctx.request_repaint();
     }
@@ -679,12 +693,12 @@ impl PaletteApp {
     /// 设置页改「搜索 Steam 游戏」（2026-10-07）：立即重算根页可见表（空查询
     /// 与关键词匹配两条分支都在 `set_steam_hidden` 内重算）+ 持久化。
     pub(crate) fn apply_search_steam_games(&mut self, ctx: &egui::Context, on: bool) {
-        if self.settings.search_steam_games == on {
+        if self.draft.settings.search_steam_games == on {
             return;
         }
         log::debug!("[dd-gui] 搜索 Steam 游戏：{on}");
-        self.settings.search_steam_games = on;
-        self.stack.root_mut().list.set_steam_hidden(!on);
+        self.draft.settings.search_steam_games = on;
+        self.view.stack.root_mut().list.set_steam_hidden(!on);
         self.save_settings_with_feedback();
         ctx.request_repaint();
     }
@@ -695,9 +709,9 @@ impl PaletteApp {
     pub(crate) fn apply_search_engines(&mut self, ctx: &egui::Context) {
         log::debug!(
             "[dd-gui] 搜索引擎配置变更：{} 个引擎已保存（离开设置页后重新聚合生效）",
-            self.settings.search_engines.len()
+            self.draft.settings.search_engines.len()
         );
-        self.engines_dirty = true;
+        self.draft.engines_dirty = true;
         self.save_settings_with_feedback();
         ctx.request_repaint();
     }
@@ -709,20 +723,19 @@ impl PaletteApp {
         // 进程将以新环境变量（搜索引擎/语言）重启：作废已缓存的兜底模板与
         // 在途拉取，否则会残留旧引擎/旧语言的兜底项（如仅启用 Bing 仍显示
         // 全部搜索引擎的「在 X 搜索 …」）。下一帧由新进程重新拉取正确模板。
-        self.fallback_store.clear();
-        self.inflight.clear();
-        self.fallback_rx = None; // 丢弃旧在途拉取（其进程属旧环境）
+        self.pool.fallback_store.clear();
+        self.pool.inflight.clear();
+        self.pool.fallback_rx = None; // 丢弃旧在途拉取（其进程属旧环境）
         let (tx, rx) = mpsc::channel();
         crate::app::spawn_aggregation(
             tx,
-            self.cache.clone(),
-            self.settings.search_engines_env(),
-            self.settings.disabled_extensions.clone(),
-            self.lang_effective,
-            self.settings.custom_commands.clone(),
-            self.settings.ext_settings.clone(),
+            self.pool.cache.clone(),
+            self.draft.settings.search_engines_env(),
+            self.draft.settings.disabled_extensions.clone(),
+            self.view.lang_effective,
+            self.draft.settings.ext_settings.clone(),
         );
-        self.aggregate_rx = Some(rx);
-        self.aggregating = true;
+        self.pool.aggregate_rx = Some(rx);
+        self.pool.aggregating = true;
     }
 }

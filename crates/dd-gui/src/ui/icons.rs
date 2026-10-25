@@ -144,12 +144,12 @@ impl PaletteApp {
                     text: icon.value.clone(),
                 },
                 IconKind::Path => {
-                    if let Some((tex, dark)) = self.icon_cache.get(&icon.value) {
+                    if let Some((tex, dark)) = self.view.icon_cache.get(&icon.value) {
                         IconView::Texture {
                             tex: tex.clone(),
                             dark: *dark,
                         }
-                    } else if self.icon_failed.contains(&icon.value) {
+                    } else if self.view.icon_failed.contains(&icon.value) {
                         // 负缓存命中：读盘/解码已失败过，直接回落占位 glyph，
                         // 不再每帧重试（避免失败 eprintln 刷屏）。
                         IconView::Glyph {
@@ -192,10 +192,10 @@ impl PaletteApp {
     /// 语义与原 `resolve_icons` 的即时写入一致（cache 正缓存 / failed 负缓存）。
     pub(crate) fn ingest_icon_writes(&mut self, writes: IconCacheWrites) {
         for (key, entry) in writes.cache {
-            self.icon_cache.insert(key, entry);
+            self.view.icon_cache.insert(key, entry);
         }
         for key in writes.failed {
-            self.icon_failed.insert(key);
+            self.view.icon_failed.insert(key);
         }
     }
 }

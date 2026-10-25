@@ -26,18 +26,18 @@ impl PaletteApp {
     /// 同样进入合并窗口，到期触发 Root 全量重聚合。同时收集扩展发来的 `host/*`
     /// 请求（M4 P2）——执行端见 [`Self::poll_host_requests`]。
     pub(crate) fn poll_notifications(&mut self) {
-        if self.processes.is_empty() {
+        if self.pool.processes.is_empty() {
             return;
         }
-        let current = self.stack.current().page_id.clone();
+        let current = self.view.stack.current().page_id.clone();
         let mut hit: Option<String> = None;
         let mut top_changed = false;
         // R-03：本帧观察到的入站队列溢出（扩展 id, 丢弃帧数）——循环期间只借用
-        // `self.processes`，toast 留到循环结束后弹（与 items_changed 同纪律）。
+        // `self.pool.processes`，toast 留到循环结束后弹（与 items_changed 同纪律）。
         let mut overflows: Vec<(String, u64)> = Vec::new();
-        // 注意：循环期间只借用 `self.processes`，不调用 `self.show_toast`
+        // 注意：循环期间只借用 `self.pool.processes`，不调用 `self.show_toast`
         // （后者可变借用整个 `self`，会与此处冲突）。
-        for (ext_id, proc) in self.processes.iter_mut() {
+        for (ext_id, proc) in self.pool.processes.iter_mut() {
             if let Some(n) = proc.take_inbound_overflow() {
                 overflows.push((ext_id.clone(), n));
             }
@@ -57,13 +57,13 @@ impl PaletteApp {
             );
             // 进入 100ms 合并窗口（与页级同口径）。已存在页级刷新则升级为顶层
             // （顶层重聚合包含页重拉，覆盖更全）；已为顶层则幂等不变。
-            if self.refresh.is_none() {
-                self.refresh = Some(RefreshState {
+            if self.view.refresh.is_none() {
+                self.view.refresh = Some(RefreshState {
                     page_id: String::new(),
                     ready_at: Instant::now() + REFRESH_WINDOW,
                     top: true,
                 });
-            } else if let Some(r) = self.refresh.as_mut() {
+            } else if let Some(r) = self.view.refresh.as_mut() {
                 r.top = true;
             }
             self.show_toast(self.tr("toast.cmd_updated"), Some(1_500));
@@ -74,8 +74,8 @@ impl PaletteApp {
                 REFRESH_WINDOW.as_millis()
             );
             // 仅当尚无待处理刷新时记录（顶层优先：已有顶层刷新不降级为页级）。
-            if self.refresh.is_none() {
-                self.refresh = Some(RefreshState {
+            if self.view.refresh.is_none() {
+                self.view.refresh = Some(RefreshState {
                     page_id: pid,
                     ready_at: Instant::now() + REFRESH_WINDOW,
                     top: false,
@@ -85,7 +85,7 @@ impl PaletteApp {
         // R-03：入站队列溢出 → 合成告警（dd-host take 时已 log::warn；此处补
         // UI 可见的错误 toast，每扩展每会话至多一次防刷屏）。
         for (ext_id, n) in overflows {
-            if self.overflow_warned.insert(ext_id.clone()) {
+            if self.pool.overflow_warned.insert(ext_id.clone()) {
                 log::warn!(
                     "[dd-gui] 扩展 {ext_id} 入站队列溢出（丢弃 {n} 帧）→ toast 告警（本会话首次）"
                 );
@@ -104,11 +104,11 @@ impl PaletteApp {
     ///（**全量**，协议层无增量推送）。
     pub(crate) fn tick_refresh(&mut self) {
         // 先处理 items_changed 合并刷新（原有语义，优先级更高——它是扩展侧的显式通知）
-        if let Some(refresh) = &self.refresh {
+        if let Some(refresh) = &self.view.refresh {
             if Instant::now() >= refresh.ready_at {
                 let top = refresh.top;
                 let page_id = refresh.page_id.clone();
-                self.refresh = None;
+                self.view.refresh = None;
                 if top {
                     log::debug!("[dd-gui] 顶层 items_changed 合并窗口到期 → Root 全量重聚合（A9）");
                     self.restart_aggregation();
@@ -118,13 +118,13 @@ impl PaletteApp {
             }
         }
         // 再去抖处理嵌套页「页内二次输入」：到期用当前页最新 query 重拉
-        if let Some(due) = &self.page_query_debounce {
+        if let Some(due) = &self.view.page_query_debounce {
             if Instant::now() >= *due {
-                self.page_query_debounce = None;
+                self.view.page_query_debounce = None;
                 log::debug!(
                     "[dd-gui] 页内二次输入去抖到期 → 按最新 query 重拉当前页（v3.3 边打边搜）"
                 );
-                let page = self.stack.current();
+                let page = self.view.stack.current();
                 if let Some(page_id) = page.page_id.clone() {
                     self.refetch_page_if_current(&page_id);
                 }
@@ -135,7 +135,7 @@ impl PaletteApp {
     /// 页级刷新（合并窗口到期 / 页内输入去抖到期）统一入口：目标页仍是当前页时
     /// 用该页当前 query 重拉 `get_items`。
     fn refetch_page_if_current(&mut self, page_id: &str) {
-        let page = self.stack.current();
+        let page = self.view.stack.current();
         // 用户可能已离开通知来源页（如已 GoBack）→ 目标页非当前页时丢弃，
         // 避免拉取一个不可见的页（结果也只会被 poll_page 作废）。
         if page.page_id.as_deref() != Some(page_id) {
@@ -156,15 +156,15 @@ impl PaletteApp {
     /// 时生效；连续输入会刷新到期时刻（天然去抖）。
     pub(crate) fn schedule_page_query_debounce(&mut self) {
         // 仅嵌套页的输入共生（Root 的输入走 fallback/聚合，不在此列）
-        let page = self.stack.current();
+        let page = self.view.stack.current();
         if page.page_id.is_none() || page.is_settings {
             return;
         }
         if page.is_loading {
             return; // 正在拉取：等待落地后自然再比较，避免叠加
         }
-        if !self.aggregating {
-            self.page_query_debounce = Some(Instant::now() + PAGE_QUERY_DEBOUNCE);
+        if !self.pool.aggregating {
+            self.view.page_query_debounce = Some(Instant::now() + PAGE_QUERY_DEBOUNCE);
         }
     }
 
@@ -176,12 +176,12 @@ impl PaletteApp {
     /// 补拉不再发起、页面卡在旧结果 / 骨架。此处只置到期时刻（刷新式去抖），
     /// 嵌套页判定与既有语义保持一致。
     pub(crate) fn rearm_page_query_debounce(&mut self) {
-        let page = self.stack.current();
+        let page = self.view.stack.current();
         if page.page_id.is_none() || page.is_settings {
             return;
         }
-        if !self.aggregating {
-            self.page_query_debounce = Some(Instant::now() + PAGE_QUERY_DEBOUNCE);
+        if !self.pool.aggregating {
+            self.view.page_query_debounce = Some(Instant::now() + PAGE_QUERY_DEBOUNCE);
         }
     }
 }
@@ -196,20 +196,20 @@ mod tests {
     #[test]
     fn tick_refresh_top_triggers_restart_aggregation() {
         let mut app = make_app();
-        app.aggregating = false; // 明确初始态，验证顶层分支确实触发重聚合
-                                 // 模拟已收到顶层 items_changed 且合并窗口已到期
-        app.refresh = Some(RefreshState {
+        app.pool.aggregating = false; // 明确初始态，验证顶层分支确实触发重聚合
+                                      // 模拟已收到顶层 items_changed 且合并窗口已到期
+        app.view.refresh = Some(RefreshState {
             page_id: String::new(),
             ready_at: Instant::now(),
             top: true,
         });
         app.tick_refresh();
         assert!(
-            app.aggregating,
+            app.pool.aggregating,
             "顶层 items_changed 到期应触发 Root 全量重聚合（restart_aggregation）"
         );
         assert!(
-            app.aggregate_rx.is_some(),
+            app.pool.aggregate_rx.is_some(),
             "重聚合应建立聚合结果接收端（poll_aggregate 落地新 Root）"
         );
     }
@@ -218,15 +218,15 @@ mod tests {
     #[test]
     fn tick_refresh_page_does_not_restart_aggregation() {
         let mut app = make_app();
-        app.aggregating = false; // 明确初始态，验证页级分支不触发重聚合
-        app.refresh = Some(RefreshState {
+        app.pool.aggregating = false; // 明确初始态，验证页级分支不触发重聚合
+        app.view.refresh = Some(RefreshState {
             page_id: "some.page".to_string(),
             ready_at: Instant::now(),
             top: false,
         });
         app.tick_refresh();
         assert!(
-            !app.aggregating,
+            !app.pool.aggregating,
             "页级 items_changed 刷新不应触发全量重聚合（走 dispatch_fetch_page）"
         );
     }

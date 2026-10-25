@@ -200,6 +200,12 @@ impl PageStack {
         self.pages.first_mut().expect("栈底恒为 Root，永不为空")
     }
 
+    /// Root 页只读引用（C2 流式聚合：绘制层判定「零项期」——部分结果
+    /// 到达即画列表，加载骨架只挡真正的无数据窗口）。
+    pub fn root(&self) -> &PageState {
+        self.pages.first().expect("栈底恒为 Root，永不为空")
+    }
+
     /// 进入嵌套页（`CommandRef::Page` 命中时）。
     pub fn push(&mut self, page: PageState) {
         self.pages.push(page);

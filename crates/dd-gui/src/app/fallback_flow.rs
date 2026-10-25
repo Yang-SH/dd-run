@@ -26,19 +26,19 @@ impl PaletteApp {
     /// 渲染出展示项并注入列表；有匹配/空查询/嵌套页则清空展示（模板缓存保留）。
     /// 每帧由 `draw_panel` 调用（模板渲染开销极小，且 `store` 内做过去重）。
     pub(crate) fn sync_fallback(&mut self) {
-        let page = self.stack.current();
-        if page.page_id.is_some() || self.aggregating || page.is_loading {
+        let page = self.view.stack.current();
+        if page.page_id.is_some() || self.pool.aggregating || page.is_loading {
             return; // 嵌套页有自己的过滤（get_items search）；加载中不打扰
         }
         let query = page.list.query().to_string();
         if query.is_empty() || page.list.has_regular_match() {
-            self.stack.current_mut().list.clear_fallback();
+            self.view.stack.current_mut().list.clear_fallback();
             return;
         }
         // 无匹配：渲染缓存模板（缓存空 → 空集，列表区回落"没有匹配项"）
-        let lang = self.lang_effective;
-        let rendered = self.fallback_store.render(&query, lang);
-        self.stack.current_mut().list.set_fallback(rendered);
+        let lang = self.view.lang_effective;
+        let rendered = self.pool.fallback_store.render(&query, lang);
+        self.view.stack.current_mut().list.set_fallback(rendered);
         // 若还有扩展未拉取模板且当前无在途请求 → 链式发起（每轮 1 个）
         self.start_fallback_fetch_chain();
     }
@@ -47,31 +47,34 @@ impl PaletteApp {
     /// 后台线程调 `fallback_commands`；完成后 [`Self::poll_fallback`] 存模板并
     /// 继续下一个（每次 1 个在途，遵守协议 §4 同进程串行化）。
     pub(crate) fn start_fallback_fetch_chain(&mut self) {
-        if self.fallback_rx.is_some() {
+        if self.pool.fallback_rx.is_some() {
             return; // 已有在途
         }
         let target = self
+            .pool
             .processes
             .iter()
-            .find(|(id, _)| self.fallback_store.wants(id))
+            .find(|(id, _)| self.pool.fallback_store.wants(id))
             .map(|(id, _)| id.clone());
         let Some(ext_id) = target else {
             return;
         };
         let name = self
+            .pool
             .exts
             .iter()
             .find(|e| e.manifest.id == ext_id)
             .map(|e| e.manifest.name.clone())
             .unwrap_or_default();
-        self.fallback_store.begin_fetch(&ext_id);
+        self.pool.fallback_store.begin_fetch(&ext_id);
         let idx = self
+            .pool
             .processes
             .iter()
             .position(|(id, _)| *id == ext_id)
             .expect("target 来自 processes，必在");
-        let (_, mut proc) = self.processes.remove(idx);
-        self.inflight.insert(ext_id.clone());
+        let (_, mut proc) = self.pool.processes.remove(idx);
+        self.pool.inflight.insert(ext_id.clone());
         log::debug!("[dd-gui] 拉取兜底模板：ext={ext_id}");
         let (tx, rx) = mpsc::channel();
         thread::spawn(move || {
@@ -83,13 +86,13 @@ impl PaletteApp {
                 result,
             });
         });
-        self.fallback_rx = Some(rx);
+        self.pool.fallback_rx = Some(rx);
     }
 
     /// 后台 `fallback_commands` 结果：存模板（非空 → Ready；空/失败 → Exhausted
     /// 不再重拉）→ 归还/丢弃进程 → 链式拉下一个 → 重渲染当前查询的兜底项。
     pub(crate) fn poll_fallback(&mut self, ctx: &egui::Context) {
-        let (outcome, disconnected) = match &self.fallback_rx {
+        let (outcome, disconnected) = match &self.pool.fallback_rx {
             Some(rx) => match rx.try_recv() {
                 Ok(o) => (Some(o), false),
                 Err(TryRecvError::Empty) => (None, false),
@@ -98,7 +101,7 @@ impl PaletteApp {
             None => (None, false),
         };
         if disconnected {
-            self.fallback_rx = None;
+            self.pool.fallback_rx = None;
         }
         let Some(outcome) = outcome else {
             return;
@@ -109,20 +112,20 @@ impl PaletteApp {
             name,
             result,
         } = outcome;
-        self.inflight.remove(&ext_id);
-        self.fallback_rx = None;
+        self.pool.inflight.remove(&ext_id);
+        self.pool.fallback_rx = None;
         match result {
             Ok(templates) => {
-                self.fallback_store.store(&ext_id, &name, templates);
+                self.pool.fallback_store.store(&ext_id, &name, templates);
                 log::debug!(
                     "[dd-gui] 兜底模板就绪：ext={ext_id}（{} 条）",
-                    self.fallback_store.template_count(&ext_id)
+                    self.pool.fallback_store.template_count(&ext_id)
                 );
                 ctx.request_repaint(); // 模板到达 → 立即重绘展示兜底项
             }
             Err(e) => {
                 log::warn!("[dd-gui] fallback_commands 失败：ext={ext_id}：{e}（本会话不再重试）");
-                self.fallback_store.store_failure(&ext_id);
+                self.pool.fallback_store.store_failure(&ext_id);
             }
         }
         if let Some(mut p) = proc {
@@ -142,7 +145,7 @@ impl PaletteApp {
 
     /// 无匹配时用 store 最新状态重渲染兜底项（拉取完成后调用）。
     pub(crate) fn rerender_fallback(&mut self) {
-        let page = self.stack.current();
+        let page = self.view.stack.current();
         if page.page_id.is_some() || page.is_loading || page.list.has_regular_match() {
             return;
         }
@@ -150,9 +153,9 @@ impl PaletteApp {
         if query.is_empty() {
             return;
         }
-        let lang = self.lang_effective;
-        let rendered = self.fallback_store.render(&query, lang);
-        self.stack.current_mut().list.set_fallback(rendered);
+        let lang = self.view.lang_effective;
+        let rendered = self.pool.fallback_store.render(&query, lang);
+        self.view.stack.current_mut().list.set_fallback(rendered);
     }
 }
 
@@ -184,16 +187,17 @@ mod tests {
     #[test]
     fn sync_fallback_injects_rendered_templates_when_no_regular_match() {
         let mut app = make_app();
-        app.aggregating = false; // 聚合已完成
-        app.stack.root_mut().list = PanelState::new(vec![PanelItem::new("Open Settings")]);
-        app.stack.root_mut().list.set_query("zzz-no-match");
+        app.pool.aggregating = false; // 聚合已完成
+        app.view.stack.root_mut().list = PanelState::new(vec![PanelItem::new("Open Settings")]);
+        app.view.stack.root_mut().list.set_query("zzz-no-match");
         // 预置 calc 兜底模板（已 Ready）
-        app.fallback_store
+        app.pool
+            .fallback_store
             .store("com.ddrun.calc", "Calculator", vec![calc_template()]);
 
         app.sync_fallback();
 
-        let page = app.stack.current();
+        let page = app.view.stack.current();
         assert!(page.list.is_fallback_mode(), "无常规匹配时应进入兜底模式");
         assert_eq!(page.list.visible_count(), 1);
         assert_eq!(
@@ -206,15 +210,16 @@ mod tests {
     #[test]
     fn sync_fallback_clears_fallback_when_regular_match() {
         let mut app = make_app();
-        app.aggregating = false;
-        app.stack.root_mut().list = PanelState::new(vec![PanelItem::new("Open Settings")]);
-        app.stack.root_mut().list.set_query("open"); // 命中常规项
-        app.fallback_store
+        app.pool.aggregating = false;
+        app.view.stack.root_mut().list = PanelState::new(vec![PanelItem::new("Open Settings")]);
+        app.view.stack.root_mut().list.set_query("open"); // 命中常规项
+        app.pool
+            .fallback_store
             .store("com.ddrun.calc", "Calculator", vec![calc_template()]);
 
         app.sync_fallback();
 
-        let page = app.stack.current();
+        let page = app.view.stack.current();
         assert!(!page.list.is_fallback_mode(), "常规有匹配时不进入兜底");
         assert_eq!(page.list.visible_count(), 1, "应展示常规匹配项而非兜底");
     }
@@ -222,19 +227,21 @@ mod tests {
     #[test]
     fn rerender_fallback_updates_templates_on_query_change() {
         let mut app = make_app();
-        app.aggregating = false;
-        app.stack.root_mut().list = PanelState::new(vec![PanelItem::new("Open Settings")]);
-        app.stack.root_mut().list.set_query("zzz");
-        app.fallback_store
+        app.pool.aggregating = false;
+        app.view.stack.root_mut().list = PanelState::new(vec![PanelItem::new("Open Settings")]);
+        app.view.stack.root_mut().list.set_query("zzz");
+        app.pool
+            .fallback_store
             .store("com.ddrun.calc", "Calculator", vec![calc_template()]);
         app.sync_fallback();
-        assert!(app.stack.current().list.is_fallback_mode());
+        assert!(app.view.stack.current().list.is_fallback_mode());
 
         // 查询变化（仍无常规匹配）→ 重渲染应反映新查询
-        app.stack.current_mut().list.set_query("abc");
+        app.view.stack.current_mut().list.set_query("abc");
         app.rerender_fallback();
         assert_eq!(
-            app.stack
+            app.view
+                .stack
                 .current()
                 .list
                 .selected_item()
@@ -248,21 +255,22 @@ mod tests {
     #[test]
     fn fallback_fetch_chain_marks_exhausted_on_dead_process() {
         let mut app = make_app();
-        app.aggregating = false;
+        app.pool.aggregating = false;
         let ext_id = "com.ddrun.calc";
-        assert!(app.fallback_store.wants(ext_id), "初始应需要拉取模板");
+        assert!(app.pool.fallback_store.wants(ext_id), "初始应需要拉取模板");
 
         // 注入一个死进程（start_fallback_fetch_chain 会 take 它去后台拉取）
-        app.processes
+        app.pool
+            .processes
             .push((ext_id.to_string(), dying_client(ext_id)));
 
         app.start_fallback_fetch_chain();
-        assert!(app.fallback_rx.is_some(), "应已发起后台拉取");
+        assert!(app.pool.fallback_rx.is_some(), "应已发起后台拉取");
 
         // 驱动 poll_fallback 直到链结束（死进程 fetch 快速失败）
         let c = ctx();
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
-        while app.fallback_rx.is_some() {
+        while app.pool.fallback_rx.is_some() {
             if std::time::Instant::now() >= deadline {
                 break;
             }
@@ -272,11 +280,11 @@ mod tests {
 
         // 死进程 → fetch 失败 → store_failure → Exhausted（本会话不再拉取）
         assert!(
-            !app.fallback_store.wants(ext_id),
+            !app.pool.fallback_store.wants(ext_id),
             "失败后该扩展应被标记 Exhausted"
         );
-        assert!(app.fallback_store.is_empty());
-        assert_eq!(app.fallback_store.template_count(ext_id), 0);
+        assert!(app.pool.fallback_store.is_empty());
+        assert_eq!(app.pool.fallback_store.template_count(ext_id), 0);
     }
 
     // ── 回归：搜索引擎配置变更（如 5→1）后兜底模板缓存必须作废 ──────
@@ -301,37 +309,42 @@ mod tests {
     #[test]
     fn engine_change_invalidates_cached_fallback_templates() {
         let mut app = make_app();
-        app.aggregating = false;
+        app.pool.aggregating = false;
         // 首启已缓存 5 个搜索引擎兜底模板
         let tmpls: Vec<CommandItem> = ["Google", "Bing", "Baidu", "DuckDuckGo", "GitHub"]
             .iter()
             .map(|n| websearch_template(n))
             .collect();
-        app.fallback_store
+        app.pool
+            .fallback_store
             .store("com.ddrun.websearch", "Web Search", tmpls);
         assert_eq!(
-            app.fallback_store.template_count("com.ddrun.websearch"),
+            app.pool
+                .fallback_store
+                .template_count("com.ddrun.websearch"),
             5,
             "首启应缓存 5 个引擎兜底项"
         );
         assert!(
-            !app.fallback_store.wants("com.ddrun.websearch"),
+            !app.pool.fallback_store.wants("com.ddrun.websearch"),
             "已缓存后不应再拉取"
         );
 
         // 配置变更触发重聚合（restart_aggregation 现在会先清缓存）
-        app.fallback_store.clear();
-        app.inflight.clear();
-        app.fallback_rx = None;
+        app.pool.fallback_store.clear();
+        app.pool.inflight.clear();
+        app.pool.fallback_rx = None;
 
         // 缓存已作废 → 仅剩 Bing 的新进程会重新拉取到 1 条模板
         assert_eq!(
-            app.fallback_store.template_count("com.ddrun.websearch"),
+            app.pool
+                .fallback_store
+                .template_count("com.ddrun.websearch"),
             0,
             "clear 后旧模板必须消失"
         );
         assert!(
-            app.fallback_store.wants("com.ddrun.websearch"),
+            app.pool.fallback_store.wants("com.ddrun.websearch"),
             "clear 后应重新拉取新引擎模板"
         );
     }

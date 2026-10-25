@@ -51,10 +51,11 @@ fn main() -> eframe::Result {
     // panic 流程不变，见 crashlog 模块文档）。
     crashlog::install();
 
-    // O4：装配日志后端（级别取环境变量 `DDRUN_LOG`，未设时 = debug，与接入前
-    // 「所有 eprintln! 都输出」等价）。后端恒写 stderr——GUI 子系统无控制台，
-    // 真机排障请从终端启动，或重定向：`dd-run.exe 2> dd-run.log`。
-    dd_protocol::logging::init();
+    // O4 + P2-5.3：装配日志后端。stderr 口径不变（级别取 `DDRUN_LOG`，未设时 =
+    // debug，与接入前等价）；P2-5.3 起增加文件腿 `%APPDATA%\dd-run\logs\dd-run.log`
+    // （默认 Info，滚动 5×1 MB）——release GUI 子系统无控制台，日志自此**留存**。
+    // 排障仍可终端重定向 stderr：`dd-run.exe 2> dd-run.log`。
+    dd_gui::file_log::init();
 
     // R-26：单实例互斥（方案：O4 init 之后、eframe 创建之前）——双开第二实例
     // 弹「已在运行」提示后退出，见函数文档。
@@ -158,7 +159,6 @@ fn main() -> eframe::Result {
             // 扩展环境（DD_WEBSEARCH_ENGINES），面板「网络搜索」按配置渲染。
             let engines_env = settings.search_engines_env();
             let disabled = settings.disabled_extensions.clone();
-            let custom_commands = settings.custom_commands.clone();
             let ext_settings = settings.ext_settings.clone();
             let (agg_tx, agg_rx) = mpsc::channel();
             spawn_aggregation(
@@ -167,10 +167,9 @@ fn main() -> eframe::Result {
                 engines_env,
                 disabled,
                 resolved_lang,
-                custom_commands,
                 ext_settings,
             );
-            Ok(Box::new(PaletteApp::new(
+            let mut app = PaletteApp::new(
                 hotkey,
                 tray.events,
                 tray_click_flag,
@@ -179,7 +178,14 @@ fn main() -> eframe::Result {
                 cache,
                 settings,
                 panel_open,
-            )))
+            );
+            // §5.1：装载使用频次（usage.json → pool.usage → Root 排序快照）。
+            // 保持 PaletteApp::new 纯注入（8 参数不变），文件系统副作用在此显式装配。
+            app.load_usage();
+            // §5.2：启动时检查更新（settings.check_updates，默认关；结果落地为
+            // toast——面板隐藏期间暂存，下次唤起可见）。
+            app.maybe_autostart_update_check();
+            Ok(Box::new(app))
         }),
     )
 }

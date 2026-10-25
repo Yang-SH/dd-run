@@ -1,6 +1,5 @@
 //! 测试共享夹具（仅 `cfg(test)` 编译）：应用构造器与死进程桩。
 
-use crate::app::aggregate::AggregatePayload;
 use crate::app::PaletteApp;
 use dd_gui::state::PanelItem;
 use dd_gui::tray::TrayEvent;
@@ -75,7 +74,55 @@ pub(crate) fn dying_client(id: &str) -> crate::ext_client::ExtClient {
 
 /// spawn 一个已退出的进程（返回前等待其确实退出，确保 refresh_health / poll 稳定检测）。
 pub(crate) fn dying_process(id: &str) -> ExtensionProcess {
-    let mut proc = ExtensionProcess::spawn(&dying_ext(id)).expect("spawn 立即退出的进程");
+    exiting_process(id, 1)
+}
+
+/// 构造「立即以指定退出码退出」的扩展进程（doc_contract §11 锚点：
+/// 1 = 崩溃口径（`dying_process` 同款），0 = EOF/正常退出口径）。
+pub(crate) fn exiting_ext(id: &str, code: i32) -> LoadedExtension {
+    let (command, args): (String, Vec<String>) = if cfg!(windows) {
+        (
+            "cmd.exe".to_string(),
+            vec!["/c".to_string(), format!("exit {code}")],
+        )
+    } else {
+        (
+            "/bin/sh".to_string(),
+            vec!["-c".to_string(), format!("exit {code}")],
+        )
+    };
+    LoadedExtension {
+        manifest: Manifest {
+            schema_version: "1.0".to_string(),
+            id: id.to_string(),
+            name: "Exiting".to_string(),
+            version: "1.0.0".to_string(),
+            description: String::new(),
+            author: String::new(),
+            license: String::new(),
+            homepage: String::new(),
+            icon: None,
+            entry: Entry {
+                command: command.clone(),
+                args,
+                env: Default::default(),
+                cwd: None,
+            },
+            frozen: true,
+            capabilities: vec![],
+            platforms: None,
+            min_host_version: None,
+        },
+        path: PathBuf::from("exiting.json"),
+        dir: PathBuf::from("."),
+        command: PathBuf::from(command),
+        cwd: PathBuf::from("."),
+    }
+}
+
+/// spawn 并等待其以 `code` 退出（与 `dying_process` 同款等待约定）。
+pub(crate) fn exiting_process(id: &str, code: i32) -> ExtensionProcess {
+    let mut proc = ExtensionProcess::spawn(&exiting_ext(id, code)).expect("spawn 指定退出码的进程");
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
     while !proc.has_exited() {
         if std::time::Instant::now() >= deadline {
@@ -95,7 +142,7 @@ pub(crate) fn make_app() -> PaletteApp {
 /// 同 `make_app` 空 channel 注入，不触真实扩展 / 聚合 / 落盘）。
 pub(crate) fn make_app_with_settings(settings: dd_gui::settings::Settings) -> PaletteApp {
     let (_ttx, tray_rx) = mpsc::channel::<TrayEvent>();
-    let (_atx, agg_rx) = mpsc::channel::<AggregatePayload>();
+    let (_atx, agg_rx) = mpsc::channel::<crate::app::aggregate::AggregateEvent>();
     PaletteApp::new(
         dd_gui::hotkey::HotkeyThread::dummy(),
         tray_rx,
@@ -112,7 +159,7 @@ pub(crate) fn make_app_with_settings(settings: dd_gui::settings::Settings) -> Pa
 /// 驱动 `poll_hotkey` 状态位流转，不触真实 `RegisterHotKey`）。
 pub(crate) fn make_app_with(hotkey_rx: mpsc::Receiver<dd_gui::hotkey::HotkeyEvent>) -> PaletteApp {
     let (_ttx, tray_rx) = mpsc::channel::<TrayEvent>();
-    let (_atx, agg_rx) = mpsc::channel::<AggregatePayload>();
+    let (_atx, agg_rx) = mpsc::channel::<crate::app::aggregate::AggregateEvent>();
     PaletteApp::new(
         dd_gui::hotkey::HotkeyThread::for_events(hotkey_rx),
         tray_rx,

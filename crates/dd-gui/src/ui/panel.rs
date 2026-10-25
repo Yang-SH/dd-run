@@ -36,10 +36,14 @@ impl PaletteApp {
         // 早返回到「左说明文案 + 右 Esc 返回」分支（设计稿 §08 line 1223-1226 + D15 line 971）。
         let mut open_settings = false;
         // T9（2026-10-05）：背景图纹理（(路径, mtime) 门控缓存；须在 self_ref
-        // 不可变再借用之前完成 &mut self.backdrop_cache 访问）。
-        let bg_path = self.settings.background_image_path.clone();
-        let bg_tex =
-            bg_path.and_then(|path| self.backdrop_cache.texture(ui.ctx(), Some(&path)).cloned());
+        // 不可变再借用之前完成 &mut self.view.backdrop_cache 访问）。
+        let bg_path = self.draft.settings.background_image_path.clone();
+        let bg_tex = bg_path.and_then(|path| {
+            self.view
+                .backdrop_cache
+                .texture(ui.ctx(), Some(&path))
+                .cloned()
+        });
         let self_ref: &Self = &*self;
         let p = theme::Palette::of(ui.visuals().dark_mode);
         // T9（2026-10-05）：背景图层（互斥语义）——帧首先把图铺满整窗，页脚 /
@@ -59,9 +63,9 @@ impl PaletteApp {
                 ui,
                 rect,
                 tex,
-                self.settings.background_image_fit,
-                self.settings.background_image_opacity,
-                self.settings.background_image_tint_intensity,
+                self.draft.settings.background_image_fit,
+                self.draft.settings.background_image_opacity,
+                self.draft.settings.background_image_tint_intensity,
                 p.panel,
             );
         }
@@ -75,7 +79,7 @@ impl PaletteApp {
         let footer_fill = if bg_active {
             // T9：背景图生效 → 页脚透明（背景图层透出）
             egui::Color32::TRANSPARENT
-        } else if self.backdrop_active {
+        } else if self.window.backdrop_active {
             ui.style().visuals.panel_fill
         } else {
             p.panel_2
@@ -126,7 +130,7 @@ impl PaletteApp {
             )
             .show(ui, |ui| {
                 // ── 设置页（批次 4.0）：独立视图，不走 searchbar/列表链路 ──
-                if self.stack.current().is_settings {
+                if self.view.stack.current().is_settings {
                     self.draw_settings(ui);
                     return;
                 }
@@ -135,7 +139,7 @@ impl PaletteApp {
                 // 页标题进 placeholder、ext_id 徽标移页脚右端（D2）。
                 // 三页顶行完全同构（同 40px 高），切换零位移（验收 A1/A5）。
                 // 旧实现（嵌套页独立标题行 + "[Esc] 返回" 文本）已废弃。
-                let page = self.stack.current();
+                let page = self.view.stack.current();
                 let is_nested = page.page_id.is_some() && !page.is_settings;
                 let page_title = if is_nested {
                     page.title.clone()
@@ -163,19 +167,19 @@ impl PaletteApp {
                     go_back_clicked = draw_back_btn(&mut back_ui, &p);
                     search_rect.min.x = back_rect.right() + 8.0;
                 }
-                let mut query = self.stack.current().list.query().to_owned();
+                let mut query = self.view.stack.current().list.query().to_owned();
                 let prev_query = query.clone(); // 渲染前页内查询（v3.3 变化检测基线）
                 let placeholder = if is_nested {
-                    nested_search_placeholder(self.lang_effective, &page_title)
+                    nested_search_placeholder(self.view.lang_effective, &page_title)
                 } else {
-                    crate::text::t(self.lang_effective, "ph.root").to_string()
+                    crate::text::t(self.view.lang_effective, "ph.root").to_string()
                 };
                 // 补拉在飞指示（真机 2026-09-14）：当前嵌套页有 get_items 在途
                 // → 搜索框右端小 spinner。有旧结果 / 延迟骨架窗口内都不闪骨架
                 // （见 PageState::begin_refetch），spinner 是这段时间唯一的「正在搜索」信号。
-                let cur_ext = self.stack.current().ext_id.clone();
+                let cur_ext = self.view.stack.current().ext_id.clone();
                 let page_busy =
-                    is_nested && !cur_ext.is_empty() && self.inflight.contains(&cur_ext);
+                    is_nested && !cur_ext.is_empty() && self.pool.inflight.contains(&cur_ext);
                 let search_ui = &mut ui.new_child(
                     egui::UiBuilder::new()
                         .max_rect(search_rect)
@@ -186,11 +190,11 @@ impl PaletteApp {
                     &mut query,
                     &placeholder,
                     page_busy,
-                    self.settings.ui_animations,
+                    self.draft.settings.ui_animations,
                 );
                 let query_changed = query != prev_query; // v3.3：渲染后变化检测（set_query 会 move query）
                 {
-                    let page = self.stack.current_mut();
+                    let page = self.view.stack.current_mut();
                     // R-23：截断发生时把输入框光标置尾（粘贴 300 字符 → 显示
                     // 前 256、光标落在文本末，续接输入语义自然）。
                     let truncated = page.list.set_query(query);
@@ -203,9 +207,9 @@ impl PaletteApp {
                             egui::TextEdit::store_state(ui.ctx(), resp.id, st);
                         }
                     }
-                    if self.want_focus {
+                    if self.window.want_focus {
                         resp.request_focus();
-                        self.want_focus = false;
+                        self.window.want_focus = false;
                         // Ctrl+F 带词进页：query 经 `set_query` 绕过输入框回填数据模型，
                         // TextEditState 的光标不随之外移（新档默认行首 / 旧档留在根页
                         // 位置）——回填非空时显式置尾，续接输入语义自然（2026-10-07
@@ -229,8 +233,8 @@ impl PaletteApp {
                 // set_query 内部 q == self.state.query 时早退，故 query 未变（非按键帧）
                 // 不会误触发；连续打字会持续刷新去抖到期时刻。
                 if is_nested && query_changed {
-                    self.stack.current_mut().mark_query_scroll_pending();
-                    self.e2e_input_at = Some(Instant::now()); // E2E：页内输入变化 = 感知计时起点
+                    self.view.stack.current_mut().mark_query_scroll_pending();
+                    self.view.e2e_input_at = Some(Instant::now()); // E2E：页内输入变化 = 感知计时起点
                     self.schedule_page_query_debounce();
                 }
                 // M4 宿主 fallback：查询变化后同步兜底展示/拉取（页面借用已释放）
@@ -238,7 +242,9 @@ impl PaletteApp {
                 ui.add_space(4.0);
 
                 // ── 列表区 ───────────────────────────────────
-                if self.aggregating {
+                // C2（§4.1）：流式聚合——加载骨架只挡**零项期**；部分结果已
+                // 到达即画列表（快扩展先回先渲染，不被 spawn 序里的慢扩展扣住）。
+                if self.pool.aggregating && self.view.stack.root().list.visible_count() == 0 {
                     // C 组批次 C2（§07.2）：首屏聚合加载与子页拉取共用同一
                     // Loading 组件（Spinner 22px accent + 3 条骨架行），替换
                     // 旧纯文本占位「正在加载扩展…」（2026-09-05 真机核对不一致）。
@@ -246,8 +252,8 @@ impl PaletteApp {
                     let dark = ui.visuals().dark_mode;
                     let time = ui.ctx().time();
                     // F2：骨架行与结果行同源密度（与 draw_list 内一致）
-                    let metrics = theme::ListMetrics::of(self.settings.density);
-                    draw_loading_state(ui, self.lang_effective, &p, dark, time, metrics);
+                    let metrics = theme::ListMetrics::of(self.draft.settings.density);
+                    draw_loading_state(ui, self.view.lang_effective, &p, dark, time, metrics);
                     ui.ctx()
                         .request_repaint_after(std::time::Duration::from_millis(33));
                 } else {
@@ -287,7 +293,7 @@ impl PaletteApp {
         // `cy`**：键帽/文本用 `paint_keycap` / `painter.text` 显式定位，齿轮用
         // 24×24 精确 max_rect 子区（恰好填满，无漂移），动作文本用 16px 高子区
         // （首控件居中无漂移）。
-        if self.stack.current().is_settings {
+        if self.view.stack.current().is_settings {
             let total_w = ui.available_width();
             let (row, _) =
                 ui.allocate_exact_size(egui::vec2(total_w, theme::KEYCAP_H), egui::Sense::hover());
@@ -296,7 +302,7 @@ impl PaletteApp {
             ui.painter().text(
                 egui::pos2(row.min.x, cy),
                 egui::Align2::LEFT_CENTER,
-                crate::text::t(self.lang_effective, "footer.settings_hint"),
+                crate::text::t(self.view.lang_effective, "footer.settings_hint"),
                 egui::FontId::proportional(theme::FOOTER_FONT),
                 p.text3,
             );
@@ -312,7 +318,7 @@ impl PaletteApp {
             ui.painter().text(
                 egui::pos2(esc_left - theme::KEYCAP_DESC_GAP, cy),
                 egui::Align2::RIGHT_CENTER,
-                crate::text::t(self.lang_effective, "footer.back"),
+                crate::text::t(self.view.lang_effective, "footer.back"),
                 egui::FontId::proportional(theme::FOOTER_FONT),
                 p.text2,
             );
@@ -325,7 +331,7 @@ impl PaletteApp {
         // （Enter 执行 / Esc 返回·隐藏，v4.11 移除 ↑↓ 选择）。
         // C 组批次 C1（§07.1）：嵌套页页脚右端常驻 ext_id 徽标——键位图例
         // 整体左移 chip 宽 + 间距让位。
-        let page = self.stack.current();
+        let page = self.view.stack.current();
         let ext_chip_w = if page.page_id.is_some() && !page.is_settings {
             text_width(ui, &page.ext_id, egui::FontId::monospace(10.0)) + 16.0
         } else {
@@ -336,23 +342,23 @@ impl PaletteApp {
         let action = page
             .list
             .selected_item()
-            .map(|item| footer_action_text(self.lang_effective, item))
+            .map(|item| footer_action_text(self.view.lang_effective, item))
             .or_else(|| {
                 page.is_loading
-                    .then(|| crate::text::t(self.lang_effective, "panel.loading").to_string())
+                    .then(|| crate::text::t(self.view.lang_effective, "panel.loading").to_string())
             })
             // S-05：无选中项且非加载中时，复用左块**空位**提示「有 N 个扩展待批准」。
             // 页脚是严格单行的几何契约（v4.10 D35），故不新增行、不改高度——只在
             // 「本该空白」时占用。有选中项时该提示让位给上下文动作文本（C7），
             // 由设置页卡片头与启动一次性 toast 兜底可见性。
             .or_else(|| {
-                let n = dd_gui::aggregator::pending_count(&self.trust);
+                let n = dd_gui::aggregator::pending_count(&self.pool.trust);
                 (n > 0).then(|| {
-                    crate::text::t(self.lang_effective, "footer.ext_pending")
+                    crate::text::t(self.view.lang_effective, "footer.ext_pending")
                         .replace("{n}", &n.to_string())
                 })
             });
-        let keys_w = keys_width(ui, self.lang_effective)
+        let keys_w = keys_width(ui, self.view.lang_effective)
             + if ext_chip_w > 0.0 {
                 theme::FOOTER_GAP + ext_chip_w
             } else {
@@ -404,7 +410,7 @@ impl PaletteApp {
         }
 
         // 右：完整键位图例，全部手绘锚定 cy（Enter 执行 / Esc 返回·隐藏）
-        paint_keys_at(ui, self.lang_effective, egui::pos2(split_x, cy), &p);
+        paint_keys_at(ui, self.view.lang_effective, egui::pos2(split_x, cy), &p);
         // 嵌套页：ext_id 徽标贴右缘垂直居中（draw_ext_chip 恰好填满其子区）
         if ext_chip_w > 0.0 {
             let chip_rect = egui::Rect::from_min_size(
@@ -416,7 +422,7 @@ impl PaletteApp {
                     .max_rect(chip_rect)
                     .layout(egui::Layout::left_to_right(egui::Align::Min)),
             );
-            draw_ext_chip(&mut chip_ui, &self.stack.current().ext_id, &p);
+            draw_ext_chip(&mut chip_ui, &self.view.stack.current().ext_id, &p);
         }
         clicked
     }
@@ -436,20 +442,20 @@ impl PaletteApp {
         // M5 批次 3：本帧主题色板（组件色统一经 Palette，不写裸色值）
         let p = theme::Palette::of(ui.visuals().dark_mode);
         // F2：列表密度档 → 行几何/排印指标（行高/字号/图标格一档联动）
-        let metrics = theme::ListMetrics::of(self.settings.density);
+        let metrics = theme::ListMetrics::of(self.draft.settings.density);
         // F7（2026-10-10）：PgUp/PgDn 页步长 = 本帧可视行数（面板可用高 /
         // 行高实测，三档密度 metrics.row_h——**不能用常量 ROW_H**，见 D8 契约）。
         // 用面板可用高近似 ScrollArea 可视高（页脚/边距占比小，翻页步长允许
-        // 粗粒度）；下限钳制在 set_page_step 内。须在下方 `self.stack.current()`
+        // 粗粒度）；下限钳制在 set_page_step 内。须在下方 `self.view.stack.current()`
         // 不可变借用前完成回写。
         let page_rows = (ui.available_height() / metrics.row_h.max(1.0)) as usize;
-        self.stack.current_mut().list.set_page_step(page_rows);
+        self.view.stack.current_mut().list.set_page_step(page_rows);
         // P2 v5：行填充材质适配（hover 分档 + selected 玻璃化治扫动闪烁，
         // 见 `theme::row_fills`——循环外一次解析，行内直用）。
         let row_fills = theme::row_fills(
             ui.visuals().dark_mode,
-            self.settings.backdrop,
-            self.backdrop_active,
+            self.draft.settings.backdrop,
+            self.window.backdrop_active,
         );
         // 本帧鼠标指针屏幕坐标（用于区分「鼠标真的动了」vs「内容在静止鼠标下滚动」）。
         let current_hover_pos = ui.input(|i| i.pointer.hover_pos());
@@ -457,7 +463,7 @@ impl PaletteApp {
         // 先把需要的状态拷贝出来（释放对 `self` 的不可变借用），
         // 以便循环结束后可写回 hover/click 结果，避免借用冲突。
         let (is_loading, empty, selected, query_empty) = {
-            let page = self.stack.current();
+            let page = self.view.stack.current();
             (
                 // 首拉 Loading（`open_page` 置位）或**延迟骨架到期**——快速补拉
                 // （Everything 温热 ~50ms）在延迟窗口内落地则全程无骨架闪烁；
@@ -468,9 +474,9 @@ impl PaletteApp {
                 page.list.query().is_empty(),
             )
         };
-        let scroll_to_top = self.stack.current().scroll_to_top;
+        let scroll_to_top = self.view.stack.current().scroll_to_top;
         // 延迟骨架未到期 → 预约到点重绘（无输入事件时也能按时切骨架）。
-        if let Some(deadline) = self.stack.current().skeleton_after {
+        if let Some(deadline) = self.view.stack.current().skeleton_after {
             let now = std::time::Instant::now();
             if now < deadline {
                 ui.ctx().request_repaint_after(deadline - now);
@@ -480,14 +486,14 @@ impl PaletteApp {
         // F8：可见项**借用表**（不 clone 项数据，消除每帧深拷贝）；借用存活至
         // ScrollArea 闭包结束（NLL），期间禁止 `&mut self`（写回全部后置）。
         // 置于骨架/空态分支前——`items.is_empty()` 空态判定即消费它。
-        let items: Vec<(usize, &PanelItem)> = self.stack.current().list.filtered().collect();
+        let items: Vec<(usize, &PanelItem)> = self.view.stack.current().list.filtered().collect();
 
         if is_loading {
             // C 组批次 C2（§07.2）：Spinner + 3 条骨架行替换纯文本；
             // 动画驱动：egui 按需重绘，加载期间 ~30fps 轮询重绘。
             let dark = ui.visuals().dark_mode;
             let time = ui.ctx().time();
-            draw_loading_state(ui, self.lang_effective, &p, dark, time, metrics);
+            draw_loading_state(ui, self.view.lang_effective, &p, dark, time, metrics);
             ui.ctx()
                 .request_repaint_after(std::time::Duration::from_millis(33));
             return;
@@ -534,18 +540,22 @@ impl PaletteApp {
         let mut clicked: Option<usize> = None;
         // T7（2026-09-20）：单击激活关闭时，单击只选中（不激活）——收集后单独回写。
         let mut select_only: Option<usize> = None;
-        let single_click = self.settings.single_click_activation;
+        let single_click = self.draft.settings.single_click_activation;
         // v4.4（D19）：右键行 → 打开菜单（锚点 = 右键点）；选中行矩形仅在
         // 键盘触发（Shift+F10）时用于锚定行底边左缘（D20）。
         let mut right_clicked: Option<(usize, egui::Pos2)> = None;
         let mut selected_rect: Option<egui::Rect> = None;
         // 本帧行矩形存档（菜单开着时右键另一行的命中依据，见 `reopen_ctx_menu_at`）。
         let mut row_rects: Vec<(usize, egui::Rect)> = Vec::new();
-        let scroll_follow = self.scroll_follow;
+        let scroll_follow = self.window.scroll_follow;
         // v4.17a：鼠标自唤起后**尚未活动过**时抑制 hover 视觉。指针可能恰好停
         // 在结果行上（唤起前的残留位置），此时画 hover 会让用户以为"那行被选中了"，
         // 而实际选中是第一项（键盘流）。一旦鼠标真正动过即恢复常驻 hover。
-        let hover_visual = self.mouse_hide.as_ref().is_none_or(|s| s.pointer_engaged());
+        let hover_visual = self
+            .window
+            .mouse_hide
+            .as_ref()
+            .is_none_or(|s| s.pointer_engaged());
         egui::ScrollArea::vertical().show(ui, |ui| {
             if scroll_to_top {
                 let content_top = ui.min_rect().min;
@@ -624,9 +634,9 @@ impl PaletteApp {
                 });
         });
         if scroll_to_top {
-            self.stack.current_mut().take_scroll_to_top();
+            self.view.stack.current_mut().take_scroll_to_top();
         }
-        self.ctx_row_rects = row_rects;
+        self.overlay.ctx_row_rects = row_rects;
         // F8：图标缓存写落盘（items 借用已随 ScrollArea 闭包结束，`&mut self` 合法）
         self.ingest_icon_writes(icon_writes);
 
@@ -638,39 +648,39 @@ impl PaletteApp {
         // v4.17a：`None` 基准 = 面板刚唤起（或指针刚回到窗口内），本帧**只采样**
         // 不判活动。否则"唤起面板"这一动作本身会被当成鼠标移动，让 hover 行
         // 抢走第一项选中（用户反馈：鼠标在面板中时默认选中了鼠标所在项）。
-        let pointer_moved = match (self.last_pointer_pos, current_hover_pos) {
+        let pointer_moved = match (self.window.last_pointer_pos, current_hover_pos) {
             (None, _) => false,
             (Some(prev), Some(cur)) => prev != cur,
             (Some(_), None) => false,
         };
-        let last_hovered = self.last_hovered_index;
+        let last_hovered = self.window.last_hovered_index;
         if let Some(idx) = select_only {
             // T7：单击仅选中（不执行）；hover 基准同步，避免下一帧被鼠标抢回
-            self.stack.current_mut().list.set_selected(idx);
-            self.last_hovered_index = Some(idx);
-            self.scroll_follow = false;
+            self.view.stack.current_mut().list.set_selected(idx);
+            self.window.last_hovered_index = Some(idx);
+            self.window.scroll_follow = false;
             ui.ctx().request_repaint();
         }
         if let Some(idx) = clicked {
-            self.stack.current_mut().list.set_selected(idx);
+            self.view.stack.current_mut().list.set_selected(idx);
             self.confirm_selected();
-            self.last_hovered_index = clicked; // 点击位置即新的 hover 基准
-            self.scroll_follow = false; // 鼠标驱动选中：不滚动跟随
+            self.window.last_hovered_index = clicked; // 点击位置即新的 hover 基准
+            self.window.scroll_follow = false; // 鼠标驱动选中：不滚动跟随
         } else if pointer_moved && hovered != last_hovered {
             if let Some(idx) = hovered {
-                if self.stack.current_mut().list.set_selected(idx) {
+                if self.view.stack.current_mut().list.set_selected(idx) {
                     // 选中确实变化：滚随关闭 + **强制下一帧重绘**。
                     // egui 按需重绘——选中在帧末回写、高亮下一帧才绘制，
                     // 鼠标停下后没有新输入事件就不会再有下一帧，
                     // 高亮会「卡」在旧行直到再动鼠标。
-                    self.scroll_follow = false;
+                    self.window.scroll_follow = false;
                     ui.ctx().request_repaint();
                 }
             }
-            self.last_hovered_index = hovered;
+            self.window.last_hovered_index = hovered;
         }
         // 更新指针坐标基准（无论是否移动都记录，供下一帧比较）。
-        self.last_pointer_pos = current_hover_pos;
+        self.window.last_pointer_pos = current_hover_pos;
 
         // ── v4.4 右键菜单触发（D19）───────────────────────────────
         // 右键行：置选中（与键盘选中视觉一致）+ 打开菜单（锚点 = 右键点 + 2,2）。
@@ -678,6 +688,7 @@ impl PaletteApp {
             // F8：items 借用已结束——按 index 重查 + 单次 clone（每帧 0 次，
             // 仅真实右键时发生；`current()` 只读借用先结束再 `current_mut()`）
             let hit = self
+                .view
                 .stack
                 .current()
                 .list
@@ -685,9 +696,9 @@ impl PaletteApp {
                 .find(|(i, _)| *i == idx)
                 .map(|(_, it)| it.clone());
             if let Some(item) = hit {
-                self.stack.current_mut().list.set_selected(idx);
-                self.last_hovered_index = Some(idx);
-                self.scroll_follow = false;
+                self.view.stack.current_mut().list.set_selected(idx);
+                self.window.last_hovered_index = Some(idx);
+                self.window.scroll_follow = false;
                 self.open_ctx_menu(
                     idx,
                     &item,
@@ -697,12 +708,13 @@ impl PaletteApp {
             }
         }
         // 键盘触发（Shift+F10）：锚定选中行底边左缘（D20）。
-        if self.want_ctx_menu_for_selected {
-            self.want_ctx_menu_for_selected = false;
-            let selected_now = self.stack.current().list.selected_index();
+        if self.overlay.want_ctx_menu_for_selected {
+            self.overlay.want_ctx_menu_for_selected = false;
+            let selected_now = self.view.stack.current().list.selected_index();
             if let (Some(sel), Some(rect)) = (selected_now, selected_rect) {
                 // F8：借用结束后按 index 重查 + 单次 clone（仅键盘触发时发生）
                 let hit = self
+                    .view
                     .stack
                     .current()
                     .list

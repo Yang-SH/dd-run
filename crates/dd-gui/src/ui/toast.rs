@@ -14,7 +14,7 @@ impl PaletteApp {
     /// C 组批次 C3（§09）：意图图标（success/error/info 语义色，16px）+
     /// caption1 12/16 单行文本。同一时刻至多 1 条（单槽语义不变）。
     pub(crate) fn draw_toast(&self, ctx: &egui::Context) {
-        let Some(toast) = &self.toast else {
+        let Some(toast) = &self.overlay.toast else {
             return;
         };
         egui::Area::new(egui::Id::new("dd-gui-toast"))

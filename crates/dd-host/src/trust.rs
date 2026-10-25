@@ -656,7 +656,6 @@ fn sha256_hex(reader: &mut impl std::io::Read) -> Result<String, String> {
 #[cfg(not(windows))]
 fn sha256_hex(reader: &mut impl std::io::Read) -> Result<String, String> {
     use sha2::Digest;
-    use std::io::Read as _;
     // 64 KiB 分块读入（与 Windows CNG 路径同口径；sha2 内部另有吸收缓冲）
     let mut hasher = sha2::Sha256::new();
     let mut buf = vec![0u8; 64 * 1024];

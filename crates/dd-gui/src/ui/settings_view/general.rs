@@ -11,11 +11,11 @@ impl PaletteApp {
     /// 「开机自启」（功能态开关）+「语言」（v4.13 D38，ComboBox 三选）。
     /// 动作入口在 `app/keys.rs`（M6 批次 6.3；语言切换 apply_lang）。
     pub(super) fn draw_general_cards(&mut self, ui: &mut egui::Ui, p: &theme::Palette) {
-        let lang = self.lang_effective;
+        let lang = self.view.lang_effective;
         // ── 卡 1：打开面板时显示 ──
-        let mut show_all = self.settings.open_view == dd_gui::settings::OpenView::All;
+        let mut show_all = self.draft.settings.open_view == dd_gui::settings::OpenView::All;
         let mut view_changed = false;
-        draw_settings_card_frame(ui, p, self.backdrop_active, |card| {
+        draw_settings_card_frame(ui, p, self.window.backdrop_active, |card| {
             card.horizontal(|ui| {
                 ui.spacing_mut().item_spacing.x = 0.0;
                 let (icon_rect, _) =
@@ -72,14 +72,14 @@ impl PaletteApp {
         // 键帽在 combo 边界被裁，不侵入按钮区。
         // 按钮宽度预算在闭包外计算（闭包内 `text_width(ui,…)` 借外层 ui，
         // 与闭包同时持 `card` 的可变借用冲突——E0502）。
-        let capturing = self.hotkey_capturing;
+        let capturing = self.hotkeys.hotkey_capturing;
         // R-15：热键未注册（启动注册失败 / 热键线程死亡）→ 标题行「未注册」徽标。
-        let hotkey_unregistered = self.hotkey_unregistered;
+        let hotkey_unregistered = self.hotkeys.hotkey_unregistered;
         // 捕获回落（钩子 Failed = egui 基础捕获）：提示文案切降级口径
         // （Win / Alt+Space 等系统组合不可录），2026-09-29 真机诊断洞补。
-        let capture_fallback = self.hotkey_capturing && self.capture_failed;
-        let mods_label = dd_gui::settings::hotkey_mods_label(self.settings.hotkey_mods);
-        let vk_label = dd_gui::settings::hotkey_vk_label(self.settings.hotkey_vk);
+        let capture_fallback = self.hotkeys.hotkey_capturing && self.hotkeys.capture_failed;
+        let mods_label = dd_gui::settings::hotkey_mods_label(self.draft.settings.hotkey_mods);
+        let vk_label = dd_gui::settings::hotkey_vk_label(self.draft.settings.hotkey_vk);
         let mut caps: Vec<&str> = mods_label.split('+').collect();
         caps.push(vk_label.as_str());
         let mut capture_clicked = false;
@@ -102,7 +102,7 @@ impl PaletteApp {
         ) + 24.0;
         // 8 = Change 与 Reset 之间的 gap，4 = 卡片内右边距
         let buttons_total_w = change_w + reset_w + 8.0 + 4.0;
-        draw_settings_card_frame(ui, p, self.backdrop_active, |card| {
+        draw_settings_card_frame(ui, p, self.window.backdrop_active, |card| {
             card.horizontal(|ui| {
                 ui.spacing_mut().item_spacing.x = 0.0;
                 let (icon_rect, _) =
@@ -218,9 +218,9 @@ impl PaletteApp {
         ui.add_space(8.0);
 
         // ── 卡 3：开机自启（功能态开关）──
-        let autostart_on = self.settings.autostart;
+        let autostart_on = self.draft.settings.autostart;
         let mut autostart_toggled = false;
-        draw_settings_card_frame(ui, p, self.backdrop_active, |card| {
+        draw_settings_card_frame(ui, p, self.window.backdrop_active, |card| {
             card.horizontal(|ui| {
                 ui.spacing_mut().item_spacing.x = 0.0;
                 let (icon_rect, _) =
@@ -281,8 +281,8 @@ impl PaletteApp {
         // / 1px border-strong / 右侧 ▼ ChevronDown / popup_below_widget 自动
         // 处理外部点击收起）。
         ui.add_space(8.0);
-        let lang_pref = self.settings.lang;
-        let lang_eff = self.lang_effective;
+        let lang_pref = self.draft.settings.lang;
+        let lang_eff = self.view.lang_effective;
         let mut lang_picked: Option<dd_gui::settings::Lang> = None;
         let labels = [
             crate::text::t(lang_eff, "lang.follow_system"),
@@ -293,7 +293,7 @@ impl PaletteApp {
         let selected_idx = lang_pref as usize;
         // D42/K3：宽度自适应——内容短恒落下限 180（= D38 规格，行为不变）。
         let combo_w = dropdown_width(ui, &labels);
-        draw_settings_card_frame(ui, p, self.backdrop_active, |card| {
+        draw_settings_card_frame(ui, p, self.window.backdrop_active, |card| {
             card.horizontal(|ui| {
                 ui.spacing_mut().item_spacing.x = 0.0;
                 // 左：图标 + 标题描述（强制宽度 = available - combo_w - gap，
@@ -365,10 +365,10 @@ impl PaletteApp {
             .collect();
         let warm_labels: Vec<&str> = warm_labels.iter().map(String::as_str).collect();
         // 序：idx 0..15 ↔ 容量 1..16，严格对齐。
-        let warm_selected = self.settings.warm_capacity as usize - 1;
+        let warm_selected = self.draft.settings.warm_capacity as usize - 1;
         let mut warm_picked: Option<u8> = None;
         let warm_combo_w = dropdown_width(ui, &warm_labels);
-        draw_settings_card_frame(ui, p, self.backdrop_active, |card| {
+        draw_settings_card_frame(ui, p, self.window.backdrop_active, |card| {
             card.horizontal(|ui| {
                 ui.spacing_mut().item_spacing.x = 0.0;
                 let left_w = (ui.available_width() - warm_combo_w - 16.0).max(160.0);
@@ -430,6 +430,130 @@ impl PaletteApp {
         // ── 卡 7：导入 / 导出设置（N5，2026-10-04）──本机迁移（两步确认
         // 范式复用「恢复默认外观」卡；导出 = 数据目录备份文件，导入覆盖）。
         self.draw_backup_card(ui, p);
+
+        // ── 卡 8：使用数据（§5.1，2026-10-25）──frecency 排序依据，仅本机；
+        // 重置 = 清空 usage.json 并回退排序快照。
+        self.draw_usage_card(ui, p);
+
+        // ── 卡 9：关于（§5.2，2026-10-25）──版本展示 + 手动检查更新 +
+        // 「启动时检查」开关（默认关；不做自动安装，原案口径）。
+        self.draw_about_card(ui, p);
+    }
+
+    /// 常规栏「关于」卡（§5.2）：当前版本 + 「检查更新」按钮 + 「启动时检查」
+    /// 开关。检查经后台 curl（3s 超时）→ toast；无网络/超时给出可读失败原因。
+    pub(super) fn draw_about_card(&mut self, ui: &mut egui::Ui, p: &theme::Palette) {
+        let lang = self.view.lang_effective;
+        let mut check_clicked = false;
+        let autostart_check_on = self.draft.settings.check_updates;
+        let mut autostart_check_toggled = false;
+        draw_settings_card_frame(ui, p, self.window.backdrop_active, |card| {
+            card.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = 0.0;
+                let (icon_rect, _) =
+                    ui.allocate_exact_size(egui::vec2(16.0, 16.0), egui::Sense::hover());
+                ui.painter().text(
+                    icon_rect.center() + egui::vec2(0.0, 1.0),
+                    egui::Align2::CENTER_CENTER,
+                    '\u{E946}', // Fluent Info
+                    egui::FontId::proportional(16.0),
+                    p.text2,
+                );
+                ui.add_space(12.0);
+                // 右侧开关 40 宽 + 16 间距预算，左列锁宽（autostart 卡同款修法）
+                let left_w = (ui.available_width() - 40.0 - 16.0).max(160.0);
+                ui.allocate_ui(egui::vec2(left_w, 40.0), |ui| {
+                    ui.vertical(|ui| {
+                        ui.set_min_height(40.0);
+                        ui.label(
+                            dd_gui::theme::semibold_title(
+                                crate::text::t(lang, "set.about.name"),
+                                14.0,
+                            )
+                            .color(p.text),
+                        );
+                        ui.add_space(2.0);
+                        ui.add(
+                            egui::Label::new(
+                                egui::RichText::new(
+                                    crate::text::t(lang, "set.about.desc").replace(
+                                        "{version}",
+                                        dd_gui::update_check::CURRENT_VERSION,
+                                    ),
+                                )
+                                .size(12.0)
+                                .color(p.text3),
+                            )
+                            .wrap(),
+                        );
+                    });
+                });
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    autostart_check_toggled = draw_switch_fn(ui, autostart_check_on, p);
+                });
+            });
+            card.add_space(8.0);
+            card.horizontal(|ui| {
+                ui.add_space(28.0);
+                if fluent_button_small(ui, crate::text::t(lang, "set.about.check"), p) {
+                    check_clicked = true;
+                }
+            });
+        });
+        if check_clicked {
+            self.start_update_check();
+        }
+        if autostart_check_toggled {
+            self.draft.settings.check_updates = !autostart_check_on;
+            self.save_settings_with_feedback();
+        }
+    }
+
+    /// 常规栏「使用数据」卡（§5.1）：说明 + 「重置使用数据」按钮
+    ///（卡式样复用诊断卡——图标 + 标题/说明 + 小按钮行）。
+    pub(super) fn draw_usage_card(&mut self, ui: &mut egui::Ui, p: &theme::Palette) {
+        let lang = self.view.lang_effective;
+        let mut reset = false;
+        draw_settings_card_frame(ui, p, self.window.backdrop_active, |card| {
+            card.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = 0.0;
+                let (icon_rect, _) =
+                    ui.allocate_exact_size(egui::vec2(16.0, 16.0), egui::Sense::hover());
+                ui.painter().text(
+                    icon_rect.center() + egui::vec2(0.0, 1.0),
+                    egui::Align2::CENTER_CENTER,
+                    '\u{E9D2}', // Fluent AreaChart（使用统计）
+                    egui::FontId::proportional(16.0),
+                    p.text2,
+                );
+                ui.add_space(12.0);
+                ui.vertical(|ui| {
+                    ui.set_min_height(36.0);
+                    ui.label(
+                        dd_gui::theme::semibold_title(crate::text::t(lang, "set.usage.name"), 14.0)
+                            .color(p.text),
+                    );
+                    ui.add(
+                        egui::Label::new(
+                            egui::RichText::new(crate::text::t(lang, "set.usage.desc"))
+                                .size(12.0)
+                                .color(p.text3),
+                        )
+                        .wrap(),
+                    );
+                });
+            });
+            card.add_space(8.0);
+            card.horizontal(|ui| {
+                ui.add_space(28.0);
+                if fluent_button_small(ui, crate::text::t(lang, "set.usage.reset"), p) {
+                    reset = true;
+                }
+            });
+        });
+        if reset {
+            self.reset_usage_data();
+        }
     }
 
     /// 常规栏「导入 / 导出设置」卡（N5，2026-10-04）：导出 = 数据目录下
@@ -441,13 +565,14 @@ impl PaletteApp {
     pub(super) fn draw_backup_card(&mut self, ui: &mut egui::Ui, p: &theme::Palette) {
         use std::time::{Duration, Instant};
         const ARM_WINDOW: Duration = Duration::from_secs(5);
-        let lang = self.lang_effective;
+        let lang = self.view.lang_effective;
         let armed = self
+            .draft
             .settings_import_armed
             .map(|t| t.elapsed() < ARM_WINDOW)
             .unwrap_or(false);
-        if self.settings_import_armed.is_some() && !armed {
-            self.settings_import_armed = None; // 超时自动撤销
+        if self.draft.settings_import_armed.is_some() && !armed {
+            self.draft.settings_import_armed = None; // 超时自动撤销
         }
         let import_label = crate::text::t(
             lang,
@@ -461,7 +586,7 @@ impl PaletteApp {
         let mut import_clicked = false;
         let backup_path = Self::settings_backup_path();
 
-        draw_settings_card_frame(ui, p, self.backdrop_active, |card| {
+        draw_settings_card_frame(ui, p, self.window.backdrop_active, |card| {
             // ── 卡头：图标 + 名称 + 描述 ──
             card.horizontal(|ui| {
                 ui.spacing_mut().item_spacing.x = 0.0;
@@ -529,10 +654,10 @@ impl PaletteApp {
         }
         if import_clicked {
             if armed {
-                self.settings_import_armed = None;
+                self.draft.settings_import_armed = None;
                 self.import_settings_backup(ui.ctx());
             } else {
-                self.settings_import_armed = Some(Instant::now());
+                self.draft.settings_import_armed = Some(Instant::now());
                 ui.ctx().request_repaint_after(ARM_WINDOW); // 超时后重绘 → 按钮复原
             }
         }
@@ -544,18 +669,18 @@ impl PaletteApp {
     /// 「添加」按钮）。校验经 [`dd_gui::settings::CustomCommand::new`]（trim /
     /// 小写化 / 空字段与空白关键词拒绝）+ 关键词唯一性，错误行 danger 提示。
     pub(super) fn draw_custom_commands_card(&mut self, ui: &mut egui::Ui, p: &theme::Palette) {
-        let lang = self.lang_effective;
-        let cmds = self.settings.custom_commands.clone();
+        let lang = self.view.lang_effective;
+        let cmds = self.draft.settings.custom_commands.clone();
         let kind_labels = [
             crate::text::t(lang, "set.custom.kind_url"),
             crate::text::t(lang, "set.custom.kind_path"),
         ];
-        let kind_idx = self.custom_kind_idx;
+        let kind_idx = self.draft.custom_kind_idx;
         let mut remove_keyword: Option<String> = None;
         let mut kind_picked: Option<usize> = None;
         let mut add_clicked = false;
 
-        draw_settings_card_frame(ui, p, self.backdrop_active, |card| {
+        draw_settings_card_frame(ui, p, self.window.backdrop_active, |card| {
             // ── 卡头：图标 + 名称 + 描述 ──
             card.horizontal(|ui| {
                 ui.spacing_mut().item_spacing.x = 0.0;
@@ -671,7 +796,7 @@ impl PaletteApp {
                     ui,
                     pair_w,
                     "dd-custom-title",
-                    &mut self.custom_title_buf,
+                    &mut self.draft.custom_title_buf,
                     crate::text::t(lang, "set.custom.title_hint"),
                     p,
                 );
@@ -679,7 +804,7 @@ impl PaletteApp {
                     ui,
                     pair_w,
                     "dd-custom-keyword",
-                    &mut self.custom_keyword_buf,
+                    &mut self.draft.custom_keyword_buf,
                     crate::text::t(lang, "set.custom.keyword_hint"),
                     p,
                 );
@@ -697,7 +822,7 @@ impl PaletteApp {
                     ui,
                     target_w,
                     "dd-custom-target",
-                    &mut self.custom_target_buf,
+                    &mut self.draft.custom_target_buf,
                     crate::text::t(lang, "set.custom.target_hint"),
                     p,
                 );
@@ -705,7 +830,7 @@ impl PaletteApp {
                     add_clicked = true;
                 }
             });
-            if let Some(err) = &self.custom_add_err {
+            if let Some(err) = &self.draft.custom_add_err {
                 card.horizontal(|ui| {
                     ui.add_space(28.0);
                     ui.label(egui::RichText::new(err.clone()).size(12.0).color(p.danger));
@@ -715,48 +840,107 @@ impl PaletteApp {
 
         // ── 闭包外应用交互结果 ──
         if let Some(idx) = kind_picked {
-            self.custom_kind_idx = idx;
+            self.draft.custom_kind_idx = idx;
         }
         if let Some(keyword) = remove_keyword {
             self.delete_custom_command(&keyword);
         }
         if add_clicked {
-            let kind = if self.custom_kind_idx == 0 {
+            let kind = if self.draft.custom_kind_idx == 0 {
                 dd_gui::settings::CustomCommandKind::Url
             } else {
                 dd_gui::settings::CustomCommandKind::Path
             };
             match dd_gui::settings::CustomCommand::new(
-                &self.custom_title_buf,
-                &self.custom_keyword_buf,
+                &self.draft.custom_title_buf,
+                &self.draft.custom_keyword_buf,
                 kind,
-                &self.custom_target_buf,
+                &self.draft.custom_target_buf,
             ) {
                 Some(c) => {
                     if self
+                        .draft
                         .settings
                         .custom_commands
                         .iter()
                         .any(|x| x.keyword == c.keyword)
                     {
-                        self.custom_add_err =
+                        self.draft.custom_add_err =
                             Some(crate::text::t(lang, "set.custom.dup_keyword").to_string());
                     } else {
-                        self.settings.custom_commands.push(c);
-                        self.custom_title_buf.clear();
-                        self.custom_keyword_buf.clear();
-                        self.custom_target_buf.clear();
-                        self.custom_add_err = None;
+                        self.draft.settings.custom_commands.push(c);
+                        self.draft.custom_title_buf.clear();
+                        self.draft.custom_keyword_buf.clear();
+                        self.draft.custom_target_buf.clear();
+                        self.draft.custom_add_err = None;
                         // 与删除同一落盘 + 重聚合口径（复用 engines_dirty 消费点）。
-                        self.engines_dirty = true;
+                        self.draft.engines_dirty = true;
                         self.save_settings_with_feedback();
                     }
                 }
                 None => {
-                    self.custom_add_err =
+                    self.draft.custom_add_err =
                         Some(crate::text::t(lang, "set.custom.invalid").to_string());
                 }
             }
+        }
+    }
+}
+
+impl PaletteApp {
+    /// P2-5.3②③（dd-run-改进分析.md §5.3）：「诊断」卡——日志留存说明 +
+    /// 「打开日志目录」/「导出诊断报告」两个动作。逻辑收在
+    /// `PaletteApp::open_logs_dir` / `export_diagnostic`（本卡只做触发与反馈）。
+    pub(super) fn draw_diagnostics_card(&mut self, ui: &mut egui::Ui, p: &theme::Palette) {
+        let lang = self.view.lang_effective;
+        let mut open_logs = false;
+        let mut export_diag = false;
+        draw_settings_card_frame(ui, p, self.window.backdrop_active, |card| {
+            card.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = 0.0;
+                let (icon_rect, _) =
+                    ui.allocate_exact_size(egui::vec2(16.0, 16.0), egui::Sense::hover());
+                ui.painter().text(
+                    icon_rect.center() + egui::vec2(0.0, 1.0),
+                    egui::Align2::CENTER_CENTER,
+                    '\u{E9D9}', // Fluent Diagnostic
+                    egui::FontId::proportional(16.0),
+                    p.text2,
+                );
+                ui.add_space(12.0);
+                ui.vertical(|ui| {
+                    ui.set_min_height(36.0);
+                    ui.label(
+                        dd_gui::theme::semibold_title(crate::text::t(lang, "set.diag.name"), 14.0)
+                            .color(p.text),
+                    );
+                    ui.add(
+                        egui::Label::new(
+                            egui::RichText::new(crate::text::t(lang, "set.diag.desc"))
+                                .size(12.0)
+                                .color(p.text3),
+                        )
+                        .wrap(),
+                    );
+                });
+            });
+            card.add_space(8.0);
+            card.horizontal(|ui| {
+                ui.add_space(28.0);
+                if fluent_button_small(ui, crate::text::t(lang, "set.diag.open_logs"), p) {
+                    open_logs = true;
+                }
+                ui.add_space(8.0);
+                if fluent_button_small(ui, crate::text::t(lang, "set.diag.export"), p) {
+                    export_diag = true;
+                }
+            });
+        });
+        if open_logs {
+            self.open_logs_dir();
+        }
+        if export_diag {
+            self.export_diagnostic();
         }
     }
 }

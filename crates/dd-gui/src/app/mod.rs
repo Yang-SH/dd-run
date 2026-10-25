@@ -8,6 +8,7 @@ pub(crate) mod aggregate;
 /// R-07：剪贴板写入常驻工作线程（`host/set_clipboard` 不再阻塞 UI 线程）。
 pub(crate) mod clipboard_worker;
 pub(crate) mod ctx_menu;
+pub(crate) mod diagnostic;
 pub(crate) mod e2e;
 pub(crate) mod fallback_flow;
 pub(crate) mod health;
@@ -19,9 +20,11 @@ pub(crate) mod page;
 pub(crate) mod pool;
 pub(crate) mod refresh;
 pub(crate) mod toast;
+pub(crate) mod update_check;
+pub(crate) mod usage;
 
 /// bin 入口（main.rs）需要的两个跨 crate 符号（facade 再导出）。
-pub use aggregate::{spawn_aggregation, AggregatePayload};
+pub use aggregate::{spawn_aggregation, AggregateEvent, AggregatePayload};
 
 use crate::app::ctx_menu::CtxMenuState;
 use crate::app::e2e::E2eSample;
@@ -201,9 +204,26 @@ pub(crate) struct HotkeyConfirm {
 /// 确认超时：正常回发为毫秒级；超过即视同失败（含热键线程死亡场景）。
 pub(crate) const HOTKEY_CONFIRM_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(2);
 
-pub struct PaletteApp {
-    /// 页面栈：栈底为 Root（首屏聚合），其上为嵌套页。
-    pub(crate) stack: PageStack,
+/// C1 拆片①（dd-run-改进分析.md §3.1）：浮层状态——Toast / 确认对话框 / 右键菜单。
+/// 同一时刻至多一个浮层语义位（单槽 Toast、单确认框、单菜单）。
+pub(crate) struct OverlayState {
+    /// Toast 提示条。
+    pub(crate) toast: Option<ToastState>,
+    /// 待确认的二次确认对话框。
+    pub(crate) confirm: Option<ConfirmDialog>,
+    /// 打开中的右键菜单（设计稿 10B，v4.4；`None` = 关闭）。
+    pub(crate) ctx_menu: Option<CtxMenuState>,
+    /// 键盘触发旗标：Shift+F10 请求对选中行开菜单（D19）。行矩形只在绘制期
+    /// 可得，`handle_keys` 置位、`draw_list` 在绘制选中行后消费落位。
+    pub(crate) want_ctx_menu_for_selected: bool,
+    /// 本帧各列表行矩形（`draw_list` 每帧重建）：菜单开着时右键另一行，全屏
+    /// 捕获层会吞掉该行的 `secondary_clicked`（D19 修正），据此命中行就地重开。
+    pub(crate) ctx_row_rects: Vec<(usize, egui::Rect)>,
+}
+
+/// C1 拆片②（dd-run-改进分析.md §3.1）：全局热键与捕获状态——热键线程句柄、
+/// 改绑确认流（候选 / 在途 / 序号 / 行内错误）与 LL 键盘钩子捕获（B 方案）。
+pub(crate) struct HotkeyState {
     /// 热键事件接收端。
     /// 热键线程句柄（M6 批次 6.3：事件接收 + 设置页更改热键后经它重注册）。
     pub(crate) hotkey: HotkeyThread,
@@ -235,42 +255,116 @@ pub struct PaletteApp {
     /// R-15：全局热键**未注册**（启动注册失败 / 热键线程死亡）——设置页
     /// 热键卡「未注册」徽标与错误 toast 的依据；重注册成功后复位。
     pub(crate) hotkey_unregistered: bool,
+}
+
+/// C1 拆片③（dd-run-改进分析.md §3.1）：设置草稿——宿主设置本体、离开设置页
+/// 消费的各类脏标记（engines / exts / lang）、设置页各输入缓冲与行内错误、
+/// 两步确认武装位与左栏栏目。
+pub(crate) struct SettingsDraft {
     /// R-17：设置保存失败已提醒过（**每会话至多一次**）——不可写目录下所有
     /// 修改「看似成功」、重启回滚，首次失败弹一次错误 toast 后不再重复轰炸；
     /// 会话内不复位（恢复可写后的修改本就会成功，无需再提示）。
     pub(crate) settings_save_warned: bool,
+    /// 扩展启停脏标记：离开设置页时与 engines_dirty 一起触发重聚合。
+    pub(crate) exts_dirty: bool,
+    /// M5 批次 4.0：宿主本地设置（当前仅主题偏好；启动加载、设置页改选即存）。
+    pub(crate) settings: dd_gui::settings::Settings,
+    /// 搜索引擎配置脏标记：设置页改动置位，**离开设置页**时消费并全量重聚合
+    /// （websearch 进程须以新环境变量重启，逐帧开关勾选只聚合一次）。
+    pub(crate) engines_dirty: bool,
+    /// 生效语言脏标记（批次 D，2026-09-06）：设置页切换语言置位，**离开设置页**时
+    /// 消费并全量重聚合——扩展进程须以新 `DDRUN_LANG` 环境变量重启才能生效
+    /// （GUI 文字当帧即变，扩展文案随下次进程重生生效，语义一致）。
+    pub(crate) lang_dirty: bool,
+    /// 设置页「添加搜索引擎」输入缓冲与校验错误（绘制层状态跨帧存活）。
+    pub(crate) engine_url_buf: String,
+    pub(crate) engine_add_err: Option<String>,
+    /// 设置页「自定义命令」卡的输入缓冲、类型选择与校验错误（N1，2026-10-04；
+    /// 绘制层状态跨帧存活）。
+    pub(crate) custom_title_buf: String,
+    pub(crate) custom_keyword_buf: String,
+    pub(crate) custom_target_buf: String,
+    /// 目标类型下拉选择：0 = URL / 1 = 本地路径。
+    pub(crate) custom_kind_idx: usize,
+    pub(crate) custom_add_err: Option<String>,
+    /// N2（2026-10-04）：扩展卡 apps 行内「设置」入口展开态 + 屏蔽名单
+    /// 输入缓冲（绘制层状态跨帧存活，不落盘）。
+    pub(crate) apps_cfg_open: bool,
+    pub(crate) apps_blocklist_buf: String,
+    /// N5（2026-10-04）：「导入并覆盖」两步确认武装置位（同
+    /// `appearance_reset_armed` 范式：5s 未确认自动撤销）。
+    pub(crate) settings_import_armed: Option<std::time::Instant>,
+    /// T9：背景图卡路径输入缓冲（绘制层状态跨帧存活，不落盘；reset / 导入
+    /// 在 apply 链内同步）。
+    pub(crate) bg_path_buf: String,
+    /// T9：背景图卡错误行（路径不存在等，UI 操作时置位、成功后清除）。
+    pub(crate) bg_err: Option<String>,
+    /// 设置页左栏当前栏目（§08 v4.6 D27）：纯视图状态、不落盘；
+    /// `open_settings` 每次进入重置为「外观」（B5）。
+    pub(crate) settings_category: SettingsCategory,
+}
+
+/// C1 拆片④（dd-run-改进分析.md §3.1）：UI 视图状态——页面栈、图标/背景纹理
+/// 缓存、剪贴板工作线程通道、生效语言、E2E 计时与刷新调度。
+pub(crate) struct UiViewState {
+    /// 页面栈：栈底为 Root（首屏聚合），其上为嵌套页。
+    pub(crate) stack: PageStack,
+    /// path 图标纹理缓存：路径 → TextureHandle（每路径只读盘+解码一次，
+    /// 避免列表每次重绘都重复 I/O 与解码——设计稿 04"按路径缓存 textureId"）。
+    pub(crate) icon_cache: HashMap<String, (egui::TextureHandle, bool)>,
+    /// Path 图标读盘/解码失败的负缓存（路径集）：失败只报一次 + 回落占位 glyph，
+    /// 否则每帧重读盘 → eprintln 刷屏（真机 2026-09-05 反馈）。
+    pub(crate) icon_failed: HashSet<String>,
+    /// R-07：剪贴板常驻工作线程——请求发送端（线程创建失败时 `None`，
+    /// `host/set_clipboard` 降级不可用）与结果接收端（`poll_clipboard_results`
+    /// 消费 → toast 反馈）。
+    pub(crate) clipboard_tx: Option<std::sync::mpsc::Sender<clipboard_worker::ClipboardRequest>>,
+    pub(crate) clipboard_rx: Receiver<clipboard_worker::ClipboardOutcome>,
+    /// T9（2026-10-05）：背景图纹理缓存（(路径, mtime) 门控 + 解码失败负缓存，
+    /// 见 `ui::backdrop_image::BackdropImageCache`）。
+    pub(crate) backdrop_cache: crate::ui::backdrop_image::BackdropImageCache,
+    /// `items_changed` 合并刷新调度。
+    pub(crate) refresh: Option<RefreshState>,
+    /// 嵌套页**页内二次输入**的去抖调度：query 变化时记录到期时刻，到期后
+    /// `tick_refresh` 用当前页 query 重新拉 `get_items`（v3.3：边打边搜）。
+    /// `None` = 无待拉取；`Some(t)` = 在 `t` 之后拉取。仅在嵌套页输入非空时调度。
+    pub(crate) page_query_debounce: Option<Instant>,
+    /// E2E 首屏计时（A-33-05 感知指标，见 [`crate::app::e2e`]）：页内 query
+    /// 最后一次输入变化的时刻（`panel.rs` 变化检测 / 带词进页回填）。
+    pub(crate) e2e_input_at: Option<Instant>,
+    /// E2E：最近一次 `get_items` 真实分派时刻（busy / 熔断 gate 之后）。
+    pub(crate) e2e_dispatch_at: Option<Instant>,
+    /// E2E：已落地、待本帧绘制完成即结算的样本（`e2e_report` 帧尾消费）。
+    pub(crate) e2e_pending: Option<E2eSample>,
+    /// T5（2026-09-20）：「恢复默认外观」两步确认的武装时刻——`Some` 且 5s 内
+    /// 显示「确认重置」，超时自动撤销（避免误触一次性重置外观）。
+    pub(crate) appearance_reset_armed: Option<Instant>,
+    /// v4.13 D38：当前生效语言（`settings.lang` 为 FollowSystem 时已按系统
+    /// UI 语言解析为具体语言，见 [`PaletteApp::resolve_lang`]）。设置页切换经
+    /// `apply_lang` 更新——egui immediate mode 下一帧全量重绘即生效。
+    pub(crate) lang_effective: dd_gui::settings::Lang,
+    /// §5.1：使用频次排序快照（`pool.usage` 的不可变投影）。Root 列表重建
+    /// （聚合到达）/ 记录 / 重置后经 `sync_usage_index` 重新注入 `PanelState`。
+    pub(crate) usage_scores: Option<dd_gui::usage::UsageScores>,
+    /// §5.2：检查更新结果接收端（`Some` = 检查在途；结果消费后置 None）。
+    pub(crate) update_rx: Option<Receiver<dd_gui::update_check::UpdateStatus>>,
+}
+
+/// C1 拆片⑤（dd-run-改进分析.md §3.1）：扩展池——聚合通道与进行态、保活客户端、
+/// 扫描清单、信任判定、in-process 规格、LRU 保活集、冷启动计时、在途请求、
+/// 崩溃熔断、fallback 轮与磁盘桩缓存。
+pub(crate) struct ExtPool {
     /// R-03：已对哪些扩展弹过「入站队列溢出」toast——每扩展每会话至多一次
     ///（连续溢出只刷日志不重复轰炸；与 settings_save_warned 同口径）。
     pub(crate) overflow_warned: HashSet<String>,
-    /// 扩展启停脏标记：离开设置页时与 engines_dirty 一起触发重聚合。
-    pub(crate) exts_dirty: bool,
-    /// 托盘事件接收端（设计稿 10C：Toggle / OpenSettings / Exit）。
-    pub(crate) tray_events: Receiver<TrayEvent>,
-    /// 托盘 Toggle 点击在途旗标（tray.rs 置位 / 本模块消费后复位）：
-    /// 失焦自动隐藏遇旗标跳过一次，避免「闪黑又展示」竞态（真机 2026-09-05）。
-    pub(crate) tray_click_flag: Arc<AtomicBool>,
-    /// 隐藏当帧是否仍需绘制面板内容一次。
-    ///
-    /// eframe 0.36 在**应用 `ViewportCommand::Visible(false)` 之前**会先
-    /// `clear(clear_color)` + present 一帧；若此时 `ui()` 空帧返回，present 的
-    /// 就是纯色底（暗色主题下 = 黑）→ 肉眼「先变黑再隐藏」闪一下（真机反馈）。
-    /// `hide()` 置位后，下一帧仍绘制一次真实面板内容（不做交互处理），
-    /// present 完再被隐藏，消除闪黑。
-    pub(crate) paint_hide_frame: bool,
-    /// 最近一次「失焦自动隐藏」的时刻。托盘 Toggle 到达时若面板刚因失焦隐藏
-    /// （<300ms，即本次托盘点击夺焦抢先触发），隐藏意图已由失焦路径完成，
-    /// 维持隐藏不再 show——兜底鼠标按下（夺焦）早于抬起（WM_LBUTTONUP）的时序。
-    pub(crate) last_focus_loss_hide: Option<Instant>,
-    /// 窗口是否可见。
-    pub(crate) visible: bool,
-    /// 下次显示时请求 FilterBox 获得焦点。
-    pub(crate) want_focus: bool,
-    /// 是否已经取得过窗口焦点（用于失焦隐藏的防误触）。
-    pub(crate) ever_focused: bool,
-    /// 首屏聚合结果接收端（聚合完成前为 `Some`）。
-    pub(crate) aggregate_rx: Option<Receiver<AggregatePayload>>,
-    /// 聚合是否仍在进行（列表区显示加载态）。
+    /// 首屏聚合事件接收端（C2 三段式流：Meta → Ext×N → Done）。
+    pub(crate) aggregate_rx: Option<Receiver<AggregateEvent>>,
+    /// 聚合是否仍在进行（列表区显示加载态——C2 起仅**零项期**显示骨架，
+    /// 部分结果到达即画列表）。
     pub(crate) aggregating: bool,
+    /// C2：本轮流式聚合已到达的扩展结果（Meta 起清零、Done 后释放；
+    /// 每次到达以其为源全量重跑 flatten 重建 Root 列表）。
+    pub(crate) arrived: Vec<aggregator::ExtItems>,
     /// 扩展源状态（健康检查/LRU 复热逻辑用；**页脚不再展示**，用户决策 2026-09-04）。
     pub(crate) sources: Vec<aggregator::SourceSummary>,
     /// 保活客户端：`(扩展 id, 客户端)`。发起请求时 take、结果归还，
@@ -309,26 +403,45 @@ pub struct PaletteApp {
     pub(crate) last_invoke: Option<InvokeParams>,
     /// 后台 `get_items` 结果接收端。
     pub(crate) page_rx: Option<Receiver<PageOutcome>>,
-    /// Toast 提示条。
-    pub(crate) toast: Option<ToastState>,
-    /// 待确认的二次确认对话框。
-    pub(crate) confirm: Option<ConfirmDialog>,
-    /// `items_changed` 合并刷新调度。
-    pub(crate) refresh: Option<RefreshState>,
-    /// 嵌套页**页内二次输入**的去抖调度：query 变化时记录到期时刻，到期后
-    /// `tick_refresh` 用当前页 query 重新拉 `get_items`（v3.3：边打边搜）。
-    /// `None` = 无待拉取；`Some(t)` = 在 `t` 之后拉取。仅在嵌套页输入非空时调度。
-    pub(crate) page_query_debounce: Option<Instant>,
-    /// E2E 首屏计时（A-33-05 感知指标，见 [`crate::app::e2e`]）：页内 query
-    /// 最后一次输入变化的时刻（`panel.rs` 变化检测 / 带词进页回填）。
-    pub(crate) e2e_input_at: Option<Instant>,
-    /// E2E：最近一次 `get_items` 真实分派时刻（busy / 熔断 gate 之后）。
-    pub(crate) e2e_dispatch_at: Option<Instant>,
-    /// E2E：已落地、待本帧绘制完成即结算的样本（`e2e_report` 帧尾消费）。
-    pub(crate) e2e_pending: Option<E2eSample>,
-    /// T5（2026-09-20）：「恢复默认外观」两步确认的武装时刻——`Some` 且 5s 内
-    /// 显示「确认重置」，超时自动撤销（避免误触一次性重置外观）。
-    pub(crate) appearance_reset_armed: Option<Instant>,
+    /// M4：连续崩溃保护状态机（协议 §11）——键 = 扩展清单 id。
+    pub(crate) crash_guards: HashMap<String, CrashGuard>,
+    /// M4 宿主 fallback 轮：兜底模板缓存与渲染状态（协议 §6.2）。
+    pub(crate) fallback_store: dd_gui::fallback::FallbackStore,
+    /// 后台 `fallback_commands` 拉取结果接收端（`Some` = 有拉取在途）。
+    pub(crate) fallback_rx: Option<Receiver<FallbackFetchOutcome>>,
+    /// 磁盘桩缓存（聚合用；设置页搜索引擎变更触发重聚合时复用）。
+    pub(crate) cache: Option<FrozenCache>,
+    /// §5.1：使用频次表（`usage.json` 权威副本）。进程内权威 = 本字段；
+    /// `PanelState` 只持有 [`dd_gui::usage::Usage::scores`] 快照参与排序。
+    pub(crate) usage: dd_gui::usage::Usage,
+}
+
+/// C1 拆片⑥（dd-run-改进分析.md §3.1）：窗口状态——可见性/焦点、托盘通道、
+/// 隐藏与拖拽时序、DWM 材质、chrome、原生缩放/尺寸记忆与指针选择接管。
+pub(crate) struct WindowState {
+    /// 托盘事件接收端（设计稿 10C：Toggle / OpenSettings / Exit）。
+    pub(crate) tray_events: Receiver<TrayEvent>,
+    /// 托盘 Toggle 点击在途旗标（tray.rs 置位 / 本模块消费后复位）：
+    /// 失焦自动隐藏遇旗标跳过一次，避免「闪黑又展示」竞态（真机 2026-09-05）。
+    pub(crate) tray_click_flag: Arc<AtomicBool>,
+    /// 隐藏当帧是否仍需绘制面板内容一次。
+    ///
+    /// eframe 0.36 在**应用 `ViewportCommand::Visible(false)` 之前**会先
+    /// `clear(clear_color)` + present 一帧；若此时 `ui()` 空帧返回，present 的
+    /// 就是纯色底（暗色主题下 = 黑）→ 肉眼「先变黑再隐藏」闪一下（真机反馈）。
+    /// `hide()` 置位后，下一帧仍绘制一次真实面板内容（不做交互处理），
+    /// present 完再被隐藏，消除闪黑。
+    pub(crate) paint_hide_frame: bool,
+    /// 最近一次「失焦自动隐藏」的时刻。托盘 Toggle 到达时若面板刚因失焦隐藏
+    /// （<300ms，即本次托盘点击夺焦抢先触发），隐藏意图已由失焦路径完成，
+    /// 维持隐藏不再 show——兜底鼠标按下（夺焦）早于抬起（WM_LBUTTONUP）的时序。
+    pub(crate) last_focus_loss_hide: Option<Instant>,
+    /// 窗口是否可见。
+    pub(crate) visible: bool,
+    /// 下次显示时请求 FilterBox 获得焦点。
+    pub(crate) want_focus: bool,
+    /// 是否已经取得过窗口焦点（用于失焦隐藏的防误触）。
+    pub(crate) ever_focused: bool,
     /// 鼠标上一帧悬停的行索引。仅当本帧悬停行与它**不同**时才接管选中，
     /// 静止不动的鼠标不再每帧抢占键盘（Tab/↓）选中——修复鼠标/键盘选择互相干扰。
     pub(crate) last_hovered_index: Option<usize>,
@@ -344,63 +457,6 @@ pub struct PaletteApp {
     /// （M1 清单第 10 项）；扩展 `Hide`（保留状态，协议 §8.3）置 false；
     /// 扩展 `Dismiss`（关闭）已清空状态，保持 true 无碍。
     pub(crate) reset_on_show: bool,
-    /// M4：连续崩溃保护状态机（协议 §11）——键 = 扩展清单 id。
-    pub(crate) crash_guards: HashMap<String, CrashGuard>,
-    /// M4 宿主 fallback 轮：兜底模板缓存与渲染状态（协议 §6.2）。
-    pub(crate) fallback_store: dd_gui::fallback::FallbackStore,
-    /// 后台 `fallback_commands` 拉取结果接收端（`Some` = 有拉取在途）。
-    pub(crate) fallback_rx: Option<Receiver<FallbackFetchOutcome>>,
-    /// path 图标纹理缓存：路径 → TextureHandle（每路径只读盘+解码一次，
-    /// 避免列表每次重绘都重复 I/O 与解码——设计稿 04"按路径缓存 textureId"）。
-    pub(crate) icon_cache: HashMap<String, (egui::TextureHandle, bool)>,
-    /// Path 图标读盘/解码失败的负缓存（路径集）：失败只报一次 + 回落占位 glyph，
-    /// 否则每帧重读盘 → eprintln 刷屏（真机 2026-09-05 反馈）。
-    pub(crate) icon_failed: HashSet<String>,
-    /// M5 批次 4.0：宿主本地设置（当前仅主题偏好；启动加载、设置页改选即存）。
-    pub(crate) settings: dd_gui::settings::Settings,
-    /// R-07：剪贴板常驻工作线程——请求发送端（线程创建失败时 `None`，
-    /// `host/set_clipboard` 降级不可用）与结果接收端（`poll_clipboard_results`
-    /// 消费 → toast 反馈）。
-    pub(crate) clipboard_tx: Option<std::sync::mpsc::Sender<clipboard_worker::ClipboardRequest>>,
-    pub(crate) clipboard_rx: Receiver<clipboard_worker::ClipboardOutcome>,
-    /// 磁盘桩缓存（聚合用；设置页搜索引擎变更触发重聚合时复用）。
-    pub(crate) cache: Option<FrozenCache>,
-    /// 搜索引擎配置脏标记：设置页改动置位，**离开设置页**时消费并全量重聚合
-    /// （websearch 进程须以新环境变量重启，逐帧开关勾选只聚合一次）。
-    pub(crate) engines_dirty: bool,
-    /// 生效语言脏标记（批次 D，2026-09-06）：设置页切换语言置位，**离开设置页**时
-    /// 消费并全量重聚合——扩展进程须以新 `DDRUN_LANG` 环境变量重启才能生效
-    /// （GUI 文字当帧即变，扩展文案随下次进程重生生效，语义一致）。
-    pub(crate) lang_dirty: bool,
-    /// 设置页「添加搜索引擎」输入缓冲与校验错误（绘制层状态跨帧存活）。
-    pub(crate) engine_url_buf: String,
-    pub(crate) engine_add_err: Option<String>,
-    /// 设置页「自定义命令」卡的输入缓冲、类型选择与校验错误（N1，2026-10-04；
-    /// 绘制层状态跨帧存活）。
-    pub(crate) custom_title_buf: String,
-    pub(crate) custom_keyword_buf: String,
-    pub(crate) custom_target_buf: String,
-    /// 目标类型下拉选择：0 = URL / 1 = 本地路径。
-    pub(crate) custom_kind_idx: usize,
-    pub(crate) custom_add_err: Option<String>,
-    /// N2（2026-10-04）：扩展卡 apps 行内「设置」入口展开态 + 屏蔽名单
-    /// 输入缓冲（绘制层状态跨帧存活，不落盘）。
-    pub(crate) apps_cfg_open: bool,
-    pub(crate) apps_blocklist_buf: String,
-    /// N5（2026-10-04）：「导入并覆盖」两步确认武装置位（同
-    /// `appearance_reset_armed` 范式：5s 未确认自动撤销）。
-    pub(crate) settings_import_armed: Option<std::time::Instant>,
-    /// T9（2026-10-05）：背景图纹理缓存（(路径, mtime) 门控 + 解码失败负缓存，
-    /// 见 `ui::backdrop_image::BackdropImageCache`）。
-    pub(crate) backdrop_cache: crate::ui::backdrop_image::BackdropImageCache,
-    /// T9：背景图卡路径输入缓冲（绘制层状态跨帧存活，不落盘；reset / 导入
-    /// 在 apply 链内同步）。
-    pub(crate) bg_path_buf: String,
-    /// T9：背景图卡错误行（路径不存在等，UI 操作时置位、成功后清除）。
-    pub(crate) bg_err: Option<String>,
-    /// 设置页左栏当前栏目（§08 v4.6 D27）：纯视图状态、不落盘；
-    /// `open_settings` 每次进入重置为「外观」（B5）。
-    pub(crate) settings_category: SettingsCategory,
     /// 主面板窗口 Win32 HWND（v4.7 D31：DWM 材质调用句柄；首个 ui 帧捕获一次，
     /// 非 Win32 平台保持 None → 材质功能静默不可用、回退不透明）。
     pub(crate) hwnd: Option<isize>,
@@ -441,14 +497,6 @@ pub struct PaletteApp {
     /// 不与控件 click 争夺 press（避免全屏 drag widget 抢占导致 click 被
     /// `is_decidedly_dragging` 抑制）。`None` = 当前无待定拖拽。
     pub(crate) drag_candidate: Option<egui::Pos2>,
-    /// 打开中的右键菜单（设计稿 10B，v4.4；`None` = 关闭）。
-    pub(crate) ctx_menu: Option<CtxMenuState>,
-    /// 键盘触发旗标：Shift+F10 请求对选中行开菜单（D19）。行矩形只在绘制期
-    /// 可得，`handle_keys` 置位、`draw_list` 在绘制选中行后消费落位。
-    pub(crate) want_ctx_menu_for_selected: bool,
-    /// 本帧各列表行矩形（`draw_list` 每帧重建）：菜单开着时右键另一行，全屏
-    /// 捕获层会吞掉该行的 `secondary_clicked`（D19 修正），据此命中行就地重开。
-    pub(crate) ctx_row_rects: Vec<(usize, egui::Rect)>,
     /// 面板显示期间的鼠标隐藏守卫（v4.17 亚克力体验优化）：`Some` = 面板已
     /// 显示且鼠标已隐藏；`None` = 面板未显示或已释放。`show()` 构造并 `Some`，
     /// `hide()` `take()` 触发 `Drop` 调 `set_cursor_visible(true)` 恢复可见。
@@ -466,17 +514,28 @@ pub struct PaletteApp {
     /// 持续偏离 ≥500ms 即落盘（拖拽缩放期间原生模态循环无 egui 帧，松手
     /// 后才开始计时——天然去抖）。兜底强杀进程不走 hide() 的丢档场景。
     pub(crate) resize_pending_since: Option<Instant>,
-    /// v4.13 D38：当前生效语言（`settings.lang` 为 FollowSystem 时已按系统
-    /// UI 语言解析为具体语言，见 [`Self::resolve_lang`]）。设置页切换经
-    /// `apply_lang` 更新——egui immediate mode 下一帧全量重绘即生效。
-    pub(crate) lang_effective: dd_gui::settings::Lang,
+}
+
+pub struct PaletteApp {
+    /// 浮层状态（Toast / 确认对话框 / 右键菜单）。
+    pub(crate) overlay: OverlayState,
+    /// 全局热键与捕获状态。
+    pub(crate) hotkeys: HotkeyState,
+    /// 设置草稿（设置本体 + 脏标记 + 设置页输入缓冲）。
+    pub(crate) draft: SettingsDraft,
+    /// UI 视图状态（页面栈 / 纹理缓存 / 生效语言 / 刷新调度）。
+    pub(crate) view: UiViewState,
+    /// 扩展池（聚合 / 保活客户端 / 信任 / 熔断 / fallback / 桩缓存）。
+    pub(crate) pool: ExtPool,
+    /// 窗口状态（可见性 / 焦点 / 托盘 / 材质 / 尺寸记忆）。
+    pub(crate) window: WindowState,
 }
 
 impl PaletteApp {
     /// 捕获主面板窗口 Win32 HWND（v4.7 D31：DWM 材质调用句柄）。
     /// 仅在 `hwnd` 尚空时执行（首个 ui 帧）；非 Win32 平台保持 None。
     pub(crate) fn capture_hwnd(&mut self, frame: &mut eframe::Frame) {
-        if self.hwnd.is_some() {
+        if self.window.hwnd.is_some() {
             return;
         }
         use raw_window_handle::HasWindowHandle;
@@ -484,7 +543,7 @@ impl PaletteApp {
             return;
         };
         if let raw_window_handle::RawWindowHandle::Win32(w) = handle.as_raw() {
-            self.hwnd = Some(w.hwnd.get());
+            self.window.hwnd = Some(w.hwnd.get());
         }
     }
 
@@ -493,7 +552,7 @@ impl PaletteApp {
         hotkey: HotkeyThread,
         tray_events: Receiver<TrayEvent>,
         tray_click_flag: Arc<AtomicBool>,
-        aggregate_rx: Receiver<AggregatePayload>,
+        aggregate_rx: Receiver<AggregateEvent>,
         cold: ColdStartTimer,
         cache: Option<FrozenCache>,
         settings: dd_gui::settings::Settings,
@@ -503,102 +562,123 @@ impl PaletteApp {
         let lang_effective = Self::resolve_lang(&settings);
         // R-07：剪贴板常驻工作线程（随 app 生命周期；创建失败降级见模块文档）
         let (clipboard_tx, clipboard_rx) = clipboard_worker::spawn();
+        // `settings` 值移入 draft 前先取 warm_capacity（LruWarmSet 容量）。
+        let warm_capacity = settings.warm_capacity;
         Self {
-            stack: PageStack::new(PageState::root(Vec::new())),
-            hotkey,
-            hotkey_pending: None,
-            hotkey_confirm: None,
-            hotkey_seq: 0,
-            hotkey_apply_failed: false,
-            hotkey_capturing: false,
-            capture_hook: None,
-            capture_rx: None,
-            capture_started: None,
-            capture_failed: false,
-            hotkey_unregistered: false,
-            settings_save_warned: false,
-            overflow_warned: HashSet::new(),
-            exts_dirty: false,
-            tray_events,
-            tray_click_flag,
-            last_focus_loss_hide: None,
-            paint_hide_frame: false,
-            visible: false,
-            want_focus: true,
-            ever_focused: false,
-            aggregate_rx: Some(aggregate_rx),
-            aggregating: true,
-            sources: Vec::new(),
-            processes: Vec::new(),
-            exts: Vec::new(),
-            inproc_specs: HashMap::new(),
-            trust: HashMap::new(),
-            ledger_state: dd_host::trust::LedgerState::Missing,
-            skipped_manifests: Vec::new(),
-            pending_notified: false,
-            lru: LruWarmSet::new(settings.warm_capacity as usize),
-            cold,
-            inflight: HashSet::new(),
-            last_command_id: None,
-            invoke_rx: None,
-            page_rx: None,
-            last_invoke: None,
-            toast: None,
-            confirm: None,
-            refresh: None,
-            page_query_debounce: None,
-            e2e_input_at: None,
-            e2e_dispatch_at: None,
-            e2e_pending: None,
-            appearance_reset_armed: None,
-            last_hovered_index: None,
-            last_pointer_pos: None,
-            scroll_follow: true, // 键盘是主输入：初始允许滚动跟随
-            reset_on_show: true,
-            crash_guards: HashMap::new(),
-            fallback_store: dd_gui::fallback::FallbackStore::new(),
-            fallback_rx: None,
-            icon_cache: HashMap::new(),
-            icon_failed: HashSet::new(),
-            settings,
-            clipboard_tx,
-            clipboard_rx,
-            cache,
-            engines_dirty: false,
-            lang_dirty: false,
-            engine_url_buf: String::new(),
-            engine_add_err: None,
-            custom_title_buf: String::new(),
-            custom_keyword_buf: String::new(),
-            custom_target_buf: String::new(),
-            custom_kind_idx: 0,
-            custom_add_err: None,
-            apps_cfg_open: false,
-            apps_blocklist_buf: String::new(),
-            settings_import_armed: None,
-            backdrop_cache: crate::ui::backdrop_image::BackdropImageCache::new(),
-            bg_path_buf: String::new(),
-            bg_err: None,
-            settings_category: SettingsCategory::default(),
-            hwnd: None,
-            backdrop_active: false,
-            backdrop_clear_countdown: 0,
-            chrome_applied: false,
-            settings_sized: false,
-            native_resize: false,
-            native_resize_since: None,
-            hide_pending: false,
-            hide_desync_since: None,
-            panel_open,
-            drag_candidate: None,
-            ctx_menu: None,
-            want_ctx_menu_for_selected: false,
-            ctx_row_rects: Vec::new(),
-            shown_size: None,
-            last_work_area: None,
-            resize_pending_since: None,
-            lang_effective,
-            mouse_hide: None,
+            hotkeys: HotkeyState {
+                hotkey,
+                hotkey_pending: None,
+                hotkey_confirm: None,
+                hotkey_seq: 0,
+                hotkey_apply_failed: false,
+                hotkey_capturing: false,
+                capture_hook: None,
+                capture_rx: None,
+                capture_started: None,
+                capture_failed: false,
+                hotkey_unregistered: false,
+            },
+            draft: SettingsDraft {
+                settings_save_warned: false,
+                exts_dirty: false,
+                settings,
+                engines_dirty: false,
+                lang_dirty: false,
+                engine_url_buf: String::new(),
+                engine_add_err: None,
+                custom_title_buf: String::new(),
+                custom_keyword_buf: String::new(),
+                custom_target_buf: String::new(),
+                custom_kind_idx: 0,
+                custom_add_err: None,
+                apps_cfg_open: false,
+                apps_blocklist_buf: String::new(),
+                settings_import_armed: None,
+                bg_path_buf: String::new(),
+                bg_err: None,
+                settings_category: SettingsCategory::default(),
+            },
+            pool: ExtPool {
+                overflow_warned: HashSet::new(),
+                aggregate_rx: Some(aggregate_rx),
+                aggregating: true,
+                arrived: Vec::new(),
+                sources: Vec::new(),
+                processes: Vec::new(),
+                exts: Vec::new(),
+                inproc_specs: HashMap::new(),
+                trust: HashMap::new(),
+                ledger_state: dd_host::trust::LedgerState::Missing,
+                skipped_manifests: Vec::new(),
+                pending_notified: false,
+                lru: LruWarmSet::new(warm_capacity as usize),
+                cold,
+                inflight: HashSet::new(),
+                last_command_id: None,
+                invoke_rx: None,
+                page_rx: None,
+                last_invoke: None,
+                crash_guards: HashMap::new(),
+                fallback_store: dd_gui::fallback::FallbackStore::new(),
+                fallback_rx: None,
+                cache,
+                // §5.1：默认空表；bin 入口 `load_usage` 从 usage.json 装载。
+                usage: dd_gui::usage::Usage::default(),
+            },
+            window: WindowState {
+                tray_events,
+                tray_click_flag,
+                last_focus_loss_hide: None,
+                paint_hide_frame: false,
+                visible: false,
+                want_focus: true,
+                ever_focused: false,
+                last_hovered_index: None,
+                last_pointer_pos: None,
+                scroll_follow: true, // 键盘是主输入：初始允许滚动跟随
+                reset_on_show: true,
+                hwnd: None,
+                backdrop_active: false,
+                backdrop_clear_countdown: 0,
+                chrome_applied: false,
+                settings_sized: false,
+                native_resize: false,
+                native_resize_since: None,
+                hide_pending: false,
+                hide_desync_since: None,
+                panel_open,
+                drag_candidate: None,
+                mouse_hide: None,
+                shown_size: None,
+                last_work_area: None,
+                resize_pending_since: None,
+            },
+            overlay: OverlayState {
+                toast: None,
+                confirm: None,
+                ctx_menu: None,
+                want_ctx_menu_for_selected: false,
+                ctx_row_rects: Vec::new(),
+            },
+            view: UiViewState {
+                stack: PageStack::new(PageState::root(Vec::new())),
+                refresh: None,
+                page_query_debounce: None,
+                e2e_input_at: None,
+                e2e_dispatch_at: None,
+                e2e_pending: None,
+                appearance_reset_armed: None,
+                icon_cache: HashMap::new(),
+                icon_failed: HashSet::new(),
+                clipboard_tx,
+                clipboard_rx,
+                backdrop_cache: crate::ui::backdrop_image::BackdropImageCache::new(),
+                lang_effective,
+                // §5.1：启动后由 `load_usage`（bin 入口装配）填充。
+                usage_scores: None,
+                // §5.2：检查更新在途接收端（按钮/启动自动检查触发）。
+                update_rx: None,
+            },
         }
     }
 
@@ -612,27 +692,34 @@ impl PaletteApp {
     }
 
     /// 按当前生效语言取文案（v4.13 D38）：`self.tr("key")` —
-    /// 大多数绘制/动作方法持有 `&self`，比逐处写 `t(self.lang_effective, _)`
-    /// 更省样板。后台线程闭包请先 `let lang = self.lang_effective;` 再捕获
+    /// 大多数绘制/动作方法持有 `&self`，比逐处写 `t(self.view.lang_effective, _)`
+    /// 更省样板。后台线程闭包请先 `let lang = self.view.lang_effective;` 再捕获
     /// （`Lang: Copy`），线程内直接 `t(lang, key)`。
     pub(crate) fn tr(&self, key: &'static str) -> &'static str {
-        crate::text::t(self.lang_effective, key)
+        crate::text::t(self.view.lang_effective, key)
     }
 
     /// R-17：设置保存 + 用户可见反馈——保存失败时**每会话至多弹一次**错误
     /// toast（不可写目录下所有修改「看似成功」、重启回滚且无解释，V-2 判据
     /// 「恰出现一次，不重复轰炸」）。全部 `settings.save()` 调用点统一走本方法。
     pub(crate) fn save_settings_with_feedback(&mut self) {
-        self.report_settings_save_failure(self.settings.save());
+        // C4（§4.8）：配置来自更高 schema 版本 → 只读模式，保存被拒且有
+        // UI 提示（防旧版保存一次把新字段永久抹掉）。
+        if self.draft.settings.read_only {
+            log::warn!("[dd-gui] 配置来自更高版本（schema_version 只读模式），保存被拒");
+            self.show_error_toast(self.tr("toast.settings_read_only").to_string());
+            return;
+        }
+        self.report_settings_save_failure(self.draft.settings.save());
     }
 
     /// [`Self::save_settings_with_feedback`] 的可注入核心（单测不触真实
     /// config.json）：失败且未提醒过 → 置位并弹错误 toast；成功或已提醒 → 静默。
     pub(crate) fn report_settings_save_failure(&mut self, ok: bool) {
-        if ok || self.settings_save_warned {
+        if ok || self.draft.settings_save_warned {
             return;
         }
-        self.settings_save_warned = true;
+        self.draft.settings_save_warned = true;
         let msg = self.tr("toast.settings_save_fail").to_string();
         self.show_error_toast(msg);
     }
@@ -642,8 +729,8 @@ impl PaletteApp {
     /// 启动初值在 `main.rs`（托盘线程 spawn 前）写入。
     pub(crate) fn sync_tray_hotkey_label(&self) {
         crate::tray::set_tray_hotkey_label(dd_gui::settings::hotkey_combo_label(
-            self.settings.hotkey_mods,
-            self.settings.hotkey_vk,
+            self.draft.settings.hotkey_mods,
+            self.draft.settings.hotkey_vk,
         ));
     }
 
@@ -661,8 +748,8 @@ impl PaletteApp {
     /// 离开设置页的脏标记（`engines_dirty` / `exts_dirty` / `lang_dirty`）由 `ui()`
     /// 既有 size-diff 收口点（`!want_settings` 分支）消费，本路径**无需新接线**。
     pub(crate) fn open_file_search_from_panel(&mut self) {
-        if self.stack.current().page_id.as_deref() == Some(FILE_SEARCH_PAGE_ID) {
-            self.want_focus = true;
+        if self.view.stack.current().page_id.as_deref() == Some(FILE_SEARCH_PAGE_ID) {
+            self.window.want_focus = true;
             log::debug!("[dd-gui] Ctrl+F：已在文件搜索页 → 幂等（仅聚焦）");
             return;
         }
@@ -672,12 +759,12 @@ impl PaletteApp {
             self.show_error_toast(msg);
             return;
         }
-        let at_root = self.stack.at_root();
-        let root_query = self.stack.current().list.query().to_string();
+        let at_root = self.view.stack.at_root();
+        let root_query = self.view.stack.current().list.query().to_string();
         let query = file_search_source_query(at_root, &root_query);
         // 查询已在 `open_page` 内写入页内搜索框（落地时由 poll_page 的 v3.3
         // 保留逻辑沿用），本路径无需额外的回填接线。
-        self.stack.go_home();
+        self.view.stack.go_home();
         log::debug!("[dd-gui] Ctrl+F：进入文件搜索页（at_root={at_root} query={query:?}）");
         let title = self.tr("ext.name.filesearch").to_string();
         self.open_page(
@@ -691,10 +778,12 @@ impl PaletteApp {
 
     /// 文件搜索扩展是否已加载且未被禁用。
     fn file_search_present(&self) -> bool {
-        self.exts
+        self.pool
+            .exts
             .iter()
             .any(|e| e.manifest.id == FILE_SEARCH_EXT_ID)
             && !self
+                .draft
                 .settings
                 .disabled_extensions
                 .iter()
@@ -707,7 +796,7 @@ impl eframe::App for PaletteApp {
     /// 面板必须留出透明底才可见）；未生效保持 eframe 默认半透明值——窗口虽
     /// 以透明视觉创建，未生效时面板不透明填充完整覆盖，视觉与既往一致。
     fn clear_color(&self, _visuals: &egui::Visuals) -> [f32; 4] {
-        if self.backdrop_active {
+        if self.window.backdrop_active {
             egui::Color32::TRANSPARENT.to_normalized_gamma_f32()
         } else {
             egui::Color32::from_rgba_unmultiplied(12, 12, 12, 180).to_normalized_gamma_f32()
@@ -722,6 +811,7 @@ impl eframe::App for PaletteApp {
         // 不发任何位置命令（设计稿 03 验收：窗口隐藏期间不发送位置命令）。
         self.poll_hotkey(ctx);
         self.poll_tray(ctx);
+        self.poll_update_check(ctx); // §5.2：检查更新结果 → toast
         self.handle_focus_loss(ctx);
         // v4.16 真机修复（拖拽后面板空白）：可见性自愈。拖拽/缩放原生模态
         // 循环内若失焦触发 hide()，`Visible(false)`（ShowWindow SW_HIDE）在
@@ -729,26 +819,26 @@ impl eframe::App for PaletteApp {
         // 仍可见：ui() 早返回每帧只呈现透明帧（= 纯材质空白底，用户截图
         // 形态）。此处检测该脱钩并恢复绘制；500ms 宽限避开正常 hide 的命令
         // 生效间隙（hide 当帧命令在帧末应用，下一帧逻辑时窗口已真隐藏）。
-        if !self.visible {
-            if let Some(hwnd) = self.hwnd {
+        if !self.window.visible {
+            if let Some(hwnd) = self.window.hwnd {
                 if crate::platform::is_window_visible(hwnd) {
-                    let since = *self.hide_desync_since.get_or_insert(Instant::now());
+                    let since = *self.window.hide_desync_since.get_or_insert(Instant::now());
                     if since.elapsed() >= std::time::Duration::from_millis(500) {
                         log::debug!(
                             "[dd-gui] 可见性自愈：visible=false 但窗口 OS 可见 >500ms（疑似模态循环内 hide 被忽略）→ 恢复绘制"
                         );
-                        self.hide_desync_since = None;
-                        self.visible = true;
-                        self.panel_open.store(true, Ordering::Relaxed);
+                        self.window.hide_desync_since = None;
+                        self.window.visible = true;
+                        self.window.panel_open.store(true, Ordering::Relaxed);
                         self.refresh_backdrop(ctx);
                         ctx.request_repaint();
                     }
                 } else {
-                    self.hide_desync_since = None;
+                    self.window.hide_desync_since = None;
                 }
             }
         } else {
-            self.hide_desync_since = None;
+            self.window.hide_desync_since = None;
         }
         // A8：每帧健康检查——面板可见期间扩展崩溃也能及时移除（此前仅 show() 时查一次，
         // 面板一直开着时崩溃的进程会滞留到下次唤起才被清理）。
@@ -759,12 +849,12 @@ impl eframe::App for PaletteApp {
         // 实测值里混入了"用户何时按 Win+Alt+Space"的人肉延迟（1936–3214 ms 乱跳的真因）。
         self.poll_aggregate();
         // 聚合未完成时持续请求重绘以驱动本回调（隐藏窗口下否则可能不产生帧）。
-        if self.aggregate_rx.is_some() {
+        if self.pool.aggregate_rx.is_some() {
             ctx.request_repaint();
         }
         // C 批次：隐藏期按 `WARM_IDLE_HIDDEN_TICK` 驱动 warm 空闲回收巡检
         // （egui 隐藏窗口默认不产帧）；保活集被回收清空后不再请求，恢复静默。
-        if !self.visible && !self.processes.is_empty() {
+        if !self.window.visible && !self.pool.processes.is_empty() {
             ctx.request_repaint_after(WARM_IDLE_HIDDEN_TICK);
         }
     }
@@ -772,18 +862,18 @@ impl eframe::App for PaletteApp {
     fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
         // v4.7 D31：首个 ui 帧捕获 HWND 并按已加载设置应用材质（成功 → 面板
         // 透明化；失败 → 回退不透明，后续帧不再重复调用）。
-        let had_hwnd = self.hwnd.is_some();
+        let had_hwnd = self.window.hwnd.is_some();
         self.capture_hwnd(frame);
-        if !had_hwnd && self.hwnd.is_some() {
+        if !had_hwnd && self.window.hwnd.is_some() {
             self.refresh_backdrop(ui.ctx());
         }
-        if !self.visible {
+        if !self.window.visible {
             // 隐藏当帧：仍绘制一次面板内容（纯色空帧 = 闪黑），不做任何交互处理。
-            if !self.paint_hide_frame {
+            if !self.window.paint_hide_frame {
                 log::debug!("[dd-gui] ui()：早返回（visible=false 且非隐藏帧）→ 本帧不绘制");
                 return;
             }
-            self.paint_hide_frame = false;
+            self.window.paint_hide_frame = false;
             self.draw_panel(ui);
             self.e2e_report(); // E2E：隐藏帧同样结算，避免隐藏期计入下次可见帧
                                // 内存优化 M3+M1（docs/memory-optimization-plan.md §3）：隐藏帧已画完，
@@ -791,9 +881,9 @@ impl eframe::App for PaletteApp {
                                // 重解码，读的是落盘 PNG 缓存）+ 修剪工作集（页按需软故障回）。
                                // 挂在 paint_hide_frame 消费点而非 hide()：hide() 之后还要绘一帧
                                // 真实内容，先清会被复绘立即重填。
-            let icon_n = self.icon_cache.len();
+            let icon_n = self.view.icon_cache.len();
             if icon_n > 0 {
-                self.icon_cache.clear();
+                self.view.icon_cache.clear();
                 log::debug!("[dd-gui] 隐藏收尾：icon_cache 清空（{icon_n} 项纹理）");
             }
             crate::platform::trim_working_set();
@@ -807,7 +897,7 @@ impl eframe::App for PaletteApp {
         // 失焦即消失）才应用，表现为「回车启动应用后面板卡一段时间才关闭」。
         // 在途期间以 30ms 间隔预约重绘（与列表 Loading 态 33ms 轮询同范式），
         // 结果消费后自动停止；面板隐藏期 ui() 早返回，不会空转。
-        if self.invoke_rx.is_some() {
+        if self.pool.invoke_rx.is_some() {
             ctx.request_repaint_after(std::time::Duration::from_millis(30));
         }
         self.poll_page();
@@ -818,10 +908,10 @@ impl eframe::App for PaletteApp {
         self.tick_refresh();
 
         // Toast 到期清除；未到期则预约重绘
-        if let Some(toast) = &self.toast {
+        if let Some(toast) = &self.overlay.toast {
             let now = Instant::now();
             if now >= toast.expires {
-                self.toast = None;
+                self.overlay.toast = None;
             } else {
                 ctx.request_repaint_after(toast.expires - now);
             }
@@ -834,20 +924,20 @@ impl eframe::App for PaletteApp {
         // v4.12 D37：目标尺寸不再用固定常量——根页 = 基准/记忆值按工作区
         // clamp；设置页 = max(650×640, 根页有效尺寸) 再 clamp（work area 缺失
         // 时不 clamp）。
-        let want_settings = self.stack.current().is_settings;
-        if want_settings != self.settings_sized {
-            self.settings_sized = want_settings;
+        let want_settings = self.view.stack.current().is_settings;
+        if want_settings != self.window.settings_sized {
+            self.window.settings_sized = want_settings;
             let (w, h) = if want_settings {
                 settings_panel_size(
-                    self.last_work_area,
-                    self.settings.panel_size,
-                    dd_gui::theme::ListMetrics::of(self.settings.density).row_h,
+                    self.window.last_work_area,
+                    self.draft.settings.panel_size,
+                    dd_gui::theme::ListMetrics::of(self.draft.settings.density).row_h,
                 )
             } else {
                 root_panel_size(
-                    self.last_work_area,
-                    self.settings.panel_size,
-                    dd_gui::theme::ListMetrics::of(self.settings.density).row_h,
+                    self.window.last_work_area,
+                    self.draft.settings.panel_size,
+                    dd_gui::theme::ListMetrics::of(self.draft.settings.density).row_h,
                 )
             };
             ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(egui::vec2(w, h)));
@@ -868,7 +958,7 @@ impl eframe::App for PaletteApp {
             // 同时**重新居中**——否则移动过的窗口按原左上角缩放，移动设置页
             // 后退回再进，面板出现在移动后的位置而非默认居中位置。隐藏态
             // 不发（下次 show() 会统一居中）。
-            if self.visible {
+            if self.window.visible {
                 self.center_on_cursor(&ctx, (w, h));
             }
         }
@@ -880,32 +970,37 @@ impl eframe::App for PaletteApp {
         if !want_settings {
             let cur = ctx.input(|i| i.viewport().inner_rect.map(|r| (r.width(), r.height())));
             if let Some((w, h)) = cur {
-                let drifted = match self.shown_size {
+                let drifted = match self.window.shown_size {
                     Some((sw, sh)) => {
                         (w - sw).abs() > SIZE_EPSILON || (h - sh).abs() > SIZE_EPSILON
                     }
                     None => false,
                 };
                 if drifted {
-                    let since = *self.resize_pending_since.get_or_insert(Instant::now());
+                    let since = *self
+                        .window
+                        .resize_pending_since
+                        .get_or_insert(Instant::now());
                     if since.elapsed() >= std::time::Duration::from_millis(500) {
                         self.persist_panel_size(&ctx);
                         // 重新对齐参照：已落盘的尺寸即新的「程序已知值」，防重复触发
-                        self.shown_size = Some((w, h));
-                        self.resize_pending_since = None;
+                        self.window.shown_size = Some((w, h));
+                        self.window.resize_pending_since = None;
                     }
                 } else {
-                    self.resize_pending_since = None;
+                    self.window.resize_pending_since = None;
                 }
             }
         }
         // 搜索引擎（2026-09-05）与扩展启停（M6 批次 6.3）配置变更：离开设置页时
         // 统一消费脏标记并全量重聚合——size-diff 收口点覆盖所有离开路径
         // （Esc / 返回按钮 / Dismiss / show 复位），逐帧勾选只触发一次。
-        if !want_settings && (self.engines_dirty || self.exts_dirty || self.lang_dirty) {
-            self.engines_dirty = false;
-            self.exts_dirty = false;
-            self.lang_dirty = false;
+        if !want_settings
+            && (self.draft.engines_dirty || self.draft.exts_dirty || self.draft.lang_dirty)
+        {
+            self.draft.engines_dirty = false;
+            self.draft.exts_dirty = false;
+            self.draft.lang_dirty = false;
             self.restart_aggregation();
         }
         // v4.11 修正：帧首判定空白区拖拽候选（不再注册占屏拖拽 widget——
@@ -915,7 +1010,7 @@ impl eframe::App for PaletteApp {
         // v4.17a：按「指针闲置」动态决定光标——静止隐藏、移动即恢复（每帧
         // 重设，因 chrome_end 会按缩放热区覆盖为 Resize 光标；守卫必须早于
         // chrome_begin 才能稳定隐藏主体区域、边缘仍显 Resize 反馈）。
-        if let Some(scope) = self.mouse_hide.as_mut() {
+        if let Some(scope) = self.window.mouse_hide.as_mut() {
             scope.apply(&ctx);
         }
         crate::ui::chrome::chrome_begin(self, &ctx);
@@ -929,10 +1024,10 @@ impl eframe::App for PaletteApp {
         crate::ui::chrome::chrome_end(self, &ctx);
         // v4.7 材质切换防闪：本帧绘制/呈现完毕后递减倒计时，归零时窗口已连续
         // 呈现多个不透明帧，此时清 DWM 材质不可见（材质在不透明面板后面）。
-        if self.backdrop_clear_countdown > 0 {
-            self.backdrop_clear_countdown -= 1;
-            if self.backdrop_clear_countdown == 0 {
-                if let Some(hwnd) = self.hwnd {
+        if self.window.backdrop_clear_countdown > 0 {
+            self.window.backdrop_clear_countdown -= 1;
+            if self.window.backdrop_clear_countdown == 0 {
+                if let Some(hwnd) = self.window.hwnd {
                     crate::platform::apply_system_backdrop(
                         hwnd,
                         crate::platform::SystemBackdrop::None,
@@ -1131,15 +1226,24 @@ mod size_tests {
     #[test]
     fn ctrl_f_from_root_opens_file_search_page() {
         let mut app = crate::test_support::make_app();
-        app.exts
+        app.pool
+            .exts
             .push(crate::test_support::dying_ext(super::FILE_SEARCH_EXT_ID));
-        app.stack.current_mut().list.set_query("报告".to_string());
+        app.view
+            .stack
+            .current_mut()
+            .list
+            .set_query("报告".to_string());
         let ctx = crate::test_support::ctx();
         press_key(&ctx, egui::Key::F, egui::Modifiers::CTRL);
         app.handle_keys(&ctx);
 
-        assert_eq!(app.stack.depth(), 2, "Ctrl+F 应推入一页（Root + 文件搜索）");
-        let page = app.stack.current();
+        assert_eq!(
+            app.view.stack.depth(),
+            2,
+            "Ctrl+F 应推入一页（Root + 文件搜索）"
+        );
+        let page = app.view.stack.current();
         assert_eq!(page.page_id.as_deref(), Some(super::FILE_SEARCH_PAGE_ID));
         assert_eq!(page.list.query(), "报告", "Root 查询应带入页内搜索框");
         assert!(!page.title.is_empty());
@@ -1154,21 +1258,30 @@ mod size_tests {
     #[test]
     fn ctrl_f_in_file_search_page_is_idempotent() {
         let mut app = crate::test_support::make_app();
-        app.exts
+        app.pool
+            .exts
             .push(crate::test_support::dying_ext(super::FILE_SEARCH_EXT_ID));
-        app.stack.push(dd_gui::navigation::PageState::nested(
+        app.view.stack.push(dd_gui::navigation::PageState::nested(
             super::FILE_SEARCH_PAGE_ID,
             "文件搜索",
             super::FILE_SEARCH_EXT_ID,
             Vec::new(),
         ));
-        app.stack.current_mut().list.set_query("abc".to_string());
+        app.view
+            .stack
+            .current_mut()
+            .list
+            .set_query("abc".to_string());
         let ctx = crate::test_support::ctx();
         press_key(&ctx, egui::Key::F, egui::Modifiers::CTRL);
         app.handle_keys(&ctx);
 
-        assert_eq!(app.stack.depth(), 2, "幂等：不重复进页");
-        assert_eq!(app.stack.current().list.query(), "abc", "已输入内容保留");
+        assert_eq!(app.view.stack.depth(), 2, "幂等：不重复进页");
+        assert_eq!(
+            app.view.stack.current().list.query(),
+            "abc",
+            "已输入内容保留"
+        );
     }
 
     /// A-CF-03：从其他嵌套页 `Ctrl+F` → 收敛到 Root 之上单页（栈深 2）、
@@ -1176,26 +1289,35 @@ mod size_tests {
     #[test]
     fn ctrl_f_from_nested_page_converges_stack_and_drops_query() {
         let mut app = crate::test_support::make_app();
-        app.exts
+        app.pool
+            .exts
             .push(crate::test_support::dying_ext(super::FILE_SEARCH_EXT_ID));
-        app.stack.push(dd_gui::navigation::PageState::nested(
+        app.view.stack.push(dd_gui::navigation::PageState::nested(
             "other.page",
             "别页",
             "com.ddrun.calc",
             Vec::new(),
         ));
-        app.stack.current_mut().list.set_query("789".to_string());
+        app.view
+            .stack
+            .current_mut()
+            .list
+            .set_query("789".to_string());
         let ctx = crate::test_support::ctx();
         press_key(&ctx, egui::Key::F, egui::Modifiers::CTRL);
         app.handle_keys(&ctx);
 
-        assert_eq!(app.stack.depth(), 2, "其他页进入也收敛为 Root + 文件搜索");
         assert_eq!(
-            app.stack.current().page_id.as_deref(),
+            app.view.stack.depth(),
+            2,
+            "其他页进入也收敛为 Root + 文件搜索"
+        );
+        assert_eq!(
+            app.view.stack.current().page_id.as_deref(),
             Some(super::FILE_SEARCH_PAGE_ID)
         );
         assert_eq!(
-            app.stack.current().list.query(),
+            app.view.stack.current().list.query(),
             "",
             "其他页的 query 语义属于该页，不得当作文件搜索词"
         );
@@ -1205,12 +1327,13 @@ mod size_tests {
     #[test]
     fn plain_f_does_not_open_file_search() {
         let mut app = crate::test_support::make_app();
-        app.exts
+        app.pool
+            .exts
             .push(crate::test_support::dying_ext(super::FILE_SEARCH_EXT_ID));
         let ctx = crate::test_support::ctx();
         press_key(&ctx, egui::Key::F, egui::Modifiers::NONE);
         app.handle_keys(&ctx);
-        assert!(app.stack.at_root(), "无修饰 F 不得进页");
+        assert!(app.view.stack.at_root(), "无修饰 F 不得进页");
     }
 
     /// A-CF-05：扩展缺失（未加载）时 `Ctrl+F` → 不进页 + Error Toast。
@@ -1221,8 +1344,8 @@ mod size_tests {
         press_key(&ctx, egui::Key::F, egui::Modifiers::CTRL);
         app.handle_keys(&ctx);
 
-        assert!(app.stack.at_root(), "扩展不可用不得产生空页");
-        let toast = app.toast.as_ref().expect("应给出明确失败反馈");
+        assert!(app.view.stack.at_root(), "扩展不可用不得产生空页");
+        let toast = app.overlay.toast.as_ref().expect("应给出明确失败反馈");
         assert!(
             toast.message.contains("文件搜索") || toast.message.contains("File Search"),
             "Toast 文案应指明文件搜索不可用：{}",
@@ -1254,18 +1377,22 @@ mod size_tests {
     #[test]
     fn backspace_not_consumed_when_go_back_disabled() {
         let mut app = crate::test_support::make_app();
-        app.stack.push(dd_gui::navigation::PageState::nested(
+        app.view.stack.push(dd_gui::navigation::PageState::nested(
             super::FILE_SEARCH_PAGE_ID,
             "文件搜索",
             super::FILE_SEARCH_EXT_ID,
             Vec::new(),
         ));
-        app.stack.current_mut().list.set_query("abc".to_string());
+        app.view
+            .stack
+            .current_mut()
+            .list
+            .set_query("abc".to_string());
         let ctx = crate::test_support::ctx();
         press_key(&ctx, egui::Key::Backspace, egui::Modifiers::NONE);
         app.handle_keys(&ctx);
 
-        assert_eq!(app.stack.depth(), 2, "默认关：退格不得返回");
+        assert_eq!(app.view.stack.depth(), 2, "默认关：退格不得返回");
         assert!(
             key_still_in_queue(&ctx, egui::Key::Backspace),
             "默认关时 Backspace 必须留给输入框（不得被 consume_key 吞掉）"
@@ -1276,8 +1403,8 @@ mod size_tests {
     #[test]
     fn backspace_go_back_enabled_nested_empty_pops() {
         let mut app = crate::test_support::make_app();
-        app.settings.backspace_go_back = true;
-        app.stack.push(dd_gui::navigation::PageState::nested(
+        app.draft.settings.backspace_go_back = true;
+        app.view.stack.push(dd_gui::navigation::PageState::nested(
             super::FILE_SEARCH_PAGE_ID,
             "文件搜索",
             super::FILE_SEARCH_EXT_ID,
@@ -1287,7 +1414,7 @@ mod size_tests {
         press_key(&ctx, egui::Key::Backspace, egui::Modifiers::NONE);
         app.handle_keys(&ctx);
 
-        assert_eq!(app.stack.depth(), 1, "嵌套页空查询：退格应返回上一级");
+        assert_eq!(app.view.stack.depth(), 1, "嵌套页空查询：退格应返回上一级");
         assert!(
             !key_still_in_queue(&ctx, egui::Key::Backspace),
             "返回时 Backspace 应被消费（不穿透到输入框）"
@@ -1298,19 +1425,23 @@ mod size_tests {
     #[test]
     fn backspace_go_back_enabled_but_query_nonempty_keeps_editing() {
         let mut app = crate::test_support::make_app();
-        app.settings.backspace_go_back = true;
-        app.stack.push(dd_gui::navigation::PageState::nested(
+        app.draft.settings.backspace_go_back = true;
+        app.view.stack.push(dd_gui::navigation::PageState::nested(
             super::FILE_SEARCH_PAGE_ID,
             "文件搜索",
             super::FILE_SEARCH_EXT_ID,
             Vec::new(),
         ));
-        app.stack.current_mut().list.set_query("abcd".to_string());
+        app.view
+            .stack
+            .current_mut()
+            .list
+            .set_query("abcd".to_string());
         let ctx = crate::test_support::ctx();
         press_key(&ctx, egui::Key::Backspace, egui::Modifiers::NONE);
         app.handle_keys(&ctx);
 
-        assert_eq!(app.stack.depth(), 2, "非空查询：退格不得返回");
+        assert_eq!(app.view.stack.depth(), 2, "非空查询：退格不得返回");
         assert!(
             key_still_in_queue(&ctx, egui::Key::Backspace),
             "非空查询时 Backspace 必须留给输入框"
@@ -1340,13 +1471,13 @@ mod size_tests {
     #[test]
     fn r17_settings_save_failure_toasts_once_per_session() {
         let mut app = crate::test_support::make_app();
-        assert!(!app.settings_save_warned);
+        assert!(!app.draft.settings_save_warned);
 
         // ① 首次失败：错误 toast（settings_save_fail 键文案）+ 置位
         app.report_settings_save_failure(false);
-        assert!(app.settings_save_warned, "首次失败应置一次性提醒位");
+        assert!(app.draft.settings_save_warned, "首次失败应置一次性提醒位");
         {
-            let t = app.toast.as_ref().expect("首次失败应有错误 toast");
+            let t = app.overlay.toast.as_ref().expect("首次失败应有错误 toast");
             assert_eq!(t.kind, toast::ToastKind::Error, "失败口径 = Error");
             assert!(
                 t.message.contains("设置保存失败") || t.message.contains("Failed to save settings"),
@@ -1356,13 +1487,13 @@ mod size_tests {
         }
 
         // ② toast 过期清掉后再失败：不重复弹
-        app.toast = None;
+        app.overlay.toast = None;
         app.report_settings_save_failure(false);
-        assert!(app.toast.is_none(), "已提醒过不得重复轰炸");
+        assert!(app.overlay.toast.is_none(), "已提醒过不得重复轰炸");
 
         // ③ 成功：静默，flag 不动
         app.report_settings_save_failure(true);
-        assert!(app.toast.is_none(), "成功路径不应有 toast");
-        assert!(app.settings_save_warned, "flag 每会话不复位");
+        assert!(app.overlay.toast.is_none(), "成功路径不应有 toast");
+        assert!(app.draft.settings_save_warned, "flag 每会话不复位");
     }
 }

@@ -18,10 +18,10 @@ impl PaletteApp {
     ///（`apply_captured_hotkey`），成功回发后 `end_hotkey_capture` 关闭本窗
     /// ——设置只在确认成功后写入，失败行内报错、候选保留可重试。
     pub(super) fn draw_hotkey_capture_dialog(&mut self, ctx: &egui::Context, p: &theme::Palette) {
-        if !self.hotkey_capturing {
+        if !self.hotkeys.hotkey_capturing {
             return;
         }
-        let lang = self.lang_effective;
+        let lang = self.view.lang_effective;
         let dark = ctx.theme() == egui::Theme::Dark;
         let mut cancelled = false;
         let mut save_clicked = false;
@@ -67,7 +67,7 @@ impl PaletteApp {
                         ui.allocate_ui(egui::vec2(area_w, 48.0), |ui| {
                             ui.set_min_height(48.0);
                             ui.with_layout(egui::Layout::top_down(egui::Align::Center), |ui| {
-                                ui.horizontal(|ui| match self.hotkey_pending {
+                                ui.horizontal(|ui| match self.hotkeys.hotkey_pending {
                                     Some((mods, vk)) => {
                                         let vk_label = dd_gui::settings::hotkey_vk_label(vk);
                                         let mut caps: Vec<String> =
@@ -97,7 +97,7 @@ impl PaletteApp {
                                             &'static str,
                                         > = Vec::new();
                                         if held.is_empty() {
-                                            let prompt_key = if self.capture_failed {
+                                            let prompt_key = if self.hotkeys.capture_failed {
                                                 "set.hotkey.capturing_fallback"
                                             } else {
                                                 "set.hotkey.capturing"
@@ -107,7 +107,7 @@ impl PaletteApp {
                                                     lang, prompt_key,
                                                 ))
                                                 .size(13.0)
-                                                .color(if self.capture_failed {
+                                                .color(if self.hotkeys.capture_failed {
                                                     p.danger
                                                 } else {
                                                     p.accent
@@ -137,14 +137,14 @@ impl PaletteApp {
                                 .size(11.0)
                                 .color(p.text3),
                         );
-                        if self.hotkey_apply_failed {
+                        if self.hotkeys.hotkey_apply_failed {
                             ui.label(
                                 egui::RichText::new(crate::text::t(lang, "set.hotkey.occupied"))
                                     .size(12.0)
                                     .color(p.danger),
                             );
                         }
-                        if let Some((mods, vk)) = self.hotkey_pending {
+                        if let Some((mods, vk)) = self.hotkeys.hotkey_pending {
                             if Self::is_system_reserved_combo(mods, vk) {
                                 ui.label(
                                     egui::RichText::new(crate::text::t(
@@ -162,7 +162,7 @@ impl PaletteApp {
                         let (row, _) =
                             ui.allocate_exact_size(egui::vec2(row_w, 32.0), egui::Sense::hover());
                         let btn_font = egui::FontId::proportional(14.0);
-                        let applying = self.hotkey_confirm.is_some();
+                        let applying = self.hotkeys.hotkey_confirm.is_some();
                         let save_text = if applying {
                             crate::text::t(lang, "set.hotkey.applying")
                         } else {
@@ -186,9 +186,13 @@ impl PaletteApp {
                             egui::pos2(reset_rect.left() - 8.0 - save_w, row.min.y),
                             egui::vec2(save_w, 32.0),
                         );
-                        let unchanged = self.hotkey_pending
-                            == Some((self.settings.hotkey_mods, self.settings.hotkey_vk));
-                        let save_enabled = !applying && !unchanged && self.hotkey_pending.is_some();
+                        let unchanged = self.hotkeys.hotkey_pending
+                            == Some((
+                                self.draft.settings.hotkey_mods,
+                                self.draft.settings.hotkey_vk,
+                            ));
+                        let save_enabled =
+                            !applying && !unchanged && self.hotkeys.hotkey_pending.is_some();
                         // 保存 = accent 主按钮（禁用 = card 底 + text_disabled，
                         // 仍绘制但点击不生效——无候选 / 未改动 / 应用中）。
                         let (save_fill, save_tcol) = if save_enabled {
@@ -247,10 +251,13 @@ impl PaletteApp {
         if cancelled {
             self.end_hotkey_capture();
         } else if reset_clicked {
-            self.hotkey_pending = Some((self.settings.hotkey_mods, self.settings.hotkey_vk));
-            self.hotkey_apply_failed = false;
+            self.hotkeys.hotkey_pending = Some((
+                self.draft.settings.hotkey_mods,
+                self.draft.settings.hotkey_vk,
+            ));
+            self.hotkeys.hotkey_apply_failed = false;
         } else if save_clicked {
-            if let Some((mods, vk)) = self.hotkey_pending {
+            if let Some((mods, vk)) = self.hotkeys.hotkey_pending {
                 // 确认流：结果在 poll_hotkey 按 seq 裁决——成功关窗写设置；
                 // 失败清 confirm + 行内报错（窗保持开、候选保留可重试）。
                 self.apply_captured_hotkey(mods, vk);

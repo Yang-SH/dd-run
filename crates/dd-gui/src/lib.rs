@@ -43,6 +43,8 @@ pub mod ext_client;
 /// M9 B2：内置扩展 in-process 适配器（直接 `serve_line`，不 spawn 子进程）。
 pub mod ext_inprocess;
 pub mod fallback;
+/// P2-5.3①：日志落盘双后端（stderr 口径不变 + 文件滚动 5×1MB，仅 bin 入口装配）。
+pub mod file_log;
 pub mod fuzzy;
 pub mod hotkey;
 pub mod navigation;
@@ -55,6 +57,20 @@ pub mod text;
 pub mod theme;
 pub mod tray;
 pub mod ui;
+/// §5.2（dd-run-改进分析.md）：检查更新——GitHub Releases `latest` 比对
+/// （系统 curl，零新依赖；不做自动安装）。
+pub mod update_check;
+/// §5.1（dd-run-改进分析.md）：使用频次（frecency）——`usage.json` 持久化 +
+/// 排序快照注入（空查询按 count 降序 / 同分 tiebreak）。
+pub mod usage;
 
 #[cfg(test)]
 pub(crate) mod test_support;
+
+// B1（dd-run-改进分析.md §3.2）：UI 快照金图（egui_kittest，仅测试编译）。
+#[cfg(test)]
+mod snapshot_tests;
+
+// B2②（dd-run-改进分析.md §3.3）：GUI 宿主侧现状注的 doc 契约锚点（仅测试编译）。
+#[cfg(test)]
+mod doc_contract_tests;

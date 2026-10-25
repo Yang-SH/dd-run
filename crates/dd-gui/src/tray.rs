@@ -22,7 +22,9 @@
 //! （进程死亡时系统自动移除图标）。
 
 use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
-use std::sync::mpsc::{self, Receiver, Sender};
+#[cfg(windows)]
+use std::sync::mpsc::Sender;
+use std::sync::mpsc::{self, Receiver};
 use std::sync::{Arc, Mutex};
 use std::thread;
 
@@ -41,6 +43,7 @@ pub fn set_tray_lang(lang: dd_gui::settings::Lang) {
 }
 
 /// 托盘线程侧读取当前生效语言（`t()` 查表用）。
+#[cfg(windows)]
 fn tray_lang() -> dd_gui::settings::Lang {
     if TRAY_LANG.load(Ordering::Relaxed) == 1 {
         dd_gui::settings::Lang::EnUs
@@ -69,6 +72,7 @@ pub enum TrayEvent {
 static TRAY_HOTKEY_LABEL: Mutex<String> = Mutex::new(String::new());
 
 /// 默认组合名（D38 静态口径的回归锚：未改绑时展示与原静态文案一致）。
+#[cfg(windows)]
 const DEFAULT_HOTKEY_LABEL: &str = "Win+Alt+Space";
 
 /// 主线程写入当前热键组合名（启动 / 改绑注册成功时调用）。
@@ -77,6 +81,7 @@ pub fn set_tray_hotkey_label(label: String) {
 }
 
 /// 托盘线程侧读取当前组合名（空 = 未写入 → 默认）。
+#[cfg(windows)]
 fn tray_hotkey_label() -> String {
     let guard = TRAY_HOTKEY_LABEL.lock().unwrap_or_else(|e| e.into_inner());
     if guard.is_empty() {
@@ -87,6 +92,7 @@ fn tray_hotkey_label() -> String {
 }
 
 /// Tooltip 文案（纯函数，单测锚点）：`dd-run — {组合名}`。
+#[cfg(windows)]
 fn tray_tooltip(label: &str) -> String {
     format!("dd-run — {label}")
 }
@@ -492,6 +498,9 @@ unsafe fn show_menu(hwnd: windows_sys::Win32::Foundation::HWND, state: &TrayStat
 
 #[cfg(test)]
 mod tests {
+    // 托盘全部实现腿（含测试引用的 helper）都在 Windows 下——非 Windows
+    // 编译时 glob 无可导入项，保留会产生 unused import 告警。
+    #[cfg(windows)]
     use super::*;
 
     #[cfg(windows)]

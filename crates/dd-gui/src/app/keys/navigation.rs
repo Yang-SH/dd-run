@@ -12,7 +12,7 @@ impl PaletteApp {
     /// `Enter` 执行、`Esc` 关闭或返回上一级。
     pub(crate) fn handle_keys(&mut self, ctx: &egui::Context) {
         // M6 批次 6.3：热键捕获模式优先拦截全部按键（Esc 取消；组合键生效）。
-        if self.hotkey_capturing {
+        if self.hotkeys.hotkey_capturing {
             self.handle_hotkey_capture(ctx);
             return;
         }
@@ -74,11 +74,11 @@ impl PaletteApp {
         });
 
         // 确认对话框活跃时：Enter=确认、Esc=取消，其余键不穿透到列表
-        if self.confirm.is_some() {
+        if self.overlay.confirm.is_some() {
             if esc {
-                self.confirm = None;
+                self.overlay.confirm = None;
             } else if enter {
-                let dialog = self.confirm.take().expect("对话框存在");
+                let dialog = self.overlay.confirm.take().expect("对话框存在");
                 let params = dialog.pending.confirmed_params();
                 self.dispatch_invoke(&dialog.ext_id, params);
             }
@@ -87,21 +87,21 @@ impl PaletteApp {
 
         // 右键菜单打开时：键盘上下文移交菜单（10B.1 键盘行）——↑↓ 移动焦点、
         // Enter 激活、Esc 关闭并回到列表；Tab/Ctrl+, 一并吞掉不穿透（D19 冻结）。
-        if self.ctx_menu.is_some() {
+        if self.overlay.ctx_menu.is_some() {
             if esc {
-                self.ctx_menu = None;
+                self.overlay.ctx_menu = None;
             } else if enter {
                 self.activate_ctx_menu(ctx);
             } else if down || tab {
-                let n = ctx_entry_count(self.ctx_menu.as_ref());
+                let n = ctx_entry_count(self.overlay.ctx_menu.as_ref());
                 if n > 0 {
-                    let state = self.ctx_menu.as_mut().expect("菜单存在");
+                    let state = self.overlay.ctx_menu.as_mut().expect("菜单存在");
                     state.focus = (state.focus + 1) % n;
                 }
             } else if up || shift_tab {
-                let n = ctx_entry_count(self.ctx_menu.as_ref());
+                let n = ctx_entry_count(self.overlay.ctx_menu.as_ref());
                 if n > 0 {
-                    let state = self.ctx_menu.as_mut().expect("菜单存在");
+                    let state = self.overlay.ctx_menu.as_mut().expect("菜单存在");
                     state.focus = (state.focus + n - 1) % n;
                 }
             }
@@ -111,7 +111,7 @@ impl PaletteApp {
         // v4.4（D19）：Shift+F10 = 对选中行打开菜单。行矩形只在绘制期可得，
         // 这里仅置旗标，`draw_list` 绘制选中行后消费落位（锚定行底边左缘）。
         if shift_f10 {
-            self.want_ctx_menu_for_selected = true;
+            self.overlay.want_ctx_menu_for_selected = true;
             ctx.request_repaint();
         }
 
@@ -119,9 +119,14 @@ impl PaletteApp {
             // B1（2026-09-20）：Esc 行为三档（设置 `esc_behavior`），默认档 =
             // 既有行为（非 Root 返回并聚焦回落后页面、Root 隐藏）。决策为纯函数，
             // 副作用在此执行。
-            let is_root = self.stack.current().page_id.is_none();
-            let query_empty = self.stack.current().list.query().is_empty();
-            match self.settings.esc_behavior.decide(is_root, query_empty) {
+            let is_root = self.view.stack.current().page_id.is_none();
+            let query_empty = self.view.stack.current().list.query().is_empty();
+            match self
+                .draft
+                .settings
+                .esc_behavior
+                .decide(is_root, query_empty)
+            {
                 dd_gui::settings::EscAction::ClearSearch => self.clear_current_query(ctx),
                 dd_gui::settings::EscAction::GoBack => {
                     if self.go_back_focused().is_none() {
@@ -136,9 +141,9 @@ impl PaletteApp {
         // 时**消费 Backspace** 并返回；其余情况一律不消费——退格留给输入框删字。
         // 修复（2026-09-23）：消费动作必须收敛在此判定内（而非函数开头无条件消费），
         // 否则默认关时输入框收不到退格，无法删除已输入内容。
-        if self.settings.backspace_go_back {
-            let is_root = self.stack.current().page_id.is_none();
-            let query_empty = self.stack.current().list.query().is_empty();
+        if self.draft.settings.backspace_go_back {
+            let is_root = self.view.stack.current().page_id.is_none();
+            let query_empty = self.view.stack.current().list.query().is_empty();
             let go_back = !is_root
                 && query_empty
                 && ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Backspace));
@@ -148,29 +153,29 @@ impl PaletteApp {
             }
         }
         if down || tab {
-            self.stack.current_mut().list.move_down();
-            self.scroll_follow = true; // 键盘选中：恢复滚动跟随
+            self.view.stack.current_mut().list.move_down();
+            self.window.scroll_follow = true; // 键盘选中：恢复滚动跟随
         }
         if up || shift_tab {
-            self.stack.current_mut().list.move_up();
-            self.scroll_follow = true;
+            self.view.stack.current_mut().list.move_up();
+            self.window.scroll_follow = true;
         }
         // F7：Home/End/PgUp/PgDn 与 ↑↓ 同分支分发（scroll_follow 同步置位）
         if home {
-            self.stack.current_mut().list.move_home();
-            self.scroll_follow = true;
+            self.view.stack.current_mut().list.move_home();
+            self.window.scroll_follow = true;
         }
         if end {
-            self.stack.current_mut().list.move_end();
-            self.scroll_follow = true;
+            self.view.stack.current_mut().list.move_end();
+            self.window.scroll_follow = true;
         }
         if page_down {
-            self.stack.current_mut().list.move_page_down();
-            self.scroll_follow = true;
+            self.view.stack.current_mut().list.move_page_down();
+            self.window.scroll_follow = true;
         }
         if page_up {
-            self.stack.current_mut().list.move_page_up();
-            self.scroll_follow = true;
+            self.view.stack.current_mut().list.move_page_up();
+            self.window.scroll_follow = true;
         }
         if enter {
             self.confirm_selected();
@@ -244,8 +249,8 @@ impl PaletteApp {
     /// B1：Esc「先清除搜索内容」档——清空当前页搜索框。嵌套页的过滤由扩展侧
     /// 完成，清空后按空查询去抖重拉（根页走本地过滤，清空即恢复全量）。
     fn clear_current_query(&mut self, ctx: &egui::Context) {
-        let is_nested = self.stack.current().page_id.is_some();
-        self.stack.current_mut().list.set_query(String::new());
+        let is_nested = self.view.stack.current().page_id.is_some();
+        self.view.stack.current_mut().list.set_query(String::new());
         if is_nested {
             self.rearm_page_query_debounce();
         }

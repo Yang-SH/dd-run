@@ -79,7 +79,7 @@ impl PaletteApp {
         item: &PanelItem,
         anchor: egui::Pos2,
     ) {
-        let rows = context_menu_rows(self.lang_effective, item);
+        let rows = context_menu_rows(self.view.lang_effective, item);
         log::debug!(
             "[dd-gui] 右键菜单：item={} category={:?}（{} 项）",
             item.id,
@@ -88,7 +88,7 @@ impl PaletteApp {
                 .filter(|r| matches!(r, CtxRow::Entry(_)))
                 .count()
         );
-        self.ctx_menu = Some(CtxMenuState {
+        self.overlay.ctx_menu = Some(CtxMenuState {
             visible_idx,
             item_id: item.id.clone(),
             rows,
@@ -102,12 +102,14 @@ impl PaletteApp {
     /// 置选中并就地重开菜单；未命中任何行（列表空白处）则仅关闭。
     pub(crate) fn reopen_ctx_menu_at(&mut self, ctx: &egui::Context, pos: egui::Pos2) {
         let hit = self
+            .overlay
             .ctx_row_rects
             .iter()
             .find(|(_, r)| r.contains(pos))
             .map(|(i, _)| *i);
         let found = hit.and_then(|idx| {
-            self.stack
+            self.view
+                .stack
                 .current()
                 .list
                 .filtered()
@@ -117,9 +119,9 @@ impl PaletteApp {
         let Some((idx, item)) = found else {
             return;
         };
-        self.stack.current_mut().list.set_selected(idx);
-        self.last_hovered_index = Some(idx);
-        self.scroll_follow = false;
+        self.view.stack.current_mut().list.set_selected(idx);
+        self.window.last_hovered_index = Some(idx);
+        self.window.scroll_follow = false;
         self.open_ctx_menu(
             idx,
             &item,
@@ -132,7 +134,7 @@ impl PaletteApp {
     /// `CommandRef` 分派）；其余动作宿主侧直接执行，结果经 Toast/eprintln 反馈。
     /// 激活同时关闭菜单（单例浮层语义）。
     pub(crate) fn activate_ctx_menu(&mut self, ctx: &egui::Context) {
-        let Some(state) = self.ctx_menu.take() else {
+        let Some(state) = self.overlay.ctx_menu.take() else {
             return;
         };
         let Some(entry) = state
@@ -152,6 +154,7 @@ impl PaletteApp {
                 // 防陈旧：列表可能已刷新（items_changed / fallback 重算）导致
                 // 索引漂移——激活前校验，失配则丢弃（菜单已随 take 关闭）。
                 let current_matches = self
+                    .view
                     .stack
                     .current()
                     .list
@@ -164,11 +167,12 @@ impl PaletteApp {
                     );
                     return;
                 }
-                self.stack
+                self.view
+                    .stack
                     .current_mut()
                     .list
                     .set_selected(state.visible_idx);
-                self.scroll_follow = false;
+                self.window.scroll_follow = false;
                 self.confirm_selected();
             }
             CtxAction::RunAsAdmin { path } => match run_as_admin(path) {
@@ -193,6 +197,7 @@ impl PaletteApp {
                 // 与 Default 相同的防陈旧校验（ext_id 取自当前列表项），
                 // 以 `sender=context_menu` + `selected_item_id` 回调扩展 invoke。
                 let Some(item) = self
+                    .view
                     .stack
                     .current()
                     .list
@@ -206,7 +211,7 @@ impl PaletteApp {
                     );
                     return;
                 };
-                let query = self.stack.current().list.query().to_owned();
+                let query = self.view.stack.current().list.query().to_owned();
                 let params =
                     dd_gui::result::context_menu_invoke_params(command_id, &state.item_id, &query);
                 log::debug!(

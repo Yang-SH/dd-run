@@ -33,7 +33,7 @@ pub const CURSOR_IDLE_HIDE: std::time::Duration = std::time::Duration::from_mill
 /// 用法：
 /// - PaletteApp 持有 `Option<MouseHideScope>`；
 ///   - `show()` 时 `Some(MouseHideScope::new())`
-///   - `ui()` 早期：`if let Some(scope) = self.mouse_hide.as_mut() { scope.apply(&ctx); }`
+///   - `ui()` 早期：`if let Some(scope) = self.window.mouse_hide.as_mut() { scope.apply(&ctx); }`
 ///   - `hide()` 时 `take()` 并立即 `set_cursor_icon(Default)`。
 pub struct MouseHideScope {
     active: bool,

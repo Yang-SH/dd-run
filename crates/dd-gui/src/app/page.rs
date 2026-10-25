@@ -47,8 +47,8 @@ pub(crate) struct PageOutcome {
 impl PaletteApp {
     /// `get_items` 结果：归还/取舍进程（M3 按是否桩复热）→ 更新对应页（页已退栈则作废）。
     pub(crate) fn poll_page(&mut self) {
-        let lang = self.lang_effective; // 预捕获：current_mut() 借用期内不能调 self.tr
-        let Some(rx) = &self.page_rx else {
+        let lang = self.view.lang_effective; // 预捕获：current_mut() 借用期内不能调 self.tr
+        let Some(rx) = &self.pool.page_rx else {
             return;
         };
         match rx.try_recv() {
@@ -61,10 +61,10 @@ impl PaletteApp {
                     result,
                     stub_reheat,
                 } = outcome;
-                self.inflight.remove(&ext_id);
-                self.page_rx = None;
+                self.pool.inflight.remove(&ext_id);
+                self.pool.page_rx = None;
 
-                if self.stack.current().page_id.as_deref() == Some(page_id.as_str()) {
+                if self.view.stack.current().page_id.as_deref() == Some(page_id.as_str()) {
                     match result {
                         Ok(res) => {
                             let e2e_landed_at = Instant::now(); // E2E：落地时刻（尽早捕获）
@@ -93,24 +93,28 @@ impl PaletteApp {
                             // 落地会把空态画上屏；此处丢弃、保持 in-flight 语义
                             // （列表空 → 骨架 / 非空 → 保留旧结果），并重武装去抖
                             // 按最新 query 补拉。非过期结果走下方正常落地。
-                            let landing_query = self.stack.current().list.query().to_owned();
+                            let landing_query = self.view.stack.current().list.query().to_owned();
                             let landing_search =
                                 (!landing_query.is_empty()).then_some(landing_query.as_str());
-                            let query_scroll_pending = self.stack.current().scroll_to_top_pending;
+                            let query_scroll_pending =
+                                self.view.stack.current().scroll_to_top_pending;
                             if landing_is_stale(&landing_query, req_search.as_deref())
                                 || (query_scroll_pending && landing_search != req_search.as_deref())
                             {
                                 log::debug!(
                                     "[dd-gui] get_items 结果过期：req={req_search:?} cur={landing_query:?} → 不落地 + 重武装补拉"
                                 );
-                                self.stack.current_mut().begin_refetch(Instant::now());
+                                self.view.stack.current_mut().begin_refetch(Instant::now());
                                 self.rearm_page_query_debounce();
                             } else {
                                 // E2E：非过期落地 → 先取计时起点（self 借用须早于 page 借用）
-                                let e2e_times =
-                                    self.e2e_input_at.take().zip(self.e2e_dispatch_at.take());
+                                let e2e_times = self
+                                    .view
+                                    .e2e_input_at
+                                    .take()
+                                    .zip(self.view.e2e_dispatch_at.take());
                                 let e2e_items = items.len(); // E2E：快照（下方 PanelState::new 会移走 items）
-                                let page = self.stack.current_mut();
+                                let page = self.view.stack.current_mut();
                                 page.clear_refetch(); // 落地：撤销延迟骨架标记
                                 page.is_loading = false;
                                 page.empty = if items.is_empty() && !is_loading {
@@ -137,7 +141,7 @@ impl PaletteApp {
                                     // wait 238–440 ms 全部为清空补拉）。首屏判据样本 =
                                     // 带词落地。
                                     if !prev_query.is_empty() {
-                                        self.e2e_pending = Some(E2eSample {
+                                        self.view.e2e_pending = Some(E2eSample {
                                             page_id: page_id.clone(),
                                             query_chars: prev_query.chars().count(),
                                             items: e2e_items,
@@ -175,8 +179,8 @@ impl PaletteApp {
                                 }
                             }
                             log::warn!("[dd-gui] get_items 失败：page={page_id}：{e}");
-                            self.e2e_dispatch_at = None; // E2E：失败不计样本，input 保留供重拉续测
-                            let page = self.stack.current_mut();
+                            self.view.e2e_dispatch_at = None; // E2E：失败不计样本，input 保留供重拉续测
+                            let page = self.view.stack.current_mut();
                             page.clear_refetch(); // 落地（失败）：撤销延迟骨架标记
                                                   // v3.3：失败落地同样保留页内 query（不吞掉 loading 期间输入）
                             let prev_query = page.list.query().to_owned();
@@ -191,13 +195,13 @@ impl PaletteApp {
                             // 失败落地同款过期补偿：请求期间用户又输入了 →
                             // 重武装去抖按最新 query 补拉（与 Ok 分支对称；
                             // 否则补拉期间输入的字符会被失败态吞掉不再触发）。
-                            let cur_query = self.stack.current().list.query().to_owned();
+                            let cur_query = self.view.stack.current().list.query().to_owned();
                             let cur_search = (!cur_query.is_empty()).then_some(cur_query.as_str());
                             let stale = cur_search != req_search.as_deref();
                             if stale {
                                 self.schedule_page_query_debounce();
                             } else {
-                                self.stack.current_mut().cancel_query_scroll();
+                                self.view.stack.current_mut().cancel_query_scroll();
                             }
                         }
                     }
@@ -214,12 +218,12 @@ impl PaletteApp {
                         self.drop_source_to_stub(&ext_id);
                     }
                     log::debug!("[dd-gui] get_items 结果作废：已离开 page={page_id}");
-                    self.e2e_input_at = None; // E2E：已离页，测量作废
-                    self.e2e_dispatch_at = None;
+                    self.view.e2e_input_at = None; // E2E：已离页，测量作废
+                    self.view.e2e_dispatch_at = None;
                 }
             }
             Err(TryRecvError::Empty) => {}
-            Err(TryRecvError::Disconnected) => self.page_rx = None,
+            Err(TryRecvError::Disconnected) => self.pool.page_rx = None,
         }
     }
 }
@@ -230,9 +234,9 @@ impl PaletteApp {
     /// 的 `want_focus` 只在落地时消费一次，返回路径需重新置位）。
     /// 返回 `None` = 已在 Root（调用方决定隐藏，§4.3），不置位。
     pub(crate) fn go_back_focused(&mut self) -> Option<dd_gui::navigation::PageState> {
-        let popped = self.stack.go_back();
+        let popped = self.view.stack.go_back();
         if popped.is_some() {
-            self.want_focus = true;
+            self.window.want_focus = true;
         }
         popped
     }
@@ -259,11 +263,12 @@ impl PaletteApp {
         title: Option<String>,
     ) {
         let title = title.unwrap_or_default();
-        self.stack
+        self.view
+            .stack
             .push(PageState::nested(page_id, title, ext_id, Vec::new()));
-        self.stack.current_mut().is_loading = true;
+        self.view.stack.current_mut().is_loading = true;
         // 进嵌套页即聚焦搜索框（截图反馈：进入文件搜索后输入框无光标 → 无法直接键入）
-        self.want_focus = true;
+        self.window.want_focus = true;
         // 根页查询回填页内搜索框（真机 2026-09-12：输入「测试」后点「文件搜索」，
         // 落地页输入框为空——根页查询虽已作为 search 传给 get_items，但页内框
         // 不见 query，用户须重打一遍）。与 `Ctrl+F` 直达进页的回填语义一致；
@@ -271,8 +276,8 @@ impl PaletteApp {
         // → 不触发过期补偿重拉）。
         if let Some(q) = search.as_deref() {
             if !q.is_empty() {
-                self.stack.current_mut().list.set_query(q.to_string());
-                self.e2e_input_at = Some(Instant::now()); // E2E：带词进页（Ctrl+F / 入口项）= 感知起点
+                self.view.stack.current_mut().list.set_query(q.to_string());
+                self.view.e2e_input_at = Some(Instant::now()); // E2E：带词进页（Ctrl+F / 入口项）= 感知起点
             }
         }
         self.dispatch_fetch_page(ext_id, page_id, search, command_id);
@@ -287,14 +292,14 @@ impl PaletteApp {
         search: Option<String>,
         command_id: Option<String>,
     ) {
-        let lang = self.lang_effective; // 预捕获：current_mut() 借用期内不能调 self.tr
-                                        // 补拉状态预备（真机 2026-09-14 两轮反馈）：凡发起 get_items 先做预备
-                                        // ——有旧结果 → 保留展示（stale-while-revalidate）；列表为空 → **延迟**切
-                                        // 骨架（快速补拉不闪骨架，慢补拉才显示）；不清空态文案（交由落地统一替换）。
-        self.stack.current_mut().begin_refetch(Instant::now());
-        if self.page_rx.is_some() || self.inflight.contains(ext_id) {
+        let lang = self.view.lang_effective; // 预捕获：current_mut() 借用期内不能调 self.tr
+                                             // 补拉状态预备（真机 2026-09-14 两轮反馈）：凡发起 get_items 先做预备
+                                             // ——有旧结果 → 保留展示（stale-while-revalidate）；列表为空 → **延迟**切
+                                             // 骨架（快速补拉不闪骨架，慢补拉才显示）；不清空态文案（交由落地统一替换）。
+        self.view.stack.current_mut().begin_refetch(Instant::now());
+        if self.pool.page_rx.is_some() || self.pool.inflight.contains(ext_id) {
             log::warn!("[dd-gui] get_items 失败：ext={ext_id} 上一请求仍在处理");
-            let page = self.stack.current_mut();
+            let page = self.view.stack.current_mut();
             page.clear_refetch(); // 未真正发起 → 撤销延迟骨架（否则 250ms 后误显示）
             page.is_loading = false;
             page.empty = Some(crate::text::t(lang, "toast.ext_busy").to_string());
@@ -302,23 +307,23 @@ impl PaletteApp {
         }
         if self.is_crash_tripped(ext_id) {
             log::warn!("[dd-gui] get_items 拒绝：ext={ext_id} 暂时不可用（连续崩溃熔断）");
-            let page = self.stack.current_mut();
+            let page = self.view.stack.current_mut();
             page.clear_refetch(); // 未真正发起 → 撤销延迟骨架
             page.is_loading = false;
             page.empty =
                 Some(crate::text::t(lang, "page.ext_unavailable_restart").replace("{id}", ext_id));
             return;
         }
-        if self.processes.iter().any(|(id, _)| id == ext_id) {
+        if self.pool.processes.iter().any(|(id, _)| id == ext_id) {
             self.fetch_page_warm(ext_id, page_id, search);
         } else if let Some(ext) = self.find_ext(ext_id).cloned() {
             // L5：兜底模板 id 不在顶层命令注册表内，§6.4 校验必失败 → 等价
             // GoToPage 的「无对应命令点击」语义（传 None 即跳过校验）。
             let command_id =
-                command_id.filter(|cid| !self.fallback_store.contains_template(ext_id, cid));
+                command_id.filter(|cid| !self.pool.fallback_store.contains_template(ext_id, cid));
             self.fetch_page_reheat(&ext, page_id, search, command_id);
         } else {
-            let page = self.stack.current_mut();
+            let page = self.view.stack.current_mut();
             page.clear_refetch(); // 未真正发起 → 撤销延迟骨架
             page.is_loading = false;
             page.empty = Some(crate::text::t(lang, "page.ext_missing").to_string());
@@ -327,20 +332,20 @@ impl PaletteApp {
 
     /// 后台 `get_items`（warm：take 进程 → 线程调用 → 结果经 channel 归还）。
     pub(crate) fn fetch_page_warm(&mut self, ext_id: &str, page_id: &str, search: Option<String>) {
-        let lang = self.lang_effective;
-        let Some(idx) = self.processes.iter().position(|(id, _)| id == ext_id) else {
+        let lang = self.view.lang_effective;
+        let Some(idx) = self.pool.processes.iter().position(|(id, _)| id == ext_id) else {
             log::warn!("[dd-gui] get_items 失败：ext={ext_id} 进程不可用（可能 in-flight）");
-            let page = self.stack.current_mut();
+            let page = self.view.stack.current_mut();
             page.clear_refetch(); // 未真正发起 → 撤销延迟骨架
             page.is_loading = false;
             page.empty = Some(crate::text::t(lang, "toast.ext_busy").to_string());
             return;
         };
-        let (_, mut proc) = self.processes.remove(idx);
-        self.inflight.insert(ext_id.to_string());
-        self.e2e_dispatch_at = Some(Instant::now()); // E2E：请求实发时刻。v3.11 原插桩**漏赋值**——
-                                                     // dispatch_at 恒 None → 落地 zip 恒 None → 样本永不
-                                                     // 创建（死代码 18 天，2026-10-07 首次真机采样时暴露）
+        let (_, mut proc) = self.pool.processes.remove(idx);
+        self.pool.inflight.insert(ext_id.to_string());
+        self.view.e2e_dispatch_at = Some(Instant::now()); // E2E：请求实发时刻。v3.11 原插桩**漏赋值**——
+                                                          // dispatch_at 恒 None → 落地 zip 恒 None → 样本永不
+                                                          // 创建（死代码 18 天，2026-10-07 首次真机采样时暴露）
         let ext_id = ext_id.to_string();
         let page_id = page_id.to_string();
         let search_req = search.clone(); // 供落地时比对（v3.3 过期补偿）
@@ -356,7 +361,7 @@ impl PaletteApp {
                 stub_reheat: false,
             });
         });
-        self.page_rx = Some(rx);
+        self.pool.page_rx = Some(rx);
     }
 
     /// 桩复热 + `get_items`（A6 / 协议 §6.4）：spawn → initialize →（`get_command` 校验）→ get_items。
@@ -372,15 +377,15 @@ impl PaletteApp {
             "[dd-gui] 桩复热：ext={} page={page_id}（spawn→initialize→get_command→get_items）",
             ext.manifest.id
         );
-        self.inflight.insert(ext.manifest.id.clone());
-        self.e2e_dispatch_at = Some(Instant::now()); // E2E：分派起点含复热期（rtt 记「复热 + 往返」，保守口径）
+        self.pool.inflight.insert(ext.manifest.id.clone());
+        self.view.e2e_dispatch_at = Some(Instant::now()); // E2E：分派起点含复热期（rtt 记「复热 + 往返」，保守口径）
         let ext = ext.clone();
         let ext_id = ext.manifest.id.clone();
         let page_id = page_id.to_string();
         // M9：内置扩展按 in-process 重建（spec 直调），其余 spawn 子进程。
-        let spec = self.inproc_specs.get(&ext_id).cloned();
+        let spec = self.pool.inproc_specs.get(&ext_id).cloned();
         let (tx, rx) = mpsc::channel();
-        let lang = self.lang_effective; // 线程闭包无法借 self：按值捕获生效语言
+        let lang = self.view.lang_effective; // 线程闭包无法借 self：按值捕获生效语言
         thread::spawn(move || {
             let mut proc = match crate::ext_client::open(spec, Some(&ext)) {
                 Ok((p, _init)) => p,
@@ -390,7 +395,7 @@ impl PaletteApp {
                         proc: None,
                         page_id,
                         search,
-                        result: Err(e),
+                        result: Err(e.to_string()),
                         stub_reheat: true,
                     });
                     return;
@@ -414,7 +419,7 @@ impl PaletteApp {
                 stub_reheat: true,
             });
         });
-        self.page_rx = Some(rx);
+        self.pool.page_rx = Some(rx);
     }
 }
 
@@ -430,7 +435,8 @@ mod tests {
     #[test]
     fn e2e_dispatch_at_set_on_warm_fetch() {
         let mut app = make_app();
-        app.processes
+        app.pool
+            .processes
             .push(("com.ddrun.test".to_string(), dying_client("com.ddrun.test")));
         app.open_page(
             "com.ddrun.test",
@@ -439,9 +445,12 @@ mod tests {
             None,
             None,
         );
-        assert!(app.e2e_input_at.is_some(), "带词进页应设 input 感知起点");
         assert!(
-            app.e2e_dispatch_at.is_some(),
+            app.view.e2e_input_at.is_some(),
+            "带词进页应设 input 感知起点"
+        );
+        assert!(
+            app.view.e2e_dispatch_at.is_some(),
             "warm 分派应设 dispatch 起点——缺失即 E2E 样本永不创建（v3.11 漏赋值回归）"
         );
     }

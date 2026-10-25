@@ -24,11 +24,12 @@ impl PaletteApp {
     /// `host/show_status` → Toast；`host/set_clipboard` → 剪贴板；`host/open_url` → 浏览器。
     /// 应答由 dd-host 完成（§7.4 能力前置：未声明回 `-32601`），此处只做执行端。
     pub(crate) fn poll_host_requests(&mut self) {
-        if self.processes.is_empty() {
+        if self.pool.processes.is_empty() {
             return;
         }
-        // 收集期间只借用 `self.processes`；执行副作用需要 `&mut self`，故先取走再统一处理。
+        // 收集期间只借用 `self.pool.processes`；执行副作用需要 `&mut self`，故先取走再统一处理。
         let requests: Vec<(String, RawMessage)> = self
+            .pool
             .processes
             .iter_mut()
             .flat_map(|(ext_id, proc)| {
@@ -84,7 +85,7 @@ impl PaletteApp {
                 // R-07：移交常驻工作线程——UI 线程不再 `spawn().join()` 等待
                 // 写入（arboard 打开 Win32 剪贴板与剪贴板管理器争用时面板冻结）。
                 // 结果由 [`Self::poll_clipboard_results`] 消费并 toast 反馈。
-                match self.clipboard_tx.as_ref() {
+                match self.view.clipboard_tx.as_ref() {
                     Some(tx) => {
                         let _ = tx.send(crate::app::clipboard_worker::ClipboardRequest {
                             ext_id: ext_id.to_string(),
@@ -131,7 +132,7 @@ impl PaletteApp {
     pub(crate) fn open_url_execute(&mut self, url: &str, source: &str) {
         if !crate::platform::is_allowed_open_url(url) {
             log::warn!("[dd-gui] host/open_url 已拦截（scheme 不在白名单）src={source} url={url}");
-            let msg = crate::text::t(self.lang_effective, "toast.open_url_blocked");
+            let msg = crate::text::t(self.view.lang_effective, "toast.open_url_blocked");
             self.show_toast(msg.to_string(), Some(2_500));
             return;
         }
@@ -168,6 +169,7 @@ impl PaletteApp {
             return;
         };
         let Some(cmd) = self
+            .draft
             .settings
             .custom_commands
             .iter()
@@ -206,11 +208,12 @@ impl PaletteApp {
     /// 置聚合脏标记（离开设置页/下一帧重聚合后条目消失；此处面板尚在 Root 页，
     /// `engines_dirty` 的重聚合由 `ui()` 收口点消费）。
     pub(crate) fn delete_custom_command(&mut self, keyword: &str) {
-        self.settings
+        self.draft
+            .settings
             .custom_commands
             .retain(|c| c.keyword != keyword);
         self.save_settings_with_feedback();
-        self.engines_dirty = true; // 重聚合消费点复用（N1：含自定义命令变更）
+        self.draft.engines_dirty = true; // 重聚合消费点复用（N1：含自定义命令变更）
         log::debug!("[dd-gui] 自定义命令已删除：{keyword}");
     }
 }
@@ -221,7 +224,7 @@ impl PaletteApp {
         match action {
             HostAction::Dismiss => self.dismiss(ctx),
             HostAction::Hide => self.hide_keep_state(ctx),
-            HostAction::GoHome => self.stack.go_home(),
+            HostAction::GoHome => self.view.stack.go_home(),
             HostAction::GoBack => {
                 self.go_back_focused(); // 返回 + 聚焦回落后页面的搜索框
             }
@@ -245,9 +248,10 @@ impl PaletteApp {
                 // §8.3 注：确认后宿主带 `context.confirmed = true` 重新 invoke。
                 // 沿用原 invoke 的 sender/context（`pending_confirm_for` 保证
                 // 不丢失搜索词/选中项，仅补 confirmed=true）。
-                let command_id = self.last_command_id.clone().unwrap_or_default();
-                let pending = result::pending_confirm_for(&command_id, self.last_invoke.as_ref());
-                self.confirm = Some(ConfirmDialog {
+                let command_id = self.pool.last_command_id.clone().unwrap_or_default();
+                let pending =
+                    result::pending_confirm_for(&command_id, self.pool.last_invoke.as_ref());
+                self.overlay.confirm = Some(ConfirmDialog {
                     ext_id: ext_id.to_string(),
                     title,
                     description,
@@ -266,7 +270,7 @@ impl PaletteApp {
     /// 同一套失败提示基建，i18n 键 `toast.clipboard_fail`）。
     /// 在 `poll_host_requests` 同帧调用（ui 循环，见 app/mod.rs）。
     pub(crate) fn poll_clipboard_results(&mut self) {
-        while let Ok(outcome) = self.clipboard_rx.try_recv() {
+        while let Ok(outcome) = self.view.clipboard_rx.try_recv() {
             match outcome {
                 crate::app::clipboard_worker::ClipboardOutcome::Written { ext_id, len } => {
                     // S-07：不再静默——info 落**扩展 id + 长度**（可溯源），

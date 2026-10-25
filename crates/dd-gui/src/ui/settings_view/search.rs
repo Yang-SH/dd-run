@@ -15,12 +15,12 @@ impl PaletteApp {
     /// 用户反馈后移除——当时保留 `f ` 前缀直达；该前缀亦已于 2026-09-19 移除，现由 `Ctrl+F` 一键直达承担。）
     pub(super) fn draw_search_behavior_card(&mut self, ui: &mut egui::Ui, p: &theme::Palette) {
         // 开关状态在闭包外读取、闭包内只收集点击结果（避免闭包内 &mut self 冲突）。
-        let apps_on = self.settings.search_apps;
-        let steam_on = self.settings.search_steam_games;
-        let lang = self.lang_effective;
+        let apps_on = self.draft.settings.search_apps;
+        let steam_on = self.draft.settings.search_steam_games;
+        let lang = self.view.lang_effective;
         let mut apps_toggled = false;
         let mut steam_toggled = false;
-        draw_settings_card_frame(ui, p, self.backdrop_active, |card| {
+        draw_settings_card_frame(ui, p, self.window.backdrop_active, |card| {
             card.horizontal(|ui| {
                 ui.spacing_mut().item_spacing.x = 0.0;
                 // 与其他卡卡头图标对齐的 16px 空槽位
@@ -100,11 +100,11 @@ impl PaletteApp {
     /// ② 退格键返回（左侧标题描述 + 右侧功能开关，排版同搜索应用卡）。
     /// 两者都是纯设置项：变更即时生效（按键分支每次读设置）并落盘。
     pub(super) fn draw_keys_behavior_card(&mut self, ui: &mut egui::Ui, p: &theme::Palette) {
-        let lang = self.lang_effective;
-        let esc_pref = self.settings.esc_behavior;
-        let backspace_on = self.settings.backspace_go_back;
-        let click_on = self.settings.single_click_activation; // T7
-        let anim_on = self.settings.ui_animations; // T8
+        let lang = self.view.lang_effective;
+        let esc_pref = self.draft.settings.esc_behavior;
+        let backspace_on = self.draft.settings.backspace_go_back;
+        let click_on = self.draft.settings.single_click_activation; // T7
+        let anim_on = self.draft.settings.ui_animations; // T8
         let mut esc_picked: Option<dd_gui::settings::EscBehavior> = None;
         let mut backspace_toggled = false;
         let mut click_toggled = false; // T7
@@ -120,7 +120,7 @@ impl PaletteApp {
             .iter()
             .position(|b| *b == esc_pref)
             .unwrap_or(0);
-        draw_settings_card_frame(ui, p, self.backdrop_active, |card| {
+        draw_settings_card_frame(ui, p, self.window.backdrop_active, |card| {
             // ── 卡头：图标 + 名称 + 描述 ──
             card.horizontal(|ui| {
                 ui.spacing_mut().item_spacing.x = 0.0;
@@ -297,6 +297,7 @@ impl PaletteApp {
             .iter()
             .filter(|pr| {
                 !self
+                    .draft
                     .settings
                     .search_engines
                     .iter()
@@ -304,12 +305,13 @@ impl PaletteApp {
             })
             .cloned()
             .collect();
-        let enabled: Vec<dd_gui::settings::SearchEngine> = self.settings.search_engines.clone();
+        let enabled: Vec<dd_gui::settings::SearchEngine> =
+            self.draft.settings.search_engines.clone();
         let mut remove_name: Option<String> = None;
         let mut preset_picked: Option<String> = None;
         let mut add_custom_url: Option<String> = None;
 
-        draw_settings_card_frame(ui, p, self.backdrop_active, |card| {
+        draw_settings_card_frame(ui, p, self.window.backdrop_active, |card| {
             card.horizontal(|ui| {
                 ui.spacing_mut().item_spacing.x = 0.0;
                 let (icon_rect, _) =
@@ -485,7 +487,7 @@ impl PaletteApp {
                 // 即完全接管样式，不再注入 visuals 边框；margin 烘进 Frame）
                 ui.put(
                     box_rect,
-                    egui::TextEdit::singleline(&mut self.engine_url_buf)
+                    egui::TextEdit::singleline(&mut self.draft.engine_url_buf)
                         .id(url_edit_id)
                         .desired_width(url_w - 24.0)
                         .font(egui::FontId::proportional(CONTROL_FONT_PT))
@@ -495,10 +497,10 @@ impl PaletteApp {
                         .hint_text(url_hint),
                 );
                 if fluent_button(ui, add_label, p) {
-                    add_custom_url = Some(self.engine_url_buf.clone());
+                    add_custom_url = Some(self.draft.engine_url_buf.clone());
                 }
             });
-            if let Some(err) = &self.engine_add_err {
+            if let Some(err) = &self.draft.engine_add_err {
                 card.horizontal(|ui| {
                     ui.add_space(28.0);
                     // B6①：报错文案走 Palette::danger（原裸色值 #C42B1C 违反
@@ -510,14 +512,17 @@ impl PaletteApp {
 
         // ── 闭包外应用交互结果 ──
         if let Some(name) = remove_name {
-            self.settings.search_engines.retain(|e| e.name != name);
-            self.engine_add_err = None;
+            self.draft
+                .settings
+                .search_engines
+                .retain(|e| e.name != name);
+            self.draft.engine_add_err = None;
             self.apply_search_engines(ctx);
         }
         if let Some(name) = preset_picked {
             if let Some(pr) = presets.iter().find(|x| x.name == name) {
-                self.settings.search_engines.push(pr.clone());
-                self.engine_add_err = None;
+                self.draft.settings.search_engines.push(pr.clone());
+                self.draft.engine_add_err = None;
                 self.apply_search_engines(ctx);
             }
         }
@@ -531,24 +536,25 @@ impl PaletteApp {
             match dd_gui::settings::SearchEngine::new(&name, url.trim()) {
                 Some(engine) => {
                     if self
+                        .draft
                         .settings
                         .search_engines
                         .iter()
                         .any(|e| e.name == engine.name)
                     {
-                        self.engine_add_err = Some(
+                        self.draft.engine_add_err = Some(
                             self.tr("set.search.err_exists")
                                 .replace("{name}", &engine.name),
                         );
                     } else {
-                        self.settings.search_engines.push(engine);
-                        self.engine_url_buf.clear();
-                        self.engine_add_err = None;
+                        self.draft.settings.search_engines.push(engine);
+                        self.draft.engine_url_buf.clear();
+                        self.draft.engine_add_err = None;
                         self.apply_search_engines(ctx);
                     }
                 }
                 None => {
-                    self.engine_add_err = Some(self.tr("set.search.err_url").to_string());
+                    self.draft.engine_add_err = Some(self.tr("set.search.err_url").to_string());
                 }
             }
         }

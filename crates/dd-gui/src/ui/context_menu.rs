@@ -19,14 +19,14 @@ impl PaletteApp {
     ///   预量（复用 [`text_width`]），同帧完成 clamp（无首帧闪烁）。
     pub(crate) fn draw_context_menu(&mut self, ctx: &egui::Context, ui: &egui::Ui) {
         // D19：列表滚动/改选即关闭——滚动会使锚点与行的对应关系漂移。
-        if self.ctx_menu.is_some() {
+        if self.overlay.ctx_menu.is_some() {
             let scrolled = ctx.input(|i| i.smooth_scroll_delta != egui::Vec2::ZERO);
             if scrolled {
-                self.ctx_menu = None;
+                self.overlay.ctx_menu = None;
                 return;
             }
         }
-        let Some(state) = self.ctx_menu.as_ref() else {
+        let Some(state) = self.overlay.ctx_menu.as_ref() else {
             return;
         };
         let dark = ctx.theme() == egui::Theme::Dark;
@@ -201,20 +201,20 @@ impl PaletteApp {
         // 焦点/激活回写：悬停接管焦点（Windows 菜单惯例，Enter 激活悬停项）；
         // 激活 → 关闭菜单并执行动作；点击菜单外 → 仅关闭。
         if let Some(i) = hover_focus {
-            if let Some(state) = self.ctx_menu.as_mut() {
+            if let Some(state) = self.overlay.ctx_menu.as_mut() {
                 state.focus = i;
             }
         }
         if let Some(i) = activated {
-            if let Some(state) = self.ctx_menu.as_mut() {
+            if let Some(state) = self.overlay.ctx_menu.as_mut() {
                 state.focus = i;
             }
             self.activate_ctx_menu(ctx);
         } else if let Some(pos) = secondary_at {
-            self.ctx_menu = None;
+            self.overlay.ctx_menu = None;
             self.reopen_ctx_menu_at(ctx, pos);
         } else if dismissed {
-            self.ctx_menu = None;
+            self.overlay.ctx_menu = None;
         }
     }
 }

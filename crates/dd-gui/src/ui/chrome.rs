@@ -105,13 +105,14 @@ fn current_screen_rect(ctx: &egui::Context) -> egui::Rect {
 /// hover-only 背景）时记录候选起点；指针移动超过阈值再发 `StartDrag`。
 /// 这样前台控件 click 完全不受干扰。
 pub(crate) fn chrome_begin(app: &mut PaletteApp, ctx: &egui::Context) {
-    if app.native_resize {
-        app.drag_candidate = None;
+    if app.window.native_resize {
+        app.window.drag_candidate = None;
         let released = !ctx.input(|i| i.pointer.primary_down());
         // v4.16 兜底：winit 吞掉左键释放（上游 #2192/#2999 一类场景）时
         // 旗标永不清除 → chrome 永久禁用。超 3s 视为释放事件丢失，强制按
         // 「循环已结束」处理。
         let expired = app
+            .window
             .native_resize_since
             .is_some_and(|t| t.elapsed() >= std::time::Duration::from_secs(3));
         if expired && !released {
@@ -119,8 +120,8 @@ pub(crate) fn chrome_begin(app: &mut PaletteApp, ctx: &egui::Context) {
         }
         if released || expired {
             log::debug!("[dd-gui] chrome：原生模态循环结束（旗标清除 + 强制重绘 + 刷新材质）");
-            app.native_resize = false;
-            app.native_resize_since = None;
+            app.window.native_resize = false;
+            app.window.native_resize_since = None;
             // v4.12 真机修复：原生缩放/拖拽模态循环结束后的首帧强制重绘，
             // 避免窗口内容停留在循环开始前的空底或旧帧。
             ctx.request_repaint();
@@ -129,8 +130,8 @@ pub(crate) fn chrome_begin(app: &mut PaletteApp, ctx: &egui::Context) {
             app.refresh_backdrop(ctx);
             // v4.16：模态循环内被推迟的 hide（`Visible(false)` 在 SC_MOVE
             // 循环内会被 Windows 忽略）在循环结束后补执行。
-            if app.hide_pending {
-                app.hide_pending = false;
+            if app.window.hide_pending {
+                app.window.hide_pending = false;
                 log::debug!("[dd-gui] chrome：补执行模态循环内推迟的 hide()");
                 app.hide(ctx);
             }
@@ -151,14 +152,14 @@ pub(crate) fn chrome_begin(app: &mut PaletteApp, ctx: &egui::Context) {
     // 主键刚按下：仅在「空白区」记录拖拽候选（缩放热区优先给 chrome_end，
     // 交互控件上则交给该控件处理，不抢 press）。
     if pointer.primary_pressed() {
-        app.drag_candidate = pointer
+        app.window.drag_candidate = pointer
             .press_origin()
             .filter(|&o| edge_zone(screen, o).is_none() && !over_interactive(o));
     }
 
     // 待定拖拽：主键仍按住且移动超过阈值 → 发起原生拖拽（之后由 OS 接管，
     // 本帧清候选避免重复发令）；已抬起则作废。
-    if let Some(origin) = app.drag_candidate {
+    if let Some(origin) = app.window.drag_candidate {
         if pointer.primary_down() {
             if let Some(pos) = pointer.latest_pos() {
                 if pos.distance(origin) > DRAG_THRESHOLD {
@@ -167,13 +168,13 @@ pub(crate) fn chrome_begin(app: &mut PaletteApp, ctx: &egui::Context) {
                     // v4.12 真机修复：StartDrag 进入原生模态循环后 egui 不收
                     // 事件；循环结束后必须立即重绘，否则窗口可能停留在空白底。
                     ctx.request_repaint();
-                    app.native_resize = true; // 用同一旗标标记原生模态循环在途
-                    app.native_resize_since = Some(Instant::now()); // v4.16 卡死兜底计时
-                    app.drag_candidate = None;
+                    app.window.native_resize = true; // 用同一旗标标记原生模态循环在途
+                    app.window.native_resize_since = Some(Instant::now()); // v4.16 卡死兜底计时
+                    app.window.drag_candidate = None;
                 }
             }
         } else {
-            app.drag_candidate = None;
+            app.window.drag_candidate = None;
         }
     }
 }
@@ -181,7 +182,7 @@ pub(crate) fn chrome_begin(app: &mut PaletteApp, ctx: &egui::Context) {
 /// 帧尾调用（全部控件绘制之后）：缩放热区光标覆盖 + 按下发起原生缩放。
 /// 放在帧尾是为了让光标图标覆盖任何控件 hover 光标（如输入框 Text）。
 pub(crate) fn chrome_end(app: &mut PaletteApp, ctx: &egui::Context) {
-    if app.native_resize {
+    if app.window.native_resize {
         return;
     }
     let screen = current_screen_rect(ctx);
@@ -191,7 +192,7 @@ pub(crate) fn chrome_end(app: &mut PaletteApp, ctx: &egui::Context) {
     if let Some((dir, icon)) = edge_zone(screen, pos) {
         ctx.set_cursor_icon(icon);
         if ctx.input(|i| i.pointer.primary_pressed()) {
-            app.native_resize = true;
+            app.window.native_resize = true;
             ctx.send_viewport_cmd(egui::ViewportCommand::BeginResize(dir));
             // v4.12 真机修复：BeginResize 进入原生模态循环后 egui 不收事件，
             // 松手后需要一次重绘恢复内容。

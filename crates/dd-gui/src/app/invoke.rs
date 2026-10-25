@@ -21,6 +21,9 @@ pub(crate) struct InvokeOutcome {
     /// `None` = 复热打开本身失败（无客户端可归还）。
     pub(crate) proc: Option<ExtClient>,
     pub(crate) result: Result<CommandResult, String>,
+    /// C3：失败分类（`ProtocolErrorKind`）——UI 据此分流 toast 文案与操作建议
+    ///（超时→可重试 / 崩溃→回落 stub / 其余→透传详情）；成功时 `Other`。
+    pub(crate) error_kind: dd_host::process::ProtocolErrorKind,
     /// 本次是否由**桩复热**发起（spawn 的新进程）：失败时不归还进程、回退 stub。
     pub(crate) stub_reheat: bool,
 }
@@ -28,7 +31,7 @@ pub(crate) struct InvokeOutcome {
 impl PaletteApp {
     /// `invoke` 结果：归还/取舍进程（M3 按是否桩复热）→ 裁决 8 种 Kind → 应用动作。
     pub(crate) fn poll_invoke(&mut self, ctx: &egui::Context) {
-        let Some(rx) = &self.invoke_rx else {
+        let Some(rx) = &self.pool.invoke_rx else {
             return;
         };
         match rx.try_recv() {
@@ -37,10 +40,11 @@ impl PaletteApp {
                     ext_id,
                     proc,
                     result,
+                    error_kind,
                     stub_reheat,
                 } = outcome;
-                self.inflight.remove(&ext_id);
-                self.invoke_rx = None;
+                self.pool.inflight.remove(&ext_id);
+                self.pool.invoke_rx = None;
                 match result {
                     Ok(command_result) => {
                         if let Some(p) = proc {
@@ -78,12 +82,19 @@ impl PaletteApp {
                             }
                         }
                         log::warn!("[dd-gui] invoke 失败：{e}");
-                        self.show_error_toast(self.tr("toast.invoke_fail").replace("{e}", &e));
+                        // C3：分类文案——超时给「可重试」、崩溃给「回落 stub」、
+                        // 其余沿用透传详情（`{e}` 占位统一进各键）。
+                        let key = match error_kind {
+                            dd_host::process::ProtocolErrorKind::Timeout => "toast.invoke_timeout",
+                            dd_host::process::ProtocolErrorKind::Crashed => "toast.invoke_crashed",
+                            dd_host::process::ProtocolErrorKind::Other => "toast.invoke_fail",
+                        };
+                        self.show_error_toast(self.tr(key).replace("{e}", &e));
                     }
                 }
             }
             Err(TryRecvError::Empty) => {}
-            Err(TryRecvError::Disconnected) => self.invoke_rx = None,
+            Err(TryRecvError::Disconnected) => self.pool.invoke_rx = None,
         }
     }
 }
@@ -94,10 +105,13 @@ impl PaletteApp {
     /// Enter/单击：按 `CommandRef` 分派（执行 / 进入页）。
     /// M3：扩展进程 warm → 直接执行；未 warm（frozen 桩）→ 复热后执行（A6）。
     pub(crate) fn confirm_selected(&mut self) {
-        let Some(item) = self.stack.current().list.confirm().cloned() else {
+        let Some(item) = self.view.stack.current().list.confirm().cloned() else {
             return;
         };
-        let query = self.stack.current().list.query().to_owned();
+        // §5.1：激活即计入使用频次（Root/嵌套页、键盘/鼠标共用本中枢；
+        // 记录在分派之前——即使后续 invoke 失败，"用户想用"这个事实仍成立）。
+        self.record_usage(&item.ext_id, &item.id);
+        let query = self.view.stack.current().list.query().to_owned();
         match &item.command {
             CommandRef::Invoke => {
                 let params = result::invoke_params(&item.id, &query);
@@ -128,7 +142,7 @@ impl PaletteApp {
             self.run_custom_command(&params.id);
             return;
         }
-        if self.invoke_rx.is_some() || self.inflight.contains(ext_id) {
+        if self.pool.invoke_rx.is_some() || self.pool.inflight.contains(ext_id) {
             log::warn!("[dd-gui] invoke 失败：ext={ext_id} 上一请求仍在处理");
             self.show_toast_kind(ToastKind::Error, self.tr("toast.ext_busy"), Some(2_000));
             return;
@@ -142,12 +156,15 @@ impl PaletteApp {
             );
             return;
         }
-        if self.processes.iter().any(|(id, _)| id == ext_id) {
+        if self.pool.processes.iter().any(|(id, _)| id == ext_id) {
             self.start_invoke(ext_id, params);
         } else if let Some(ext) = self.find_ext(ext_id).cloned() {
             // L5：兜底模板 id 不在扩展顶层命令注册表内 → §6.4 校验对其必然失败，
             // 模板项跳过校验直接 invoke（常规命令保持 §6.4 语义不变）。
-            let skip_lookup = self.fallback_store.contains_template(ext_id, &params.id);
+            let skip_lookup = self
+                .pool
+                .fallback_store
+                .contains_template(ext_id, &params.id);
             self.start_invoke_reheat(&ext, params, skip_lookup); // 桩复热
         } else {
             log::warn!("[dd-gui] invoke 失败：ext={ext_id} 无扩展信息");
@@ -157,28 +174,33 @@ impl PaletteApp {
 
     /// 后台 `invoke`（warm：take 进程 → 线程调用 → 结果经 channel 归还）。
     pub(crate) fn start_invoke(&mut self, ext_id: &str, params: InvokeParams) {
-        self.last_command_id = Some(params.id.clone());
-        self.last_invoke = Some(params.clone()); // Confirm 重发沿用
+        self.pool.last_command_id = Some(params.id.clone());
+        self.pool.last_invoke = Some(params.clone()); // Confirm 重发沿用
         log::debug!("[dd-gui] invoke 发起：ext={ext_id} cmd={}", params.id);
-        let Some(idx) = self.processes.iter().position(|(id, _)| id == ext_id) else {
+        let Some(idx) = self.pool.processes.iter().position(|(id, _)| id == ext_id) else {
             log::warn!("[dd-gui] invoke 失败：ext={ext_id} 进程不可用（可能 in-flight）");
             self.show_error_toast(self.tr("toast.ext_busy"));
             return;
         };
-        let (_, mut proc) = self.processes.remove(idx);
-        self.inflight.insert(ext_id.to_string());
+        let (_, mut proc) = self.pool.processes.remove(idx);
+        self.pool.inflight.insert(ext_id.to_string());
         let ext_id = ext_id.to_string();
         let (tx, rx) = mpsc::channel();
         thread::spawn(move || {
-            let result = invoke_on(&mut proc, &params);
+            // C3：分类在错误产生点（ProtocolError 仍是强类型），不再事后判串。
+            let (result, error_kind) = match proc.invoke(&params) {
+                Ok(r) => (Ok(r), dd_host::process::ProtocolErrorKind::Other),
+                Err(e) => (Err(e.to_string()), e.kind()),
+            };
             let _ = tx.send(InvokeOutcome {
                 ext_id,
                 proc: Some(proc),
                 result,
+                error_kind,
                 stub_reheat: false,
             });
         });
-        self.invoke_rx = Some(rx);
+        self.pool.invoke_rx = Some(rx);
     }
 
     /// 桩复热 + `invoke`（A6 / 协议 §6.4）：spawn → initialize → `get_command(id)` → invoke。
@@ -193,8 +215,8 @@ impl PaletteApp {
         params: InvokeParams,
         skip_lookup: bool,
     ) {
-        self.last_command_id = Some(params.id.clone());
-        self.last_invoke = Some(params.clone());
+        self.pool.last_command_id = Some(params.id.clone());
+        self.pool.last_invoke = Some(params.clone());
         log::debug!(
             "[dd-gui] 桩复热：ext={} cmd={}（spawn→initialize→{}→invoke）",
             ext.manifest.id,
@@ -205,13 +227,13 @@ impl PaletteApp {
                 METHOD_GET_COMMAND
             }
         );
-        self.inflight.insert(ext.manifest.id.clone());
+        self.pool.inflight.insert(ext.manifest.id.clone());
         let ext = ext.clone();
         let ext_id = ext.manifest.id.clone();
         // M9：内置扩展按 in-process 重建（spec 直调），其余 spawn 子进程。
-        let spec = self.inproc_specs.get(&ext_id).cloned();
+        let spec = self.pool.inproc_specs.get(&ext_id).cloned();
         let (tx, rx) = mpsc::channel();
-        let lang = self.lang_effective; // 线程闭包无法借 self：按值捕获生效语言
+        let lang = self.view.lang_effective; // 线程闭包无法借 self：按值捕获生效语言
         thread::spawn(move || {
             let mut proc = match crate::ext_client::open(spec, Some(&ext)) {
                 Ok((p, _init)) => p,
@@ -220,7 +242,8 @@ impl PaletteApp {
                     let _ = tx.send(InvokeOutcome {
                         ext_id,
                         proc: None,
-                        result: Err(e),
+                        result: Err(e.to_string()),
+                        error_kind: dd_host::process::ProtocolErrorKind::Other,
                         stub_reheat: true,
                     });
                     return;
@@ -241,10 +264,11 @@ impl PaletteApp {
                 ext_id,
                 proc: Some(proc),
                 result,
+                error_kind: dd_host::process::ProtocolErrorKind::Other,
                 stub_reheat: true,
             });
         });
-        self.invoke_rx = Some(rx);
+        self.pool.invoke_rx = Some(rx);
     }
 }
 
@@ -263,13 +287,14 @@ mod tests {
         let mut app = make_app();
         let c = ctx();
         let ext_id = "com.example.dying";
-        app.sources.push(SourceSummary {
+        app.pool.sources.push(SourceSummary {
             id: ext_id.to_string(),
             name: "Dying".to_string(),
             status: SourceStatus::Warm { commands: 3 },
         });
         // 保活集放一个死进程（供 drop_source_to_stub 移除断言）
-        app.processes
+        app.pool
+            .processes
             .push((ext_id.to_string(), dying_client(ext_id)));
 
         // 构造「调用期间进程崩溃」的 InvokeOutcome（proc 为另一个死进程）
@@ -278,19 +303,21 @@ mod tests {
             ext_id: ext_id.to_string(),
             proc: Some(dying_client(ext_id)),
             result: Err("进程在调用期间崩溃".to_string()),
+            error_kind: dd_host::process::ProtocolErrorKind::Other,
             stub_reheat: false,
         });
-        app.invoke_rx = Some(rx);
-        app.inflight.insert(ext_id.to_string());
+        app.pool.invoke_rx = Some(rx);
+        app.pool.inflight.insert(ext_id.to_string());
 
         app.poll_invoke(&c);
 
         assert!(
-            app.processes.iter().all(|(id, _)| id != ext_id),
+            app.pool.processes.iter().all(|(id, _)| id != ext_id),
             "死进程应从保活集移除（回落 stub）"
         );
         assert!(
-            app.crash_guards
+            app.pool
+                .crash_guards
                 .get(ext_id)
                 .map(|g| g.consecutive())
                 .unwrap_or(0)
@@ -349,7 +376,7 @@ mod tests {
         // ② 应用级：滞留客户端随失败 outcome 回归 → Failed（经 store_warm_process 拒绝）
         let mut app = make_app();
         let ext_id = "com.ddrun.slow";
-        app.sources.push(SourceSummary {
+        app.pool.sources.push(SourceSummary {
             id: ext_id.to_string(),
             name: "Slow".to_string(),
             status: SourceStatus::Warm { commands: 1 },
@@ -359,19 +386,20 @@ mod tests {
             ext_id: ext_id.to_string(),
             proc: Some(client),
             result: Err(err.to_string()),
+            error_kind: dd_host::process::ProtocolErrorKind::Other,
             stub_reheat: false,
         });
-        app.invoke_rx = Some(rx);
-        app.inflight.insert(ext_id.to_string());
+        app.pool.invoke_rx = Some(rx);
+        app.pool.inflight.insert(ext_id.to_string());
 
         app.poll_invoke(&c);
 
-        assert!(app.inflight.is_empty(), "inflight 应复位（不再永占）");
+        assert!(app.pool.inflight.is_empty(), "inflight 应复位（不再永占）");
         assert!(
-            app.processes.iter().all(|(id, _)| id != ext_id),
+            app.pool.processes.iter().all(|(id, _)| id != ext_id),
             "滞留客户端不得回 warm 集（否则永远答复滞留不可用）"
         );
-        let s = app.sources.iter().find(|s| s.id == ext_id).unwrap();
+        let s = app.pool.sources.iter().find(|s| s.id == ext_id).unwrap();
         assert!(
             s.status.is_failed(),
             "扩展应呈 Failed（Retry 可重试），实际 {:?}",

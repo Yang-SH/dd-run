@@ -165,8 +165,8 @@ impl PaletteApp {
         );
         nav_ui.spacing_mut().item_spacing.y = NAV_GAP;
         for (cat, icon, label_key) in NAV_CATS {
-            let selected = self.settings_category == cat;
-            let label = crate::text::t(self.lang_effective, label_key);
+            let selected = self.draft.settings_category == cat;
+            let label = crate::text::t(self.view.lang_effective, label_key);
             let (item_rect, resp) =
                 nav_ui.allocate_exact_size(egui::vec2(NAV_W, NAV_ITEM_H), egui::Sense::click());
             // B7 真机修订（2026-09-12）：`Response::hovered()` 在本应用不生效，
@@ -228,7 +228,7 @@ impl PaletteApp {
                 fg,
             );
             if resp.clicked() {
-                self.settings_category = cat;
+                self.draft.settings_category = cat;
             }
         }
 
@@ -250,26 +250,31 @@ impl PaletteApp {
                 .text_styles
                 .insert(egui::TextStyle::Button, egui::FontId::proportional(14.0));
         }
-        egui::ScrollArea::vertical().show(&mut content_ui, |ui| match self.settings_category {
-            SettingsCategory::Appearance => {
-                self.draw_appearance_card(ui, &p);
-                self.draw_material_card(ui, &p, &ctx);
-                self.draw_background_image_card(ui, &p, &ctx);
-                self.draw_density_card(ui, &p);
-                ui.add_space(8.0); // 卡片间距 8px（§08.1）
-                self.draw_reset_appearance_card(ui, &p);
+        egui::ScrollArea::vertical().show(&mut content_ui, |ui| {
+            match self.draft.settings_category {
+                SettingsCategory::Appearance => {
+                    self.draw_appearance_card(ui, &p);
+                    self.draw_material_card(ui, &p, &ctx);
+                    self.draw_background_image_card(ui, &p, &ctx);
+                    self.draw_density_card(ui, &p);
+                    ui.add_space(8.0); // 卡片间距 8px（§08.1）
+                    self.draw_reset_appearance_card(ui, &p);
+                }
+                SettingsCategory::General => {
+                    self.draw_general_cards(ui, &p);
+                    ui.add_space(8.0); // 卡片间距 8px（§08.1）
+                    self.draw_keys_behavior_card(ui, &p);
+                    // P2-5.3②③：诊断卡（打开日志目录 / 导出诊断报告）。
+                    ui.add_space(8.0);
+                    self.draw_diagnostics_card(ui, &p);
+                }
+                SettingsCategory::Search => {
+                    self.draw_search_behavior_card(ui, &p);
+                    ui.add_space(8.0); // 卡片间距 8px（§08.1）
+                    self.draw_search_engine_card(ui, &p, &ctx);
+                }
+                SettingsCategory::Extensions => self.draw_extensions_card(ui, &p),
             }
-            SettingsCategory::General => {
-                self.draw_general_cards(ui, &p);
-                ui.add_space(8.0); // 卡片间距 8px（§08.1）
-                self.draw_keys_behavior_card(ui, &p);
-            }
-            SettingsCategory::Search => {
-                self.draw_search_behavior_card(ui, &p);
-                ui.add_space(8.0); // 卡片间距 8px（§08.1）
-                self.draw_search_engine_card(ui, &p, &ctx);
-            }
-            SettingsCategory::Extensions => self.draw_extensions_card(ui, &p),
         });
 
         // ── PowerToys 式热键捕获对话框（2026-09-30 seq 确认流配套）：ctx 层

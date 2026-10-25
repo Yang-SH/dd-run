@@ -13,9 +13,9 @@ impl PaletteApp {
     /// 选择即生效：点击 radio-card 立即 `apply_theme_pref`（set_theme + save）。
     pub(super) fn draw_appearance_card(&mut self, ui: &mut egui::Ui, p: &theme::Palette) {
         let dark = ui.visuals().dark_mode;
-        let lang = self.lang_effective;
+        let lang = self.view.lang_effective;
         let mut pick: Option<dd_gui::settings::ThemePref> = None;
-        draw_settings_card_frame(ui, p, self.backdrop_active, |card| {
+        draw_settings_card_frame(ui, p, self.window.backdrop_active, |card| {
             // 主题 icon + 名称 + 描述（16px / 14/20 / 12/16 fg-2 / text / text-3）
             // item_spacing.x 清零：gap 严格 12px（§08 CSS setting-row gap），不受
             // egui 默认 8px item_spacing 叠加影响。
@@ -83,7 +83,7 @@ impl PaletteApp {
                     if i > 0 {
                         ui.add_space(gap);
                     }
-                    let selected = self.settings.theme == *pref;
+                    let selected = self.draft.settings.theme == *pref;
                     if draw_radio_card(ui, card_w, zh, en, *thumb, selected, p, dark) {
                         pick = Some(*pref);
                     }
@@ -109,28 +109,28 @@ impl PaletteApp {
         ctx: &egui::Context,
     ) {
         let dark = ui.visuals().dark_mode;
-        let lang = self.lang_effective;
-        let material = self.settings.backdrop;
-        let material_active = self.backdrop_active;
+        let lang = self.view.lang_effective;
+        let material = self.draft.settings.backdrop;
+        let material_active = self.window.backdrop_active;
         // T9（2026-10-05）：背景图生效 → 材质行整体置灰（互斥语义——材质 /
         // 着色 / 边框链路暂停生效），卡头下提示恢复条件。
-        let bg_set = self.settings.background_image_path.is_some();
+        let bg_set = self.draft.settings.background_image_path.is_some();
         // 开关状态在闭包外读取、闭包内只收集点击结果（避免闭包内 &mut self 冲突）。
         let mut picked_material: Option<dd_gui::settings::Backdrop> = None;
         let mut picked_corner: Option<dd_gui::settings::CornerPref> = None;
         let mut picked_border: Option<dd_gui::settings::BorderMode> = None;
-        let mut opacity_tmp = self.settings.material_opacity;
+        let mut opacity_tmp = self.draft.settings.material_opacity;
         let mut opacity_changed = false;
         let mut opacity_released = false;
         // T6（2026-09-20）：着色行状态（模式 pill + 自定义色 + 强度）
-        let colorization = self.settings.colorization;
+        let colorization = self.draft.settings.colorization;
         let mut picked_colorization: Option<dd_gui::settings::ColorizationMode> = None;
-        let mut color_tmp = self.settings.custom_tint_color;
+        let mut color_tmp = self.draft.settings.custom_tint_color;
         let mut color_changed = false;
-        let mut intensity_tmp = self.settings.custom_tint_intensity;
+        let mut intensity_tmp = self.draft.settings.custom_tint_intensity;
         let mut intensity_changed = false;
         let mut intensity_released = false;
-        draw_settings_card_frame(ui, p, self.backdrop_active, |card| {
+        draw_settings_card_frame(ui, p, self.window.backdrop_active, |card| {
             // 卡头：图标 + 名称 + 描述（描述跟随当前材质，同 DeskBox 行描述语义）
             card.horizontal(|ui| {
                 ui.spacing_mut().item_spacing.x = 0.0;
@@ -358,7 +358,7 @@ impl PaletteApp {
                         ui,
                         pill_w,
                         crate::text::t(lang, key),
-                        self.settings.corner_pref == pref,
+                        self.draft.settings.corner_pref == pref,
                         p,
                         dark,
                         false,
@@ -403,7 +403,7 @@ impl PaletteApp {
                             ui,
                             pill_w,
                             crate::text::t(lang, key),
-                            self.settings.border_mode == mode,
+                            self.draft.settings.border_mode == mode,
                             p,
                             dark,
                             !material_active || bg_set,
@@ -458,22 +458,23 @@ impl PaletteApp {
         ctx: &egui::Context,
     ) {
         let dark = ui.visuals().dark_mode;
-        let lang = self.lang_effective;
-        let bg_set = self.settings.background_image_path.is_some();
+        let lang = self.view.lang_effective;
+        let bg_set = self.draft.settings.background_image_path.is_some();
         // 运行期解码失败（负缓存命中且路径与当前设置一致）→ 错误行提示
         let decode_failed = self
+            .view
             .backdrop_cache
-            .load_failed(self.settings.background_image_path.as_deref());
+            .load_failed(self.draft.settings.background_image_path.as_deref());
         let mut apply_clicked = false;
         let mut clear_clicked = false;
         let mut picked_fit: Option<dd_gui::settings::BgImageFit> = None;
-        let mut opacity_tmp = self.settings.background_image_opacity;
+        let mut opacity_tmp = self.draft.settings.background_image_opacity;
         let mut opacity_changed = false;
         let mut opacity_released = false;
-        let mut tint_tmp = self.settings.background_image_tint_intensity;
+        let mut tint_tmp = self.draft.settings.background_image_tint_intensity;
         let mut tint_changed = false;
         let mut tint_released = false;
-        draw_settings_card_frame(ui, p, self.backdrop_active, |card| {
+        draw_settings_card_frame(ui, p, self.window.backdrop_active, |card| {
             // 卡头：图标 + 名称 + 描述（同主题 / 材质卡口径；Photo glyph E91B）
             card.horizontal(|ui| {
                 ui.spacing_mut().item_spacing.x = 0.0;
@@ -524,7 +525,7 @@ impl PaletteApp {
                     ui,
                     path_w,
                     "dd-bgimg-path",
-                    &mut self.bg_path_buf,
+                    &mut self.draft.bg_path_buf,
                     crate::text::t(lang, "set.bgimg.path_hint"),
                     p,
                 );
@@ -537,7 +538,7 @@ impl PaletteApp {
                     }
                 });
             });
-            if let Some(err) = &self.bg_err {
+            if let Some(err) = &self.draft.bg_err {
                 card.horizontal(|ui| {
                     ui.label(egui::RichText::new(err.clone()).size(12.0).color(p.danger));
                 });
@@ -574,7 +575,7 @@ impl PaletteApp {
                             ui,
                             pill_w,
                             crate::text::t(lang, fit.name_key()),
-                            self.settings.background_image_fit == fit,
+                            self.draft.settings.background_image_fit == fit,
                             p,
                             dark,
                             !bg_set,
@@ -635,21 +636,22 @@ impl PaletteApp {
         });
         // ── 闭包外应用交互结果 ──
         if apply_clicked {
-            let path = self.bg_path_buf.trim();
+            let path = self.draft.bg_path_buf.trim();
             if path.is_empty() {
                 // 空输入 + 「设为背景」= 清除（提供无「清除」按钮依赖的出路）
-                self.bg_err = None;
+                self.draft.bg_err = None;
                 self.apply_background_path(ctx, None);
             } else if !std::path::Path::new(path).is_file() {
-                self.bg_err = Some(crate::text::t(lang, "set.bgimg.err_not_found").to_string());
+                self.draft.bg_err =
+                    Some(crate::text::t(lang, "set.bgimg.err_not_found").to_string());
             } else {
-                self.bg_err = None;
+                self.draft.bg_err = None;
                 self.apply_background_path(ctx, Some(path.to_string()));
             }
         }
         if clear_clicked {
-            self.bg_path_buf.clear();
-            self.bg_err = None;
+            self.draft.bg_path_buf.clear();
+            self.draft.bg_err = None;
             self.apply_background_path(ctx, None);
         }
         if let Some(fit) = picked_fit {
@@ -675,10 +677,10 @@ impl PaletteApp {
     /// 下次唤起时按新档推导（`base_height_for_workarea`）。
     pub(super) fn draw_density_card(&mut self, ui: &mut egui::Ui, p: &theme::Palette) {
         let dark = ui.visuals().dark_mode;
-        let lang = self.lang_effective;
-        let current = self.settings.density;
+        let lang = self.view.lang_effective;
+        let current = self.draft.settings.density;
         let mut pick: Option<dd_gui::settings::ListDensity> = None;
-        draw_settings_card_frame(ui, p, self.backdrop_active, |card| {
+        draw_settings_card_frame(ui, p, self.window.backdrop_active, |card| {
             // 卡头：图标 + 名称 + 描述（同主题/材质卡口径）
             card.horizontal(|ui| {
                 ui.spacing_mut().item_spacing.x = 0.0;
@@ -755,7 +757,7 @@ impl PaletteApp {
             });
         });
         if let Some(density) = pick {
-            self.settings.density = density;
+            self.draft.settings.density = density;
             self.save_settings_with_feedback();
         }
     }
@@ -767,13 +769,14 @@ impl PaletteApp {
     pub(super) fn draw_reset_appearance_card(&mut self, ui: &mut egui::Ui, p: &theme::Palette) {
         use std::time::{Duration, Instant};
         const ARM_WINDOW: Duration = Duration::from_secs(5);
-        let lang = self.lang_effective;
+        let lang = self.view.lang_effective;
         let armed = self
+            .view
             .appearance_reset_armed
             .map(|t| t.elapsed() < ARM_WINDOW)
             .unwrap_or(false);
-        if self.appearance_reset_armed.is_some() && !armed {
-            self.appearance_reset_armed = None; // 超时自动撤销（按钮回「恢复默认」）
+        if self.view.appearance_reset_armed.is_some() && !armed {
+            self.view.appearance_reset_armed = None; // 超时自动撤销（按钮回「恢复默认」）
         }
         let btn_label = crate::text::t(
             lang,
@@ -784,7 +787,7 @@ impl PaletteApp {
             },
         );
         let mut clicked = false;
-        draw_settings_card_frame(ui, p, self.backdrop_active, |card| {
+        draw_settings_card_frame(ui, p, self.window.backdrop_active, |card| {
             card.horizontal(|ui| {
                 ui.spacing_mut().item_spacing.x = 0.0;
                 let (icon_rect, _) =
@@ -832,10 +835,10 @@ impl PaletteApp {
         });
         if clicked {
             if armed {
-                self.appearance_reset_armed = None;
+                self.view.appearance_reset_armed = None;
                 self.apply_reset_appearance(ui.ctx());
             } else {
-                self.appearance_reset_armed = Some(Instant::now());
+                self.view.appearance_reset_armed = Some(Instant::now());
                 ui.ctx().request_repaint_after(ARM_WINDOW); // 超时后重绘 → 按钮复原
             }
         }

@@ -8,10 +8,17 @@
 
 pub mod builtin;
 pub mod cache;
+/// C3：三边界错误类型（清单/信任/spawn → `LoadError`）。
+pub mod error;
 pub mod manifest;
 pub mod process;
 pub mod signing;
 pub mod trust;
+
+/// 生产写入器：整文件写入（`std::fs::write`）。
+fn atomic_writer(tmp: &std::path::Path, bytes: &[u8]) -> std::io::Result<()> {
+    std::fs::write(tmp, bytes)
+}
 
 /// 原子写盘（R-02）：同目录写 `.tmp` 临时文件后 `rename` 覆盖目标。
 ///
@@ -22,6 +29,18 @@ pub mod trust;
 /// 删除 `.tmp` 残留。刻意不做 fsync：调用方（UI 线程高频落盘）优先低延迟，
 /// 崩溃窗口从「整个写入时长」缩到「一次 rename」。
 pub(crate) fn atomic_write(path: &std::path::Path, bytes: &[u8]) -> std::io::Result<()> {
+    atomic_write_with(path, bytes, atomic_writer)
+}
+
+/// [`atomic_write`] 的可注入形态（A4）：`writer` 负责把 `bytes` 落到传入的
+/// `.tmp` 路径。测试传恒 `Err` 的桩注入写盘失败——不再依赖 OS 权限语义
+/// （root 容器无视 `chmod`、`share_mode(0)` 仅 Windows 可用），注入分支
+/// （`share_mode` / `chmod`）已删，root/非 root 行为一致。
+pub(crate) fn atomic_write_with(
+    path: &std::path::Path,
+    bytes: &[u8],
+    writer: impl Fn(&std::path::Path, &[u8]) -> std::io::Result<()>,
+) -> std::io::Result<()> {
     if let Some(dir) = path.parent() {
         std::fs::create_dir_all(dir)?;
     }
@@ -31,7 +50,7 @@ pub(crate) fn atomic_write(path: &std::path::Path, bytes: &[u8]) -> std::io::Res
         .unwrap_or_default();
     tmp_name.push(".tmp");
     let tmp = path.with_file_name(tmp_name);
-    match std::fs::write(&tmp, bytes) {
+    match writer(&tmp, bytes) {
         Ok(()) => match std::fs::rename(&tmp, path) {
             Ok(()) => Ok(()),
             Err(e) => {
@@ -87,32 +106,31 @@ mod tests {
 
     /// R-02：写入失败 → 返回 `Err`、原文件保持完整旧内容、无 `.tmp` 残留。
     ///
-    /// 失败注入：Windows 下以 `share_mode(0)` 独占打开目标文件，使
-    /// `MoveFileExW(REPLACE_EXISTING)` 因共享冲突失败；Unix 下把目录置只读。
+    /// 失败注入（A4）：writer 桩恒 `Err`——不再依赖 OS 权限语义（root 容器
+    /// 无视 `chmod`、`share_mode(0)` 仅 Windows 可用），root/非 root 一致。
     #[test]
     fn r02_atomic_write_failure_keeps_old() {
+        use super::atomic_write_with;
+
         let dir = temp_dir("failure");
         std::fs::create_dir_all(&dir).unwrap();
         let target = dir.join("data.json");
         std::fs::write(&target, b"original").unwrap();
 
-        #[cfg(windows)]
-        {
-            use std::os::windows::fs::OpenOptionsExt;
-            let _lock = std::fs::OpenOptions::new()
-                .read(true)
-                .share_mode(0)
-                .open(&target)
-                .unwrap();
-            assert!(atomic_write(&target, b"new").is_err());
-        }
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o555)).unwrap();
-            assert!(atomic_write(&target, b"new").is_err());
-            std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o755)).unwrap();
-        }
+        let seen_tmp = std::cell::RefCell::new(None);
+        let err = atomic_write_with(&target, b"new", |tmp, _| {
+            *seen_tmp.borrow_mut() = Some(tmp.to_path_buf());
+            Err(std::io::Error::other("injected"))
+        })
+        .unwrap_err();
+        assert_eq!(err.kind(), std::io::ErrorKind::Other);
+        assert!(
+            seen_tmp
+                .borrow()
+                .as_deref()
+                .is_some_and(|p| p.to_string_lossy().ends_with(".tmp")),
+            "writer 收到的必须是 .tmp 路径（目标本体不可被触碰）"
+        );
 
         assert_eq!(std::fs::read(&target).unwrap(), b"original");
         assert!(!dir.join("data.json.tmp").exists(), "无 .tmp 残留");

@@ -27,7 +27,7 @@ pub(crate) const WARM_IDLE_HIDDEN_TICK: Duration = Duration::from_secs(15);
 impl PaletteApp {
     /// 按清单 id 找已扫描扩展（复热 spawn 用）。
     pub(crate) fn find_ext(&self, ext_id: &str) -> Option<&LoadedExtension> {
-        self.exts.iter().find(|e| e.manifest.id == ext_id)
+        self.pool.exts.iter().find(|e| e.manifest.id == ext_id)
     }
 }
 
@@ -44,8 +44,8 @@ impl PaletteApp {
             self.mark_source_failed(&ext_id, "in-process 调用超时，扩展滞留未归还".to_string());
             return;
         }
-        self.processes.push((ext_id.clone(), proc));
-        if let Some(victim) = self.lru.access(&ext_id) {
+        self.pool.processes.push((ext_id.clone(), proc));
+        if let Some(victim) = self.pool.lru.access(&ext_id) {
             if victim != ext_id {
                 self.evict_warm(&victim);
             }
@@ -55,15 +55,15 @@ impl PaletteApp {
     /// LRU 驱逐（A7）：close + 终止进程、从保活集移除、源状态回落 stub。
     /// 优雅 close 走后台线程（≤1s+1s 超时），避免卡 UI；失败强杀由 Drop 兜底。
     pub(crate) fn evict_warm(&mut self, victim: &str) {
-        if let Some(idx) = self.processes.iter().position(|(id, _)| id == victim) {
-            let (_, proc) = self.processes.remove(idx);
+        if let Some(idx) = self.pool.processes.iter().position(|(id, _)| id == victim) {
+            let (_, proc) = self.pool.processes.remove(idx);
             thread::spawn(move || {
                 let _ = proc.close();
             });
             log::warn!("[dd-gui] LRU 驱逐：{victim}（warm 超容量，close+释放，命令回落 stub）");
         }
-        self.lru.remove(victim);
-        if let Some(s) = self.sources.iter_mut().find(|s| s.id == victim) {
+        self.pool.lru.remove(victim);
+        if let Some(s) = self.pool.sources.iter_mut().find(|s| s.id == victim) {
             if !s.status.is_failed() {
                 let n = match &s.status {
                     SourceStatus::Warm { commands } | SourceStatus::Stub { commands } => *commands,
@@ -77,9 +77,9 @@ impl PaletteApp {
     /// A8：进程已退出（崩溃或正常退出）时把该扩展从保活集移除、LRU 清出、源状态回落 stub。
     /// 进程对象本身由调用方 drop（此处仅清理宿主侧簿记，供下次点击走复热 spawn）。
     pub(crate) fn drop_source_to_stub(&mut self, ext_id: &str) {
-        self.processes.retain(|(pid, _)| pid != ext_id);
-        self.lru.remove(ext_id);
-        if let Some(s) = self.sources.iter_mut().find(|s| s.id == ext_id) {
+        self.pool.processes.retain(|(pid, _)| pid != ext_id);
+        self.pool.lru.remove(ext_id);
+        if let Some(s) = self.pool.sources.iter_mut().find(|s| s.id == ext_id) {
             if !s.status.is_failed() {
                 let n = match &s.status {
                     SourceStatus::Warm { commands } | SourceStatus::Stub { commands } => *commands,
@@ -92,7 +92,7 @@ impl PaletteApp {
 
     /// 源状态转 warm（桩复热成功 / cold start warm 时调用；Failed→Warm 同理恢复）。
     pub(crate) fn mark_source_warm(&mut self, ext_id: &str) {
-        if let Some(s) = self.sources.iter_mut().find(|s| s.id == ext_id) {
+        if let Some(s) = self.pool.sources.iter_mut().find(|s| s.id == ext_id) {
             if s.status.is_stub() || s.status.is_failed() {
                 let n = match &s.status {
                     SourceStatus::Warm { commands } | SourceStatus::Stub { commands } => *commands,
@@ -109,7 +109,7 @@ impl PaletteApp {
     /// Retry 按钮可重试（重聚合 → `open()` 重建全新客户端）。仅当当前非 Failed
     /// 时覆写（保留聚合期更早的失败原因）。
     pub(crate) fn mark_source_failed(&mut self, ext_id: &str, error: String) {
-        if let Some(s) = self.sources.iter_mut().find(|s| s.id == ext_id) {
+        if let Some(s) = self.pool.sources.iter_mut().find(|s| s.id == ext_id) {
             if !s.status.is_failed() {
                 s.status = SourceStatus::Failed { error };
             }

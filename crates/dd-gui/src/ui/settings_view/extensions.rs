@@ -12,30 +12,30 @@ impl PaletteApp {
         // 闭包外拷贝数据（闭包内只收集交互结果）。运行时状态（失败原因 / 是否熔断）
         // 一并收集，驱动失败提示行与「重试」按钮（协议 §11 用户手动重试，M6.4 L2）。
         let rows = extension_rows(
-            &self.exts,
-            &self.settings.disabled_extensions,
-            &self.sources,
-            &self.trust,
+            &self.pool.exts,
+            &self.draft.settings.disabled_extensions,
+            &self.pool.sources,
+            &self.pool.trust,
         );
         let mut changed: Option<(String, bool)> = None;
         let mut retry_id: Option<String> = None;
         // S-05：行内「允许 / 阻止」的收集位（闭包内只收集，落盘在闭包外）。
         let mut trust_action: Option<(String, Decision)> = None;
-        let lang = self.lang_effective;
+        let lang = self.view.lang_effective;
         // 卡片头汇总：待批准数（页脚另有提示，但设置页是"处理现场"）与台账损坏提示。
-        let pending = dd_gui::aggregator::pending_count(&self.trust);
-        let ledger_corrupt = matches!(self.ledger_state, dd_host::trust::LedgerState::Corrupt);
+        let pending = dd_gui::aggregator::pending_count(&self.pool.trust);
+        let ledger_corrupt = matches!(self.pool.ledger_state, dd_host::trust::LedgerState::Corrupt);
         // R-20：解析失败清单（路径 + 原因），闭包外拷贝。
-        let skipped = self.skipped_manifests.clone();
+        let skipped = self.pool.skipped_manifests.clone();
         // N2：apps 行内「设置」展开态 + 屏蔽名单快照与交互收集位（闭包外
         // 快照、闭包内只收集，落盘在闭包外——与引擎卡同纪律）。
-        let apps_cfg_open = self.apps_cfg_open;
+        let apps_cfg_open = self.draft.apps_cfg_open;
         let blocklist_frags = self.apps_blocklist_fragments();
         let mut apps_cfg_clicked = false;
         let mut blocklist_remove: Option<String> = None;
         let mut blocklist_add_clicked = false;
 
-        draw_settings_card_frame(ui, p, self.backdrop_active, |card| {
+        draw_settings_card_frame(ui, p, self.window.backdrop_active, |card| {
             card.horizontal(|ui| {
                 ui.spacing_mut().item_spacing.x = 0.0;
                 let (icon_rect, _) =
@@ -377,7 +377,7 @@ impl PaletteApp {
                         ui,
                         w,
                         "dd-apps-blocklist",
-                        &mut self.apps_blocklist_buf,
+                        &mut self.draft.apps_blocklist_buf,
                         crate::text::t(lang, "set.apps.blocklist.hint"),
                         p,
                     );
@@ -392,7 +392,7 @@ impl PaletteApp {
         }
         // N2：apps「设置」展开开合 + 屏蔽名单增删落盘（apply 内含重聚合脏标记）。
         if apps_cfg_clicked {
-            self.apps_cfg_open = !self.apps_cfg_open;
+            self.draft.apps_cfg_open = !self.draft.apps_cfg_open;
         }
         if let Some(frag) = blocklist_remove {
             self.apps_blocklist_remove(&frag);

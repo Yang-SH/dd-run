@@ -54,7 +54,7 @@ fn payload_str(payload: &(dyn std::any::Any + Send)) -> String {
 /// 本地时间戳（RFC3339 带时区，毫秒精度）；时钟不可用时回落
 /// `<timestamp 不可用>`（不得 panic）。chrono 已在依赖树内（dd-host/dd-ext），
 /// 本地时区由 chrono 的 local feature 解析。
-fn local_timestamp_rfc3339() -> String {
+pub(crate) fn local_timestamp_rfc3339() -> String {
     chrono::Local::now()
         .format("%Y-%m-%dT%H:%M:%S%.3f%:z")
         .to_string()

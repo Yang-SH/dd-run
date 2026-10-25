@@ -32,6 +32,8 @@ pub const HOTKEY_MODIFIERS_DEFAULT: u32 = windows_sys::Win32::UI::Input::Keyboar
 pub const HOTKEY_VK_DEFAULT: u32 = 0x20;
 
 /// 内部热键 id（仅本进程内区分多个热键用）。
+/// 热键消息循环的注册 id（RegisterHotKey / UnregisterHotKey 共用）。
+#[cfg(windows)]
 const HOTKEY_ID: i32 = 0xDD01;
 /// 热键线程自定义命令消息（PostThreadMessageW 携带 seq + mods/vk）。
 #[cfg(windows)]
@@ -103,7 +105,8 @@ pub struct HotkeyThread {
     /// join 句柄（drop 时不等待，进程退出即回收）；线程创建失败时为
     /// `None`（R-05：降级为无热键运行，不 panic）。
     _handle: Option<thread::JoinHandle<()>>,
-    /// 热键线程 id（PostThreadMessageW 目标；非 Windows = 0）。
+    /// 热键线程 id（PostThreadMessageW 目标；非 Windows = 0，仅写不读）。
+    #[cfg_attr(not(windows), allow(dead_code))]
     thread_id: u32,
     /// 非 Windows：重注册命令发送端（Windows 走 PostThreadMessageW，无此字段；
     /// 线程创建失败时发送端对端已死，send 静默失败由 UI 确认超时兜底）。
@@ -492,7 +495,7 @@ fn vk_to_code(vk: u32) -> Option<global_hotkey::hotkey::Code> {
 /// (mods 位掩码, vk) → crate [`HotKey`]；主键不可映射 → `None`。
 #[cfg(not(windows))]
 fn to_hotkey(mods: u32, vk: u32) -> Option<global_hotkey::hotkey::HotKey> {
-    use global_hotkey::hotkey::{HotKey, Modifiers};
+    use global_hotkey::hotkey::HotKey;
     let code = vk_to_code(vk)?;
     let m = mods_mask_to_modifiers(mods);
     Some(if m.is_empty() {

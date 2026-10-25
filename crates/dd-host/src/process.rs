@@ -151,6 +151,29 @@ impl std::fmt::Display for ProtocolError {
     }
 }
 
+/// C3（dd-run-改进分析.md §4.6）：调用失败的用户可感知分类——UI 层据此分流
+/// 文案与操作建议（超时可重试 / 崩溃回落 stub / 其余透传详情），不再对
+/// `Display` 串做 contains 判型。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProtocolErrorKind {
+    /// §10 超时：进程仍在，可稍后重试。
+    Timeout,
+    /// 进程已退出（EOF / 崩溃 / 超限关闭连接）：走 A8 回落 stub 路径。
+    Crashed,
+    /// 其余（信封 / RPC / I/O 等）：详情透传。
+    Other,
+}
+
+impl ProtocolError {
+    pub fn kind(&self) -> ProtocolErrorKind {
+        match self {
+            Self::Timeout { .. } => ProtocolErrorKind::Timeout,
+            Self::ProcessExited | Self::MessageTooLarge { .. } => ProtocolErrorKind::Crashed,
+            _ => ProtocolErrorKind::Other,
+        }
+    }
+}
+
 impl std::error::Error for ProtocolError {}
 
 impl From<std::io::Error> for ProtocolError {

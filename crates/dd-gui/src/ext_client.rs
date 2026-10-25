@@ -51,14 +51,15 @@ pub const INPROCESS_CALL_TIMEOUT: Duration = Duration::from_secs(5);
 ///
 /// 供聚合（[`crate::aggregator`]）与复热链路（`app::pool` / `invoke` / `page`）共用，
 /// 保证两条路径的后端选择口径一致。背景线程内亦可安全调用（参数按值捕获）。
+/// C3：错误统一为 [`dd_host::error::LoadError`]（Display 与原 String 文案逐字一致）。
 pub fn open(
     spec: Option<ExtensionSpec>,
     ext: Option<&LoadedExtension>,
-) -> Result<(ExtClient, InitializeResult), String> {
+) -> Result<(ExtClient, InitializeResult), dd_host::error::LoadError> {
     match (spec, ext) {
         (Some(spec), _) => ExtClient::open_builtin(spec),
         (None, Some(ext)) => ExtClient::spawn_subprocess(ext),
-        (None, None) => Err("扩展无注册信息（既非内置也无可执行文件）".to_string()),
+        (None, None) => Err(dd_host::error::LoadError::NoRegistration),
     }
 }
 
@@ -78,13 +79,17 @@ pub enum ExtClient {
 impl ExtClient {
     /// 子进程后端：spawn + §5.1 握手（复用既有 [`crate::aggregator`] 链路，
     /// 失败信息带可操作线索：命令路径 / stderr 末行）。
-    pub fn spawn_subprocess(ext: &LoadedExtension) -> Result<(Self, InitializeResult), String> {
+    pub fn spawn_subprocess(
+        ext: &LoadedExtension,
+    ) -> Result<(Self, InitializeResult), dd_host::error::LoadError> {
         let (proc, init) = crate::aggregator::spawn_and_initialize_with_info(ext)?;
         Ok((Self::Subprocess(proc), init))
     }
 
     /// 进程内后端：以运行期构造的 [`ExtensionSpec`] 建 in-process 扩展 + §5.1 握手。
-    pub fn open_builtin(spec: ExtensionSpec) -> Result<(Self, InitializeResult), String> {
+    pub fn open_builtin(
+        spec: ExtensionSpec,
+    ) -> Result<(Self, InitializeResult), dd_host::error::LoadError> {
         let ext = InProcessExtension::new(spec);
         let id = ext.id().to_string();
         // R-04：initialize 同口径包超时（内置握手虽轻，统一防线）——构造即超时
@@ -97,12 +102,18 @@ impl ExtClient {
                 )
             });
         let Some(ext) = returned else {
-            return Err(format!(
-                "in-process 扩展 {id} initialize 超时（{} ms）",
-                INPROCESS_CALL_TIMEOUT.as_millis()
-            ));
+            return Err(dd_host::error::LoadError::Initialize {
+                reason: format!(
+                    "in-process 扩展 {id} initialize 超时（{} ms）",
+                    INPROCESS_CALL_TIMEOUT.as_millis()
+                ),
+                detail: String::new(),
+            });
         };
-        let init = init.map_err(|e| format!("initialize 失败：{e}"))?;
+        let init = init.map_err(|e| dd_host::error::LoadError::Initialize {
+            reason: e.to_string(),
+            detail: String::new(),
+        })?;
         Ok((
             Self::InProcess {
                 ext: Some(ext),
@@ -449,6 +460,11 @@ mod tests {
             Ok(_) => panic!("无注册信息应报错"),
             Err(e) => e,
         };
-        assert!(err.contains("无注册信息"), "got {err}");
+        // C3：结构化变体 + Display 文案契约。
+        assert!(
+            matches!(err, dd_host::error::LoadError::NoRegistration),
+            "应为 NoRegistration，实际 {err:?}"
+        );
+        assert!(err.to_string().contains("无注册信息"), "got {err}");
     }
 }

@@ -13,13 +13,14 @@ impl PaletteApp {
     /// **0 退出码 = 正常退出**（如扩展自行 close），仅回落 stub 不计数。
     /// 两种情形都：从保活集移除、LRU 清出、源状态回落（下次点击复热 spawn）。
     pub(crate) fn refresh_health(&mut self) {
-        if self.processes.is_empty() {
+        if self.pool.processes.is_empty() {
             return;
         }
         // 诊断摘要必须在**进程被 drop 之前**取出（stderr 随进程对象一起消失）：
         // 退出码 + stderr 末行。2026-09-10 真机反馈驱动——此前这里只打「已退出」，
         // 扩展写在 stderr 的根因（如 `'python' 不是内部或外部命令`）被直接丢掉。
         let exited: Vec<(String, bool, Option<String>)> = self
+            .pool
             .processes
             .iter_mut()
             .filter_map(|(id, p)| {
@@ -62,15 +63,16 @@ impl PaletteApp {
     /// 守卫：① 仅**面板隐藏**时回收——用户正在看列表时不回收，避免"看着就变慢"；
     /// ② 进程已被 take（in-flight 请求在途）的扩展跳过，等结果归还后再判。
     pub(crate) fn warm_idle_reclaim(&mut self) {
-        if self.visible || self.processes.is_empty() {
+        if self.window.visible || self.pool.processes.is_empty() {
             return;
         }
         let mut evicted = false;
-        for id in self.lru.idle_victims(WARM_IDLE_TTL) {
-            if !self.processes.iter().any(|(pid, _)| pid == &id) {
+        for id in self.pool.lru.idle_victims(WARM_IDLE_TTL) {
+            if !self.pool.processes.iter().any(|(pid, _)| pid == &id) {
                 continue; // 在途请求（进程已 take 出保活集）：等归还后再判
             }
             let idle = self
+                .pool
                 .lru
                 .last_access(&id)
                 .map(|t| t.elapsed().as_secs())
@@ -95,8 +97,9 @@ impl PaletteApp {
     /// 退出码 + stderr 末行）。熔断时并入 Failed 原因与日志——设置页扩展卡片会直接
     /// 展示它，用户无需再去翻日志（2026-09-10 真机反馈）。
     pub(crate) fn record_crash(&mut self, ext_id: &str, detail: Option<&str>) {
-        let lang = self.lang_effective; // 预捕获：sources.iter_mut() 借用期内不能调 self.tr
+        let lang = self.view.lang_effective; // 预捕获：sources.iter_mut() 借用期内不能调 self.tr
         let guard = self
+            .pool
             .crash_guards
             .entry(ext_id.to_string())
             .or_insert_with(|| CrashGuard::new(ext_id));
@@ -121,7 +124,7 @@ impl PaletteApp {
                     .replace("{id}", ext_id)
                     .replace("{n}", &n.to_string()),
             );
-            if let Some(s) = self.sources.iter_mut().find(|s| s.id == ext_id) {
+            if let Some(s) = self.pool.sources.iter_mut().find(|s| s.id == ext_id) {
                 s.status = SourceStatus::Failed { error };
             }
         } else {
@@ -134,7 +137,7 @@ impl PaletteApp {
 
     /// M4/§11：扩展成功恢复（warm/复热成功）→ 清零连续崩溃计数、解除熔断。
     pub(crate) fn reset_crash(&mut self, ext_id: &str) {
-        if let Some(g) = self.crash_guards.get_mut(ext_id) {
+        if let Some(g) = self.pool.crash_guards.get_mut(ext_id) {
             if g.is_tripped() || g.consecutive() > 0 {
                 log::warn!("[dd-gui] 扩展 {ext_id} 恢复成功，清零连续崩溃计数");
             }
@@ -144,7 +147,8 @@ impl PaletteApp {
 
     /// M4/§11：该扩展是否处于熔断（暂时不可用）态。
     pub(crate) fn is_crash_tripped(&self, ext_id: &str) -> bool {
-        self.crash_guards
+        self.pool
+            .crash_guards
             .get(ext_id)
             .map(|g| g.is_tripped())
             .unwrap_or(false)
@@ -163,29 +167,31 @@ mod tests {
     fn refresh_health_drops_to_stub_and_records_crash() {
         let mut app = make_app();
         let ext_id = "com.example.dying";
-        app.sources.push(SourceSummary {
+        app.pool.sources.push(SourceSummary {
             id: ext_id.to_string(),
             name: "Dying".to_string(),
             status: SourceStatus::Warm { commands: 5 },
         });
-        app.processes
+        app.pool
+            .processes
             .push((ext_id.to_string(), dying_client(ext_id)));
 
         app.refresh_health();
 
         assert!(
-            app.processes.iter().all(|(id, _)| id != ext_id),
+            app.pool.processes.iter().all(|(id, _)| id != ext_id),
             "崩溃进程应从保活集移除（回落 stub）"
         );
         assert!(
-            app.crash_guards
+            app.pool
+                .crash_guards
                 .get(ext_id)
                 .map(|g| g.consecutive())
                 .unwrap_or(0)
                 >= 1,
             "应记录一次崩溃"
         );
-        let s = app.sources.iter().find(|s| s.id == ext_id).unwrap();
+        let s = app.pool.sources.iter().find(|s| s.id == ext_id).unwrap();
         assert!(s.status.is_stub(), "源状态应回落 Stub，实际 {:?}", s.status);
     }
 
@@ -193,7 +199,7 @@ mod tests {
     fn consecutive_crashes_trip_circuit_breaker() {
         let mut app = make_app();
         let ext_id = "com.example.dying";
-        app.sources.push(SourceSummary {
+        app.pool.sources.push(SourceSummary {
             id: ext_id.to_string(),
             name: "Dying".to_string(),
             status: SourceStatus::Warm { commands: 3 },
@@ -201,20 +207,22 @@ mod tests {
 
         // 前 N-1 次不熔断
         for _ in 0..(MAX_CONSECUTIVE_CRASHES - 1) {
-            app.processes
+            app.pool
+                .processes
                 .push((ext_id.to_string(), dying_client(ext_id)));
             app.refresh_health();
             assert!(!app.is_crash_tripped(ext_id), "未达阈值不应熔断");
         }
         // 第 N 次触发熔断
-        app.processes
+        app.pool
+            .processes
             .push((ext_id.to_string(), dying_client(ext_id)));
         app.refresh_health();
         assert!(
             app.is_crash_tripped(ext_id),
             "连续 N 次崩溃应熔断（暂时不可用）"
         );
-        let s = app.sources.iter().find(|s| s.id == ext_id).unwrap();
+        let s = app.pool.sources.iter().find(|s| s.id == ext_id).unwrap();
         assert!(s.status.is_failed(), "熔断后源状态应为 Failed");
     }
 
@@ -224,7 +232,7 @@ mod tests {
     fn crashed_failed_reason_carries_diagnostics() {
         let mut app = make_app();
         let ext_id = "com.example.dying";
-        app.sources.push(SourceSummary {
+        app.pool.sources.push(SourceSummary {
             id: ext_id.to_string(),
             name: "Dying".to_string(),
             status: SourceStatus::Warm { commands: 1 },
@@ -234,7 +242,7 @@ mod tests {
             app.record_crash(ext_id, Some("退出码 1；stderr: boom"));
         }
 
-        let s = app.sources.iter().find(|s| s.id == ext_id).unwrap();
+        let s = app.pool.sources.iter().find(|s| s.id == ext_id).unwrap();
         match &s.status {
             SourceStatus::Failed { error } => {
                 assert!(error.contains("诊断"), "应含诊断段：{error}");
@@ -254,13 +262,14 @@ mod tests {
         for _ in 0..MAX_CONSECUTIVE_CRASHES {
             g.record_crash();
         }
-        app.crash_guards.insert(ext_id.to_string(), g);
+        app.pool.crash_guards.insert(ext_id.to_string(), g);
         assert!(app.is_crash_tripped(ext_id), "应先处于熔断态");
 
         app.reset_crash(ext_id);
         assert!(!app.is_crash_tripped(ext_id), "reset_crash 应解除熔断");
         assert_eq!(
-            app.crash_guards
+            app.pool
+                .crash_guards
                 .get(ext_id)
                 .map(|g| g.consecutive())
                 .unwrap_or(0),
@@ -282,40 +291,40 @@ mod tests {
             "com.example.inflight",
         );
         for id in [idle, fresh, inflight] {
-            app.sources.push(SourceSummary {
+            app.pool.sources.push(SourceSummary {
                 id: id.to_string(),
                 name: id.to_string(),
                 status: SourceStatus::Warm { commands: 2 },
             });
-            app.processes.push((id.to_string(), dying_client(id)));
+            app.pool.processes.push((id.to_string(), dying_client(id)));
         }
         let now = std::time::Instant::now();
         let stale = now - WARM_IDLE_TTL - std::time::Duration::from_secs(5);
-        app.lru.access_at(idle, stale);
-        app.lru.access_at(fresh, now);
-        app.lru.access_at(inflight, stale);
+        app.pool.lru.access_at(idle, stale);
+        app.pool.lru.access_at(fresh, now);
+        app.pool.lru.access_at(inflight, stale);
         // 模拟 in-flight 请求：进程已 take 出保活集（结果未归还）
-        app.processes.retain(|(pid, _)| pid != inflight);
+        app.pool.processes.retain(|(pid, _)| pid != inflight);
 
         app.warm_idle_reclaim();
 
         assert!(
-            app.processes.iter().all(|(id, _)| id != idle),
+            app.pool.processes.iter().all(|(id, _)| id != idle),
             "空闲超阈值者应被回收（移出保活集）"
         );
         assert!(
-            app.processes.iter().any(|(id, _)| id == fresh),
+            app.pool.processes.iter().any(|(id, _)| id == fresh),
             "刚触达者不应被回收"
         );
-        assert!(!app.lru.contains(idle), "被回收者应从 LRU 集移除");
-        assert!(app.lru.contains(fresh), "未回收者仍在 LRU 集内");
+        assert!(!app.pool.lru.contains(idle), "被回收者应从 LRU 集移除");
+        assert!(app.pool.lru.contains(fresh), "未回收者仍在 LRU 集内");
         assert!(
-            app.lru.contains(inflight),
+            app.pool.lru.contains(inflight),
             "在途扩展（无进程）应跳过回收，仍留在 LRU 集"
         );
-        let s = app.sources.iter().find(|s| s.id == idle).unwrap();
+        let s = app.pool.sources.iter().find(|s| s.id == idle).unwrap();
         assert!(s.status.is_stub(), "被回收者源状态应回落 Stub");
-        let s = app.sources.iter().find(|s| s.id == fresh).unwrap();
+        let s = app.pool.sources.iter().find(|s| s.id == fresh).unwrap();
         assert!(!s.status.is_stub(), "未回收者源状态保持 Warm");
     }
 
@@ -324,24 +333,24 @@ mod tests {
     fn warm_idle_reclaim_skipped_when_panel_visible() {
         let mut app = make_app();
         let id = "com.example.idle";
-        app.sources.push(SourceSummary {
+        app.pool.sources.push(SourceSummary {
             id: id.to_string(),
             name: id.to_string(),
             status: SourceStatus::Warm { commands: 1 },
         });
-        app.processes.push((id.to_string(), dying_client(id)));
-        app.lru.access_at(
+        app.pool.processes.push((id.to_string(), dying_client(id)));
+        app.pool.lru.access_at(
             id,
             std::time::Instant::now() - WARM_IDLE_TTL - std::time::Duration::from_secs(5),
         );
-        app.visible = true;
+        app.window.visible = true;
 
         app.warm_idle_reclaim();
 
         assert!(
-            app.processes.iter().any(|(pid, _)| pid == id),
+            app.pool.processes.iter().any(|(pid, _)| pid == id),
             "可见时不应回收保活进程"
         );
-        assert!(app.lru.contains(id), "可见时 LRU 记录不变");
+        assert!(app.pool.lru.contains(id), "可见时 LRU 记录不变");
     }
 }

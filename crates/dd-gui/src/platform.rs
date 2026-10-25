@@ -30,14 +30,18 @@ pub(crate) use shell::{is_allowed_open_url, open_path, reveal_in_folder, run_as_
 use cursor::cursor_should_hide;
 #[cfg(test)]
 use paths::file_url_candidates;
-#[cfg(test)]
+// reveal_path_allowed 仅 Windows 有实现体（explorer 参数门控），测试亦为
+// Windows 腿——非 Windows 下该 use 引用不存在的项会直接编译错误。
+#[cfg(all(test, windows))]
 use shell::reveal_path_allowed;
 
 #[cfg(test)]
 mod tests {
+    #[cfg(windows)]
+    use super::reveal_path_allowed;
     use super::{
-        cursor_should_hide, file_url_candidates, is_allowed_open_url, reveal_path_allowed,
-        MouseHideScope, CURSOR_IDLE_HIDE,
+        cursor_should_hide, file_url_candidates, is_allowed_open_url, MouseHideScope,
+        CURSOR_IDLE_HIDE,
     };
     use std::time::{Duration, Instant};
 
