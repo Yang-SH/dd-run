@@ -11,10 +11,14 @@
 //!   协议 / 清单零改动。隐私姿态：纯本地文件读取，与 README 非目标一致。
 //! - 平台策略：Windows 优先（其余平台编译恒成立占位，同 apps P4 口径）。
 
-use crate::{i18n::tr, Effect, ExtensionSpec};
+#[cfg(windows)]
+use crate::Effect;
+use crate::{i18n::tr, ExtensionSpec};
 use dd_protocol::messages::InvokeParams;
 use dd_protocol::methods::METHOD_HOST_OPEN_URL;
-use dd_protocol::model::{CommandItem, CommandRef, CommandResult, Icon, IconKind};
+use dd_protocol::model::{CommandItem, CommandResult};
+#[cfg(windows)]
+use dd_protocol::model::{CommandRef, Icon, IconKind};
 
 pub const EXT_ID: &str = "com.ddrun.bookmarks";
 
@@ -22,6 +26,7 @@ pub const EXT_ID: &str = "com.ddrun.bookmarks";
 /// 尾部提示条目）。
 pub const MAX_ENTRIES: usize = 2000;
 
+#[cfg(windows)]
 const GLYPH: char = '\u{E718}'; // FavoriteStar
 
 pub fn spec() -> ExtensionSpec {
@@ -50,6 +55,7 @@ pub fn spec() -> ExtensionSpec {
 
 /// 一条扁平化书签（`folder` = 浏览器/根/子文件夹路径，进条目 subtitle）。
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg(any(windows, test))]
 pub(crate) struct Bookmark {
     pub title: String,
     pub url: String,
@@ -61,6 +67,7 @@ pub(crate) struct Bookmark {
 /// 损坏文件（非 JSON / 无 `roots` / roots 非对象）→ `None`（调用方跳过该
 /// 文件，不影响其余浏览器/配置档）；`url` 型节点缺 `url` 字段跳过；未知
 /// `type` 跳过（向前兼容）。
+#[cfg(any(windows, test))]
 pub(crate) fn parse_bookmarks_json(text: &str, browser: &str) -> Option<Vec<Bookmark>> {
     let value = serde_json::from_str::<serde_json::Value>(text).ok()?;
     let roots = value.get("roots")?.as_object()?;
@@ -85,6 +92,7 @@ pub(crate) fn parse_bookmarks_json(text: &str, browser: &str) -> Option<Vec<Book
 }
 
 /// 根键显示名（书签栏 / 其他书签 / 移动设备书签）。
+#[cfg(any(windows, test))]
 fn root_label(key: &str) -> &'static str {
     match key {
         "bookmark_bar" => tr("书签栏", "Bookmarks bar"),
@@ -95,6 +103,7 @@ fn root_label(key: &str) -> &'static str {
 }
 
 /// 递归扁平化一个书签节点；返回是否已触及截断上限（触顶后停止收集）。
+#[cfg(any(windows, test))]
 fn flatten_node(node: &serde_json::Value, folder: &str, out: &mut Vec<Bookmark>) -> bool {
     if out.len() >= MAX_ENTRIES {
         return true;

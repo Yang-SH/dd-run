@@ -24,8 +24,10 @@ use dd_protocol::model::{CommandItem, CommandRef, CommandResult, Icon, IconKind}
 
 /// 无头执行超时（毫秒）：超时 kill，避免长命令挂死扩展进程（宿主侧另有 10s
 /// invoke 超时会杀整个扩展进程并触发崩溃计数，这里先自行兜底）。
+#[cfg(windows)]
 const EXEC_TIMEOUT_MS: u64 = 3_000;
 /// 结果摘要最大长度（超出截断 + 省略号）。
+#[cfg(windows)]
 const MAX_SUMMARY: usize = 120;
 
 pub fn spec() -> ExtensionSpec {

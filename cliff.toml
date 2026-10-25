@@ -1,0 +1,37 @@
+# git-cliff 配置（B4，dd-run-改进分析.md §3.3/批次 B）：仅用于 Release body 的
+# 「提交明细」自动生成——`git-cliff --unreleased --strip all` 输出自上个 tag
+# 以来的 Conventional Commits 分组列表，由 release.yml 追加在人手写的
+# Release Highlights 之后。**不覆盖仓库内 CHANGELOG.md**（人工详账，与
+# implementation.md §7 联动，见分析文档 B4 的范围记档）。
+[changelog]
+# 迭代写法 = git-cliff 官方文档现行模式（commits | group_by）；分组先后随
+# 提交出现序（明细场景可接受）。{% for %} 尾部反斜杠 = 去 Tera 输出空行。
+body = """
+{% for group, commits in commits | group_by(attribute="group") %}\
+### {{ group | upper_first }}
+
+{% for commit in commits %}\
+- {{ commit.message | upper_first }}（{{ commit.id | truncate(length=7, end="") }}）
+{% endfor %}\
+{% endfor %}\
+"""
+footer = ""
+trim = true
+
+[git]
+conventional_commits = true
+filter_unconventional = false
+protect_breaking_commits = true
+tag_pattern = "v*"
+sort_commits = "oldest"
+commit_parsers = [
+    { message = "^feat", group = "新功能（feat）" },
+    { message = "^fix", group = "修复（fix）" },
+    { message = "^perf", group = "性能（perf）" },
+    { message = "^refactor", group = "重构（refactor）" },
+    { message = "^docs", group = "文档（docs）" },
+    { message = "^ci", group = "构建与 CI（ci）" },
+    { message = "^test", group = "测试（test）" },
+    { message = "^chore|^build", group = "杂务（chore/build）" },
+    { message = ".*", group = "其他" },
+]

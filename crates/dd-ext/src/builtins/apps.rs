@@ -29,14 +29,19 @@
 //! （`.desktop` + PATH）为**编译恒成立占位**，待对应平台轮实现。
 //! 参考实现：[`docs/m4-record.md`](../../docs/m4-record.md) P4 决策。
 
-use crate::{i18n::tr, Effect, ExtensionSpec};
+#[cfg(windows)]
+use crate::Effect;
+use crate::{i18n::tr, ExtensionSpec};
 use dd_protocol::messages::InvokeParams;
-use dd_protocol::model::{CommandItem, CommandRef, CommandResult, Icon, IconKind};
+use dd_protocol::model::{CommandItem, CommandResult};
+#[cfg(windows)]
+use dd_protocol::model::{CommandRef, Icon, IconKind};
 
 /// 稳定版「UTF-16 LE 字节 → String」解码。
 /// `String::from_utf16le_lossy` 在稳定工具链上仍受 `str_from_utf16_endian`
 /// feature gate 限制，这里手写等价实现（LE 字节 → u16 → 稳定的
 /// `String::from_utf16_lossy`），避免引入 nightly 依赖。
+#[cfg(windows)]
 fn from_utf16le_lossy(bytes: &[u8]) -> String {
     let mut v = Vec::with_capacity(bytes.len() / 2);
     let mut i = 0;
@@ -60,6 +65,7 @@ pub fn set_configured_blocklist(text: Option<String>) {
 }
 
 /// 读取当前注入的屏蔽名单原文（`sys::user_blocklist` 解析消费）。
+#[cfg(windows)]
 fn configured_blocklist_text() -> Option<String> {
     CONFIGURED_BLOCKLIST
         .read()

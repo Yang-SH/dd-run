@@ -406,6 +406,7 @@ fn filetime_to_unix(ft: i64) -> i64 {
 
 /// 合并 FILETIME 的高/低 32 位为一个 i64（IPC 通道用；纯函数便于离线单测）。
 /// Windows `FILETIME` = 100ns 间隔、自 1601-01-01 起算的 64 位值，拆为两个 u32。
+#[cfg(any(windows, test))]
 fn combine_filetime(high: u32, low: u32) -> i64 {
     (((high as u64) << 32) | (low as u64)) as i64
 }
