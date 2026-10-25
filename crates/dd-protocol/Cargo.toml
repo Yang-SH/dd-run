@@ -1,9 +1,10 @@
 [package]
 name = "dd-protocol"
+# 协议版本独立于产品版本（见根 Cargo.toml [workspace.package] 注释），随契约演进，不随发版 bump。
 version = "1.0.0"
-edition = "2021"
-rust-version = "1.95"
-license = "MIT"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
 description = "dd-run Extension Protocol v1.0 的 Rust 类型投影与 NDJSON 成帧（契约来源：docs/protocol.md）"
 publish = false
 
@@ -14,3 +15,11 @@ serde_json = "1"
 # `std` 必须显式开启：`set_boxed_logger` 在 `alloc` 之下，默认 feature 在 workspace
 # 合并后可能被别的依赖关掉（实测踩到），显式声明最稳。
 log = { version = "0.4", features = ["std"] }
+
+# ── §4.5（dd-run-改进分析.md）：Decoder::push 成帧热路径 bench（仅 dev 面）──
+[dev-dependencies]
+criterion = "0.5"
+
+[[bench]]
+name = "decoder"
+harness = false

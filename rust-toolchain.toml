@@ -1,0 +1,13 @@
+# 工具链钉扎（dd-run-改进分析.md A1）：MSRV 显式固定为 rust-version = "1.95"，
+# 干净机器 clone 后 rustup 自动安装本文件声明的工具链，cargo test 零手动步骤。
+# 注意：
+# - 本地 Windows 日常构建仍需 gnu 宿主工具链覆盖（channel 1.95.0 在 Windows
+#   解析为 msvc 宿主，本机无 VS 链接器；§5.7 去 pin 后 config.toml 不再指定
+#   target，构建 target = 所用工具链的宿主三元组）——用
+#   `cargo +stable-x86_64-pc-windows-gnu ...` 覆盖本文件（+旗标优先级最高）。
+# - CI 三 job 用 RUSTUP_TOOLCHAIN 环境变量覆盖本文件（该变量优先于
+#   rust-toolchain.toml），Windows job 保持 stable-x86_64-pc-windows-gnu
+#   gnu 宿主不变，见 .github/workflows/ci.yml。
+[toolchain]
+channel = "1.95.0"
+components = ["clippy", "rustfmt"]

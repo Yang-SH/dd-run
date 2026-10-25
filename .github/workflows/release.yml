@@ -25,18 +25,27 @@ jobs:
     name: build + portable zip + GitHub Release
     runs-on: windows-latest
     timeout-minutes: 45
+    env:
+      # A1：覆盖仓库 rust-toolchain.toml（优先级高于 rustup default），锁 gnu
+      # 宿主工具链（自带 self-contained 链接器），与 ci.yml Windows job 同语义。
+      RUSTUP_TOOLCHAIN: stable-x86_64-pc-windows-gnu
     steps:
+      # B4：fetch-depth 0 = 全历史 + tag——git-cliff 提交明细需要「自上个 tag
+      # 以来」的完整提交区间（默认浅克隆只有 1 个 commit，明细必空）。
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: 0
 
-      # tag（ vX.Y.Z）必须与 crates/dd-gui/Cargo.toml 的 version 一致，防错发。
+      # tag（vX.Y.Z）必须与根 Cargo.toml 的 workspace version 一致（5 个产品 crate 经
+      # version.workspace 继承，此处即全部产品版本），防错发。
       - name: Verify tag matches Cargo.toml version
         if: github.event_name == 'push'
         shell: bash
         run: |
-          VER=$(grep -m1 '^version' crates/dd-gui/Cargo.toml | sed -E 's/.*"([^"]+)".*/\1/')
+          VER=$(grep -m1 '^version' Cargo.toml | sed -E 's/.*"([^"]+)".*/\1/')
           echo "crate version = ${VER}, tag = ${GITHUB_REF_NAME}"
           if [ "v${VER}" != "${GITHUB_REF_NAME}" ]; then
-            echo "::error::tag ${GITHUB_REF_NAME} 与 crates/dd-gui/Cargo.toml 版本 v${VER} 不一致"
+            echo "::error::tag ${GITHUB_REF_NAME} 与 根 Cargo.toml（workspace 继承单一来源）版本 v${VER} 不一致"
             exit 1
           fi
 
@@ -61,8 +70,9 @@ jobs:
           printf '%s' "${DDRUN_SIGN_KEY}" > "${KEY_FILE}"
           echo "DDRUN_SIGN_KEY=${KEY_FILE}" >> "$GITHUB_ENV"
 
-      # 仓库 .cargo/config.toml 默认 target = x86_64-pc-windows-gnu；gnu 工具链自带
-      # self-contained 链接器（package.sh 对 self-contained 仅作 PATH 兜底追加）。
+      # §5.7：config.toml 不再钉扎 target——构建 target = RUSTUP_TOOLCHAIN 宿主
+      # 三元组（windows-gnu）；gnu 工具链自带 self-contained 链接器（package.sh
+      # 对 self-contained 仅作 PATH 兜底追加）。
       # dist/dev/ 下的 dd-run-cli/dd-ext-sample 是本机自检工具，不进发布 zip。
       - name: Build & package
         shell: bash
@@ -78,24 +88,46 @@ jobs:
         shell: pwsh
         run: pwsh -NoProfile -File tools/portable_zip.ps1
 
+      # B4（dd-run-改进分析.md）：Release body = 人手写的 Release Highlights
+      # （下方 heredoc，**每次发版人工更新本次亮点小节**）+ git-cliff 自动生成的
+      # 「提交明细」（自上个 tag 以来，cliff.toml 分组）。git-cliff 失败不阻塞
+      # 发版（body 文件恒存在，仅缺明细段）。仓库内 CHANGELOG.md 是人工详账，
+      # **不**被生成物覆盖（分析文档 B4 范围记档）。
+      - name: Install git-cliff (prebuilt)
+        if: github.event_name == 'push'
+        uses: taiki-e/install-action@ab6895351a88b908e96a4697860d4ffea5e57dbe # v2
+        with:
+          tool: git-cliff
+
+      - name: Generate release body (highlights + git-cliff detail)
+        if: github.event_name == 'push'
+        shell: bash
+        run: |
+          cat > release_body.md <<'BODY'
+          dd-run ${{ github.ref_name }} — 免安装绿色版（portable）
+
+          **本次亮点（发版时人工更新）**
+
+          - 解压后直接运行 `dd-run-<版本>.exe`（单文件，5 个内置扩展以 in-process 方式内置于宿主进程，无安装器）
+          - `extensions.d/` 为文件搜索扩展 sidecar：与 exe 保持相对位置即可被自动发现（需本机装有 [Everything](https://www.voidtools.com/)）
+          - 数据目录：`%APPDATA%\dd-run\`（设置 / 扩展清单 / 缓存 / 日志）；开机自启在应用内设置页开启
+          - 完整变更台账见仓库 [CHANGELOG.md](https://github.com/Yang-SH/dd-run/blob/main/CHANGELOG.md)
+          BODY
+          {
+            echo ""
+            echo "---"
+            echo ""
+            echo "**提交明细（自上个 tag 起，自动生成）**"
+            echo ""
+            git-cliff --unreleased --strip all >> release_body.md || echo "（git-cliff 生成失败，明细缺失）"
+          } >> release_body.md
+
       - name: Attach to GitHub Release
         if: github.event_name == 'push'
         uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3
         with:
           files: dist/dd-run-*-portable.zip
-          body: |
-            dd-run ${{ github.ref_name }} — 免安装绿色版（portable）
-
-            **本次亮点（自 v0.2.0 起）**
-
-            - **跨平台（O6）**：macOS / Linux 免安装包首发（`dd-run-<ver>-linux-<arch>.tar.gz` / `dd-run-<ver>-macos-<arch>.tar.gz`，单二进制 + 运行时依赖说明，CI 门禁预览版）；三平台阻塞 CI 门禁（build / test / conformance / roundtrip）；全局热键接入 `global-hotkey`（Linux 仅 X11，Wayland 降级）、单实例互斥（Unix socket）
-            - **扩展签名（O14）全链落地**：发行方 Ed25519 真钥——本包 `extensions.d/` 内随附有效 `.sig`，随包扩展验签通过即免信任同意（`.sig` 与清单保持相对位置即可）
-            - 修复：热键重注册降级分支事件契约偏差；CI 签名 secret 错配；`dist/dev` 自检工具陈旧
-            - ⚠️ Windows 便携包单件较 0.2.0 约 **+1.2%**（扩展签名链增量）；文件搜索扩展仍需 [Everything](https://www.voidtools.com/)（仅 Windows）
-
-            - 解压后直接运行 `dd-run-<版本>.exe`（单文件，5 个内置扩展以 in-process 方式内置于宿主进程，无安装器）
-            - `extensions.d/` 为文件搜索扩展 sidecar：与 exe 保持相对位置即可被自动发现（需本机装有 [Everything](https://www.voidtools.com/)）
-            - 数据目录：`%APPDATA%\dd-run\`（设置 / 扩展清单 / 缓存）；开机自启在应用内设置页开启
+          body_path: release_body.md
 
   # O6 批次四（2026-10-11）：Linux/macOS 发布产物——免安装单二进制 tar.gz
   # （optimization-plan §2.6.3）。filesearch sidecar 为 Windows 专属不随包
@@ -105,6 +137,9 @@ jobs:
     name: build + tar.gz (linux) + GitHub Release
     runs-on: ubuntu-latest
     timeout-minutes: 45
+    env:
+      # A1：覆盖仓库 rust-toolchain.toml，维持工具链选择零变化。
+      RUSTUP_TOOLCHAIN: stable
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
@@ -112,10 +147,10 @@ jobs:
         if: github.event_name == 'push'
         shell: bash
         run: |
-          VER=$(grep -m1 '^version' crates/dd-gui/Cargo.toml | sed -E 's/.*"([^"]+)".*/\1/')
+          VER=$(grep -m1 '^version' Cargo.toml | sed -E 's/.*"([^"]+)".*/\1/')
           echo "crate version = ${VER}, tag = ${GITHUB_REF_NAME}"
           if [ "v${VER}" != "${GITHUB_REF_NAME}" ]; then
-            echo "::error::tag ${GITHUB_REF_NAME} 与 crates/dd-gui/Cargo.toml 版本 v${VER} 不一致"
+            echo "::error::tag ${GITHUB_REF_NAME} 与 根 Cargo.toml（workspace 继承单一来源）版本 v${VER} 不一致"
             exit 1
           fi
 
@@ -125,8 +160,8 @@ jobs:
       - name: Cache cargo
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
 
-      # package.sh 非 Windows 分支：显式 --target 宿主三元组（覆盖 config.toml
-      # 的 windows-gnu 硬编码，与 ci.yml 门禁 CARGO_BUILD_TARGET 同语义），
+      # package.sh 非 Windows 分支：显式 --target 宿主三元组（§5.7 去 pin 后
+      # 与宿主默认一致，保留为显式声明；与 ci.yml 门禁 CARGO_BUILD_TARGET 同语义），
       # 产出 dist/dd-run-<ver>-linux-<arch>.tar.gz。
       - name: Build & package (linux tar.gz)
         run: bash tools/package.sh
@@ -141,6 +176,9 @@ jobs:
     name: build + tar.gz (macOS) + GitHub Release
     runs-on: macos-latest
     timeout-minutes: 45
+    env:
+      # A1：同 release-linux——覆盖仓库 rust-toolchain.toml。
+      RUSTUP_TOOLCHAIN: stable
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
@@ -148,10 +186,10 @@ jobs:
         if: github.event_name == 'push'
         shell: bash
         run: |
-          VER=$(grep -m1 '^version' crates/dd-gui/Cargo.toml | sed -E 's/.*"([^"]+)".*/\1/')
+          VER=$(grep -m1 '^version' Cargo.toml | sed -E 's/.*"([^"]+)".*/\1/')
           echo "crate version = ${VER}, tag = ${GITHUB_REF_NAME}"
           if [ "v${VER}" != "${GITHUB_REF_NAME}" ]; then
-            echo "::error::tag ${GITHUB_REF_NAME} 与 crates/dd-gui/Cargo.toml 版本 v${VER} 不一致"
+            echo "::error::tag ${GITHUB_REF_NAME} 与 根 Cargo.toml（workspace 继承单一来源）版本 v${VER} 不一致"
             exit 1
           fi
 
@@ -169,3 +207,48 @@ jobs:
         uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3
         with:
           files: dist/dd-run-*-macos-*.tar.gz
+
+  # A2（dd-run-改进分析.md）：发布产物可验证性——三平台产物全部附着后，
+  # 生成统一 SHA256SUMS.txt（覆盖全部资产，sha256sum -c 可验）并为本 run
+  # 构建的产物生成 build provenance 出处证明（GitHub 原生 attestation，
+  # 免费、无需证书；`gh attestation verify` 可验来源工作流与 commit）。
+  release-sums:
+    name: SHA256SUMS + build provenance
+    needs: [release, release-linux, release-macos]
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    steps:
+      - name: Download release assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p dist
+          gh release download "${GITHUB_REF_NAME}" --repo "${GITHUB_REPOSITORY}" \
+            --pattern 'dd-run-*-portable.zip' \
+            --pattern 'dd-run-*-linux-*.tar.gz' \
+            --pattern 'dd-run-*-macos-*.tar.gz' --dir dist
+          ls -l dist
+
+      - name: Generate SHA256SUMS.txt
+        working-directory: dist
+        run: |
+          sha256sum dd-run-* > SHA256SUMS.txt
+          cat SHA256SUMS.txt
+
+      - name: Generate build provenance (attestation)
+        uses: actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a # v3
+        with:
+          subject-path: |
+            dist/dd-run-*-portable.zip
+            dist/dd-run-*-linux-*.tar.gz
+            dist/dd-run-*-macos-*.tar.gz
+
+      - name: Attach SHA256SUMS.txt to GitHub Release
+        uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3
+        with:
+          files: dist/SHA256SUMS.txt

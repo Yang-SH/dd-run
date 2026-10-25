@@ -33,8 +33,8 @@ $root = Split-Path -Parent $PSScriptRoot   # 仓库根
 Push-Location $root
 try {
   if (-not $Version) {
-    $m = Select-String -Path "crates/dd-gui/Cargo.toml" -Pattern '^version = "(.+)"'
-    if (-not $m) { throw "无法从 crates/dd-gui/Cargo.toml 解析版本" }
+    $m = Select-String -Path "Cargo.toml" -Pattern '^version = "(.+)"'
+    if (-not $m) { throw "无法从根 Cargo.toml（workspace 单一来源）解析版本" }
     $Version = $m.Matches[0].Groups[1].Value
   }
 

@@ -1,9 +1,9 @@
 [package]
 name = "dd-gui"
-version = "0.2.1"
-edition = "2021"
-rust-version = "1.95"
-license = "MIT"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
 description = "dd-run host UI: frameless always-on-top command palette panel (egui)。对外入口产物名 `dd-run`（[[bin]]），crate 包名保持 `dd-gui` 以沿用内部引用。"
 
 # 对外入口：产物名为 `dd-run`（单文件宿主，内含 5 个内置扩展 exe，见 build.rs +
@@ -18,6 +18,12 @@ dd-protocol = { path = "../dd-protocol" }
 # M9：内置扩展 in-process 调用（直接 `dd_ext::serve_line`，不 spawn 子进程）。
 dd-ext = { path = "../dd-ext" }
 serde_json = "1"
+# §5.1（dd-run-改进分析.md）：usage.json 序列化。`serde`/`serde_derive` 已在
+# 依赖树内（dd-protocol 传递）→ lock 零新增。
+serde = { version = "1", features = ["derive"] }
+# C3（dd-run-改进分析.md §4.6）：SettingsImportError。`thiserror 2.0.20` 已在
+# 依赖树内（传递依赖）→ lock 零新增。
+thiserror = "2"
 # O4 可观测性：`log` 仅为 facade（零传递依赖），后端由 dd-protocol::logging 提供。
 log = "0.4"
 # R-25 崩溃取证：panic 记录的本地时间戳。chrono 0.4 已在依赖树内（dd-host /
@@ -76,3 +82,22 @@ image = { version = "0.25", default-features = false, features = ["png", "ico", 
 # catch_unwind 双护栏。选型依据见 §2.6.2。
 [target.'cfg(not(windows))'.dependencies]
 global-hotkey = "0.8"
+
+# ── B1（dd-run-改进分析.md §3.2）：UI 快照测试（仅 dev/测试编译，不进产物）──
+# 金图护栏：布局 / 间距 / 配色 / 层级回归，替代「改 UI 必三平台手测」。
+# 与正常依赖的 eframe 同版本但重开 default_fonts——egui 内置字体（Ubuntu-Light
+# 等）字节随 epaint 源码分发、全机器逐字节一致，金图跨机器 / 跨 runner 稳定
+#（刻意不注入系统字体：runner 镜像更新会漂移；内置字体无 CJK，中文渲染为
+# 方块但同样逐字节确定，布局回归不受影响）。lock 新增依赖仅 dev 面。
+[dev-dependencies]
+eframe = { version = "0.36", features = ["default_fonts"] }
+egui_kittest = { version = "0.36", features = ["wgpu", "snapshot", "eframe"] }
+
+# ── §4.5（dd-run-改进分析.md）：性能门槛 bench（仅 dev/测试编译，不进产物）──
+# 首屏热路径基线：FuzzyMatcher::score / set_query（含 recompute_visible）/ flatten。
+# CI bench job 与基线比对（>20% 才红）见 tools/bench_compare.mjs。lock 新增仅 dev 面。
+criterion = "0.5"
+
+[[bench]]
+name = "hot_paths"
+harness = false

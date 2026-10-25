@@ -2,6 +2,15 @@
 resolver = "2"
 members = ["crates/*"]
 
+# 产品版本单一来源：5 个产品 crate（dd-gui / dd-host / dd-ext / dd-ext-sample /
+# dd-run-cli）以 `version.workspace = true` 继承，发版 bump 只改这一处；
+# dd-protocol 保持独立 1.0.0 版本线（协议版本独立于产品版本，随契约演进）。
+[workspace.package]
+version = "0.2.1"
+edition = "2021"
+rust-version = "1.95"
+license = "MIT"
+
 # 发布 profile：只调编译器层面参数，不改任何代码/依赖/协议字段。
 # - strip = "symbols"：剥符号表（windows-gnu 默认 release 保留，纯体积税）
 # - lto = "fat" + codegen-units = 1：跨 crate 死代码消除，编译更慢但产物更小

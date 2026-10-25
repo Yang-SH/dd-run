@@ -23,3 +23,8 @@ Cargo.lock.orig
 /.docscan.txt
 /.doclinks.txt
 
+
+# B1：kittest 快照测试的比对衍生物（diff/new/old），仅比对失败时生成，不入库
+crates/dd-gui/tests/snapshots/*.diff.png
+crates/dd-gui/tests/snapshots/*.new.png
+crates/dd-gui/tests/snapshots/*.old.png

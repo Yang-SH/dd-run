@@ -1,9 +1,9 @@
 [package]
 name = "dd-run-cli"
-version = "0.2.1"
-edition = "2021"
-rust-version = "1.95"
-license = "MIT"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
 description = "dd-run 开发自检 CLI（M0：扩展清单扫描与协议全链路自检；产物改名 dd-run-cli 以把 dd-run.exe 让给 GUI 宿主入口）"
 publish = false
 

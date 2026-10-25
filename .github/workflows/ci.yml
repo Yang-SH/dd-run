@@ -13,6 +13,11 @@ jobs:
     name: build / test / clippy / fmt (windows-gnu)
     runs-on: windows-latest
     timeout-minutes: 30
+    env:
+      # A1：仓库 rust-toolchain.toml（channel 1.95.0）优先级高于 `rustup default`
+      # ——本 job 必须锁 gnu 宿主工具链（自带 self-contained 链接器，见下），
+      # 用 RUSTUP_TOOLCHAIN 显式覆盖（该变量优先于 rust-toolchain.toml）。
+      RUSTUP_TOOLCHAIN: stable-x86_64-pc-windows-gnu
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
@@ -22,11 +27,21 @@ jobs:
           rustup default stable-x86_64-pc-windows-gnu
           rustup component add clippy rustfmt
 
+      # P2-4.5（2026-10-25 核对轮）：rustc 对 windows-gnu 的 raw-dylib 导入库生成
+      # 需 dlltool.exe，其位置在工具链 bin/self-contained/ 子目录——部分 rustc
+      # 版本（本机 1.98.0 实测）只按 PATH 查找。追加进 GITHUB_PATH；若 runner
+      # 工具链本就无需 dlltool 则为无害 no-op。
+      - name: Ensure dlltool discoverable (raw-dylib, windows-gnu)
+        run: >
+          Add-Content $env:GITHUB_PATH
+          "$env:USERPROFILE\.rustup\toolchains\stable-x86_64-pc-windows-gnu\lib\rustlib\x86_64-pc-windows-gnu\bin\self-contained"
+
       - name: Cache cargo
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
 
-      # 仓库 .cargo/config.toml 默认 target = x86_64-pc-windows-gnu，
-      # rustup 的 gnu 工具链自带 self-contained 链接器，runner 无需外部 mingw。
+      # §5.7：config.toml 不再钉扎 build.target——构建 target = RUSTUP_TOOLCHAIN
+      # 的宿主三元组（windows-gnu）；rustup 的 gnu 工具链自带 self-contained
+      # 链接器，runner 无需外部 mingw。
       - name: Build (workspace, all targets)
         run: cargo build --workspace --all-targets
 
@@ -81,10 +96,12 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     env:
-      # 仓库 .cargo/config.toml 硬编码 build.target = x86_64-pc-windows-gnu
-      # （本地单平台开发口径）——CI 探索批用 env 覆盖回宿主三元组，否则
-      # 非 Windows runner 上连 windows-gnu 的 std 都没有（E0463）。
+      # 显式钉宿主三元组（§5.7 去 pin 后与宿主默认一致，保留为防漂移的显式声明；
+      # 历史：config.toml 曾硬编码 windows-gnu，无此覆盖则连 std 都没有——E0463）。
       CARGO_BUILD_TARGET: x86_64-unknown-linux-gnu
+      # A1：覆盖仓库 rust-toolchain.toml（其优先级高于 `rustup default`），
+      # 维持 unix job 工具链选择零变化。
+      RUSTUP_TOOLCHAIN: stable
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
@@ -96,6 +113,11 @@ jobs:
 
       - name: Build (workspace, all targets)
         run: cargo build --workspace --all-targets
+
+      # A3（dd-run-改进分析.md）：跨平台 clippy 门禁——Windows 专属代码在
+      # unix 下的死代码/未用导入已当批清零（41 条），自此三平台同门禁。
+      - name: Clippy (-D warnings)
+        run: cargo clippy --workspace --all-targets -- -D warnings
 
       - name: Test (workspace)
         run: |
@@ -116,13 +138,96 @@ jobs:
       - name: Roundtrip smoke (spawn, sample extension)
         run: cargo run -p dd-run-cli -- --roundtrip
 
+  # B1（dd-run-改进分析.md §3.2）：UI 快照金图 job——只在本 job 显式跑
+  # （`-- --ignored`；快照测试已标 #[ignore]，常规 test/clippy 不触 wgpu）。
+  # Windows runner 走 DX12 WARP 软件适配器。**continue-on-error 先行观察**：
+  # 金图为本机 GPU 生成，WARP 与本地 GPU 的像素一致性未经实测——首绿后摘除
+  # 本标记转为阻塞门禁（届时若像素漂移，在 kittest.toml 调阈值或以 CI 出图）。
+  snapshot:
+    name: UI snapshots (windows, WARP)
+    runs-on: windows-latest
+    timeout-minutes: 30
+    continue-on-error: true
+    env:
+      # 同 check（windows-gnu）：覆盖仓库 rust-toolchain.toml。
+      RUSTUP_TOOLCHAIN: stable-x86_64-pc-windows-gnu
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Install toolchain (stable-x86_64-pc-windows-gnu)
+        run: |
+          rustup toolchain install stable-x86_64-pc-windows-gnu --profile minimal
+          rustup default stable-x86_64-pc-windows-gnu
+          rustup component add clippy rustfmt
+
+      # 同 check：raw-dylib 的 dlltool 查找防御（快照测试同样编译 dev 依赖链）。
+      - name: Ensure dlltool discoverable (raw-dylib, windows-gnu)
+        run: >
+          Add-Content $env:GITHUB_PATH
+          "$env:USERPROFILE\.rustup\toolchains\stable-x86_64-pc-windows-gnu\lib\rustlib\x86_64-pc-windows-gnu\bin\self-contained"
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+
+      - name: Snapshot tests (golden comparison)
+        run: cargo test -p dd-gui --lib snapshot -- --ignored
+
+  # §4.5（dd-run-改进分析.md）：性能趋势回归——PR base 与 head 各跑一遍
+  # criterion bench（fast 参数压时长），共享 CARGO_TARGET_DIR 后用
+  # tools/bench_compare.mjs 比中位数，退化 >20% 才红（runner 裸机噪音大，
+  # 高阈值防误报）。**continue-on-error 观察模式**：runner 噪音分布未经
+  # 实测，首绿观察后转阻塞（与 B1 snapshot 同节奏）；仅 PR 触发（push 全量
+  # 跑双份 bench 纯烧时间，main 上的性能回归由 PR 阶段拦下）。
+  bench:
+    name: perf trend (linux, base vs head)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    continue-on-error: true
+    if: github.event_name == 'pull_request'
+    env:
+      # 显式钉宿主三元组（§5.7 去 pin 后与宿主默认一致）+ 覆盖 rust-toolchain.toml。
+      CARGO_BUILD_TARGET: x86_64-unknown-linux-gnu
+      RUSTUP_TOOLCHAIN: stable
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: 0
+
+      - name: Install toolchain (stable)
+        run: rustup toolchain install stable --profile minimal && rustup default stable
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+
+      - name: Checkout PR base as sibling worktree
+        run: git worktree add ../dd-run-base "${{ github.event.pull_request.base.sha }}"
+
+      # 两棵树共用绝对 target 目录：依赖只编一次，两份基线落同一 criterion/ 下。
+      - name: Bench (PR base)
+        run: >
+          cd ../dd-run-base &&
+          CARGO_TARGET_DIR="$GITHUB_WORKSPACE/target" cargo bench
+          -p dd-gui -p dd-protocol --bench hot_paths --bench decoder --
+          --save-baseline base --warm-up-time 1 --measurement-time 2 --sample-size 20
+
+      - name: Bench (PR head)
+        run: >
+          cargo bench
+          -p dd-gui -p dd-protocol --bench hot_paths --bench decoder --
+          --save-baseline head --warm-up-time 1 --measurement-time 2 --sample-size 20
+
+      - name: Compare medians (>20% regression fails)
+        run: node tools/bench_compare.mjs target/criterion base head --threshold 20
+
   check-macos:
     name: build / test (macos, O6 gate)
     runs-on: macos-latest
     timeout-minutes: 30
     env:
-      # 同上：覆盖 config.toml 的 windows-gnu 默认目标。
+      # 显式钉宿主三元组（§5.7 去 pin 后与宿主默认一致，保留为防漂移的显式声明）。
       CARGO_BUILD_TARGET: aarch64-apple-darwin
+      # A1：同 check-linux——覆盖仓库 rust-toolchain.toml，维持零变化。
+      RUSTUP_TOOLCHAIN: stable
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
@@ -134,6 +239,10 @@ jobs:
 
       - name: Build (workspace, all targets)
         run: cargo build --workspace --all-targets
+
+      # A3：同 check-linux——三平台 clippy 同门禁（aarch64-apple-darwin 已实测 0 告警）。
+      - name: Clippy (-D warnings)
+        run: cargo clippy --workspace --all-targets -- -D warnings
 
       - name: Test (workspace)
         run: |
