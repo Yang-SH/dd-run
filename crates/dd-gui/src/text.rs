@@ -227,6 +227,47 @@ const I18N: &[(&str, &str, &str)] = &[
     ),
     ("toast.ext_missing", "扩展信息缺失，无法执行", "Extension info missing; cannot run"),
     ("toast.invoke_fail", "命令执行失败：{e}", "Failed to run command: {e}"),
+    // C3（§4.6）：失败分类文案——超时与崩溃不再共用「命令执行失败：{e}」，
+    // 各给可操作建议（超时可重试 / 崩溃看扩展诊断）。
+    (
+        "toast.invoke_timeout",
+        "命令超时（{e}），可稍后重试",
+        "Command timed out ({e}) — try again in a moment",
+    ),
+    (
+        "toast.invoke_crashed",
+        "扩展进程已退出（{e}），命令回落暂存",
+        "Extension process exited ({e}) — command fell back to stub",
+    ),
+    // C4（§4.8）：配置来自更高 schema 版本 → 只读模式，保存被拒。
+    (
+        "toast.settings_read_only",
+        "配置来自更高版本的 dd-run，已禁用写入（请先升级）",
+        "Settings were written by a newer dd-run — writing is disabled (please upgrade)",
+    ),
+    // P2-5.3②③：诊断卡（打开日志目录 / 导出诊断报告）。
+    ("set.diag.name", "诊断", "Diagnostics"),
+    ("set.diag.desc", "日志留存于数据目录，排障时可一并导出", "Logs are kept in the data directory; export them together when troubleshooting"),
+    ("set.diag.open_logs", "打开日志目录", "Open log folder"),
+    ("set.diag.export", "导出诊断报告", "Export diagnostic report"),
+    ("toast.diag_dir_missing", "数据目录不可定位，日志功能不可用", "Data directory unavailable — logging disabled"),
+    ("toast.diag_dir_open_fail", "打开日志目录失败：{e}", "Failed to open log folder: {e}"),
+    ("toast.diag_exported", "诊断报告已导出：{file}", "Diagnostic report exported: {file}"),
+    ("toast.diag_export_fail", "诊断报告导出失败：{e}", "Failed to export diagnostic report: {e}"),
+    // §5.1：使用频次（frecency）卡。
+    ("set.usage.name", "使用数据", "Usage data"),
+    ("set.usage.desc", "按使用频次排序空查询首屏与同分搜索结果；数据仅存本机", "Orders the empty-query home screen and ties in search results by usage frequency; data stays on this device"),
+    ("set.usage.reset", "重置使用数据", "Reset usage data"),
+    ("toast.usage_reset", "使用数据已重置", "Usage data reset"),
+    // §5.2：检查更新（关于卡）。
+    ("set.about.name", "关于", "About"),
+    ("set.about.desc", "dd-run v{version}——便携启动器，数据全部留在本机", "dd-run v{version} — portable launcher, all data stays on this device"),
+    ("set.about.check", "检查更新", "Check for updates"),
+    ("set.about.autostart_check", "启动时检查更新", "Check for updates on startup"),
+    ("toast.update_checking", "正在检查更新…", "Checking for updates…"),
+    ("toast.update_latest", "已是最新版本", "You're up to date"),
+    ("toast.update_available", "有新版本：v{version}（请到 GitHub Releases 下载）", "New version available: v{version} (download from GitHub Releases)"),
+    ("toast.update_failed", "检查更新失败：{e}", "Update check failed: {e}"),
     ("toast.cmd_updated", "扩展命令已更新", "Extension commands updated"),
     ("toast.ext_retry", "正在重试扩展 {id}", "Retrying extension {id}"),
     (
