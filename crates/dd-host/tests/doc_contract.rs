@@ -12,8 +12,10 @@
 //! 6 条（manifest 跳过上报、UTF-8 无效帧、超时常量、semver 三段口径、
 //! 可执行补全、内置 frozen 降级）；`dd-protocol` / `dd-ext` / `dd-gui` 侧
 //! 现状注分别由各自 `doc_contract`（测试）文件承接——dd-gui 侧（toast 忽略
-//! state / frozen 门禁读清单 / 通知消费式取走等）见
-//! `crates/dd-gui/src/doc_contract_tests.rs`。
+//! state / frozen 门禁读清单 / 通知消费式取走等，其中 2 条就近放
+//! `aggregator.rs` 测试模块）见 `crates/dd-gui/src/doc_contract_tests.rs`。
+//! 本文件共 **7 个测试** = 上述 6 条 B2② 锚 + 1 条 C5 deprecated 锚
+//! （`manifest_icon_is_stored_unexpanded`，见下方 no-assert 台账首条）。
 //!
 //! `no-assert` 台账（dd-host 侧）：
 //! - manifest-schema.md §5「`icon` 无消费者」：**C5 收口后改为 deprecated 锚**

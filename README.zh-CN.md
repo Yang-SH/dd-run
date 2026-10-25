@@ -32,6 +32,7 @@
 - **多语言**：面板 UI 跟随系统显示语言。
 - **快且隔离**：内置扩展常驻就绪（进程内化，无启动开销）；第三方与文件搜索 sidecar 经 frozen / stub / LRU 懒加载；文件搜索 sidecar 以独立进程运行，其崩溃不影响宿主。
 - **便携分发**：`dist/dd-run-0.2.1.exe`（约 8.4 MB，8,722,944 字节，`strip = "symbols"`）是单文件，宿主与 5 个内置扩展进程内化打包（M9 起不再内嵌 exe）。文件搜索扩展以 sidecar 形态随 `dist/extensions.d/` 携带，宿主自动扫描可执行文件同目录。无安装器：解压发版 zip 即用。macOS / Linux 另有免安装 `tar.gz`（单二进制 + 运行时依赖 README；文件搜索按设计缺席）。
+- **用户数据集中一处**：数据目录内存放 `config.json`（设置）、`usage.json`（使用频次，可在设置页重置）、`extensions.d/`、`cache/`、`logs/`（运行日志 + panic 取证）——Windows 为 `%APPDATA%\dd-run`，macOS 为 `~/Library/Application Support/dd-run`，Linux 为 `$XDG_CONFIG_HOME/dd-run`（缺省 `~/.config/dd-run`）。设置页可打开日志目录、导出诊断报告（单 JSON）。
 
 ## 目标与非目标
 

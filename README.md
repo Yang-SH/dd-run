@@ -32,6 +32,7 @@ Its architecture and extension contracts are **distilled from Microsoft PowerToy
 - **Localized UI**: the panel follows the system display language.
 - **Fast & isolated**: built-in extensions are always ready (in-process, no launch cost); third-party and the file-search sidecar launch lazily via frozen/stub/LRU; the file-search sidecar runs in its own process, so its crash can't take the host down.
 - **Portable distribution**: `dist/dd-run-0.2.1.exe` (~8.4 MB, 8,722,944 bytes; `strip = "symbols"`) is a single file bundling the host and the five built-in extensions in-process (no embedded exes since M9). The file-search extension ships as a sidecar in `dist/extensions.d/` and is discovered automatically next to the executable. No installer: unzip the release zip and run. macOS / Linux get portable `tar.gz` builds (single binary + runtime-dependency README; file search absent by design).
+- **User data in one place**: the data dir holds `config.json` (settings), `usage.json` (usage frequency, resettable in Settings), `extensions.d/`, `cache/`, and `logs/` (run log + panic log) — `%APPDATA%\dd-run` on Windows, `~/Library/Application Support/dd-run` on macOS, `$XDG_CONFIG_HOME/dd-run` (default `~/.config/dd-run`) on Linux. The settings page can open the log folder and export a diagnosis report (single JSON).
 
 ## Goals and non-goals
 

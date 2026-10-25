@@ -218,7 +218,7 @@
 
 | 步骤 | 内容 | 验收 | 状态 |
 | --- | --- | --- | --- |
-| C1 | `PaletteApp` **六片**拆分，按 5→11→18→13→22→26 分批提交（944 处引用改写） | 直接字段 ≤ 8；每批独立可编译；测试数不减 | ✅（2026-10-24）：六批全落地（Overlay5 / Hotkey11 / Draft18 / UiView13 / ExtPool22 / Window26，并集=全集 95；C2 起 ExtPool +1 = `arrived` 流式在途集 → 23，总 96）；直接字段 = 6；650 passed / 0 failed（数不减）；`git diff -w` 抽查 = 纯前缀插入；金图 6/6 逐字节不变（像素级零行为证明）；未新增 `pub(crate)`；同名字段误伤三处（FallbackStore.exts / ExtRow.trust / PanelState.visible）均被编译器当场拦下——「越界访问由编译器挡」实证 |
+| C1 | `PaletteApp` **六片**拆分，按 5→11→18→13→22→26 分批提交（944 处引用改写） | 直接字段 ≤ 8；每批独立可编译；测试数不减 | ✅（2026-10-24）：六批全落地（Overlay5 / Hotkey11 / Draft18 / UiView13 / ExtPool22 / Window26，并集=全集 95；C2 起 ExtPool +1 = `arrived` 流式在途集 → 23，总 96）；**计数更新（2026-10-25 复核轮）**：P2-5.1/5.2 又给 UiViewState 加 `usage_scores`/`update_rx`（→15）、给 ExtPool 加 `usage`（→24），六片合计 **99**——直接字段仍 = 6，拆片纪律未破；650 passed / 0 failed（数不减）；`git diff -w` 抽查 = 纯前缀插入；金图 6/6 逐字节不变（像素级零行为证明）；未新增 `pub(crate)`；同名字段误伤三处（FallbackStore.exts / ExtRow.trust / PanelState.visible）均被编译器当场拦下——「越界访问由编译器挡」实证 |
 | C2 | 流式聚合（`AggregateEvent`） | 慢扩展场景首项 \< 300 ms | ✅（2026-10-24）：三段式 Meta→Ext×N→Done 落地；Ext 完成序回传（快扩展先回先渲染）；加载骨架只挡零项期；选中按 (ext_id,id) 身份恢复；旧轮进程在首个结果到达时替换（无空窗）；结构化测试 3 条 + 金图 6/6 逐字节不变 + frozen 桩锚点回归全绿；「<300ms」由机制保证 + 结构断言承接（不引慢扩展夹具进 CI） |
 | C3 | 三边界 `thiserror` 错误类型 | 超时/崩溃文案与操作分离 | ✅（2026-10-24）：`LoadError`（Display 逐字一致、open 链路换型、测试结构化匹配）+ `ProtocolErrorKind`（分类在产生点，invoke toast 按类分流：超时可重试 / 崩溃回落 stub）+ `SettingsImportError`；thiserror 2 已在树 → lock 零新增；只动三边界（48→42，余量非边界路径） |
 | C4 | settings `schema_version` + 未知字段保真 | 降级不丢配置 | ✅（2026-10-24）：写盘戳 `schema_version:1`、更高版本 → 只读模式（保存拒 + toast）；`Settings.unknown`（JSON 编码文本）读→写保真（类型还原、往返稳定）；验收测试 4 条 |
@@ -304,6 +304,14 @@ CARGO_BUILD_TARGET=x86_64-unknown-linux-gnu cargo +1.95.0 test --workspace
 3. **§3.1 口径注记**——944 为字段引用口径；全量 `self.`/`app.` 出现 1,613 处（含方法调用）。
 
 本轮复核确认成立（可放心引用）：107 文件 / 48,159 行、95 字段（含 3 个跨行声明）、631 `#[test]`、395 包、行号锚 93 处（排除本文档自身）/ 契约锚 16 / 现状注 24、`Result<_, String>` 非注释 48 处、两份 `atomic_write` 除可见性外逐字相同、`PaletteApp::new` 恰 8 参数、`release.yml:36/115/151` 三处均只读 dd-gui 版本、§4.1 / §4.3 / §5 全部行号锚。
+
+**第五轮（2026-10-25，批次 A–D + P2 全部落地后的全量复核）修正 1 处 + 澄清 2 处**：
+
+1. **§6 C1 字段计数更新**——P2-5.1/5.2 落地后 UiViewState +2（`usage_scores`/`update_rx` → 15）、ExtPool 再 +1（`usage` → 24），六片合计 **99**（原记 96 为 C2 时点口径）；直接字段仍 = 6，拆片纪律未破（已在 C1 行就地更正）。
+2. **澄清：B2「22 条」口径成立**——本轮复核一度误报「实测 21 vs 声明 22」，实为把 C5 的 icon deprecated 锚（1 条）误计入 B2、又漏数 dd-gui 在 `aggregator.rs` 就近的 2 条；真实构成 = B2 锚 22（protocol 5 / ext 3 / host 6 / gui 8，gui 含 aggregator 就近 2）+ C5 锚 1 = **23 个测试**，与附录 C 各行记档及各 crate 文件实数逐一相符，无需改数。
+3. **澄清：dd-host `tests/doc_contract.rs` 头注释**——「覆盖 6 条」指 B2② 现状注锚，文件实际含 7 个测试（多出的是 C5 icon 锚，头注释 no-assert 台账本已记）——已在头注释补歧义澄清，并顺手补记 dd-gui「2 条就近放 aggregator」的指引。
+
+门禁复测（本轮）：`cargo test --workspace --no-fail-fast` **679 passed / 0 failed / 7 ignored**；clippy `-D warnings` 零告警；fmt 零差异；docscan 四项全绿。随轮修文档缺口：README 中英新增「用户数据集中一处」条目（config.json / usage.json / extensions.d/ / cache/ / logs/ 三平台路径，与 `dd_run_dir` 实现逐字对照）、package.sh README-dist 模板同步（usage.json 入列、logs/ 描述补运行日志——P2-5.3 后不再只有 panic 取证）。
 
 **第二轮新增 4 项**（原报告遗漏）：
 

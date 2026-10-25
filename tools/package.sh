@@ -90,7 +90,7 @@ dd-run ${VER} (${TAG}) — portable single-file build
 
 数据目录 / Data dir：
   ${DATA_DIR_LINE}
-  （config.json 设置 / extensions.d/ 扩展 / cache/ 缓存 / logs/ panic 取证）
+  （config.json 设置 / usage.json 使用频次 / extensions.d/ 扩展 / cache/ 缓存 / logs/ 运行日志与 panic 取证）
 
 说明：
   - 5 个内置扩展（apps/calc/system/websearch/shell）in-process 内置于宿主
