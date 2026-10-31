@@ -18,6 +18,14 @@ jobs:
       # ——本 job 必须锁 gnu 宿主工具链（自带 self-contained 链接器，见下），
       # 用 RUSTUP_TOOLCHAIN 显式覆盖（该变量优先于 rust-toolchain.toml）。
       RUSTUP_TOOLCHAIN: stable-x86_64-pc-windows-gnu
+      # CI 基建修复（2026-10-31）：runner 镜像 10-25 前后变更，PATH 上的
+      # x86_64-w64-mingw32-gcc 丢失自家 sysroot（crt2.o / crtbegin.o /
+      # -lkernel32 全部 not found，纯 docs 提交也红——非代码回归）。显式启用
+      # rustup gnu 工具链自带的 self-contained CRT（crt2.o / libkernel32.a /
+      # libmingwex.a 等全套随 rust-mingw 分发，本地列目录实证齐全；flag 注入
+      # -B self-contained 引用路径已本地机制实证），链接不再依赖 runner 预装
+      # mingw 的完整性。
+      RUSTFLAGS: -C link-self-contained=yes
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
@@ -25,6 +33,9 @@ jobs:
         run: |
           rustup toolchain install stable-x86_64-pc-windows-gnu --profile minimal
           rustup default stable-x86_64-pc-windows-gnu
+          # link-self-contained=yes 的载体（rust-mingw 在 minimal profile 下的
+          # required 语义有版本出入，显式补装关闭该假设；已装则 no-op）。
+          rustup component add rust-mingw
           rustup component add clippy rustfmt
 
       # P2-4.5（2026-10-25 核对轮）：rustc 对 windows-gnu 的 raw-dylib 导入库生成
@@ -69,23 +80,35 @@ jobs:
   # - cargo-machete：死依赖检测（O3 原方案是 cargo-udeps，但它需要 nightly 工具链且
   #   每次冷编译整个依赖树，CI 成本高；machete 基于 identifier 匹配、stable 秒级，
   #   对本项目规模足够——若出现误报，用 workspace 层的 [package.metadata.ignore] 豁免）。
+  # - cargo-deny（清单 §2.1，2026-10-30）：许可证 + bans 门禁——校验对象是 Cargo.lock，
+  #   与平台无关，audit job 单点执行即代表三平台。允许清单 = deny.toml（仓库根目录）
+  #   实测最小集，逐条审批理由在文件内注记；`cargo deny check licenses bans` 直接
+  #   阻塞（无 continue-on-error）。工具经 install-action 预编译安装（cargo-deny 在其
+  #   支持清单内，2026-10-30 对 TOOLS.md 实证——计划撰写时的 manifests 未核验不确定性就此消除）。
   audit:
-    name: dependencies (audit + machete)
+    name: dependencies (audit + deny + machete)
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
-      - name: Install cargo-audit & cargo-machete (prebuilt)
+      - name: Install cargo-audit & cargo-deny & cargo-machete (prebuilt)
         uses: taiki-e/install-action@ab6895351a88b908e96a4697860d4ffea5e57dbe # v2
         with:
-          tool: cargo-audit,cargo-machete
+          tool: cargo-audit,cargo-deny,cargo-machete
 
       - name: Security audit (RustSec advisory-db)
         run: cargo audit
 
       - name: Unused dependencies
         run: cargo machete
+
+      # 清单 §2.1（2026-10-30）：许可证 + bans 门禁，直接阻塞（无
+      # continue-on-error）。deny.toml = 仓库根目录实测最小集（本机
+      # `cargo deny check licenses bans` exit 0 先证，2026-10-28/30 两轮）；
+      # 新增依赖引入清单外许可证 → 此处 fail，须在 deny.toml 逐条审批后扩充。
+      - name: Licenses & bans (cargo-deny)
+        run: cargo deny check licenses bans
 
   # O6 首批（2026-10-11）：三方平台构建矩阵——build/test/conformance 在
   # ubuntu/macOS 为**阻塞门禁**（探索轮两处平台缺口修复后全绿，已摘
@@ -138,6 +161,14 @@ jobs:
       - name: Roundtrip smoke (spawn, sample extension)
         run: cargo run -p dd-run-cli -- --roundtrip
 
+      # P2-5.4（未完善事项清单 §4.2）：脚手架端到端——「零基础用户 --ext-new 生成
+      # → --conformance 绿灯」的 CI 客观锚（ubuntu 自带 python3，首用即验；
+      # start 已由脚手架设 0o755，POSIX 清单 entry = ${EXT_DIR}/start 开箱即绿）。
+      - name: Scaffold end-to-end (--ext-new → --conformance)
+        run: |
+          cargo run -p dd-run-cli -- --ext-new com.example.demo --extensions-dir /tmp/ext-demo
+          cargo run -p dd-run-cli -- --conformance --ext-id com.example.demo --extensions-dir /tmp/ext-demo
+
   # B1（dd-run-改进分析.md §3.2）：UI 快照金图 job——只在本 job 显式跑
   # （`-- --ignored`；快照测试已标 #[ignore]，常规 test/clippy 不触 wgpu）。
   # Windows runner 走 DX12 WARP 软件适配器。**continue-on-error 先行观察**：
@@ -151,6 +182,9 @@ jobs:
     env:
       # 同 check（windows-gnu）：覆盖仓库 rust-toolchain.toml。
       RUSTUP_TOOLCHAIN: stable-x86_64-pc-windows-gnu
+      # CI 基建修复（2026-10-31）：同 check job——显式启用自带 self-contained
+      # CRT，链接不再依赖 runner 预装 mingw 的完整性（10-25 起镜像漂移）。
+      RUSTFLAGS: -C link-self-contained=yes
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
@@ -158,6 +192,9 @@ jobs:
         run: |
           rustup toolchain install stable-x86_64-pc-windows-gnu --profile minimal
           rustup default stable-x86_64-pc-windows-gnu
+          # link-self-contained=yes 的载体（rust-mingw 在 minimal profile 下的
+          # required 语义有版本出入，显式补装关闭该假设；已装则 no-op）。
+          rustup component add rust-mingw
           rustup component add clippy rustfmt
 
       # 同 check：raw-dylib 的 dlltool 查找防御（快照测试同样编译 dev 依赖链）。

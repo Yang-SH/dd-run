@@ -29,6 +29,9 @@ jobs:
       # A1：覆盖仓库 rust-toolchain.toml（优先级高于 rustup default），锁 gnu
       # 宿主工具链（自带 self-contained 链接器），与 ci.yml Windows job 同语义。
       RUSTUP_TOOLCHAIN: stable-x86_64-pc-windows-gnu
+      # CI 基建修复（2026-10-31）：同 ci.yml check/snapshot——runner 镜像
+      # 10-25 起预装 mingw 丢 sysroot，显式启用自带 self-contained CRT。
+      RUSTFLAGS: -C link-self-contained=yes
     steps:
       # B4：fetch-depth 0 = 全历史 + tag——git-cliff 提交明细需要「自上个 tag
       # 以来」的完整提交区间（默认浅克隆只有 1 个 commit，明细必空）。
@@ -53,6 +56,9 @@ jobs:
         run: |
           rustup toolchain install stable-x86_64-pc-windows-gnu --profile minimal
           rustup default stable-x86_64-pc-windows-gnu
+          # link-self-contained=yes 的载体（rust-mingw 在 minimal profile 下的
+          # required 语义有版本出入，显式补装关闭该假设；已装则 no-op）。
+          rustup component add rust-mingw
 
       - name: Cache cargo
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
