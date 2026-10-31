@@ -22,7 +22,7 @@
 - **wgpu 谜底（踩坑记档）**：`target/x86_64-pc-windows-gnu/release/` 为 P2-5.7 去 pin 前旧产物位——10-25 的 `--all-targets` 构建经 dev-deps 特性统一使 eframe 双渲染器（`Renderer::default() = Wgpu`）；**HEAD 真产物在 `target/release/`**，启动验证须用新位。
 - **波次④影响不变**：本机腿仍待人眼 oracle 分叉（MPO 提升成功 = 用户可见 → 用户会话解锁；覆盖层故障 = 驱动回滚 / MPO 禁用方向修复）。
 - **因果取证（同日续，排除法）**：AMD 驱动包（DriverStore 全量枚举 ~20 包）与 IDD 三件（GameViewer ×2 / Oray）均 ≤ 5-17 落盘、早于 10-07 正常期（排除）；热修 5-17 → 10-15/16 半年空档后连装三更新（**KB5127647/48 = OS 安全更新、KB5127690 = .NET**）= 破坏窗口内 OS 质量更新面唯一变量（其余窗口内更新为 Defender/PowerShell/MSRT 等非显示链面）、**最优因果候选**；修复候选 = 逐个 `wusa /uninstall` 卸载或 MPO 禁用（`OverlayTestMode=5`）——系统级，待维护者执行 + 人眼 oracle 终审。
-- **Duplication 探针尝试（time-boxed，已放弃）**：自建 DXGI Desktop Duplication 探针（Rust + windows crate，%TEMP% 零仓库改动）——**连 Start 菜单全屏动画都零帧**（30s 窗口逐轮 HRESULT 确认真 WAIT_TIMEOUT）= OS 级扫描输出捕获 API 在本机整体失聪，与「更新引入呈现合成回归」互证；探针失聪故无信息量，decisive oracle 仍为人眼。
+- **Duplication 探针尝试（time-boxed，已放弃；核对轮口径修正）**：自建 DXGI Desktop Duplication 探针（Rust + windows crate，%TEMP% 零仓库改动）——**有证据的发现**：面板开启、查询光标持续闪烁的 ~30s 窗口内零帧（逐轮 HRESULT 确认 WAIT_TIMEOUT）= **面板内容（含光标闪烁）未达桌面合成**——与 GDI/PrintWindow/CUA 三栈白帧构成四个独立 API 族的一致证据；**无证据而撤回的声称**：「连 Start 动画都零帧 → API 整体失聪」——对照腿因按键投递两次失败（`activation_failed`）从未发生，不成立；探针路径放弃，decisive oracle = 人眼。
 
 ### 波次③ 步骤 1–2——发版准备：CHANGELOG 归段 + snapshot 转阻塞（2026-10-31）
 
