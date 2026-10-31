@@ -238,7 +238,15 @@ jobs:
   # 本标记转为阻塞门禁（届时若像素漂移，在 kittest.toml 调阈值或以 CI 出图）。
   snapshot:
     name: UI snapshots (windows, WARP)
-    runs-on: windows-latest
+    # 钉 windows-2022（2026-10-31 R7 实证定案）：金图（618fee2，10-25）最后一次
+    # CI 绿 = 旧 windows-latest 镜像的 WARP 渲染；10-25 镜像轮换后新 WARP 的
+    # 文字光栅化漂移 ~700 像素/图（R7 直方图：阈值 10.0 仍 706 失败 = 非_AA 噪音
+    # 的真实像素差）。本机对金图 6/6 全绿（批次零嫌疑）→ 漂移在 runner 侧。
+    # 钉回旧镜像环境使金图零改动复配、本地与 CI 同族；比 max_failed_pixels
+    # 容差（kittest 文档红线：>10 即可遮真实回归）与「金图正典迁移 CI」
+    # （本地 opt-in 比对永久失配）两案更优。若 2022 镜像退役 → 金图需随
+    # 新正典环境重生成（UPDATE_SNAPSHOTS=1），回写时记档。
+    runs-on: windows-2022
     timeout-minutes: 30
     continue-on-error: true
     env:
