@@ -2,7 +2,26 @@
 
 本文件记录 dd-run 的版本变更。
 
-## [Unreleased]
+## [0.3.0] - 待发版（段日期随 §4.4 tag 回填）
+
+### 发布摘要（自 0.2.1 起的变更）
+
+- **质量与安全门禁（波次① / S1 收口）**：`cargo-deny` 许可证 + bans 门禁直接阻塞进 CI（`deny.toml` = 实测最小允许集）；协议 fuzz `fuzz/` 独立 crate 双 target（decoder / envelope，断言永不 panic）+ 语料 20 枚 + 每夜观察 job（七夜零 crash 时钟 2026-10-31 起算，观察期满随发版收口转阻塞）；列表虚拟化经专项 bench 判定**永不立项**（panel 逐行绘制实测 3.88 ms ≤ 8 ms/帧）；security-audit 验收草案唯一未勾项回写勾销。
+- **结构重构（refactor-structure 批次 A–E，逐批纯搬运证明）**：批次 A platform 目录化（8 子模块，paths / shell 拆为可单测单元——落库时漏登 CHANGELOG，本段核对轮补载专节）→ B aggregator 目录化 → C theme 目录化 → D 命名消歧三组重命名 → E `dd_gui::` lib 内自引用清零（257 处 / 46 文件）；≥800 非空行单文件 8 → 6，三关 679/0/7 逐批守恒、release 产物零漂移（批次 B +512 B / +0.005% 符号量级，字节级如实记档）。
+- **工程与回归基建（改进分析批次 A–D / B1–B4 / C1–C5）**：构建可复现（`rust-toolchain.toml` 钉扎 MSRV）+ workspace 版本继承单点 + 发布产物 SHA256SUMS / build provenance 链；三平台 clippy 同门禁 + 非 Windows 字体发现 + 写盘失败注入去 OS 权限化；UI 快照金图 6 张（kittest，布局 / 间距 / 配色回归自此机器判定）+ docscan `--write-index` + git-cliff Release body + 契约「实现现状」注断言化 24 处；PaletteApp 六片拆分（像素级零行为证明）+ 首屏流式聚合（先到先渲染）+ 错误三边界（thiserror）+ 设置前向兼容 + 协议死字段收口。
+- **性能与功能增量（P2-4.5 / P2-5.1–5.7）**：criterion 四组 bench + CI 趋势回归 job（PR base vs head，>20% 退化判红，观察模式）；使用频次 frecency 排序（`usage.json` + 设置页使用数据卡）；检查更新（GitHub Releases 比对，系统 curl，零新依赖）；日志落盘 + 诊断卡（导出单 JSON 诊断报告）；`--ext-new` 扩展开发脚手架（一键生成 7 件 + conformance CI 模板）；`.cargo/config.toml` 去 `build.target` 钉扎（Linux/macOS 贡献者开箱即用）。
+- **跨平台兑现（S3 并行腿）**：内置扩展 bookmarks / apps / system / shell 的 macOS / Linux 真实现（TODO ×4 清零）——书签 Chromium 路径、`/Applications` 与 `.desktop` + PATH 扫描、pmset/osascript 与 systemctl/loginctl 命令表、终端模拟器回退与 `$SHELL` 无头执行；S-06 危险命令确认门跨平台承接；新增 unix 面单测 18 条随 linux/macOS 门禁执行，Windows 分支零字节改动。
+- **文档纪律（docscan 二阶段 / O13）**：行号锚基线 157 处重测、107 处清为「文件 + 符号名」锚，机检覆盖 3 → 30 份非豁免文档 0 锚全绿（证据型报告四类豁免）；文档一致性收口门进 CI + 便携包产物链单一来源（`portable_zip.ps1`）随早期节入库。
+- **CI 基建**：main 自 10-25 因 runner 镜像漂移两连红 → 三层根因逐层剥离修复（R1–R10 攻坚：self-contained CRT + 工具链钉 1.98.0 + choco mingw-w64 dlltool 路由 + 非 CRT 导入库 shim）全绿恢复；金图正典迁移 CI runner（WARP 文字光栅化漂移处置）；snapshot job 观察期结束转阻塞；fuzz 夜间观察 job 上线。
+- **随批修复（2026-10-16 真机反馈）**：回车启动应用后面板滞留（在途期间 30 ms 重绘驱动）、滚动后重开面板不回顶、嵌套页改查询后不回顶——三项用户可见修复。
+- **升级注意（行为变更面）**：日志默认落盘 `%APPDATA%\dd-run\logs\`（级别 Info，滚动 5×1 MB）；面板首屏改先到先渲染（快扩展不再被慢扩展扣住）；设置页新增「使用数据重置」「打开日志目录 / 导出诊断报告」「检查更新」卡（启动时检查**默认关**，便携工具隐私优先）；使用频次数据落 `usage.json`（仅本机，可重置）；无破坏性变更，扩展协议 v1.0 契约零改动（清单 `icon` 字段进入弃用注记：解析兼容保留、宿主不消费——manifest-schema §5）。
+
+### 波次③ 步骤 1–2——发版准备：CHANGELOG 归段 + snapshot 转阻塞（2026-10-31）
+
+- **CHANGELOG 归段**（[实施计划](./docs/实施计划-2026-10-28.md) §4.2 / 清单 §6.2）：`[Unreleased]` **27 个批次小节**逐节清点零丢失，归段为 `[0.3.0]` 发版段并补本「发布摘要」；核对轮补载批次 A（platform 目录化，10-21 落库漏登）专节——**发版段计 28 节**；**版本号 0.3.0** 依据 §4.2 内容判据（含批次 B–E 结构重构 + 三个新门禁 → 建议 minor，tag 前可由维护者改定）；README 中英版本口径 v0.2.1 → v0.3.0 同步（产物字节数沿 0.2.1 实测值，随发版批以 0.3.0 产物实测回填；顺带修正 README 叙事行「v0.2.0 published」漏更 v0.2.1 的存量问题）。
+- **snapshot job 观察期结束转阻塞**（实施计划 §4.3 / 清单 §3.1）：摘除 `continue-on-error`——转正依据 = 金图正典迁移 CI runner（R9 run 41157013020 重生成入库，双向对称直方图实证为确定性环境差）+ R10（run 41157930401）全绿；**转正后首跑（阻塞模式）验证随本批 push**。stale 注记顺带重写（R7 钉扎理由已被 R8「钉扎不成立」/ R9 正典迁移取代）。
+- **bench job 预检保持观察**（实施计划 §4.3 / 清单 §3.2）：gh 实查 CI 历史全为 push（零 PR run）→ bench（仅 PR 触发）观察数据为零，按「观察数据不足不阻塞发版」口径维持 `continue-on-error`、随下一 PR 周期转正；job 注记记因。
+- **§4.4（tag 与发布链验证）挂起**：待 fuzz 七夜观察满足（绿灯首跑 2026-10-31 起算）或维护者明确记档偏差后执行；本批不含版本号提升（根 `Cargo.toml` 仍 0.2.1，随 §4.4 单点 bump）。
 
 ### CI 基建攻坚——main 全绿恢复 + fuzz 七夜时钟起算 + 金图正典迁移（2026-10-31）
 
@@ -206,6 +225,12 @@
 - **写盘失败注入去 OS 权限化**：dd-host / dd-gui 各拆出 `atomic_write_with(path, bytes, writer)`（生产路径不变），r02 / r17 三个失败注入测试改恒 `Err` writer 桩——root 容器（无视 `chmod`）与非 Windows 不再必挂，`share_mode(0)` / `chmod` 注入分支删除。
 - **非 Windows 字体修复**：O5-a 移除内置字体后非 Windows 构建的字体集**必然为空**（界面文字不可读）——新增系统字体发现（标准目录扫描，CJK 命中优先、无 CJK 回落任意系统字体并 warn、空集 warn），空字体降级日志 debug → warn，新增字体非空回归锚单测。README（中英）与 README-dist 补「中文需系统 CJK 字体（建议 fonts-noto-cjk）」运行时依赖。
 - **社区基建**：新增 CONTRIBUTING.md（环境 / 三关命令 / 仓库纪律）、SECURITY.md（私密漏洞报告渠道 + 信任模型简述）、3 个 issue 模板（Bug / 扩展开发 / 功能建议）。
+
+### refactor-structure 批次 A——platform.rs 目录化（2026-10-21；2026-10-31 核对轮补载）
+
+- **纯搬运零行为 / 零 API 变更**（[refactor-structure](./docs/refactor-structure-2026-10-21.md) §4.1，对应 A1 / B2）：`platform.rs`（1,155 行，方案口径）目录化为 8 个子模块——可单测纯文本（`split_file_url` / `percent_decode` / `to_windows_path` / `reveal_path_allowed`）拆出为 `paths` / `shell` 可单测单元，与 Win32 FFI 分离；零 API 变更（提交说明口径）。
+- **真机冒烟（方案 §10.3，2026-10-21 自动化执行）**：fonts（截图中 / 英 / 图标无缺字方块）、dwm（`DwmGetWindowAttribute` 取证 Mica + Round）、window（居中逐像素吻合，`(1904−984)/2 = 460`）三模块取证通过。
+- **补载记档**：本批落库（`ff7817f`，2026-10-21）时漏登 CHANGELOG 小节与 implementation.md 台账行（同日台账仅记「文档结构整理」批）——`[0.3.0]` 归段核对轮（2026-10-31）发现补载，工作事实以方案 §4.1 / §10.3 与提交说明为准；台账行同轮补记。
 
 ### 便携包产物链接口 + 文档收口门（2026-10-17 收口批）
 

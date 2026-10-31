@@ -2,11 +2,11 @@
 
 [English](./README.md) | [简体中文](./README.zh-CN.md)
 
-> **状态**：生效中 ｜ **版本**：v0.2.1 ｜ **最后更新**：2026-10-11
+> **状态**：生效中 ｜ **版本**：v0.3.0 ｜ **最后更新**：2026-10-31
 
 **用 Rust 从零构建的命令面板 / 启动器，核心与平台无关。** **Windows** 为主力支持平台；macOS / Linux 提供免安装绿色包（三平台阻塞 CI 门禁同源构建的预览版，真机验收进行中）。设计参考自 [PowerToys Command Palette（CmdPal）](https://github.com/microsoft/PowerToys/tree/main/src/modules/cmdpal) 模块。
 
-> **当前状态**：MVP 里程碑 **M0–M9 已全部关闭**并通过真机验收（M0–M6 核心面板与设置；M7 发布工程；M8 扩展生态验证；M9 内置扩展进程内化）；**v0.2.0** 已于 2026-10-07 发布（上一版 v0.1.1，2026-09-10）——自 0.1.1 起的累计变更与**一处行为变更**（Steam 游戏默认不参与搜索）见 [`CHANGELOG.md`](./CHANGELOG.md) `[0.2.0]` 段。里程碑进度见 [`docs/implementation.md`](./docs/implementation.md) §5，遗留项台账见其 §6.1。
+> **当前状态**：MVP 里程碑 **M0–M9 已全部关闭**并通过真机验收（M0–M6 核心面板与设置；M7 发布工程；M8 扩展生态验证；M9 内置扩展进程内化）；**v0.2.1** 已于 2026-10-11 发布（上一版 v0.2.0，2026-10-07）——发行方签名密钥仪式与打包链平台化见 [`CHANGELOG.md`](./CHANGELOG.md) `[0.2.1]` 段（无行为变更）；**v0.3.0** 发版准备中——自 0.2.1 起的累计变更见 `[0.3.0]` 段。里程碑进度见 [`docs/implementation.md`](./docs/implementation.md) §5，遗留项台账见其 §6.1。
 
 ---
 
@@ -31,7 +31,7 @@
 - **设置页**（`Ctrl+,` 打开）：外观（亮暗主题、Mica/Acrylic 材质）、常规（开机自启、自定义全局热键——默认 `Win+Alt+Space`）、搜索引擎管理（预设 + 自定义 `{q}` 模板引擎）、扩展管理（按扩展启停）。
 - **多语言**：面板 UI 跟随系统显示语言。
 - **快且隔离**：内置扩展常驻就绪（进程内化，无启动开销）；第三方与文件搜索 sidecar 经 frozen / stub / LRU 懒加载；文件搜索 sidecar 以独立进程运行，其崩溃不影响宿主。
-- **便携分发**：`dist/dd-run-0.2.1.exe`（约 8.4 MB，8,722,944 字节，`strip = "symbols"`）是单文件，宿主与 5 个内置扩展进程内化打包（M9 起不再内嵌 exe）。文件搜索扩展以 sidecar 形态随 `dist/extensions.d/` 携带，宿主自动扫描可执行文件同目录。无安装器：解压发版 zip 即用。macOS / Linux 另有免安装 `tar.gz`（单二进制 + 运行时依赖 README；文件搜索按设计缺席）。
+- **便携分发**：`dist/dd-run-0.3.0.exe`（约 8.4 MB；`strip = "symbols"`；字节数随发版产物实测回填——v0.2.1 实测 8,722,944 字节）是单文件，宿主与 5 个内置扩展进程内化打包（M9 起不再内嵌 exe）。文件搜索扩展以 sidecar 形态随 `dist/extensions.d/` 携带，宿主自动扫描可执行文件同目录。无安装器：解压发版 zip 即用。macOS / Linux 另有免安装 `tar.gz`（单二进制 + 运行时依赖 README；文件搜索按设计缺席）。
 - **用户数据集中一处**：数据目录内存放 `config.json`（设置）、`usage.json`（使用频次，可在设置页重置）、`extensions.d/`、`cache/`、`logs/`（运行日志 + panic 取证）——Windows 为 `%APPDATA%\dd-run`，macOS 为 `~/Library/Application Support/dd-run`，Linux 为 `$XDG_CONFIG_HOME/dd-run`（缺省 `~/.config/dd-run`）。设置页可打开日志目录、导出诊断报告（单 JSON）。
 
 ## 目标与非目标
@@ -59,7 +59,7 @@
 
 | 项 | 说明 |
 |---|---|
-| 入口产物 | `dist/dd-run-0.2.1.exe`（Windows，约 8.4 MB / 8,722,944 字节；版本随 `crates/dd-gui/Cargo.toml` 升） |
+| 入口产物 | `dist/dd-run-0.3.0.exe`（Windows，约 8.4 MB——字节数随发版产物实测回填，v0.2.1 = 8,722,944；版本随 `crates/dd-gui/Cargo.toml` 升） |
 | 非 Windows 包（O6） | `dist/dd-run-<ver>-linux-<arch>.tar.gz` / `dist/dd-run-<ver>-macos-<arch>.tar.gz`：单二进制 `dd-run` + `README-dist.txt`（运行时系统库清单 / 数据目录 / 使用说明）。文件搜索 sidecar 为 Windows 专属不随包；这些包无签名面。运行需系统字体（中文需 CJK 字体，如 `fonts-noto-cjk`） |
 | 打包方式（M9） | 5 个内置扩展进程内化编译：宿主直接驱动 `dd_ext::serve_line`，不再内嵌任何扩展 exe；`dd-gui/build.rs` 内嵌空表，`assets/embed/` 为遗留临时目录，已 gitignore |
 | Sidecar | 文件搜索扩展（`dd-ext-search.exe` + `com.ddrun.filesearch.json`）随 `dist/extensions.d/` 携带；宿主扫描可执行文件同目录的 `extensions.d/`（批次 7.5），zip 解压即用——优先级：用户数据目录 > sidecar > 内置 |
