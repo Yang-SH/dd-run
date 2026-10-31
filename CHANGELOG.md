@@ -4,6 +4,88 @@
 
 ## [Unreleased]
 
+### S3——内置扩展跨平台 TODO ×4 清零（macOS / Linux 真实现）（2026-10-31）
+
+- **bookmarks**：macOS（`~/Library/Application Support/Google|Microsoft Edge`）与 Linux（`~/.config/google-chrome|microsoft-edge`）书签搜索——同套 Chromium JSON 扁平化 + mtime 门控缓存；空态占位条目（顶层恒非空）。
+- **apps**：macOS 扫描 `/Applications` + `~/Applications`（`open` 启动）；Linux 解析 `.desktop`（`Exec` 去字段码直连 argv，NoDisplay/Hidden/Type 过滤）+ PATH 逐目录扫可执行位（同名去重，上限 400）。
+- **system**：macOS `pmset` / `osascript`（System Events）、Linux `systemctl` / `loginctl`——锁屏/睡眠/关机/重启/注销 5 命令，危险项（关机/重启/注销）二次确认与 Windows 表同构。
+- **shell**：macOS `open -a Terminal`、Linux 终端模拟器依序回退（x-terminal-emulator → gnome-terminal → konsole → xfce4-terminal → xterm）；无头执行 `$SHELL -c`（缺省 `/bin/sh`），3 秒超时 + 输出摘要与 Windows 同构；**S-06 危险命令确认门跨平台承接**——unix 危险词表（rm/dd/mkfs/shutdown 系）+ 嵌套启动器（sudo/bash/eval…）整段过门 + 多段命令切段含 `;` + 反引号/`$()` 整体过门。
+- **验收**：`grep "TODO 对应平台轮"` = **0**；新增 unix 面单测 18 条（随 linux/macOS CI 门禁执行）；Windows 侧 `#[cfg(windows)]` 分支**零字节改动**（行为零变化，679/0/7 守恒）；跨目标 `cargo check`/`clippy -D warnings`（x86_64-unknown-linux-gnu + aarch64-apple-darwin）全绿。实机行为（macOS 辅助功能权限、Linux 桌面环境差异）随波次④ O6 ④ 会话复验。
+- **CI 基建修复（同批落地，待 CI 实证）**：`RUSTFLAGS=-C link-self-contained=yes` 加至 ci.yml（check / snapshot）与 release.yml（release）三处 windows-gnu job——根因 = runner 镜像 10-25 前后变更致 PATH 上 mingw gcc 丢失 sysroot（`crt2.o`/`-lkernel32` not found）；rustup gnu 工具链自带 self-contained CRT（crt2.o / libkernel32.a 等全套）经本地列目录实证齐全，flag 注入机制经本地最小 crate 构建实证（无 flag 0 引用 → 有 flag 链接行引用 self-contained，二进制可跑）。
+- **CI 基建发现（记档）**：gh 实查——main 自 **2026-10-25** 起 CI 两连红（windows-gnu + snapshot 双 job `x86_64-w64-mingw32-gcc` 链接失败；纯 docs 提交也红 = runner 镜像漂移非代码回归；linux/macOS job 绿）；上条修复即为处置，push 后首跑实证。
+
+### 波次②步骤 6——P2-5.4 脚手架 conformance 端到端进 CI（2026-10-31）
+
+- **check-linux job 新增「Scaffold end-to-end」步**：`--ext-new com.example.demo --extensions-dir /tmp/ext-demo` 生成 → `--conformance --ext-id com.example.demo` 全表面自检（ubuntu 自带 python3，「首用即验」）——「零基础用户产出通过 conformance 的扩展」的 CI 客观锚。
+- **执行前实证三点**：CLI 旗标与解析器逐字吻合；conformance 磁盘路径直扫直 spawn 不经信任门禁（CLI 自检语境，新扩展可直接跑）；脚手架 `start` 已设 0o755 + POSIX 清单 entry（`${EXT_DIR}/start`）开箱即绿。
+- **本地 sanity**：`--ext-new` 生成物 7 件实证（生成无需 Python）；`--conformance` 腿按预案以 CI 为准（本机无 Python、不引入依赖），**CI 全绿随 push 首跑实证**；YAML 经 js-yaml 解析校验。
+- **波次②（S2）六步全部落地**：refactor 批次 B–E + docscan 二阶段 + 本腿；余 S3 并行腿（内置扩展 TODO ×4）。
+
+### 波次②步骤 5——docscan 第二阶段：行号锚治理扩面（2026-10-31）
+
+- **豁免口径定稿**（[未完善事项清单](./docs/未完善事项清单-2026-10-25.md) §3.4）：证据型报告维持豁免——`docs/archive/**`、以 file:line 为取证本体的 `dd-run-修复实施方案.md`、INDEX §E 类核查/评审报告（严审报告 / security-audit / P2 验收报告 / doc-audit）、`CHANGELOG.md`（发布史时点性记录）；主线与专题方案及导航层全部纳入。
+- **基线重测 157 处**（10-25 口径 148）→ **107 处清为「文件 + 符号名」锚**（implementation 11 / 改进分析 41 / settings-personalization 31 / o9-o14 10 / 其余 7 份 14；含批次 B–E 后已漂移的锚；符号不可靠考者退化为「文件 + 性质描述」）。
+- **docscan §④ 扩面**：机检覆盖从三份契约扩至**全部非豁免根文档（30 份 0 锚全绿）**；豁免档恰余 50 处；`docs/archive/` 豁免维持。
+- **顺带**：`dd-run-改进分析.md` 补登 INDEX §B（曾漏登——唯一入口缺口）。
+
+### 波次②步骤 4——refactor 批次 E：别名清理（2026-10-31）
+
+- **lib 内 `dd_gui::` 自引用清零**（[refactor-structure](./docs/refactor-structure-2026-10-21.md) §4.5）：机械替换 **257 处 / 46 文件**（`dd_gui::` → `crate::`，含 `#[cfg(test)]` 与文档注释内路径）+ 3 处人工改写（theme.rs / aggregator 桥注记的外部路径字面量改等义表述——该二处描述的正是「外部路径不变」契约）+ 删除 `lib.rs` 的 `extern crate self as dd_gui;` 及其说明注释；**bin `main.rs` 12 处保持不动**（真实跨 crate 引用）——**验收 grep（`--exclude=main.rs` 口径）= 0**（§3.4 量化验收达成）。
+- **净行数 −18、零符号增删**：行内替换 + `crate::` 排序位次（c < d）触发的 import 重排（净 0）+ 行宽缩短触发的折行归并 + extern 块删除；规模以执行时点重测为准（257 行，v1.1 记档 253 系 10-29 时点，方案预判的增长趋势成立）。
+- **门禁**：`cargo test --workspace` **679 passed / 0 failed / 7 ignored 守恒**、clippy `--workspace --all-targets -D warnings` 零告警、fmt 零差异、bin 重链通过、release **10,163,712 B 零漂移**（连续第 5 次同值实测）；docscan 全绿。**真机冒烟**与批次 D 余四腿同因（环境级 OpenGL 呈现问题，见批次 D 条目）待环境修复后合并执行。
+- **refactor 五批次（A–E）全部落地**；§1 目标口径实测 **8→6**（platform 300 / theme 674 非空达标；aggregator/mod.rs 823 非空越线——tests 原位保留所致，方案 §10.7 记档，再拆属后续裁决）。
+
+### 波次②步骤 3——refactor 批次 D：命名消歧（2026-10-31）
+
+- **三组重命名**（[refactor-structure](./docs/refactor-structure-2026-10-21.md) §4.4，对应 C1/C2/C3）：`app/aggregate.rs → app/aggregate_job.rs`（聚合任务编排，与 `aggregator/` 扫描/映射区分）、`app/keys/navigation.rs → app/keys/page_keys.rs`（键导航，与根 `navigation.rs` 页面栈区分）、`app/toast.rs → app/toast_state.rs`（状态与时长，与 `ui/toast.rs` 绘制区分）。调用点以实测为准（方案清单系撰写时点快照）：**9 文件 16 行引用修正**——C2 仅 `app/keys.rs` 的 `mod` 声明一处（page_keys 为 `impl PaletteApp` 方法块，全仓零模块路径引用）；`pub use` 再导出随模块名同步，bin 侧 `dd_gui::app::spawn_aggregation` 路径不变。
+- **重命名证明**：三文件 SHA256 搬运前后一致（内容零字节改动）；`git diff -M --summary` = rename **96% / 100% / 100%**（aggregate 的 4% 差异为该文件批次前既有未提交修改，非本批）。
+- **门禁**：`cargo test --workspace` **679 passed / 0 failed / 7 ignored 守恒**、clippy `--workspace --all-targets -D warnings` 零告警、fmt 零差异、bin 重链通过、release **10,163,712 B 零漂移**；docscan 初跑 MISSING 3（方案文档 §3.3 旧全路径）随回写修正——机检先行抓住文档漂移。
+- **真机冒烟受阻记档**（方案 §6.3）：自动化冒烟完成「热键唤起（实际热键 Ctrl+Space）/ 冷启动聚合经重命名模块（日志 `dd_gui::app::aggregate_job`，1235 命令）/ 窗口居中逐坐标吻合」三证后，面板 GL 内容不上屏（平白）——**A/B 对照同机 0.2.1 旧发行版同样空白**，定性为环境级 OpenGL 呈现问题（eframe glow 渲染器 / RX 580 / 驱动 26.1.1.251211，`backdrop=none` 不缓解，kittest/wgpu 快照与 bench 全绿、波次①②③不涉渲染栈）；方向键 / Enter / 设置页 / 文件页四腿需可见像素，待环境修复后与批次 E 冒烟合并执行（详见方案文档 §10.6）。
+
+### 波次②步骤 2——refactor 批次 C：theme 目录化（2026-10-30）
+
+- **纯搬运零逻辑改动**（[refactor-structure](./docs/refactor-structure-2026-10-21.md) §4.3）：`theme.rs` 1,368 行 → 根文件 699（模块文档 + egui 路径注记原位 + `pub use` 桥 + tests 656 行原位仅 +3 导入）/ `tokens.rs` 118（几何 / 排印 / 页脚键帽 / 设置按钮 token 与 `ListMetrics`）/ `palette.rs` 206（亮暗语义色板与阴影 / 遮罩 + 右键菜单几何）/ `backdrop.rs` 176（材质档注册表与行 / 卡片填充）/ `visuals.rs` 220（着色混合与 egui `Visuals` 装配）= 1,419 行；实际切片 16–130 / 132–329 / 331–498 / 500–711（§4.3 行区间系方案撰写时点快照按条目名定位）。
+- **纯搬运证明**：四子模块 body 与原区间**逐字节一致**（行号切片搬运 + diff 实证；根文件 `theme.rs` 原位保留无整文件改名，批次 B 的 rename 识别路径不适用，以逐字节切片对比替代）；行数守恒 1,368 → 1,419。**可见性偏离（方案 §5 红线 3，共 4 项）**：`rgb` / `glass` / `tint_mix` / `mix_panel` private → `pub(super)`（palette 跨模块取用与 tests 所需的最小放宽）。
+- **外部路径零改动**：公开项经 `theme.rs` `pub use` 桥再导出——`dd_gui::theme::*` / `crate::theme::*` 全部调用面（27 文件）零修改。
+- **门禁**：`cargo test --workspace` **679 passed / 0 failed / 7 ignored 守恒**、clippy `--workspace --all-targets -D warnings` 零告警、fmt 零差异、bin 重链通过；release **10,163,712 B vs 当日即时基线 10,163,712 B（零漂移）**。方案文档升 v1.5（§10.5 实测段）；真机冒烟按方案 §6.3 随批次 D / E。
+
+### 波次②步骤 1——refactor 批次 B：aggregator 目录化（2026-10-30）
+
+- **纯搬运零逻辑改动**（[refactor-structure](./docs/refactor-structure-2026-10-21.md) §4.2）：`aggregator.rs` 1,700 行 → 目录模块 `mod.rs` 873（模块文档 + `pub use` 桥 + tests 原位）/ `model.rs` 101（协议常量 + 聚合数据模型）/ `env.rs` 78（扩展环境注入）/ `scan.rs` 298（目录扫描与信任归并）/ `spawn.rs` 283（spawn 与首屏收集，含 C2 新增的 `collect_top_level_streaming`）/ `items.rs` 144（列表合并与条目渲染）。
+- **纯搬运证明**：`git diff --cached --summary` = `rename aggregator.rs → aggregator/mod.rs (50%)`；全文件行 multiset 对 HEAD 共 57 行差异全部归因（9 个私有项签名加 `pub(super)` 前缀对 / 桥接 / 文件头与 use / tests 导入块 / fmt 归整）——**零代码行增删**；行数守恒 1,700 → 1,777。
+- **外部路径零改动**：公开项经 `mod.rs` `pub use` 桥再导出——`dd_gui::aggregator::flatten` 等路径不变（含 benches/hot_paths.rs，实施计划 §3.1 预判的引用面无需修改）；`flatten_5ext` bench median 229.7 µs（基线 ≈218 µs，量级不变）。
+- **门禁**：`cargo test --workspace` **679 passed / 0 failed / 7 ignored 守恒**、clippy `-p dd-gui --all-targets -D warnings` 零告警、fmt 零差异、bin 重链通过；release **10,163,712 B vs 当日基线 10,163,200 B（+512 B / +0.005%，符号路径字符串差异量级）**。方案文档升 v1.4（§10.4 实测段）；真机冒烟按方案 §6.3 随批次 D / E。
+
+### 波次①步骤 4——协议 fuzz 初始化（清单 §2.2，2026-10-30）
+
+- **`fuzz/` 独立 crate**（cargo-fuzz 惯例）：自带隔离 `[workspace]` 表（根 workspace `members = crates/*` 不含之），**主 Cargo.lock 零新增**（`fuzz/Cargo.lock` 独立生成 = 24 项：23 registry 包 + path 依赖 dd-protocol，libfuzzer-sys 0.4.13）；`[package.metadata] cargo-fuzz = true` 识别标记手补（cargo-fuzz ≥0.13 必需，init 模板自带）。
+- **两个 target**：`decoder`——任意 bytes → `Decoder::with_default_limit().push`（API 无 Err 分支），断言不 panic + 两条契约不变式（`Message` 行长 ≤ 1 MiB / `TooLarge.size > max`）；`envelope`——UTF-8 后 `validate` 三态（含 `InvalidReason` 全分支），连带 `to_error_response()` 错误响应构造面。
+- **语料种子 20 枚入库**：envelope 侧 `ParseError` 与 `InvalidReason` 各分支一枚（合法请求 / 合法响应 / 合法错误响应 / 截断 JSON `-32700` / 批处理数组 / 非对象标量 / 非法 id / 缺 jsonrpc / 版本不符 / 非字符串 method / 数组 params / result+error 并存 / 非对象 error）；decoder 侧除刻意不放的 1 MiB 超限路外全分支（合法帧 / 多帧 / CRLF+空行 / 裸换行 / 截断 UTF-8 / 无换行残留 / 多字节 UTF-8）。JSON 语法机检 18 过 / 1 刻意失败（即 `-32700` 种子），另 2 枚（裸换行 / 二进制截断 UTF-8）不属 JSON 机检面。刻意不放 1 MiB 超限种子——libFuzzer `max_len` 取语料最大单元会拉垮执行吞吐（验收 = 累计 ≥10⁷ 次零 panic），超限双路已有 S-02 专设单测覆盖。
+- **夜间观察 job**（`.github/workflows/fuzz.yml`，**独立文件**——不向 ci.yml 加 schedule 以免全套门禁每晚重跑）：每晚 21:00 UTC + `workflow_dispatch` 手动首跑；`RUSTUP_TOOLCHAIN=nightly` 覆盖仓库工具链钉扎；两个 target 各 600 s；观察模式 `continue-on-error`，**连续七夜零 crash 后随 S4 转阻塞**；crash 输入 base64 进日志（仓库无 upload-artifact SHA pin，不引入未验证 action——O11 纪律）。
+- **本机记档**：nightly 1.101.0 + cargo-fuzz 0.13.2 装机成功；windows-msvc 下 fuzz 运行不可行（ASan 运行库缺失 + sancov 符号未解析链接错误，cargo-fuzz on msvc 已知摩擦）——本地验证降级为 stable `cargo check`（双 target 编译过）+ 语料机检；运行平台 = CI ubuntu（nightly + 默认 ASan）。执行依据 [实施计划](./docs/实施计划-2026-10-28.md) §2.4；七夜观察结果记 [implementation.md](./docs/implementation.md)。
+
+### 波次①步骤 3——cargo-deny 许可证门禁进 CI（清单 §2.1，2026-10-30）
+
+- **ci.yml audit job**：install-action tool 清单 `cargo-audit,cargo-machete` 追加 **`cargo-deny`**（其支持清单内含该工具，2026-10-30 对 install-action `TOOLS.md` 实证——计划撰写时「manifests 未核验、先试 a 再回退 b」的不确定性消除，`cargo install` 回退方案不触发）+ job 末新增 **`cargo deny check licenses bans` 直接阻塞**（无 `continue-on-error`）；job 名改「dependencies (audit + deny + machete)」。许可证校验对象 = `Cargo.lock`，与平台无关，audit job（ubuntu）单点执行即代表三平台。
+- **允许清单**：`deny.toml`（仓库根目录，2026-10-28 落地）= 实测 encounter 最小集——MIT / Apache-2.0 / BSD-2/3 / ISC / Unicode-3.0 + BSL-1.0（clipboard-win）/ MPL-2.0（nucleo）/ OFL-1.1 与 Ubuntu-font-1.0（egui 内嵌字体）/ Zlib，逐条审批理由在文件内注记；新增依赖引入清单外许可证 → CI fail，须逐条审批后扩充。
+- **实测**：本机 `cargo deny check licenses bans` 2026-10-28 / 10-30 两轮 `licenses ok / bans ok`；YAML 经 js-yaml 解析校验（audit 五步序正确）。lock 零新增（deny.toml 为配置文件）。
+- **CI 首跑腿待验**：改门禁文件的工作副本 push 后由其自身 PR 实证（audit job 全绿且阻塞）。执行依据 [实施计划](./docs/实施计划-2026-10-28.md) §2.3；台账 [implementation.md](./docs/implementation.md) §7。
+
+### 波次①步骤 2——列表虚拟化判定腿（清单 §2.4，2026-10-29）
+
+- **bench 新增三组**（`crates/dd-gui/benches/hot_paths.rs`，430 行夹具 = 真实上限 400 应用 + 30 文件，kittest harness 范式复用快照夹具）：`panel_draw`（软件适配器全帧，快照管线同源）/ `panel_draw_gpu`（硬件适配器全帧，判定组）/ `panel_draw_layout`（零渲染分解，= 虚拟化 `show_rows` 可节省成本的上界）。
+- **实测数字（本机 = 真机口径，criterion median）**：布局分解 **3.88 ms**、硬件全帧 **9.48 ms**、软件全帧 **39.94 ms**（适配器：硬件组 = 本机独显 Radeon RX 580，软件组 = Microsoft Basic Render Driver（WARP），布局组零渲染无适配器——由 bench 内置 logger 捕获记档）。
+- **判定：虚拟化永不立项、正式关闭**——判据度量对象（panel.rs 逐行绘制）实测 3.88 ms ≤ 8 ms/帧；硬件全帧超阈段 ≈5.6 ms 为可见像素光栅化 + kittest 回读，属虚拟化救不了的固定成本（上虚拟化后全帧仍 ≈6 ms，收益 ~3.7 ms/帧不值得 `show_rows` 复杂度）。
+- **计划前提修正（偏差记档）**：kittest 的 `default_wgpu_setup` 在**所有机器**显式优先 CPU 软件适配器（快照确定性设计），非计划所记「本机 GPU / CI WARP 耗时不同」——故判定组拆软件/硬件双份，硬件组经 `WgpuTestRenderer::from_setup` 绕开软件优先选择器。
+- **代码面**：两个 `#[doc(hidden)]` 测试钩子（`AggregateEvent::full_fixture` / `PaletteApp::set_window_visible`——bench 独立 crate 触不到 `pub(crate)`，沿 P2-4.5 `FuzzyMatcher` 放宽 pub 先例）；dev-dependencies 增 `egui-wgpu`（树内同版本 0.36.2，lock 零新增包、仅 +1 依赖边）。CI bench job 零改动：无 wgpu 适配器的环境各组经 `catch_unwind` 自跳过（`bench_compare.mjs` 单侧缺失不判红），有则自动进趋势回归。
+- **门禁**：`cargo test --workspace` **679 passed / 0 failed / 7 ignored** 守恒、fmt 零差异、clippy `--all-targets -D warnings` 零告警。台账落 [implementation.md](./docs/implementation.md) §3.1 末行 + §7；执行依据 [实施计划](./docs/实施计划-2026-10-28.md) §2.2。
+
+### 波次①步骤 1——security-audit 真机回归验收行回写（2026-10-29）
+
+- **回写勾销**：[security-audit-2026-09-23.md](./docs/security-audit-2026-09-23.md) 验收草案唯一未勾项「真机回归（Apps 启动 / WebSearch / 文件搜索打开 S-03 / Shell 危险命令确认弹窗 / 图标显示 / Calc 剪贴板提示 S-07 / 显示所在目录定位 S-08）」改勾——S 系列真机走查已于 **2026-10-07 用户批量确认收口**（walkthrough checklist §3 五行全勾有档），属验收行回写遗漏、无实质缺口。纯文档零代码。
+- **版本**：security-audit 升 **v1.10**，顺带修正头部版本自 v1.9 起漏更仍写 v1.8 的问题；量化验收 `grep -c '\- \[ \]'` = **0**（全文档未勾项归零）。
+- **连带回写**：INDEX v1.47（状态/行数）、[未完善事项清单](./docs/未完善事项清单-2026-10-25.md) v1.2 §6.1 销项（文档卫生余 §6.2 归段一项）、implementation.md §7 实施沿革、[实施计划](./docs/实施计划-2026-10-28.md) §2.1 状态推进。执行依据 [实施计划-2026-10-28.md](./docs/实施计划-2026-10-28.md) §2.1。
+
 ### 改进分析批次 P2-5.2（检查更新）（2026-10-25）
 
 - **`update_check.rs` 新模块**：读 GitHub Releases `latest`（`tag_name`）与当前产品版本比较——纯逻辑（`parse_tag_name` / `normalize_tag` / `classify` 三段数值比较）+ 系统 `curl` 拉取（`-fsSL --max-time 3` + User-Agent `dd-run/<ver>`）。**HTTP 方案决策记档：不引 HTTP crate**（运行时面 lock 新增 + 二进制体积税；ureq/WinHTTP 弃选）——curl 在 Windows 10 1803+ 为系统组件、POSIX 普遍可用，**lock 零新增**。版本比较**近似记档**：预发布后缀（`-beta`）比较时忽略、展示保留完整 tag；解析失败 → `Failed` 给可读原因不静默。

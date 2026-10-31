@@ -10,7 +10,7 @@
 
 | 项 | 一句话 |
 |---|---|
-| 目标 | 同时关闭两处已声明边界：① trust 台账「**用户同意 + 变更检测 ≠ 防篡改**」定性（trust.rs 模块文档自记）；② 非 Windows `assess` fail-open（**D2 缺口声明**，trust.rs:287–291） |
+| 目标 | 同时关闭两处已声明边界：① trust 台账「**用户同意 + 变更检测 ≠ 防篡改**」定性（trust.rs 模块文档自记）；② 非 Windows `assess` fail-open（**D2 缺口声明**，原 `trust.rs` 287–291 行的 `assess` 分支——O14 落地后该缺口已收口） |
 | 推荐方案 | 宿主**内置发行方 ed25519 公钥** + 清单旁挂 **`.sig` detached 签名**（签名对象 = 清单字节 + 清单/exe 双 SHA256 锚）+ 三态降级（验签通过 → 免同意；失败 → `Pending`+告警；无签名 → 现行同意流） |
 | 协议影响 | 清单 schema v1.0 **零字段改动**（`.sig` 在清单之外）；`.sig` 不触碰 NDJSON 方法面与协商——按 protocol.md §13 预期**连 MINOR 递增都不需要**，登记性质为「扫描层分发契约」（manifest-schema.md 新节 + 设计文档 §8.2 注记）；v1.0 冻结不破坏 |
 | 依赖增量 | `ed25519-dalek`（纯 Rust，连带 curve25519-dalek / signature trait，约 2–4 crate、零 C 依赖）——D1 选型定案后进 Cargo.lock |

@@ -129,17 +129,25 @@ for (const p of files) {
   }
 }
 
-// ── ④ 契约文档禁行号锚（B2①，2026-10-24）──
-// 规则：三份**对扩展作者可见**的契约文档（protocol / manifest-schema /
-// extensions）内出现 `x.rs:行号` 即 fail——行号随代码漂移（治理前 16 处锚
-// 多处已失效），一律改「文件 + 符号名」锚。其余 docs 的 ~77 处行号锚第二
-// 阶段清理后再扩面（分析文档 §3.3 改法①「分批放开」）。
-const CONTRACT_DOCS = new Set(["docs/protocol.md", "docs/manifest-schema.md", "docs/extensions.md"]);
+// ── ④ 行号锚禁令（B2①，2026-10-24；第二阶段扩面，2026-10-31）──
+// 规则：**非豁免文档**出现 `x.rs:行号` 即 fail——行号随代码漂移（治理前 16 处锚
+// 多处已失效），一律改「文件 + 符号名」锚。豁免 = 证据型报告（口径 2026-10-31
+// 定，详见 docs/未完善事项清单-2026-10-25.md §3.4）：docs/archive/**（归档，
+// 本就不在扫描列表）、以 file:line 为取证本体的修复实施方案、时点性核查/评审
+// 报告（INDEX §E 类）、CHANGELOG（发布史时点性记录）。
+const ANCHOR_EXEMPT = new Set([
+  "CHANGELOG.md",
+  "docs/dd-run-修复实施方案.md",
+  "docs/dd-run-代码严审报告.md",
+  "docs/security-audit-2026-09-23.md",
+  "docs/search-file-p2-acceptance-2026-09-15.md",
+  "docs/doc-audit-2026-09-29.md",
+]);
 const anchorBad = [];
 let anchorChecked = 0;
 for (const p of files) {
   const rel = relative(ROOT, p).replaceAll("\\", "/");
-  if (!CONTRACT_DOCS.has(rel)) continue;
+  if (ANCHOR_EXEMPT.has(rel)) continue;
   anchorChecked++;
   const txt = readFileSync(p, "utf-8");
   for (const m of txt.matchAll(/[A-Za-z_]+\.rs:\d+/g)) anchorBad.push(`${rel}  ->  ${m[0]}`);
@@ -150,7 +158,7 @@ report += "== INDEX line counts ==\n";
 report += drifts.length ? drifts.join("\n") + "\n" : `(${checked} rows checked, 0 drift)\n\n`;
 report += "== referenced file paths (O13) ==\n";
 report += refBad.length ? refBad.join("\n") + "\n" : `(${refChecked} unique paths checked, 0 missing)\n\n`;
-report += "== contract-doc line anchors (B2①) ==\n";
+report += "== line anchors (B2① + phase 2) ==\n";
 report += anchorBad.length ? anchorBad.join("\n") + "\n" : `(${anchorChecked} docs checked, 0 anchors)\n\n`;
 report += "== outbound link counts ==\n";
 for (const [k, v] of Object.entries(links).sort()) report += `${k.padEnd(44)} -> ${v} unique\n`;
@@ -161,7 +169,7 @@ console.log(
   `links: ${broken.length ? `BROKEN ${broken.length}` : "OK (0 broken)"}  |  ` +
     `index counts: ${drifts.length ? `DRIFT ${drifts.length}` : `OK (${checked} rows)`}  |  ` +
     `referenced paths: ${refBad.length ? `MISSING ${refBad.length}` : `OK (${refChecked} unique)`}  |  ` +
-    `contract anchors: ${anchorBad.length ? `FAIL ${anchorBad.length}` : `OK (${anchorChecked} docs, 0 anchors)`}` +
+    `line anchors: ${anchorBad.length ? `FAIL ${anchorBad.length}` : `OK (${anchorChecked} docs, 0 anchors)`}` +
     (WRITE_INDEX && autoFixed.length ? `  |  auto-fixed: ${autoFixed.length}（${autoFixed.join("; ")}）` : ""),
 );
 if (drifts.length) console.log(drifts.join("\n"));

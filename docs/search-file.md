@@ -53,8 +53,8 @@
 
 - **超时统一 `ES_TIMEOUT = 1200ms`**（`search.rs` 约 :53），探活与搜索共用；单请求总耗时（探活 + 查询 + 回落）≤ 宿主 `get_items` 2000ms。
 - **编码**：路径 → `file://` 由 `path_to_file_url()`（`search.rs` 约 :99）完成，**不做 percent-encode**；`file://` 解析由宿主 `resolve_file_url_to_path()`（`platform.rs` 约 :529，旧的 `file_url_to_path` 已删除）以「存在性优先 + decode 兜底」处理。
-- ⚠️ 原文档多处提及的 `pct_encode`（RFC 3986 URL 编码）**在全仓不存在**，相关段落已统一改为 `path_to_file_url`；查询参数对 Everything 为**原样直透**，不经任何 URL 编码（例外：以 `-`/`/` 开头的查询前置 `^` 转义，`search.rs:548-552`）。
-- ⚠️ **未定义行为补录（2026-09-13）**：查询中的**双引号不转义**、查询**长度无上限**，均直接透传（`search.rs:556`）——含双引号的语义与超长查询的取舍由 Everything 自身决定，扩展层不做防护。
+- ⚠️ 原文档多处提及的 `pct_encode`（RFC 3986 URL 编码）**在全仓不存在**，相关段落已统一改为 `path_to_file_url`；查询参数对 Everything 为**原样直透**，不经任何 URL 编码（例外：以 `-`/`/` 开头的查询前置 `^` 转义（`search.rs` 的查询转义分支））。
+- ⚠️ **未定义行为补录（2026-09-13）**：查询中的**双引号不转义**、查询**长度无上限**，均直接透传（`search.rs` 查询透传段）——含双引号的语义与超长查询的取舍由 Everything 自身决定，扩展层不做防护。
 
 ---
 
@@ -63,7 +63,7 @@
 - **P0（✅ 已实施）**：占位项专属文案（`files.hint`/`files.guide`/`files.error`）；`files.guide` subtitle 与模块注释对齐 es.exe 通道。
 - **P1（✅ 已实施）**：每结果注册同一 `PATH_INDEX` pid，生成三动作——默认打开 / 显示所在目录（`explorer /select` + `raw_arg`）/ 复制路径（`host/set_clipboard`）；`spec().capabilities` 与 `examples/extensions.d/com.ddrun.filesearch.json` 同时声明 `host/set_clipboard`；宿主已渲染 `more_commands` 并发送 `sender=context_menu` 的 `invoke`（L2 NDJSON 冒烟通过）。
 - **P2（✅ 代码已实施）**：`everything-ipc` 主通道 + `es.exe` 回落；L2 冒烟已验证 IPC 主通道真机返回真实结果。**真机验收 A-33-05…A-33-10 首轮已完成（2026-09-15，见 §4）**。
-- **宿主侧（✅ 已落地）**：§6 页内二次输入 200ms 去抖重拉（`PAGE_QUERY_DEBOUNCE`，定义于 `refresh.rs` :13；`page.rs:115` 为调用点）、`host/open_url` 经 `ShellExecuteW(verb="open")` 打开（P1.5 修复，与 P2 互不依赖）。
+- **宿主侧（✅ 已落地）**：§6 页内二次输入 200ms 去抖重拉（`PAGE_QUERY_DEBOUNCE`，定义于 `refresh.rs` :13；调用点 = `refresh.rs` 的 `schedule_page_query_debounce`）、`host/open_url` 经 `ShellExecuteW(verb="open")` 打开（P1.5 修复，与 P2 互不依赖）。
 
 ---
 

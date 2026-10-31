@@ -1,6 +1,6 @@
 # dd-run 代码结构整理方案（仅 dd-gui）
 
-> **状态**：执行中（批次 A 已落地，真机冒烟通过） ｜ **版本**：v1.3 ｜ **最后更新**：2026-10-21
+> **状态**：执行中 → **五批次（A–E）全部落地**（真机冒烟余腿随环境修复，见 §10.6/§10.7） ｜ **版本**：v1.7 ｜ **最后更新**：2026-10-31
 > **关联**：[implementation.md](./implementation.md) · [refactor-layering-plan.md](./refactor-layering-plan.md) · [o9-o14-optimization-plan.md](./o9-o14-optimization-plan.md) · [INDEX.md](./INDEX.md)
 
 ---
@@ -40,8 +40,8 @@
 | 文件 | 行数 | 生产代码约 | 混杂职责数 |
 |---|---|---|---|
 | `crates/dd-gui/src/platform.rs` | 1352 | 1157 | 7 |
-| `crates/dd-gui/src/aggregator.rs` | 1440 | 857 | 5 |
-| `crates/dd-gui/src/theme.rs` | 1304 | 713 | 4 |
+| `crates/dd-gui/src/aggregator/`（批次 B 起目录化，原单文件 aggregator.rs） | 1440 | 857 | 5 |
+| `crates/dd-gui/src/theme/`（批次 C 起目录化，原单文件 theme.rs） | 1304 | 713 | 4 |
 | `crates/dd-gui/src/app/mod.rs` | 1295 | 946 | 9（`PaletteApp` 95 个字段） |
 | `crates/dd-gui/src/state.rs` | 1015 | 约 700 | 2 |
 | `crates/dd-gui/src/settings/tests.rs` | 936 | 0（纯测试） | 1 |
@@ -59,8 +59,8 @@
 | 编号 | 文件 | 行区间 → 职责 | 本次 |
 |---|---|---|---|
 | A1 | `crates/dd-gui/src/platform.rs` | 18–300 字体与工作集；301–419 光标屏工作区与居中；423–465 提权；467–583 file URL 解析；590–703 reveal / open；707–952 DWM 材质与 chrome（含 950 的 `wide`）；957–1016 自启动注册表；1019–1037 系统语言；1040–1155 光标隐藏 | ✅ 批次 A |
-| A2 | `crates/dd-gui/src/aggregator.rs` | 51–149 常量与类型；150–219 环境注入；220–500 扫描 / 来源 / 信任；502–725 collect 与 spawn；726–856 条目拍平与自定义命令 | ✅ 批次 B |
-| A3 | `crates/dd-gui/src/theme.rs` | 18–130 几何 token；134–265 `Palette`；267–330 阴影；340–510 材质与着色；514–712 `Colorization` / `visuals` | ✅ 批次 C |
+| A2 | `crates/dd-gui/src/aggregator/`（批次 B 起目录化，原单文件 aggregator.rs） | 51–149 常量与类型；150–219 环境注入；220–500 扫描 / 来源 / 信任；502–725 collect 与 spawn；726–856 条目拍平与自定义命令 | ✅ 批次 B |
+| A3 | `crates/dd-gui/src/theme/`（批次 C 起目录化，原单文件 theme.rs） | 18–130 几何 token；134–265 `Palette`；267–330 阴影；340–510 材质与着色；514–712 `Colorization` / `visuals` | ✅ 批次 C |
 | A4 | `crates/dd-gui/src/app/mod.rs` | 95 字段横跨热键 / 托盘 / 聚合 / LRU / 图标 / 设置缓冲 / 窗口材质 / 尺寸 / i18n | ❌ §8（P5 另立项） |
 | A5 | `crates/dd-gui/src/state.rs` | 列表状态机 + 拼音索引；职责其实单一，仅**命名**误导（见 C4） | ❌ §8（待裁决） |
 | A6 | `crates/dd-ext/src/bin/search.rs`（2596）、`crates/dd-ext/src/builtins/apps.rs`（1903）、`crates/dd-host/src/process.rs`（1317）、`crates/dd-run-cli/src/main.rs`（1320） | 同型问题，但不在本轮范围 | ❌ §8 |
@@ -77,9 +77,9 @@
 
 | 编号 | 冲突对 | 影响 | 本次 |
 |---|---|---|---|
-| C1 | `crates/dd-gui/src/aggregator.rs`（扫描/映射）vs `crates/dd-gui/src/app/aggregate.rs`（聚合任务编排） | 检索与跳转时无法凭名字区分 | ✅ 改 `app/aggregate.rs` → `app/aggregate_job.rs` |
-| C2 | `crates/dd-gui/src/navigation.rs`（页面栈）vs `crates/dd-gui/src/app/keys/navigation.rs`（键导航） | 同上 | ✅ 改键侧 → `app/keys/page_keys.rs` |
-| C3 | `crates/dd-gui/src/app/toast.rs`（状态与时长）vs `crates/dd-gui/src/ui/toast.rs`（绘制） | 同上 | ✅ 改状态侧 → `app/toast_state.rs` |
+| C1 | `crates/dd-gui/src/aggregator/`（批次 B 起目录化，原单文件 aggregator.rs）（扫描/映射）vs `crates/dd-gui/src/app/aggregate_job.rs`（批次 D 起此名，原 app/aggregate.rs）（聚合任务编排） | 检索与跳转时无法凭名字区分 | ✅ 改 `app/aggregate.rs` → `app/aggregate_job.rs` |
+| C2 | `crates/dd-gui/src/navigation.rs`（页面栈）vs `crates/dd-gui/src/app/keys/page_keys.rs`（批次 D 起此名，原 app/keys/navigation.rs）（键导航） | 同上 | ✅ 改键侧 → `app/keys/page_keys.rs` |
+| C3 | `crates/dd-gui/src/app/toast_state.rs`（批次 D 起此名，原 app/toast.rs）（状态与时长）vs `crates/dd-gui/src/ui/toast.rs`（绘制） | 同上 | ✅ 改状态侧 → `app/toast_state.rs` |
 | C4 | `crates/dd-gui/src/state.rs` 实为「列表状态」而非 app 状态 | 名不副实 | ❌ 改名需 re-export 桥接，收益不抵，待裁决（§8） |
 
 ### 3.4 D — 别名 hack
@@ -227,6 +227,10 @@
 | v1.1 | 2026-10-21 | 批次 A 落地并实测回写；体积基线按 HEAD 口径修正（9,105,408 → 8,804,352 B） |
 | v1.2 | 2026-10-21 | 核对修正 6 处数据缺陷：① 行数口径显式标注（§2 = 非空行 / §10.2 = 全行）；② §2.2 标题由「>1000 行」改为「≥800 行」、§1 目标由「8 → 1」改为「8 → 5」（原表述把 3 个 800–1000 行文件算成 >1000）；③ §3.1 A1 行区间按实测校正 3 处；④ §4.1「可见性」列统一写 `pub(super)` 与实现不符（公开项实为 `pub`），改为子模块内真实可见性并加注「对外由 `pub use` 桥接」；⑤ §4.2 `is_trusted` / `pending_count` 实际在 240/245 行（scan 区间），从 spawn 移入 scan；⑥ §4.3 `rgb` / `glass` 实际在 694/704 行（visuals 区间），从 palette 移入 visuals |
 | v1.3 | 2026-10-21 | 批次 A 真机冒烟（自动化）完成并回写：§6.3 加「必须先读 config.json 取真实热键」警示；新增 §10.3 记录三项方法论坑（热键取值、Job 连带杀进程、DPI 虚拟化）与逐模块结论；顺带纠正版本号 0.2.1 与安装版字节一致事实 |
+| v1.4 | 2026-10-30 | 批次 B 落地并实测回写（§10.4：aggregator 目录化六文件，rename 50% + 行 multiset 57 差异全归因 + 679 守恒 + release +512 B 符号量级） |
+| v1.5 | 2026-10-30 | 批次 C 落地并实测回写（§10.5：theme 目录化根文件 + 四子模块，body 逐字节切片一致 + 4 项 `pub(super)` + 679 守恒 + release 零漂移） |
+| v1.6 | 2026-10-31 | 批次 D 落地并实测回写（§10.6：三组重命名，SHA256 零字节改动 + rename 96%/100%/100% + 679 守恒 + release 零漂移；§3.3 三处全路径随改名更新；真机冒烟受阻记档——环境级 OpenGL 呈现问题，A/B 对照旧发行版同样空白，与批次无关） |
+| v1.7 | 2026-10-31 | 批次 E 落地并实测回写（§10.7：lib 内 `dd_gui::` 清零——机械替换 257 处/46 文件 + 3 处桥注记人工改写 + extern 删除；bin 12 处不动；验收 grep = 0；679 守恒 + release 零漂移；§1 目标口径实测 8→6 记档——aggregator/mod.rs 823 非空越线） |
 
 ---
 
@@ -274,7 +278,7 @@
 |---|---|
 | `cargo test --workspace` | **627 passed / 0 failed**（与拆分前逐项一致，无新增 `#[ignore]`） |
 | `rustfmt --edition 2021 --check`（9 个文件） | 零差异 |
-| `cargo clippy -p dd-gui --all-targets -- -D warnings` | 仅 `capture_hook.rs:57` 的 `missing_const_for_thread_local`——**已知 clippy 1.96 上游误报**（该文件本批未改动，HEAD 同样报，代码已是 `const { … }` 形式），非回归。⚠️ **本机退出码为 101**（被该误报以 `-D warnings` 阻断），判定口径 = 「告警清单只含该条」，不按退出码判 |
+| `cargo clippy -p dd-gui --all-targets -- -D warnings` | 仅 `capture_hook.rs` 的 `missing_const_for_thread_local`——**已知 clippy 1.96 上游误报**（该文件本批未改动，HEAD 同样报，代码已是 `const { … }` 形式），非回归。⚠️ **本机退出码为 101**（被该误报以 `-D warnings` 阻断），判定口径 = 「告警清单只含该条」，不按退出码判 |
 | `cargo build -p dd-gui`（重链 bin） | 通过 |
 | release 体积 | **8,804,352 B**，与 HEAD 差值 **0** |
 | 代码行守恒（机械校验） | 原 1025 行代码行在新集合中**全部存在**；缺失项全为 `use` 行（按设计不参与比对）；新增 11 行 = `pub use` 续行 3 + `#[cfg(test)]` 3 + `#[cfg(windows)]` 1 + `cursor_should_hide` 因 `pub(super)` 超列宽被 rustfmt 折行 4 |
@@ -307,3 +311,19 @@
 | `shell.rs` | ⚠️ 未测 | 「在文件夹中显示」「打开 URL」会弹真实窗口，不适合自动化 |
 
 **副产品（两个过时事实已纠正）**：仓库版本为 **0.2.1**（非 0.1.1）；本机 `D:\Program Files\dd-run\dd-run-0.2.1.exe` = **8,804,352 B**，与 target 产物**逐字节相同** —— 故本次冒烟结论同样代表用户实际运行的安装版。系统为 Win11 build 26300。
+
+### 10.4 批次 B — `aggregator` 目录化（已完成，2026-10-30）
+
+按 §4.2 表逐块 `git mv` + 字节切片搬入五个子模块（§4.2 行区间系撰写时点快照，实际按条目名定位；`collect_top_level_streaming` 为方案撰写后 C2 新增，按主题归入 `spawn.rs`）。**纯搬运证明**：① `git diff --cached --summary` 显示 `rename aggregator.rs => aggregator/mod.rs (50%)`；② 全文件行 multiset 对比 HEAD——57 行差异全部归因（9 个私有项签名加 `pub(super)` 前缀对、桥接 `pub use` / `mod` 声明 / 五文件 `//!` 头与 use 行、tests 导入块 15 行、原 mod 头 use 移除、fmt 空行与单条 `///` 分隔行归整），**零代码行增删**；③ 行数守恒：1,700 → 1,777（+77 = 上述新增类目）。**门禁**：679 passed / 0 failed / 7 ignored 守恒、clippy `-p dd-gui --all-targets -D warnings` 零告警、fmt 零差异、bin 重链通过；**release 10,163,712 B vs 基线 10,163,200 B（+512 B / +0.005%，符号路径字符串差异量级）**；`flatten_5ext` bench median 229.7 µs（基线 ≈218，+5% 量级不变）。外部路径经 `pub use` 桥零改动——§3.1 预判的 `benches/hot_paths.rs` 引用面**无需改路径**（O12 `pub use` 先例）。真机冒烟按 §6.3 留待批次 D / E 后各一次。
+
+### 10.5 批次 C — `theme` 目录化（已完成，2026-10-30）
+
+按 §4.3 表逐块**行号切片**搬入四个子模块（§4.3 行区间系撰写时点快照，实际按条目名定位——tokens 16–130 / palette 132–329 / backdrop 331–498 / visuals 500–711；`rgb` / `glass` 按 v1.2 ⑥ 归 visuals，palette.rs 经 `use super::visuals::{glass, rgb}` 取用）。**纯搬运证明**：① 四子模块 body 与原 `theme.rs` 对应区间**逐字节一致**（Node 行号切片搬运后对 `git show HEAD` 逐行 diff 实证；visuals 仅 4 行加 `pub(super)` 前缀）；② 根文件保留段——模块文档 1–10 / egui 路径注记 12–13 / `#[cfg(test)] mod tests` 713–1368 共 656 行——**逐字节原位**，仅新增 3 行测试导入（`Color32` / `CornerRadius` / `ThemePreference` + `rgb` / `tint_mix` / `mix_panel`）；③ 行数守恒：1,368 → 1,419（+57 新增 = 四文件 `//!` 头 12 / 子模块 use 行 6 + 组内空行 9 / 根桥接块净增 27 / 测试导入 3；−6 消失 = 区块间空行 5 + 原 1 行 use 导入改分文件）。**批次 B 的 rename 识别路径此处不适用**（根文件 `theme.rs` 原位保留、无整文件改名，四子文件相似度均低于阈值）——以逐字节切片对比替代。**可见性偏离（§5 红线 3，共 4 项）**：`rgb` / `glass`（palette.rs 跨模块取用 + tests）、`tint_mix` / `mix_panel`（tests 取用）private → `pub(super)`。**门禁**：679 passed / 0 failed / 7 ignored 守恒、clippy `--workspace --all-targets -D warnings` 零告警、fmt 零差异（桥接组一处 `KEYCAP_GAP`/`KEYCAP_H` 排序经 rustfmt 归正）、bin 重链通过；**release 10,163,712 B vs 当日即时基线 10,163,712 B（零漂移）**。外部路径经 `theme.rs` `pub use` 桥零改动——`dd_gui::theme::*` / `crate::theme::*` 调用面 27 文件零修改。真机冒烟按 §6.3 留待批次 D / E 后各一次。
+
+### 10.6 批次 D — 命名消歧（已完成，2026-10-31；真机冒烟受阻记档见本节末）
+
+按 §4.4 表执行三组重命名：`app/aggregate.rs` → `app/aggregate_job.rs`（C1）/ `app/keys/navigation.rs` → `app/keys/page_keys.rs`（C2）/ `app/toast.rs` → `app/toast_state.rs`（C3）。**调用点以实测为准**（§4.4 系撰写时点快照，实际引用面更大）：C1 = `app/mod.rs`（`pub(crate) mod` 声明 + `pub use` 再导出）+ `snapshot_tests.rs` ×2 + `test_support.rs` ×2；C2 = `app/keys.rs` 的 `mod` 声明**仅此一处**（navigation.rs 为 `impl PaletteApp` 方法块，全仓零模块路径引用）；C3 = `app/mod.rs`（声明 + 2 use + tests 裸路径 1 处）+ `host_actions.rs` / `invoke.rs` / `update_check.rs` / `usage.rs` / `doc_contract_tests.rs` 各 1 use。合计 **3 次 mv + 9 文件 16 行引用修正**；bin 侧 `dd_gui::app::spawn_aggregation` 路径不变（再导出随模块名同步）；冲突对另一侧（根 `navigation.rs` 页面栈 / `ui/toast.rs` 绘制）零触碰；注释按 §5 红线 1 原样保留。**重命名证明（§6.2）**：三文件 SHA256 搬运前后一致（内容零字节改动）；`git diff -M --summary` = rename `aggregate.rs => aggregate_job.rs (96%)`（4% 差异全为该文件批次前既有未提交修改）/ `navigation.rs => page_keys.rs (100%)` / `toast.rs => toast_state.rs (100%)`。**门禁**：679 passed / 0 failed / 7 ignored 守恒、clippy `--workspace --all-targets -D warnings` 零告警、fmt 零差异、bin 重链通过、release 10,163,712 B vs 即时基线（零漂移）；docscan 初跑 `referenced paths: MISSING 3`（§3.3 三行引用旧全路径 `app/aggregate.rs` / `app/keys/navigation.rs` / `app/toast.rs`）→ 本批回写同步修正为现名（机检先行抓住文档漂移，收口门有效）。**真机冒烟（§6.3）受阻记档**：自动化冒烟（computer-use + PowerShell GDI 截屏）完成三证——① 热键唤起（config.json 实际热键 Ctrl+Space，窗口在屏）；② 冷启动聚合经重命名模块（日志 `dd_gui::app::aggregate_job`，1235 命令，29 ms）；③ 窗口居中逐坐标吻合（(1920−650)/2=635、(1032−532)/2=250，与窗口实测 bounds 一致）——其后**面板 GL 内容不上屏（平白）**：GDI 全屏截图亦空白，A/B 对照同机 **0.2.1 旧发行版同样空白**（`G:\Program Files\dd-run\dd-run-0.2.1.exe`，用户常驻实例同象），定性为**环境级 OpenGL 呈现问题**（eframe glow 渲染器 / RX 580 / 驱动 26.1.1.251211；GL 上下文与表面创建成功、事件循环与聚合全部正常、panic 零条目；`backdrop=none` 不缓解；波次①②③不涉渲染栈，kittest/wgpu 快照与 bench 全绿）。方向键选中 / Enter 执行 / 设置页 / 文件页四腿**需可见像素**（盲按 Enter 有执行未知首项风险，不做），待环境修复后与批次 E 冒烟合并执行；诊断线索（AMD 驱动更新回滚 / Windows 图形设置 / MPO）随本记录留档；config.json 与用户常驻实例已还原。
+
+### 10.7 批次 E — 别名清理（已完成，2026-10-31；真机冒烟余腿与 §10.6 同因合并待环境修复）
+
+按 §4.5 执行：lib 内 `dd_gui::` → `crate::`（机械替换 **257 处 / 46 文件**，Node 逐文件计数）+ 删除 `lib.rs` 的 `extern crate self as dd_gui;` 及其说明注释（−3 行，分层重构段头保留）。**规模以执行时点实测为准**：grep 行口径 257（§4.5 撰写时点 135、2026-10-29 实测 253——方案预判的增长趋势成立，+4 系批次 C 桥注记等未提交改动累积），occurrence 口径 257（3 行各含 2 处）；bin `main.rs` 12 处保持不动，验收 grep（`--exclude=main.rs` 口径）= **0**。**3 处人工改写**：theme.rs / aggregator/mod.rs 桥注记的外部路径字面量（该二处描述的正是「外部路径不变」契约，机械替换会使其失真）改为等义表述（保行数）；doc 注释 intra-doc 链接机械替换（[`crate::…`] 等价解析）；字符串面核对 = 仅 diagnostic.rs 两处 JSON 键 + 路径表达式（代码位，非运行时输出）。**fmt 归位**：`crate::`（c < d）排序位次触发 import 组重排（净 0）+ 行宽缩短触发的折行归并；本批独占 28 文件净 −15 行 + lib.rs −3 = **净 −18 行，零符号增删**。**门禁**：679 passed / 0 failed / 7 ignored 守恒、clippy `--workspace --all-targets -D warnings` 零告警、fmt 零差异、bin 重链通过、release 10,163,712 B（零漂移，连续第 5 次同值实测）；docscan 全绿。**真机冒烟**：与批次 D 余四腿同因受阻（§10.6 环境级 OpenGL 呈现问题），待环境修复后合并一次执行。**§1 目标口径偏差记档**：≥800 非空行单文件实测 **8→6**（platform 300 / theme 674 达标；aggregator/mod.rs **823 非空**仍越线——tests 块按 §4.2 原位保留所致，方案拆分设计未预见其体量；是否再拆属后续裁决，不属本批）。**批次 A–E 至此全部落地。**

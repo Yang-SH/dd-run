@@ -3,7 +3,7 @@
 > **状态**：已落地 ｜ **版本**：v1.6 ｜ **O9–O14 已全部收口**（O9 / O10（=F4）/ O11 / O12 于 2026-10-11；**O13 于 2026-10-17**；O14 由 extension-signing-plan 独立立项、已发版验证）｜ **最后更新**：2026-10-17（首版 2026-10-10）｜ **输入**：独立第三轮严审 + **同日仓库逐项复核三轮**（HEAD `7606900`）
 > **v1.1 校订记录**：① 删除原 O15（内存长会话真机复验）——经核实**已于 2026-10-03 由 V-13 基线收口**（见 §4），v1.0 将其列为待办属误判；② 移除对严审报告"R-1/R-2/N-1~N-3"的悬空编号引用（严审报告实际无此编号体系，且 `R-xx` 已被项目内部修订号占用，见 shell.rs R-10 / trust.rs R-12 注释）；③ O9 机制描述按源码修正为"切段后**每段**首词判定"；④ O12 前置核对已完成并给出结论；⑤ O13 文档计数按实际口径修正。
 > **v1.2 校订记录**：① O9 链路类型名修正：实际为 `CommandResult::Confirm`（v1.1 误写 `ConfirmIntent`，全仓无此类型）；② O9 证据归属修正：绕过面为严审报告 **P4 已确认**发现（非本文新取证），本文补 `cmd /C`、`pwsh` 两类并做源码行级核实；③ §4 LRU 行修正：**已由 N4 落地**（2026-10-03），v1.1 误标"未立项"；④ §5 性能表述归属核准：冷启动基线不属 V-13 口径（V-13 为内存台账），改为"V 系列真机走查实测台账"；v1.0 曾误写"冷启动 200 ms"已废弃（查无该实测口径）；⑤ O10 设计要点按实际工程结构修正：`[workspace.package]` 节当前不存在、crate 为独立 `[package]` 声明；⑥ O14 补编号衔接：修复实施方案已预留 **F12（扩展签名）"单独立项"**，本文 O14 即其立项载体；⑦ §7 "O1–O8 均已闭环"表述修正为分项状态。
-> **v1.3 校订记录**：① **O10 降级为 F4 落地跟踪**：查证修复实施方案 **F4 = "MSRV 声明 + 清单解析拒绝 `.cmd`/`.bat`"**，与本文 O10 事项同一且 F4 设计更全（含 manifest.rs 侧）；经 git log 逐条核实，F4 是 F 系列唯一未落地项（HEAD `7606900` 实测全仓仍无 `rust-version`、`manifest.rs:303` 仍在补全 `.cmd`/`.bat`）→ O10 不再另立方案，改为衔接跟踪，设计以 F4 为准；② 关联行与 §7 "F1–F11 已全部落地"修正为分项状态（F1–F3、F5–F11 已落地，F4 待实施）；③ §5 体积表述修正：**O5-a（default_fonts 移除）已于 2026-10-07 落地**（宿主单件 −1.35 MiB，字形穷举闭环无 tofu），不再表述为"有 tofu 风险"；不做的是 O5-b/O5-c 与 `panic=abort`；④ §4 I3 状态措辞对齐 INDEX §5 口径"保留不做（视真机）"。
+> **v1.3 校订记录**：① **O10 降级为 F4 落地跟踪**：查证修复实施方案 **F4 = "MSRV 声明 + 清单解析拒绝 `.cmd`/`.bat`"**，与本文 O10 事项同一且 F4 设计更全（含 manifest.rs 侧）；经 git log 逐条核实，F4 是 F 系列唯一未落地项（HEAD `7606900` 实测全仓仍无 `rust-version`、`manifest.rs` 仍在补全 `.cmd`/`.bat`）→ O10 不再另立方案，改为衔接跟踪，设计以 F4 为准；② 关联行与 §7 "F1–F11 已全部落地"修正为分项状态（F1–F3、F5–F11 已落地，F4 待实施）；③ §5 体积表述修正：**O5-a（default_fonts 移除）已于 2026-10-07 落地**（宿主单件 −1.35 MiB，字形穷举闭环无 tofu），不再表述为"有 tofu 风险"；不做的是 O5-b/O5-c 与 `panic=abort`；④ §4 I3 状态措辞对齐 INDEX §5 口径"保留不做（视真机）"。
 > **v1.6 落地记录（2026-10-17）**：**O13 收口**（收口批）——`tools/docscan.mjs` 在既有「跨文件链接可达 + INDEX 行数登记」两项之外新增**第③项「文档引用文件存在性」**：只看反引号包裹的**仓库根相对路径**（`crates/` `tools/` `docs/` `examples/` `.github/` 前缀 + 已知文件扩展名；排除通配符 / 变量 / **简写源码路径**（`ui/panel.rs` 类）/ 上游或外部引用（`src/modules/cmdpal/…`、`file://…`、`~/.config/…`）），**高精度优先**；`ci.yml` Windows job 增 `node tools/docscan.mjs` 收口门（与「文档回写六处」第⑥步同源）。**验收**：全量实跑 **78 条唯一路径、0 误报**（首轮宽口径 113 条中 111 条为简写源码路径 / 上游引用类噪音，据此收敛规则）；人为构造失配（临时文件引用一个不存在的 `tools/` 路径）**被检出 exit 1**、删除后复跑 exit 0。**随批实修**：机检首跑即抓出 **4 处归档后未更新的链接标签**——`[`docs/m9-inprocess-builtins.md`]` → `docs/archive/…`（cmdpal-platform-agnostic-design.md ×2 / implementation.md ×1）、`[`docs/doc-code-diff-2026-09-13.md`]` → `docs/archive/…`（CHANGELOG.md ×1）。
 > **v1.5 落地记录（2026-10-11，同日第二批）**：**O12 收口**——按 §3 设计要点执行（`settings_view/`、`settings/`、`keys/` 三目录化 + 重导出），三个独立 commit（`d191340`/`a558d0f`/`eda5c0e`），§6.3 验收全过；实施备注：拆分伴生的可见性最小改动 = 跨子模块项 `pub(super)` 化（编译器指示），tests 内层 `mod tests { }` 包装移除后由 cargo fmt 统一降级缩进。O13 维持「看 O12 落地后维护痛点再定」——拆分后三目录文件均已 <1000 行（最大 977 为 settings 单测），机检必要性下降，暂缓。
 > **v1.4 落地记录（2026-10-11）**：**O9 + F4（经 O10）+ O11 按 §6 验收总标准一个批次收口**——① O9 落地：`NESTED_SHELL_HEADS`（cmd/call/powershell/pwsh/wmic/robocopy 六词，段首词命中即整段过确认门）+ 含 `^` 转义查询整体确认，新增单测 3 组 11 断言（7 条绕过样例 + `^` 例 + 回归负例）；② O10/F4 落地：6 crate 声明 `rust-version`——**声明值实测修正为 1.95**（依赖图 eframe/egui 0.36.2 要求 1.95、自有源码用 1.88 API `as_chunks`，1.77.2 为不可兑现声明；安全不变式 ≥ BatBadBut 修复线 1.77.2 仍满足，偏差说明见修复实施方案 §F4 实施版）+ `manifest.rs` 裸名只补 `.exe` + 新测试 `resolve_executable_no_longer_completes_cmd_bat` + manifest-schema.md §4 同步；③ O11 落地：两个 workflow 全部 action SHA pin（`actions/checkout@3d3c42e…`、`Swatinem/rust-cache@6323deb…`、`taiki-e/install-action@ab68953…`、`softprops/action-gh-release@efb3536…`）+ job `timeout-minutes`（check/audit 30、release 45）+ 根目录 3 个设计稿 HTML 移入 `docs/archive/`（README/文档活链接同步改写）；随批修复存量 clippy `explicit_auto_deref`（panel.rs，干净 HEAD 即触发，非本批引入）。**验收**：`cargo test --workspace` 611 passed / `clippy --workspace --all-targets -- -D warnings` 全绿 / `fmt --check` 零差异。
@@ -17,11 +17,11 @@
 | 编号 | 提案 | 一句话说明 | 协议/清单 | 依赖增量 | 优先级 | 改动量 | 依据（已逐项核实到源码/文档） |
 |---|---|---|---|---|---|---|---|
 | O9 | 确认门覆盖嵌套 shell | 确认门触发词表补 `cmd`/`powershell`/`pwsh`/`call`/`wmic`/`robocopy` 等，闭合"借壳执行"绕过面 | 零改动 | 零 | **P1** | 小 | 严审报告 **P4 已确认**（5 类）+ 本文补 2 类并做 shell.rs 行级核实 |
-| O10 | ~~声明 MSRV~~ → **F4 落地跟踪** | 事项与修复实施方案 **F4（MSRV + 拒绝 `.cmd`/`.bat`）同一**，不另立方案；本文仅衔接跟踪与补结构核实 | 零改动 | 零 | **P1** | 极小 | 修复实施方案 §F4 已立项；git log 逐条核实 **F4 为 F 系列唯一未落地项**（HEAD 无 `rust-version`、`manifest.rs:303` 仍在补全 `.cmd`/`.bat`） |
+| O10 | ~~声明 MSRV~~ → **F4 落地跟踪** | 事项与修复实施方案 **F4（MSRV + 拒绝 `.cmd`/`.bat`）同一**，不另立方案；本文仅衔接跟踪与补结构核实 | 零改动 | 零 | **P1** | 极小 | 修复实施方案 §F4 已立项；git log 逐条核实 **F4 为 F 系列唯一未落地项**（HEAD 无 `rust-version`、`manifest.rs` 仍在补全 `.cmd`/`.bat`） |
 | O11 | CI/仓库卫生三件套 | ① Actions SHA pin ② workflow 加 `timeout-minutes` ③ 根目录 HTML 设计稿归档 | 零改动 | 零 | P2 | 小 | 本文新取证（workflows 与仓库根目录核实） |
 | O12 | 巨型文件拆分 | `settings_view.rs`（4104 行）等三文件按既有分层惯例拆分 | 零改动 | 零 | P2 | 中 | 两轮严审一致结论；layering plan 前置核对已完成（见 §3） |
 | O13 | 文档一致性 CI 扫描 | plan 类文档"状态列"与代码符号的粗一致性机检，接在既有 docscan 之后 | 零改动 | 零 | P3 | 低–中 | 既有 doc-audit 机制的延伸；已有漂移实例佐证（见 §3） |
-| O14 | 扩展签名 | 宿主内置公钥 + 作者签名，唯一能同时关闭台账"非防篡改"定性与非 Windows fail-open 的方案 | **协议增量**（v1.1 候选） | 依赖待选型 | 战略 | 大 | security-audit §4.4.2"明确不做①"+ trust.rs:14–15 自记边界；**承接修复实施方案预留的 F12** |
+| O14 | 扩展签名 | 宿主内置公钥 + 作者签名，唯一能同时关闭台账"非防篡改"定性与非 Windows fail-open 的方案 | **协议增量**（v1.1 候选） | 依赖待选型 | 战略 | 大 | security-audit §4.4.2"明确不做①"+ `trust.rs` 模块文档自记边界；**承接修复实施方案预留的 F12** |
 
 **建议节奏**：O9 + F4（经 O10 跟踪）一个批次收口（合计改动 < 100 行）；O11/O12 随下个常规批次；O13 看 O12 落地后的维护痛点再决定；O14 独立立项选型。
 
@@ -48,7 +48,7 @@
 
 > ✅ **已落地（2026-10-11）**：按本节设计实施，单测 3 组全绿；见 v1.4 落地记录。
 
-**动机与证据**（严审报告 **P4 已确认**该绕过面，本文补两类并做源码行级核实）：`is_dangerous_query`（`crates/dd-ext/src/builtins/shell.rs:168`）自 R-10（2026-09-29）起按 `&`/`|`/`\r`/`\n` **切段后每段**各自过 `is_dangerous_command`（shell.rs:170–173），每段取**首词**（含扩展名剥离归一，`cmd.exe` → `cmd`）查 `DANGEROUS_COMMANDS`（12 词）与 `DANGEROUS_SUBCOMMANDS`。已知绕过面——**段首词本身是嵌套 shell 启动器时，其参数中的危险命令不触发确认**（P4 已确认 `call del`、`d^el`、`powershell -Command`、`wmic`、`robocopy /MIR` 五类；本文补 `cmd /C`、`pwsh` 两类）：
+**动机与证据**（严审报告 **P4 已确认**该绕过面，本文补两类并做源码行级核实）：`is_dangerous_query`（`crates/dd-ext/src/builtins/shell.rs` 的 `is_dangerous_query`）自 R-10（2026-09-29）起按 `&`/`|`/`\r`/`\n` **切段后每段**各自过 `is_dangerous_command`（同文件切段循环），每段取**首词**（含扩展名剥离归一，`cmd.exe` → `cmd`）查 `DANGEROUS_COMMANDS`（12 词）与 `DANGEROUS_SUBCOMMANDS`。已知绕过面——**段首词本身是嵌套 shell 启动器时，其参数中的危险命令不触发确认**（P4 已确认 `call del`、`d^el`、`powershell -Command`、`wmic`、`robocopy /MIR` 五类；本文补 `cmd /C`、`pwsh` 两类）：
 
 - `cmd /C del /s /q C:\x`（段首词 `cmd` 不在表内，实际执行 `del`）
 - `call del …`（`call` 同理）
@@ -57,12 +57,12 @@
 
 现有 12 词词表（`format`/`diskpart`/`cipher`/`del`/`erase`/`rd`/`rmdir`/`takeown`/`icacls`/`vssadmin`/`bcdedit`/`shutdown`）不含上述任何启动器词，绕过面成立。
 
-**定位不变式**：本项**只扩大确认弹窗触发面，不新增拦截**，与 F6 落地的弹窗文案（shell.rs:242"dd-run 不会拦截或沙箱化任何命令"）及 R-10 既定注释（"宁可多问一次……护栏而非沙箱边界"）一致。目标场景是粘贴社交工程（用户从网页复制一整行命令），嵌套 shell 恰是该场景的主要载体。
+**定位不变式**：本项**只扩大确认弹窗触发面，不新增拦截**，与 F6 落地的弹窗文案（shell.rs 的 `is_dangerous_command` 确认分支："dd-run 不会拦截或沙箱化任何命令"）及 R-10 既定注释（"宁可多问一次……护栏而非沙箱边界"）一致。目标场景是粘贴社交工程（用户从网页复制一整行命令），嵌套 shell 恰是该场景的主要载体。
 
 **设计要点**（复用两个既有惯例：R-10 的切段+首词归一化管线、`DANGEROUS_SUBCOMMANDS` 的二元组表结构）：
 1. 新增"嵌套 shell 头部词"集合：`cmd`、`powershell`、`pwsh`、`call`、`wmic`、`robocopy`（大小写不敏感，走现有 `split('.')` 扩展名剥离，`cmd.exe` 自动覆盖）；
 2. `d^el` 类 `^` 转义：不做全文还原（误报面不可控），**对含 `^` 的查询整体弹确认**——"含转义符"本身就是可疑信号；
-3. 命中后走现有 `CommandResult::Confirm` 链路（`is_critical: true`，与 shell.rs:234–248 危险命令分支同构），弹窗文案复用 F6 版本，不另写新文案。
+3. 命中后走现有 `CommandResult::Confirm` 链路（`is_critical: true`，与 shell.rs 的危险命令分支同构），弹窗文案复用 F6 版本，不另写新文案。
 
 **验收判据**：新增单测逐条覆盖上述绕过样例（P4 五类 + 本文补两类，共 7 条；每例断言返回 `Confirm` 而非 `ShowToast`）；既有非危险命令样例（`echo hello`、`git status`）回归不弹确认；真机走查一例正向 + 一例绕过。
 
@@ -76,7 +76,7 @@
 
 > **v1.3 变更**：查证后确认本事项与修复实施方案 **F4（"MSRV 声明 + 清单解析拒绝 `.cmd`/`.bat`"，§231 起）为同一事项**，且 F4 设计更完整（含 manifest.rs 侧）。按"不重复立项"判据，本文**不再另立方案**，O10 降级为 F4 的落地跟踪索引，设计、批次与 commit 均以 F4 为准。
 
-**落地状态核实（2026-10-10，HEAD `7606900`）**：F 系列经 git log 逐条核对——F1（`9640b3b`）、F2/F5/F6（`de081f8`）、F3（`8e0eb88`）、F7（`2afa214`）、F8（`18e85e8`）、F9/F10/F11（`7606900`）均已落地；**F4 无对应提交，为 F 系列唯一未落地项**。源码佐证：全仓仍无 `rust-version`（根 `Cargo.toml` 与各 crate manifest 均无），`manifest.rs:303` 仍按 `[".exe", ".cmd", ".bat"]` 补全。
+**落地状态核实（2026-10-10，HEAD `7606900`）**：F 系列经 git log 逐条核对——F1（`9640b3b`）、F2/F5/F6（`de081f8`）、F3（`8e0eb88`）、F7（`2afa214`）、F8（`18e85e8`）、F9/F10/F11（`7606900`）均已落地；**F4 无对应提交，为 F 系列唯一未落地项**。源码佐证：全仓仍无 `rust-version`（根 `Cargo.toml` 与各 crate manifest 均无），`manifest.rs` 仍按 `[".exe", ".cmd", ".bat"]` 补全（F4 落地前状态）。
 
 **本文补充核实（供实施参考，不改 F4 设计）**：根 `[workspace]` 无 `[workspace.package]` 节、各 crate 为独立 `[package]` 声明（已核实 `crates/dd-ext/Cargo.toml` 等）；F4 采用的逐 crate 各加一行（×6）方案与现状结构吻合、改动最小，无需引入 workspace 继承。MSRV 取值以 F4 v1.1 修订为准（**1.77.2**，CVE-2024-24576 修复线）。
 
@@ -131,8 +131,8 @@
 ### O14 — 扩展签名（战略级）
 
 **动机**（两处边界均已核实到源码/审计原文）：
-1. **台账非防篡改**：trust.rs:14–15 自记"**不是防篡改**。能写 `extensions.d` 的攻击者同样能写 `trust.json`。真正意义上的防篡改需要扩展签名（宿主内置公钥 + 作者签名），**不在本项范围**"；security-audit §4.4.2"明确不做①：扩展签名/公钥验签"。
-2. **非 Windows fail-open**：trust.rs:288–291——`if !hash_available() { Trust::AutoTrusted }`（注释"D2 缺口声明：非 Windows 不做门禁"），即无哈希能力平台全部自动信任。
+1. **台账非防篡改**：`trust.rs` 模块文档自记"**不是防篡改**。能写 `extensions.d` 的攻击者同样能写 `trust.json`。真正意义上的防篡改需要扩展签名（宿主内置公钥 + 作者签名），**不在本项范围**"；security-audit §4.4.2"明确不做①：扩展签名/公钥验签"。
+2. **非 Windows fail-open**：原 `trust.rs` 288–291 行——`if !hash_available() { Trust::AutoTrusted }`（注释"D2 缺口声明：非 Windows 不做门禁"），即无哈希能力平台全部自动信任（O14 落地后该分支已由签名门禁取代）。
 
 签名是唯一能同时闭合两处的方案，也是将来开放第三方分发生态的前置。
 

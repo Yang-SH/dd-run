@@ -1,6 +1,6 @@
 # dd-run 安全审计与修复方案（2026-09-23）
 
-> **状态**：生效中 ｜ **版本**：v1.8 ｜ **最后更新**：2026-09-24
+> **状态**：生效中 ｜ **版本**：v1.10 ｜ **最后更新**：2026-10-29
 > **关联**：[protocol.md](./protocol.md) · [manifest-schema.md](./manifest-schema.md) · [implementation.md](./implementation.md) · [extensions.md](./extensions.md)
 
 ---
@@ -539,7 +539,7 @@ pub(crate) fn decode_icon_image(bytes: &[u8]) -> Option<egui::ColorImage> {
 | `crates/dd-host/src/trust.rs`（**新增**） | 台账（`TrustLedger` / `TrustEntry` / `Decision` / `LedgerState`）、判定（`assess` / `Assessment` / `Trust` / `ExtOrigin`）、哈希（CNG `BCryptHashData`，64 KiB 分块流式）、`FIRST_PARTY_IDS` | 710 行（含 **14 条单测**） |
 | `crates/dd-host/src/manifest.rs` | 新增 `trust_file()`（数据根目录下 `trust.json`） | +10 行 |
 | `crates/dd-host/Cargo.toml` | `chrono`（`decided_at` RFC3339）+ `[target.'cfg(windows)'.dependencies] windows-sys`（feature `Win32_Security_Cryptography`） | +11 行 |
-| `crates/dd-gui/src/aggregator.rs` | 扫描结果**携带来源**（`ExtOrigin`）；`load_extension_sources` 返回具名结构 `ExtensionSources`（含判定表 + 台账状态）；新增 `is_trusted`（fail-closed）/ `pending_count` / `origin_of`；**spawn 唯一入口加门禁** | +约 150 行（含 4 条新单测） |
+| `crates/dd-gui/src/aggregator/`（批次 B 起目录化，原单文件 aggregator.rs） | 扫描结果**携带来源**（`ExtOrigin`）；`load_extension_sources` 返回具名结构 `ExtensionSources`（含判定表 + 台账状态）；新增 `is_trusted`（fail-closed）/ `pending_count` / `origin_of`；**spawn 唯一入口加门禁** | +约 150 行（含 4 条新单测） |
 | `crates/dd-gui/src/app/{aggregate,keys,mod}.rs` | `active` 过滤加信任维度；`set_extension_trust()`（写台账 + 落盘 + 立即重聚合 + toast）；`trust` / `ledger_state` / `pending_notified` 状态 | +约 70 行 |
 | `crates/dd-gui/src/ui/settings_view.rs` | 行内来源标签（内置/随包/用户安装）+ 信任状态 + 「允许 / 阻止」按钮 + 路径 tooltip + 同 id 撞车告警行；卡片头待批准/台账损坏提示 | +约 120 行（含 1 条新单测） |
 | `crates/dd-gui/src/ui/panel.rs` | 待批准提示落在页脚左块**空位** | +12 行 |
@@ -741,7 +741,7 @@ pub(crate) fn decode_icon_image(bytes: &[u8]) -> Option<egui::ColorImage> {
 - [x] **§8.1 / §8.2 PoC 输出反转**：S-01 的两种注入形态现被拒且 `apps.rs` 已无 `cmd.exe`（源码断言）；S-02 的 4 KiB 无换行输入现被上限拦住（`unterminated_stream_is_bounded_and_reports_once`，§4.1.1）。
 - [x] **零协议/清单变更**：S-01–S-04、S-06、S-10 均未改字段、方法名或清单 schema；仅 `docs/protocol.md` §7.4 增加一段**实现侧策略注**（非契约）。
 - [x] 体积无回归（2026-09-24 实测）：安全加固三批（S-01 批 / S-05 / 低危收尾）后 `cargo build --release` + `tools/package.sh` exit 0——宿主 `dd-run.exe` 9,100,800 → **9,105,408 B**（低危批 +4,608 B / **+0.05%**；S-05 批此前 +0.87%），dist exe 与 release exe sha256 一致，仍在 9–11 MB 目标区间。
-- [ ] 真机回归：Apps 启动、WebSearch 开网页、**文件搜索「打开」**（S-03 的关键回归面）、Shell 危险命令确认弹窗、图标显示、**Calc 复制后出现"扩展已写入剪贴板"提示（S-07）**、**文件搜索「显示所在目录」定位正确（S-08）** —— 需真机走查。
+- [x] 真机回归：Apps 启动、WebSearch 开网页、**文件搜索「打开」**（S-03 的关键回归面）、Shell 危险命令确认弹窗、图标显示、**Calc 复制后出现"扩展已写入剪贴板"提示（S-07）**、**文件搜索「显示所在目录」定位正确（S-08）** —— 已走查（2026-10-07 批量确认收口，walkthrough checklist §3 五行全勾；**图标显示**腿不在 §3 行集，归档 = 同日 F2/I1 密度与占位复验「真实图标层级清晰」截图，implementation.md §7 10-07 行；2026-10-29 回写）。
 - [x] 文档同步：`docs/protocol.md` §7.4 ✅ 已加；`docs/manifest-schema.md` §9 ✅（S-05 批）；`extensions.md` §6.1 ✅（S-05 批）。
 
 #### 一度出现的 22 条 spawn 用例失败（已排除，非缺陷 —— 留档备查）
@@ -820,3 +820,4 @@ verdict     = bounded — 上限生效
 | v1.7 | 2026-09-24 | **S-05 实施落地（§4.4.3 新增）**：新增 `dd-host/src/trust.rs`（台账 + `assess` 判定 + CNG SHA-256 分块流式，710 行含 14 单测）、`manifest::trust_file()`、`dd-gui/aggregator` 的门禁与来源标注、设置页行内审批 UI、页脚空位提示、i18n 17 键。**+19 条单测**。**三处与冻结方案的偏离如实记录**：① 未加 `SourceStatus::Pending` 等枚举变体，改用「与停用集同手法」的 `active` 过滤 + **spawn 唯一入口门禁**（无旁路由单一收口点保证；代价 = 待批准项不进 `sources`，可见性由设置页/启动 toast/页脚空位四处承担）；② 页脚提示落在**左块空位**而非新增行（页脚是严格单行几何契约 D35）；③ `dd-host` 新增 `chrono`（同版本已在依赖树内，lock 零新增）。**验收**：A1–A11 已有单测/实测证据（**A11 哈希开销实测 0.874 ms @836,608 B**，判据 <10 ms；首方/内置走短路 ≈0 ms），A12 待环境自愈后复跑（本轮 20 条失败为已知 `Os error 231` 环境批，**失败名单无本项新测试**）。§1/§7.1 状态改「已修复」 |
 | v1.8 | 2026-09-24 | **低危收尾：S-07/S-08/S-09/S-11 全部修复（§5.2–§5.5 新增），审计 11 项闭环**。S-07（§5.2）：剪贴板 1 MiB 上限**拒绝式**前置 + 成功改 `info!`（id+字节）+ 2 s 来源 toast，+2 单测；「可配置关闭」开关与 S-06 同口径刻意未做。S-08（§5.3）：`valid_reveal_path` 四条收紧（空串/`"`/控制字符/`%`/`^`），扩展既有用例断言；选项② COM 路线列为后续可选。S-09（§5.4）：缓存文件名加 **FNV-1a 32 位指纹**（零依赖），`load` 旧名兼容一个版本但**两路都校验快照 `ext_id` 归属**，invalidate/remove 双前缀清理，+2 单测（碰撞对互不覆盖 + 伪造拒绝）。S-11（§5.5）：`make_result_checked` 收 `Result` 替换 5 处 `.expect`，invoke 序列化失败回 `-32603` 并**跳过副作用**，信封 `expect` 改 match；**无需 test 钩子**（直接注入 `Err`），+1 单测。**门禁**：fmt 5 文件无差异、clippy 无新增告警；复跑 dd-host 65/65、dd-ext 105+1（机器绑定）、dd-gui 228+6（全为 `Os error 231` 环境批，失败名单无本批新测试）。本批 **+5 条单测**；余待办仅真机走查（重打包体积实测已闭环，见 §7.2：宿主 9,105,408 B / 低危批 +0.05%） |
 | v1.9 | 2026-10-11 | **S-12 入账（扩展签名，O14/F12）**：原 §4.4.2「明确不做①：扩展签名/公钥验签」正式立项并部分落地——立项选型见 [`extension-signing-plan.md`](./extension-signing-plan.md)（D1–D5 决策：ed25519-dalek / 旁挂 .sig / 清单+exe 双哈希捆绑锚 / 内置发行方公钥 / 三态降级）。**批次一已落地**（`dd-host/src/signing.rs` + trust 判定链三态整合 + `Assessment.sig_invalid` 告警位 + 12 单测先红后绿）：Valid 免同意（用户 Deny 优先）/ Invalid fail-closed / 无签名现行同意流零变化；**R-12 升级重钉静默窗口被签名锚闭合**。批次三（本行）：manifest-schema.md §9「分发签名」登记 + 设置页 `sig_invalid` 告警行（沿 R-12 告警行先例）+ i18n 1 键。协议面零改动（清单 schema v1.0 字节不动，`.sig` 为扫描层分发契约）。批次二待办：发行方真钥（CI secret 签发链）/ 公钥轮换 / 随包 .sig / 端到端腿 / 体积实测。占位钥姿态：当前任何 .sig 判 Invalid 属预期 fail-closed |
+| v1.10 | 2026-10-29 | **真机回归验收行回写（纯文档，零代码）**：§7 验收草案唯一未勾项「真机回归：Apps 启动 / WebSearch / 文件搜索打开（S-03）/ Shell 危险命令确认弹窗 / 图标显示 / Calc 剪贴板提示（S-07）/ 显示所在目录定位（S-08）」改勾并注记——S 系列真机走查已于 **2026-10-07 用户批量确认收口**（walkthrough checklist §3 五行全勾有档 + implementation.md §7 当日「用户真机走查批量收口」行），属验收行回写遗漏、无实质缺口（[未完善事项清单](./未完善事项清单-2026-10-25.md) §6.1 口径）。**顺带修正**：头部版本自 v1.9 起漏更（仍写 v1.8 / 2026-09-24，S-12 入账时未同步），本次一并改为 v1.10。至此全文档未勾选验收行归零（量化验收：`grep -c` 未勾选 checkbox 模式输出 0）。**核对轮补记（同日）**：① 七个子项中「图标显示」不在 walkthrough §3 行集，其归档 = 同日 F2/I1 密度与占位复验截图（implementation.md §7 10-07 行「真实图标/glyph 弱色占位层级清晰」），注记已补明；② 初稿曾沿清单 §6.1 原文引「INDEX §5.2 有档」，实测 INDEX §5.2 十行无批量确认专行（批量确认一手档案在 implementation.md §7 10-07 三行），引用已改 |

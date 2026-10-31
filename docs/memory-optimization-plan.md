@@ -69,7 +69,7 @@
 
 ### 4.3 M2 — 字体栈 mmap 化（唯一动私有提交的措施）
 
-- 上游事实（epaint 0.36.1 已核）：`FontData { font: Cow<'static,[u8]> }` 提供 `from_static(&'static [u8])`（`fonts.rs:131`）；解析路径为 `skrifa::FontRef::from_index(font_data.as_ref(), …)`（`font.rs:388`）——**纯借用**。mmap 后 FontData / skrifa / set_fonts 热替换重解析全链路直接引用文件页，零私有拷贝（连启动瞬时峰值也消失）。
+- 上游事实（epaint 0.36.1 已核）：`FontData { font: Cow<'static,[u8]> }` 提供 `from_static(&'static [u8])`（epaint `FontData::from_static`）；解析路径为 `skrifa::FontRef::from_index(font_data.as_ref(), …)`（skrifa `FontRef::from_index`）——**纯借用**。mmap 后 FontData / skrifa / set_fonts 热替换重解析全链路直接引用文件页，零私有拷贝（连启动瞬时峰值也消失）。
 - 落法：`load_cjk_font_definitions` 各 `std::fs::read` 改 `memmap2::Mmap`（新增 1 个成熟小依赖）+ `Box::leak` 成 `'static` 切片 + `FontData::from_static`；后台线程加载时序、热替换调用点零改动；仅 Windows 字体路径。落地位置见 `platform.rs` 约 :94-118（`memmap2::Mmap::map` 约 :100、`Box::leak` 约 :103、`from_static` 约 :105）。
 - 生命周期：字体 mmap 常驻进程全程（`Box::leak` 有意为之）；Windows Fonts 目录下文件被系统更新替换属极小概率且 mmap 只读不受影响。
 
