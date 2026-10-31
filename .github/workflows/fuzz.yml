@@ -40,11 +40,16 @@ jobs:
         with:
           tool: cargo-fuzz
 
+      # --target 显式钉 GNU host（2026-10-31 首跑实证）：新版 cargo-fuzz 在
+      # x86_64 Linux 默认改用 x86_64-unknown-linux-musl，而 nightly minimal
+      # 无 musl std（E0463）且 ASan 与静态 musl 不兼容——GNU host = std 随
+      # minimal 自带 + 动态链接 ASan 经典组合。本机 0.13.2 无此默认，故
+      # v1.5 本地验证未暴露。
       - name: Fuzz decoder (NDJSON framing)
-        run: cargo fuzz run decoder -- -max_total_time=600
+        run: cargo fuzz run decoder --target x86_64-unknown-linux-gnu -- -max_total_time=600
 
       - name: Fuzz envelope (NDJSON envelope validation)
-        run: cargo fuzz run envelope -- -max_total_time=600
+        run: cargo fuzz run envelope --target x86_64-unknown-linux-gnu -- -max_total_time=600
 
       - if: failure()
         name: Dump crash inputs to log (base64)
