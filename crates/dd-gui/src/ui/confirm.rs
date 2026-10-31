@@ -1,10 +1,10 @@
 //! 二次确认对话框绘制。
 
 use crate::app::PaletteApp;
+use crate::theme;
 use crate::ui::widgets::keycap_width;
 use crate::ui::widgets::paint_keycap;
 use crate::ui::widgets::text_width;
-use dd_gui::theme;
 use eframe::egui;
 
 impl PaletteApp {

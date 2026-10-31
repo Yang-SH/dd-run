@@ -2,8 +2,8 @@
 
 use crate::app::PaletteApp;
 use crate::app::{root_panel_size, settings_panel_size, APP_H, APP_W, SIZE_EPSILON};
-use dd_gui::hotkey::HotkeyEvent;
-use dd_gui::tray::TrayEvent;
+use crate::hotkey::HotkeyEvent;
+use crate::tray::TrayEvent;
 use eframe::egui;
 use std::sync::atomic::Ordering;
 use std::time::Instant;
@@ -48,7 +48,7 @@ impl PaletteApp {
         // 先同步旗标防重复发送。
         let want_settings = self.view.stack.current().is_settings;
         self.window.settings_sized = want_settings;
-        let row_h = dd_gui::theme::ListMetrics::of(self.draft.settings.density).row_h;
+        let row_h = crate::theme::ListMetrics::of(self.draft.settings.density).row_h;
         let (w, h) = if want_settings {
             settings_panel_size(
                 self.window.last_work_area,
@@ -229,7 +229,7 @@ impl PaletteApp {
                     // 确认」生效；过期/未知事件一律忽略（旧实现按到达顺序
                     // 盲配 + 单槽快照，重试场景错位——真机「冲突第二次假
                     // 成功」根因，本分支为根治后的唯一裁决点）。
-                    if seq == dd_gui::hotkey::HOTKEY_SEQ_STARTUP {
+                    if seq == crate::hotkey::HOTKEY_SEQ_STARTUP {
                         // 启动注册结果（线程 spawn 失败 / 启动注册失败）。
                         // R-15：置「未注册」状态位（设置页徽标）+ 错误 toast。
                         if !ok {
@@ -260,7 +260,7 @@ impl PaletteApp {
                         self.hotkeys.hotkey_unregistered = false;
                         // R-19：托盘 tooltip / 菜单尾缀随改绑同步（下次右键可见）。
                         self.sync_tray_hotkey_label();
-                        let combo = dd_gui::settings::hotkey_combo_label(c.mods, c.vk);
+                        let combo = crate::settings::hotkey_combo_label(c.mods, c.vk);
                         // R-18：toast 入 i18n + 带新组合名 + 点明「按它可显隐
                         // 面板」（按新热键面板隐藏是 Toggle 设计行为非 bug）。
                         self.show_toast(

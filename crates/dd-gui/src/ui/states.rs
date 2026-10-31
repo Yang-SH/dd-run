@@ -1,8 +1,8 @@
 //! 列表空态/加载态绘制与辅助色计算。
 
+use crate::theme;
 use crate::ui::panel::SEARCH_GLYPH;
 use crate::ui::settings_view::accent_soft;
-use dd_gui::theme;
 use eframe::egui;
 
 /// 单个列表项行（设计稿 01 ueli 式布局）：**图标 20px 列 + 名称 + 描述徽标
@@ -41,7 +41,7 @@ pub(crate) fn draw_empty_state(
         ui.add_space(10.0);
         // B1：空态标题 16px/600（base400）走 semibold 族；2026-09-13 追加
         // 0.05em 字距（semibold_title，缓解雅黑 Bold 小字号「压缩」观感）。
-        ui.label(dd_gui::theme::semibold_title(title, 16.0).color(p.text));
+        ui.label(crate::theme::semibold_title(title, 16.0).color(p.text));
         if let Some(desc) = desc {
             ui.add_space(2.0);
             ui.label(egui::RichText::new(desc).size(12.0).color(p.text3));
@@ -85,7 +85,7 @@ pub(crate) fn shimmer_color(p: &theme::Palette, time: f64) -> egui::Color32 {
 /// 动画由调用方 `request_repaint_after` 驱动（egui 按需重绘）。
 pub(crate) fn draw_loading_state(
     ui: &mut egui::Ui,
-    lang: dd_gui::settings::Lang,
+    lang: crate::settings::Lang,
     p: &theme::Palette,
     dark: bool,
     time: f64,

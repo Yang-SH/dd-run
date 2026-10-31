@@ -6,11 +6,11 @@
 // 单测。纪律：搬运单位 = 完整定义块（含文档注释），函数体一字不改；仅将跨
 // 子模块项 `pub(super)` 化（编译器指示的最小可见性改动）。
 
+pub(crate) use crate::aggregator::{SourceStatus, SourceSummary};
 pub(crate) use crate::app::PaletteApp;
+pub(crate) use crate::theme;
 pub(crate) use crate::ui::widgets::draw_back_btn;
 pub(crate) use crate::ui::widgets::text_width;
-pub(crate) use dd_gui::aggregator::{SourceStatus, SourceSummary};
-pub(crate) use dd_gui::theme;
 pub(crate) use dd_host::manifest::LoadedExtension;
 pub(crate) use dd_host::trust::{Assessment, Decision, ExtOrigin, Trust};
 pub(crate) use eframe::egui;
@@ -106,7 +106,7 @@ impl PaletteApp {
         // LayoutJob 排版后 painter.galley 直绘：左对齐 + 垂直居中手工对位）。
         let mut title_job = egui::text::LayoutJob::single_section(
             self.tr("page.settings").to_owned(),
-            egui::TextFormat::simple(dd_gui::theme::semibold(18.0), p.text),
+            egui::TextFormat::simple(crate::theme::semibold(18.0), p.text),
         );
         title_job.sections[0].format.extra_letter_spacing = 18.0 * 0.05;
         let title_galley = ui.ctx().fonts_mut(|f| f.layout_job(title_job));
@@ -385,7 +385,7 @@ mod tests {
         // v4.13：NAV_CATS 存 i18n key——按 zh 解析后断言（D38）。
         let labels: Vec<&str> = NAV_CATS
             .iter()
-            .map(|(_, _, k)| crate::text::t(dd_gui::settings::Lang::ZhCn, k))
+            .map(|(_, _, k)| crate::text::t(crate::settings::Lang::ZhCn, k))
             .collect();
         assert_eq!(labels, ["外观", "常规", "搜索", "扩展"]);
         let cats: Vec<SettingsCategory> = NAV_CATS.iter().map(|(c, _, _)| *c).collect();

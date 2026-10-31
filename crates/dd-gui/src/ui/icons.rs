@@ -1,8 +1,8 @@
 //! 图标：IconView 解析、纹理缓存、glyph/path 绘制。
 
 use crate::app::PaletteApp;
-use dd_gui::state::PanelItem;
-use dd_gui::theme;
+use crate::state::PanelItem;
+use crate::theme;
 use dd_protocol::model::IconKind;
 use eframe::egui;
 use std::collections::HashMap;

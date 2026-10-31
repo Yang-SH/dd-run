@@ -1,8 +1,8 @@
 //! 纯文本函数（零 egui 依赖）：路径/URL 形态判断、动作 glyph 映射、
 //! 搜索框占位文案、页脚动作文案、i18n 文案表（v4.13 D38）。
 
-use dd_gui::settings::Lang;
-use dd_gui::state::PanelItem;
+use crate::settings::Lang;
+use crate::state::PanelItem;
 use dd_protocol::model::CommandRef;
 
 /// 右键菜单 glyph（Segoe Fluent/MDL2，10B.0 解剖图）。

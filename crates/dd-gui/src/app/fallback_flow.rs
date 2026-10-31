@@ -78,7 +78,7 @@ impl PaletteApp {
         log::debug!("[dd-gui] 拉取兜底模板：ext={ext_id}");
         let (tx, rx) = mpsc::channel();
         thread::spawn(move || {
-            let result = dd_gui::fallback::fetch_fallback_commands(&mut proc);
+            let result = crate::fallback::fetch_fallback_commands(&mut proc);
             let _ = tx.send(FallbackFetchOutcome {
                 ext_id,
                 proc: Some(proc),
@@ -161,9 +161,9 @@ impl PaletteApp {
 
 #[cfg(test)]
 mod tests {
+    use crate::state::PanelItem;
+    use crate::state::PanelState;
     use crate::test_support::{ctx, dying_client, make_app};
-    use dd_gui::state::PanelItem;
-    use dd_gui::state::PanelState;
     use dd_protocol::model::{CommandItem, CommandRef};
 
     /// calc 兜底模板（title 含 `{query}`，render 时替换）。

@@ -19,11 +19,11 @@
 //! 快照文件在 `crates/dd-gui/tests/snapshots/`（kittest 默认位置）。
 //! 与产品体积零关联：dev-dependencies 不进任何产物。
 
-use crate::app::aggregate::{AggregateEvent, AggregatePayload};
+use crate::app::aggregate_job::{AggregateEvent, AggregatePayload};
 use crate::settings::{Settings, ThemePref};
+use crate::state::PanelItem;
 use crate::test_support::item_with;
 use crate::tray::TrayEvent;
-use dd_gui::state::PanelItem;
 use dd_protocol::model::CommandRef;
 use eframe::egui;
 use std::sync::mpsc;
@@ -39,7 +39,7 @@ fn fixture_items() -> Vec<PanelItem> {
     let mut calc = item_with("com.ddrun.calc", CommandRef::Invoke);
     calc.id = "Calculator".to_string();
     calc.title = "Calculator".to_string();
-    calc.pinyin = dd_gui::state::pinyin_haystack(&calc.title);
+    calc.pinyin = crate::state::pinyin_haystack(&calc.title);
     let mut apps = item_with(
         "com.ddrun.apps",
         CommandRef::Page {
@@ -48,7 +48,7 @@ fn fixture_items() -> Vec<PanelItem> {
     );
     apps.id = "All Apps".to_string();
     apps.title = "All Apps".to_string();
-    apps.pinyin = dd_gui::state::pinyin_haystack(&apps.title);
+    apps.pinyin = crate::state::pinyin_haystack(&apps.title);
     vec![calc, apps]
 }
 
@@ -76,7 +76,7 @@ fn snapshot_app_with(
     };
 
     let (_ttx, tray_rx) = mpsc::channel::<TrayEvent>();
-    let (atx, agg_rx) = mpsc::channel::<crate::app::aggregate::AggregateEvent>();
+    let (atx, agg_rx) = mpsc::channel::<crate::app::aggregate_job::AggregateEvent>();
     // 预发完整聚合结果：空查询首屏 = 固定夹具项 + 单一 Warm 源摘要。
     let _ = atx.send(AggregateEvent::Full(AggregatePayload {
         items: payload_items,
@@ -90,7 +90,7 @@ fn snapshot_app_with(
     }));
 
     let mut app = crate::app::PaletteApp::new(
-        dd_gui::hotkey::HotkeyThread::dummy(),
+        crate::hotkey::HotkeyThread::dummy(),
         tray_rx,
         Arc::new(std::sync::atomic::AtomicBool::new(false)),
         agg_rx,
@@ -196,7 +196,7 @@ fn snapshot_nested_page() {
         for it in &mut items {
             it.ext_id = "com.ddrun.calc".to_string();
         }
-        app.view.stack.push(dd_gui::navigation::PageState::nested(
+        app.view.stack.push(crate::navigation::PageState::nested(
             "calc",
             "Calculator",
             "com.ddrun.calc",
@@ -213,7 +213,7 @@ fn snapshot_nested_page() {
 #[ignore = "需 GPU/wgpu 适配器，由 CI snapshot job 显式运行（-- --ignored）"]
 fn snapshot_settings_appearance() {
     let mut harness = snapshot_harness(egui::Theme::Dark, fixture_items(), |app| {
-        let mut page = dd_gui::navigation::PageState::root(Vec::new());
+        let mut page = crate::navigation::PageState::root(Vec::new());
         page.is_settings = true;
         app.view.stack.push(page);
     });

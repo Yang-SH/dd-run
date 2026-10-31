@@ -141,7 +141,7 @@ impl FallbackStore {
     /// 按当前查询渲染全部 Ready 模板为 [`PanelItem`]（`title` 中 `{query}` →
     /// 真实搜索词）。空查询不调用（调用方保证 query 非空时才展示兜底）。
     /// `lang` 传入为当前生效语言（v4.14 D40：类别徽标随 GUI 语言切换）。
-    pub fn render(&self, query: &str, lang: dd_gui::settings::Lang) -> Vec<PanelItem> {
+    pub fn render(&self, query: &str, lang: crate::settings::Lang) -> Vec<PanelItem> {
         let mut out = Vec::new();
         for (ext_id, state) in &self.exts {
             if let ExtState::Ready { name, templates } = state {
@@ -195,7 +195,7 @@ pub fn fetch_fallback_commands(proc: &mut ExtClient) -> Result<Vec<CommandItem>,
 #[cfg(test)]
 mod tests {
     use super::*;
-    use dd_gui::settings::Lang;
+    use crate::settings::Lang;
     use dd_protocol::model::CommandRef;
 
     fn template(id: &str, title: &str) -> CommandItem {

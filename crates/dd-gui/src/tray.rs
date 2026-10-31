@@ -34,9 +34,9 @@ use std::thread;
 static TRAY_LANG: AtomicU8 = AtomicU8::new(0);
 
 /// 主线程在启动时与设置页切换语言时调用（`apply_lang`）。
-pub fn set_tray_lang(lang: dd_gui::settings::Lang) {
+pub fn set_tray_lang(lang: crate::settings::Lang) {
     let code = match lang {
-        dd_gui::settings::Lang::EnUs => 1,
+        crate::settings::Lang::EnUs => 1,
         _ => 0,
     };
     TRAY_LANG.store(code, Ordering::Relaxed);
@@ -44,11 +44,11 @@ pub fn set_tray_lang(lang: dd_gui::settings::Lang) {
 
 /// 托盘线程侧读取当前生效语言（`t()` 查表用）。
 #[cfg(windows)]
-fn tray_lang() -> dd_gui::settings::Lang {
+fn tray_lang() -> crate::settings::Lang {
     if TRAY_LANG.load(Ordering::Relaxed) == 1 {
-        dd_gui::settings::Lang::EnUs
+        crate::settings::Lang::EnUs
     } else {
-        dd_gui::settings::Lang::ZhCn
+        crate::settings::Lang::ZhCn
     }
 }
 

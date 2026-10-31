@@ -13,7 +13,7 @@ impl PaletteApp {
     pub(super) fn draw_general_cards(&mut self, ui: &mut egui::Ui, p: &theme::Palette) {
         let lang = self.view.lang_effective;
         // ── 卡 1：打开面板时显示 ──
-        let mut show_all = self.draft.settings.open_view == dd_gui::settings::OpenView::All;
+        let mut show_all = self.draft.settings.open_view == crate::settings::OpenView::All;
         let mut view_changed = false;
         draw_settings_card_frame(ui, p, self.window.backdrop_active, |card| {
             card.horizontal(|ui| {
@@ -31,7 +31,7 @@ impl PaletteApp {
                 ui.vertical(|ui| {
                     ui.set_min_height(36.0);
                     ui.label(
-                        dd_gui::theme::semibold_title(
+                        crate::theme::semibold_title(
                             crate::text::t(lang, "set.openview.name"),
                             14.0,
                         )
@@ -78,8 +78,8 @@ impl PaletteApp {
         // 捕获回落（钩子 Failed = egui 基础捕获）：提示文案切降级口径
         // （Win / Alt+Space 等系统组合不可录），2026-09-29 真机诊断洞补。
         let capture_fallback = self.hotkeys.hotkey_capturing && self.hotkeys.capture_failed;
-        let mods_label = dd_gui::settings::hotkey_mods_label(self.draft.settings.hotkey_mods);
-        let vk_label = dd_gui::settings::hotkey_vk_label(self.draft.settings.hotkey_vk);
+        let mods_label = crate::settings::hotkey_mods_label(self.draft.settings.hotkey_mods);
+        let vk_label = crate::settings::hotkey_vk_label(self.draft.settings.hotkey_vk);
         let mut caps: Vec<&str> = mods_label.split('+').collect();
         caps.push(vk_label.as_str());
         let mut capture_clicked = false;
@@ -119,7 +119,7 @@ impl PaletteApp {
                     ui.set_min_height(36.0);
                     ui.horizontal(|ui| {
                         ui.label(
-                            dd_gui::theme::semibold_title(
+                            crate::theme::semibold_title(
                                 crate::text::t(lang, "set.hotkey.name"),
                                 14.0,
                             )
@@ -241,7 +241,7 @@ impl PaletteApp {
                     ui.vertical(|ui| {
                         ui.set_min_height(40.0);
                         ui.label(
-                            dd_gui::theme::semibold_title(
+                            crate::theme::semibold_title(
                                 crate::text::t(lang, "set.autostart.name"),
                                 14.0,
                             )
@@ -283,7 +283,7 @@ impl PaletteApp {
         ui.add_space(8.0);
         let lang_pref = self.draft.settings.lang;
         let lang_eff = self.view.lang_effective;
-        let mut lang_picked: Option<dd_gui::settings::Lang> = None;
+        let mut lang_picked: Option<crate::settings::Lang> = None;
         let labels = [
             crate::text::t(lang_eff, "lang.follow_system"),
             crate::text::t(lang_eff, "lang.zh_cn"),
@@ -315,7 +315,7 @@ impl PaletteApp {
                         ui.vertical(|ui| {
                             ui.set_min_height(40.0);
                             ui.label(
-                                dd_gui::theme::semibold_title(
+                                crate::theme::semibold_title(
                                     crate::text::t(lang_eff, "settings.lang.name"),
                                     14.0,
                                 )
@@ -339,7 +339,7 @@ impl PaletteApp {
                 });
                 // 右：自绘 Fluent 下拉（替换 egui ComboBox）
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    use dd_gui::settings::Lang;
+                    use crate::settings::Lang;
                     if let Some(idx) =
                         draw_fluent_dropdown(ui, selected_idx, &labels, combo_w, p, true)
                     {
@@ -360,7 +360,7 @@ impl PaletteApp {
         // 与语言卡同规格：D42 行 40px + 左列锁宽 wrap + 自绘 Fluent 下拉）；
         // 切换经 apply_warm_capacity 即时生效（缩容立即驱逐 + 落盘）。
         ui.add_space(8.0);
-        let warm_labels: Vec<String> = (1..=dd_gui::settings::WARM_CAPACITY_MAX as u32)
+        let warm_labels: Vec<String> = (1..=crate::settings::WARM_CAPACITY_MAX as u32)
             .map(|n| n.to_string())
             .collect();
         let warm_labels: Vec<&str> = warm_labels.iter().map(String::as_str).collect();
@@ -388,7 +388,7 @@ impl PaletteApp {
                         ui.vertical(|ui| {
                             ui.set_min_height(40.0);
                             ui.label(
-                                dd_gui::theme::semibold_title(
+                                crate::theme::semibold_title(
                                     crate::text::t(lang_eff, "set.warm_capacity.name"),
                                     14.0,
                                 )
@@ -466,7 +466,7 @@ impl PaletteApp {
                     ui.vertical(|ui| {
                         ui.set_min_height(40.0);
                         ui.label(
-                            dd_gui::theme::semibold_title(
+                            crate::theme::semibold_title(
                                 crate::text::t(lang, "set.about.name"),
                                 14.0,
                             )
@@ -476,10 +476,8 @@ impl PaletteApp {
                         ui.add(
                             egui::Label::new(
                                 egui::RichText::new(
-                                    crate::text::t(lang, "set.about.desc").replace(
-                                        "{version}",
-                                        dd_gui::update_check::CURRENT_VERSION,
-                                    ),
+                                    crate::text::t(lang, "set.about.desc")
+                                        .replace("{version}", crate::update_check::CURRENT_VERSION),
                                 )
                                 .size(12.0)
                                 .color(p.text3),
@@ -530,7 +528,7 @@ impl PaletteApp {
                 ui.vertical(|ui| {
                     ui.set_min_height(36.0);
                     ui.label(
-                        dd_gui::theme::semibold_title(crate::text::t(lang, "set.usage.name"), 14.0)
+                        crate::theme::semibold_title(crate::text::t(lang, "set.usage.name"), 14.0)
                             .color(p.text),
                     );
                     ui.add(
@@ -603,11 +601,8 @@ impl PaletteApp {
                 ui.vertical(|ui| {
                     ui.set_min_height(36.0);
                     ui.label(
-                        dd_gui::theme::semibold_title(
-                            crate::text::t(lang, "set.backup.name"),
-                            14.0,
-                        )
-                        .color(p.text),
+                        crate::theme::semibold_title(crate::text::t(lang, "set.backup.name"), 14.0)
+                            .color(p.text),
                     );
                     ui.add_space(2.0);
                     ui.add(
@@ -666,7 +661,7 @@ impl PaletteApp {
     /// 常规栏「自定义命令」卡（N1，2026-10-04）：关键词直达 URL / 本地路径。
     /// 交互范式复用搜索引擎卡——列表行（名称 + 关键词 + 目标截断 + 删除，
     /// D42 行规格 32px）+ 底部添加区（类型下拉 + 名称/关键词/目标输入 +
-    /// 「添加」按钮）。校验经 [`dd_gui::settings::CustomCommand::new`]（trim /
+    /// 「添加」按钮）。校验经 [`crate::settings::CustomCommand::new`]（trim /
     /// 小写化 / 空字段与空白关键词拒绝）+ 关键词唯一性，错误行 danger 提示。
     pub(super) fn draw_custom_commands_card(&mut self, ui: &mut egui::Ui, p: &theme::Palette) {
         let lang = self.view.lang_effective;
@@ -697,11 +692,8 @@ impl PaletteApp {
                 ui.vertical(|ui| {
                     ui.set_min_height(36.0);
                     ui.label(
-                        dd_gui::theme::semibold_title(
-                            crate::text::t(lang, "set.custom.name"),
-                            14.0,
-                        )
-                        .color(p.text),
+                        crate::theme::semibold_title(crate::text::t(lang, "set.custom.name"), 14.0)
+                            .color(p.text),
                     );
                     ui.add_space(2.0);
                     ui.add(
@@ -847,11 +839,11 @@ impl PaletteApp {
         }
         if add_clicked {
             let kind = if self.draft.custom_kind_idx == 0 {
-                dd_gui::settings::CustomCommandKind::Url
+                crate::settings::CustomCommandKind::Url
             } else {
-                dd_gui::settings::CustomCommandKind::Path
+                crate::settings::CustomCommandKind::Path
             };
-            match dd_gui::settings::CustomCommand::new(
+            match crate::settings::CustomCommand::new(
                 &self.draft.custom_title_buf,
                 &self.draft.custom_keyword_buf,
                 kind,
@@ -911,7 +903,7 @@ impl PaletteApp {
                 ui.vertical(|ui| {
                     ui.set_min_height(36.0);
                     ui.label(
-                        dd_gui::theme::semibold_title(crate::text::t(lang, "set.diag.name"), 14.0)
+                        crate::theme::semibold_title(crate::text::t(lang, "set.diag.name"), 14.0)
                             .color(p.text),
                     );
                     ui.add(

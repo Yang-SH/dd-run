@@ -6,8 +6,8 @@
 //! exe 风险大于收益），结果只到 toast + 打开 Releases 页的提示。
 
 use super::*;
-use crate::app::toast::ToastKind;
-use dd_gui::update_check::{self, UpdateStatus};
+use crate::app::toast_state::ToastKind;
+use crate::update_check::{self, UpdateStatus};
 use std::sync::mpsc;
 use std::thread;
 

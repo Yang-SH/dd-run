@@ -1,13 +1,13 @@
 //! 嵌套页：`get_items` 发起（warm/复热）+ `poll_page` 结果落地。
 
+use crate::aggregator;
 use crate::app::e2e::E2eSample;
 use crate::app::pool::get_items_on;
 use crate::app::PaletteApp;
 use crate::ext_client::ExtClient;
-use dd_gui::aggregator;
-use dd_gui::navigation::PageState;
-use dd_gui::state::PanelItem;
-use dd_gui::state::PanelState;
+use crate::navigation::PageState;
+use crate::state::PanelItem;
+use crate::state::PanelState;
 use dd_host::manifest::LoadedExtension;
 use dd_protocol::messages::GetItemsResult;
 use std::sync::mpsc;
@@ -233,7 +233,7 @@ impl PaletteApp {
     /// 从文件搜索页返回后输入框失焦，无法直接键入——进页时 `open_page` 置位
     /// 的 `want_focus` 只在落地时消费一次，返回路径需重新置位）。
     /// 返回 `None` = 已在 Root（调用方决定隐藏，§4.3），不置位。
-    pub(crate) fn go_back_focused(&mut self) -> Option<dd_gui::navigation::PageState> {
+    pub(crate) fn go_back_focused(&mut self) -> Option<crate::navigation::PageState> {
         let popped = self.view.stack.go_back();
         if popped.is_some() {
             self.window.want_focus = true;

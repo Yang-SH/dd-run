@@ -14,7 +14,7 @@ impl PaletteApp {
     pub(super) fn draw_appearance_card(&mut self, ui: &mut egui::Ui, p: &theme::Palette) {
         let dark = ui.visuals().dark_mode;
         let lang = self.view.lang_effective;
-        let mut pick: Option<dd_gui::settings::ThemePref> = None;
+        let mut pick: Option<crate::settings::ThemePref> = None;
         draw_settings_card_frame(ui, p, self.window.backdrop_active, |card| {
             // 主题 icon + 名称 + 描述（16px / 14/20 / 12/16 fg-2 / text / text-3）
             // item_spacing.x 清零：gap 严格 12px（§08 CSS setting-row gap），不受
@@ -34,7 +34,7 @@ impl PaletteApp {
                 ui.vertical(|ui| {
                     ui.set_min_height(36.0);
                     ui.label(
-                        dd_gui::theme::semibold_title(crate::text::t(lang, "set.theme.name"), 14.0)
+                        crate::theme::semibold_title(crate::text::t(lang, "set.theme.name"), 14.0)
                             .color(p.text),
                     );
                     ui.add(
@@ -61,19 +61,19 @@ impl PaletteApp {
                 // B6③：缩略图种类跟随目标主题（跟随系统 = 亮暗拼接）
                 let prefs = [
                     (
-                        dd_gui::settings::ThemePref::System,
+                        crate::settings::ThemePref::System,
                         crate::text::t(lang, "set.theme.follow"),
                         "System",
                         ThemeThumb::System,
                     ),
                     (
-                        dd_gui::settings::ThemePref::Light,
+                        crate::settings::ThemePref::Light,
                         crate::text::t(lang, "set.theme.light"),
                         "Light",
                         ThemeThumb::Light,
                     ),
                     (
-                        dd_gui::settings::ThemePref::Dark,
+                        crate::settings::ThemePref::Dark,
                         crate::text::t(lang, "set.theme.dark"),
                         "Dark",
                         ThemeThumb::Dark,
@@ -116,15 +116,15 @@ impl PaletteApp {
         // 着色 / 边框链路暂停生效），卡头下提示恢复条件。
         let bg_set = self.draft.settings.background_image_path.is_some();
         // 开关状态在闭包外读取、闭包内只收集点击结果（避免闭包内 &mut self 冲突）。
-        let mut picked_material: Option<dd_gui::settings::Backdrop> = None;
-        let mut picked_corner: Option<dd_gui::settings::CornerPref> = None;
-        let mut picked_border: Option<dd_gui::settings::BorderMode> = None;
+        let mut picked_material: Option<crate::settings::Backdrop> = None;
+        let mut picked_corner: Option<crate::settings::CornerPref> = None;
+        let mut picked_border: Option<crate::settings::BorderMode> = None;
         let mut opacity_tmp = self.draft.settings.material_opacity;
         let mut opacity_changed = false;
         let mut opacity_released = false;
         // T6（2026-09-20）：着色行状态（模式 pill + 自定义色 + 强度）
         let colorization = self.draft.settings.colorization;
-        let mut picked_colorization: Option<dd_gui::settings::ColorizationMode> = None;
+        let mut picked_colorization: Option<crate::settings::ColorizationMode> = None;
         let mut color_tmp = self.draft.settings.custom_tint_color;
         let mut color_changed = false;
         let mut intensity_tmp = self.draft.settings.custom_tint_intensity;
@@ -147,7 +147,7 @@ impl PaletteApp {
                 ui.vertical(|ui| {
                     ui.set_min_height(36.0);
                     ui.label(
-                        dd_gui::theme::semibold_title(
+                        crate::theme::semibold_title(
                             crate::text::t(lang, "set.backdrop.name"),
                             14.0,
                         )
@@ -193,9 +193,9 @@ impl PaletteApp {
             card.horizontal(|ui| {
                 ui.spacing_mut().item_spacing.x = 0.0;
                 let avail = ui.available_width();
-                let n = dd_gui::settings::Backdrop::ALL.len() as f32;
+                let n = crate::settings::Backdrop::ALL.len() as f32;
                 let pill_w = (avail - (n - 1.0) * gap) / n;
-                for (i, backdrop) in dd_gui::settings::Backdrop::ALL.into_iter().enumerate() {
+                for (i, backdrop) in crate::settings::Backdrop::ALL.into_iter().enumerate() {
                     if i > 0 {
                         ui.add_space(gap);
                     }
@@ -230,9 +230,9 @@ impl PaletteApp {
             card.horizontal(|ui| {
                 ui.spacing_mut().item_spacing.x = 0.0;
                 let avail = ui.available_width();
-                let n = dd_gui::settings::ColorizationMode::ALL.len() as f32;
+                let n = crate::settings::ColorizationMode::ALL.len() as f32;
                 let pill_w = (avail - (n - 1.0) * gap) / n;
-                for (i, mode) in dd_gui::settings::ColorizationMode::ALL
+                for (i, mode) in crate::settings::ColorizationMode::ALL
                     .into_iter()
                     .enumerate()
                 {
@@ -252,7 +252,7 @@ impl PaletteApp {
                     }
                 }
             });
-            if colorization == dd_gui::settings::ColorizationMode::Custom {
+            if colorization == crate::settings::ColorizationMode::Custom {
                 // 自定义档：色块 + 强度滑杆（材质未生效同样置灰）
                 card.add_space(6.0);
                 card.horizontal(|ui| {
@@ -344,9 +344,9 @@ impl PaletteApp {
                 let avail = ui.available_width();
                 let pill_w = (avail - 2.0 * gap) / 3.0;
                 for (i, (pref, key)) in [
-                    (dd_gui::settings::CornerPref::Round, "set.corner.round"),
-                    (dd_gui::settings::CornerPref::Small, "set.corner.small"),
-                    (dd_gui::settings::CornerPref::Square, "set.corner.square"),
+                    (crate::settings::CornerPref::Round, "set.corner.round"),
+                    (crate::settings::CornerPref::Small, "set.corner.small"),
+                    (crate::settings::CornerPref::Square, "set.corner.square"),
                 ]
                 .into_iter()
                 .enumerate()
@@ -389,9 +389,9 @@ impl PaletteApp {
                     let avail = ui.available_width();
                     let pill_w = (avail - 2.0 * gap) / 3.0;
                     for (i, (mode, key)) in [
-                        (dd_gui::settings::BorderMode::Neutral, "set.border.neutral"),
-                        (dd_gui::settings::BorderMode::Accent, "set.border.accent"),
-                        (dd_gui::settings::BorderMode::None, "set.border.off"),
+                        (crate::settings::BorderMode::Neutral, "set.border.neutral"),
+                        (crate::settings::BorderMode::Accent, "set.border.accent"),
+                        (crate::settings::BorderMode::None, "set.border.off"),
                     ]
                     .into_iter()
                     .enumerate()
@@ -467,7 +467,7 @@ impl PaletteApp {
             .load_failed(self.draft.settings.background_image_path.as_deref());
         let mut apply_clicked = false;
         let mut clear_clicked = false;
-        let mut picked_fit: Option<dd_gui::settings::BgImageFit> = None;
+        let mut picked_fit: Option<crate::settings::BgImageFit> = None;
         let mut opacity_tmp = self.draft.settings.background_image_opacity;
         let mut opacity_changed = false;
         let mut opacity_released = false;
@@ -491,7 +491,7 @@ impl PaletteApp {
                 ui.vertical(|ui| {
                     ui.set_min_height(36.0);
                     ui.label(
-                        dd_gui::theme::semibold_title(crate::text::t(lang, "set.bgimg.name"), 14.0)
+                        crate::theme::semibold_title(crate::text::t(lang, "set.bgimg.name"), 14.0)
                             .color(p.text),
                     );
                     ui.add(
@@ -564,10 +564,10 @@ impl PaletteApp {
                 ui.horizontal(|ui| {
                     ui.spacing_mut().item_spacing.x = 0.0;
                     let avail = ui.available_width();
-                    let n = dd_gui::settings::BgImageFit::ALL.len() as f32;
+                    let n = crate::settings::BgImageFit::ALL.len() as f32;
                     let gap = 8.0;
                     let pill_w = (avail - (n - 1.0) * gap) / n;
-                    for (i, fit) in dd_gui::settings::BgImageFit::ALL.into_iter().enumerate() {
+                    for (i, fit) in crate::settings::BgImageFit::ALL.into_iter().enumerate() {
                         if i > 0 {
                             ui.add_space(gap);
                         }
@@ -679,7 +679,7 @@ impl PaletteApp {
         let dark = ui.visuals().dark_mode;
         let lang = self.view.lang_effective;
         let current = self.draft.settings.density;
-        let mut pick: Option<dd_gui::settings::ListDensity> = None;
+        let mut pick: Option<crate::settings::ListDensity> = None;
         draw_settings_card_frame(ui, p, self.window.backdrop_active, |card| {
             // 卡头：图标 + 名称 + 描述（同主题/材质卡口径）
             card.horizontal(|ui| {
@@ -697,7 +697,7 @@ impl PaletteApp {
                 ui.vertical(|ui| {
                     ui.set_min_height(36.0);
                     ui.label(
-                        dd_gui::theme::semibold_title(
+                        crate::theme::semibold_title(
                             crate::text::t(lang, "set.density.name"),
                             14.0,
                         )
@@ -722,18 +722,12 @@ impl PaletteApp {
                 let avail = ui.available_width();
                 let pill_w = (avail - 2.0 * gap) / 3.0;
                 for (i, (density, key)) in [
+                    (crate::settings::ListDensity::Compact, "set.density.compact"),
                     (
-                        dd_gui::settings::ListDensity::Compact,
-                        "set.density.compact",
-                    ),
-                    (
-                        dd_gui::settings::ListDensity::Standard,
+                        crate::settings::ListDensity::Standard,
                         "set.density.standard",
                     ),
-                    (
-                        dd_gui::settings::ListDensity::Relaxed,
-                        "set.density.relaxed",
-                    ),
+                    (crate::settings::ListDensity::Relaxed, "set.density.relaxed"),
                 ]
                 .into_iter()
                 .enumerate()
@@ -812,7 +806,7 @@ impl PaletteApp {
                     ui.vertical(|ui| {
                         ui.set_min_height(36.0);
                         ui.label(
-                            dd_gui::theme::semibold_title(
+                            crate::theme::semibold_title(
                                 crate::text::t(lang, "set.reset.name"),
                                 14.0,
                             )

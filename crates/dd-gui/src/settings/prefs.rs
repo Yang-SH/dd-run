@@ -452,7 +452,7 @@ impl Lang {
 
 /// 列表密度档（icons-typography-plan.md F2，参考 DeskBox「图标/文字大小可调」）。
 /// 一档联动行高/标题字号/标签字号/图标格/glyph 字号五值——具体数值见
-/// `dd_gui::theme::ListMetrics`（标准档 = 既有常量，parity 单测守卫）。
+/// `crate::theme::ListMetrics`（标准档 = 既有常量，parity 单测守卫）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum ListDensity {
     /// 紧凑（行高 36，一屏更多结果）。

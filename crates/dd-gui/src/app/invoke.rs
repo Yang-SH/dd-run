@@ -1,10 +1,10 @@
 //! 命令执行：`invoke` 发起/复热/轮询 + Confirm 重发。
 
 use crate::app::pool::invoke_on;
-use crate::app::toast::ToastKind;
+use crate::app::toast_state::ToastKind;
 use crate::app::PaletteApp;
 use crate::ext_client::ExtClient;
-use dd_gui::result;
+use crate::result;
 use dd_host::manifest::LoadedExtension;
 use dd_protocol::messages::InvokeParams;
 use dd_protocol::methods::METHOD_GET_COMMAND;
@@ -138,7 +138,7 @@ impl PaletteApp {
     pub(crate) fn dispatch_invoke(&mut self, ext_id: &str, params: InvokeParams) {
         // N1（2026-10-04）：自定义直达命令走**宿主内部分发**（§3 惯例 ⑤）——
         // 不对应任何扩展进程，无 busy / 熔断面；`params.id` = `custom:{keyword}`。
-        if ext_id == dd_gui::aggregator::HOST_CUSTOM_EXT_ID {
+        if ext_id == crate::aggregator::HOST_CUSTOM_EXT_ID {
             self.run_custom_command(&params.id);
             return;
         }
@@ -275,10 +275,10 @@ impl PaletteApp {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::aggregator::{SourceStatus, SourceSummary};
     use crate::ext_inprocess::InProcessExtension;
     use crate::test_support::{ctx, dying_client, make_app};
     use dd_ext::ExtensionSpec;
-    use dd_gui::aggregator::{SourceStatus, SourceSummary};
     use dd_host::process::ProtocolError;
     use dd_protocol::model::Sender;
 

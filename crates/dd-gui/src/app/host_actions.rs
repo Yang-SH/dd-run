@@ -1,9 +1,9 @@
 //! 扩展宿主请求（ShowToast/Clipboard/OpenUrl 等）与 8 种结果裁决落地。
 
-use crate::app::toast::ConfirmDialog;
+use crate::app::toast_state::ConfirmDialog;
 use crate::app::PaletteApp;
-use dd_gui::result;
-use dd_gui::result::HostAction;
+use crate::result;
+use crate::result::HostAction;
 use dd_protocol::messages::{OpenUrlParams, RawMessage, SetClipboardParams, ShowStatusParams};
 use dd_protocol::methods::{
     METHOD_HOST_OPEN_URL, METHOD_HOST_SET_CLIPBOARD, METHOD_HOST_SHOW_STATUS,
@@ -160,12 +160,12 @@ impl PaletteApp {
 
     /// N1（2026-10-04）：执行自定义直达命令（宿主内部分发，§3 惯例 ⑤）。
     ///
-    /// `item_id` = `custom:{keyword}`（[`dd_gui::aggregator::CUSTOM_ITEM_PREFIX`]）。
+    /// `item_id` = `custom:{keyword}`（[`crate::aggregator::CUSTOM_ITEM_PREFIX`]）。
     /// `url` 走 [`Self::open_url_execute`]（S-03 白名单天然生效）；`path` 走
     /// ShellExecute「双击等价」（与 `file://` 同一执行函数，含 UNC）。
     /// 配置中已无该关键词（删除后列表未刷新的竞态）→ 记日志忽略。
     pub(crate) fn run_custom_command(&mut self, item_id: &str) {
-        let Some(keyword) = item_id.strip_prefix(dd_gui::aggregator::CUSTOM_ITEM_PREFIX) else {
+        let Some(keyword) = item_id.strip_prefix(crate::aggregator::CUSTOM_ITEM_PREFIX) else {
             return;
         };
         let Some(cmd) = self
@@ -180,10 +180,10 @@ impl PaletteApp {
             return;
         };
         match cmd.kind {
-            dd_gui::settings::CustomCommandKind::Url => {
+            crate::settings::CustomCommandKind::Url => {
                 self.open_url_execute(&cmd.target, "custom");
             }
-            dd_gui::settings::CustomCommandKind::Path => {
+            crate::settings::CustomCommandKind::Path => {
                 // 与 file:// 腿同一「双击等价」执行函数（ShellExecute，含 UNC）；
                 // info 落目标路径可溯源（同 S-03 §4.2 口径）。
                 log::info!(

@@ -3,8 +3,10 @@
 use std::time::Instant;
 
 use crate::app::PaletteApp;
+use crate::state::PanelItem;
 use crate::text::footer_action_text;
 use crate::text::nested_search_placeholder;
+use crate::theme;
 use crate::ui::row::draw_item_row;
 use crate::ui::settings_view::draw_ext_chip;
 use crate::ui::states::draw_empty_state;
@@ -16,8 +18,6 @@ use crate::ui::widgets::keys_width;
 use crate::ui::widgets::paint_keycap;
 use crate::ui::widgets::paint_keys_at;
 use crate::ui::widgets::text_width;
-use dd_gui::state::PanelItem;
-use dd_gui::theme;
 use eframe::egui;
 
 /// 搜索栏前缀搜索图标（Segoe MDL2 "Search" U+E721；设计稿 01 searchbar glyph）。
@@ -352,7 +352,7 @@ impl PaletteApp {
             // 「本该空白」时占用。有选中项时该提示让位给上下文动作文本（C7），
             // 由设置页卡片头与启动一次性 toast 兜底可见性。
             .or_else(|| {
-                let n = dd_gui::aggregator::pending_count(&self.pool.trust);
+                let n = crate::aggregator::pending_count(&self.pool.trust);
                 (n > 0).then(|| {
                     crate::text::t(self.view.lang_effective, "footer.ext_pending")
                         .replace("{n}", &n.to_string())

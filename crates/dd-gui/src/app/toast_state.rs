@@ -1,8 +1,8 @@
 //! Toast 与确认对话框状态（意图类型、时长策略）。
 
 use crate::app::PaletteApp;
-use dd_gui::result::PendingConfirm;
-use dd_gui::theme;
+use crate::result::PendingConfirm;
+use crate::theme;
 use eframe::egui;
 use std::time::Duration;
 use std::time::Instant;

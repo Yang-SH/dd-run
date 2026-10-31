@@ -18,10 +18,10 @@ pub enum SystemBackdrop {
 
 /// M1（2026-09-20）：设置枚举 → DWM 类型的**唯一映射点**（参照 CmdPal
 /// `BackdropStyles` 注册表思想）。调用方不再各自 `match`——新增材质档
-/// 只需在 [`SystemBackdrop`] 与 [`dd_gui::settings::Backdrop`] 各加一行。
-impl From<dd_gui::settings::Backdrop> for SystemBackdrop {
-    fn from(b: dd_gui::settings::Backdrop) -> Self {
-        use dd_gui::settings::Backdrop;
+/// 只需在 [`SystemBackdrop`] 与 [`crate::settings::Backdrop`] 各加一行。
+impl From<crate::settings::Backdrop> for SystemBackdrop {
+    fn from(b: crate::settings::Backdrop) -> Self {
+        use crate::settings::Backdrop;
         match b {
             Backdrop::None => SystemBackdrop::None,
             Backdrop::Mica => SystemBackdrop::Mica,

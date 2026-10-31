@@ -4,7 +4,7 @@
 //! 仅按职责物理分文件——业务编排在 app/，绘制在 [`crate::ui`]，系统副作用在
 //! [`crate::platform`]，纯函数在 [`crate::text`]。
 
-pub(crate) mod aggregate;
+pub(crate) mod aggregate_job;
 /// R-07：剪贴板写入常驻工作线程（`host/set_clipboard` 不再阻塞 UI 线程）。
 pub(crate) mod clipboard_worker;
 pub(crate) mod ctx_menu;
@@ -19,13 +19,14 @@ pub(crate) mod lifecycle;
 pub(crate) mod page;
 pub(crate) mod pool;
 pub(crate) mod refresh;
-pub(crate) mod toast;
+pub(crate) mod toast_state;
 pub(crate) mod update_check;
 pub(crate) mod usage;
 
 /// bin 入口（main.rs）需要的两个跨 crate 符号（facade 再导出）。
-pub use aggregate::{spawn_aggregation, AggregateEvent, AggregatePayload};
+pub use aggregate_job::{spawn_aggregation, AggregateEvent, AggregatePayload};
 
+use crate::aggregator;
 use crate::app::ctx_menu::CtxMenuState;
 use crate::app::e2e::E2eSample;
 use crate::app::fallback_flow::FallbackFetchOutcome;
@@ -33,17 +34,16 @@ use crate::app::invoke::InvokeOutcome;
 use crate::app::page::PageOutcome;
 use crate::app::pool::WARM_IDLE_HIDDEN_TICK;
 use crate::app::refresh::RefreshState;
-use crate::app::toast::ConfirmDialog;
-use crate::app::toast::ToastState;
+use crate::app::toast_state::ConfirmDialog;
+use crate::app::toast_state::ToastState;
 use crate::ext_client::ExtClient;
+use crate::hotkey::HotkeyThread;
+use crate::navigation::PageStack;
+use crate::navigation::PageState;
+use crate::robustness::CrashGuard;
+use crate::tray::TrayEvent;
 use crate::ui::settings_view::SettingsCategory;
 use dd_ext::ExtensionSpec;
-use dd_gui::aggregator;
-use dd_gui::hotkey::HotkeyThread;
-use dd_gui::navigation::PageStack;
-use dd_gui::navigation::PageState;
-use dd_gui::robustness::CrashGuard;
-use dd_gui::tray::TrayEvent;
 use dd_host::cache::ColdStartTimer;
 use dd_host::cache::FrozenCache;
 use dd_host::cache::LruWarmSet;
@@ -268,7 +268,7 @@ pub(crate) struct SettingsDraft {
     /// 扩展启停脏标记：离开设置页时与 engines_dirty 一起触发重聚合。
     pub(crate) exts_dirty: bool,
     /// M5 批次 4.0：宿主本地设置（当前仅主题偏好；启动加载、设置页改选即存）。
-    pub(crate) settings: dd_gui::settings::Settings,
+    pub(crate) settings: crate::settings::Settings,
     /// 搜索引擎配置脏标记：设置页改动置位，**离开设置页**时消费并全量重聚合
     /// （websearch 进程须以新环境变量重启，逐帧开关勾选只聚合一次）。
     pub(crate) engines_dirty: bool,
@@ -342,12 +342,12 @@ pub(crate) struct UiViewState {
     /// v4.13 D38：当前生效语言（`settings.lang` 为 FollowSystem 时已按系统
     /// UI 语言解析为具体语言，见 [`PaletteApp::resolve_lang`]）。设置页切换经
     /// `apply_lang` 更新——egui immediate mode 下一帧全量重绘即生效。
-    pub(crate) lang_effective: dd_gui::settings::Lang,
+    pub(crate) lang_effective: crate::settings::Lang,
     /// §5.1：使用频次排序快照（`pool.usage` 的不可变投影）。Root 列表重建
     /// （聚合到达）/ 记录 / 重置后经 `sync_usage_index` 重新注入 `PanelState`。
-    pub(crate) usage_scores: Option<dd_gui::usage::UsageScores>,
+    pub(crate) usage_scores: Option<crate::usage::UsageScores>,
     /// §5.2：检查更新结果接收端（`Some` = 检查在途；结果消费后置 None）。
-    pub(crate) update_rx: Option<Receiver<dd_gui::update_check::UpdateStatus>>,
+    pub(crate) update_rx: Option<Receiver<crate::update_check::UpdateStatus>>,
 }
 
 /// C1 拆片⑤（dd-run-改进分析.md §3.1）：扩展池——聚合通道与进行态、保活客户端、
@@ -406,14 +406,14 @@ pub(crate) struct ExtPool {
     /// M4：连续崩溃保护状态机（协议 §11）——键 = 扩展清单 id。
     pub(crate) crash_guards: HashMap<String, CrashGuard>,
     /// M4 宿主 fallback 轮：兜底模板缓存与渲染状态（协议 §6.2）。
-    pub(crate) fallback_store: dd_gui::fallback::FallbackStore,
+    pub(crate) fallback_store: crate::fallback::FallbackStore,
     /// 后台 `fallback_commands` 拉取结果接收端（`Some` = 有拉取在途）。
     pub(crate) fallback_rx: Option<Receiver<FallbackFetchOutcome>>,
     /// 磁盘桩缓存（聚合用；设置页搜索引擎变更触发重聚合时复用）。
     pub(crate) cache: Option<FrozenCache>,
     /// §5.1：使用频次表（`usage.json` 权威副本）。进程内权威 = 本字段；
-    /// `PanelState` 只持有 [`dd_gui::usage::Usage::scores`] 快照参与排序。
-    pub(crate) usage: dd_gui::usage::Usage,
+    /// `PanelState` 只持有 [`crate::usage::Usage::scores`] 快照参与排序。
+    pub(crate) usage: crate::usage::Usage,
 }
 
 /// C1 拆片⑥（dd-run-改进分析.md §3.1）：窗口状态——可见性/焦点、托盘通道、
@@ -547,6 +547,15 @@ impl PaletteApp {
         }
     }
 
+    /// bench / 外部测试钩子：置面板窗口可见。`window` 字段为 `pub(crate)`，
+    /// `benches/` 独立 crate 触不到（快照测试在同 crate 直赋
+    /// `app.window.visible`，本钩子为等价入口）。P2-4.5 `FuzzyMatcher`
+    /// 放宽 `pub` 同款偏差记档；`#[doc(hidden)]` 不进公开文档面。
+    #[doc(hidden)]
+    pub fn set_window_visible(&mut self, visible: bool) {
+        self.window.visible = visible;
+    }
+
     #[allow(clippy::too_many_arguments)] // 构造注入依赖多（v4.16 增看门狗旗标）
     pub fn new(
         hotkey: HotkeyThread,
@@ -555,7 +564,7 @@ impl PaletteApp {
         aggregate_rx: Receiver<AggregateEvent>,
         cold: ColdStartTimer,
         cache: Option<FrozenCache>,
-        settings: dd_gui::settings::Settings,
+        settings: crate::settings::Settings,
         panel_open: Arc<AtomicBool>,
     ) -> Self {
         // FollowSystem 在此一次性解析为具体语言（每帧取用零探测开销）。
@@ -619,11 +628,11 @@ impl PaletteApp {
                 page_rx: None,
                 last_invoke: None,
                 crash_guards: HashMap::new(),
-                fallback_store: dd_gui::fallback::FallbackStore::new(),
+                fallback_store: crate::fallback::FallbackStore::new(),
                 fallback_rx: None,
                 cache,
                 // §5.1：默认空表；bin 入口 `load_usage` 从 usage.json 装载。
-                usage: dd_gui::usage::Usage::default(),
+                usage: crate::usage::Usage::default(),
             },
             window: WindowState {
                 tray_events,
@@ -684,9 +693,9 @@ impl PaletteApp {
 
     /// 解析生效语言（v4.13 D38）：偏好为 FollowSystem → 平台探测系统 UI
     /// 语言；用户已显式选择 → 原样。`new()` 与 `apply_lang` 共用。
-    pub(crate) fn resolve_lang(settings: &dd_gui::settings::Settings) -> dd_gui::settings::Lang {
+    pub(crate) fn resolve_lang(settings: &crate::settings::Settings) -> crate::settings::Lang {
         match settings.lang {
-            dd_gui::settings::Lang::FollowSystem => crate::platform::system_ui_lang(),
+            crate::settings::Lang::FollowSystem => crate::platform::system_ui_lang(),
             l => l,
         }
     }
@@ -728,7 +737,7 @@ impl PaletteApp {
     /// 成功后（`poll_hotkey` 成功分支，save+reset 共用该唯一写点）调用；
     /// 启动初值在 `main.rs`（托盘线程 spawn 前）写入。
     pub(crate) fn sync_tray_hotkey_label(&self) {
-        crate::tray::set_tray_hotkey_label(dd_gui::settings::hotkey_combo_label(
+        crate::tray::set_tray_hotkey_label(crate::settings::hotkey_combo_label(
             self.draft.settings.hotkey_mods,
             self.draft.settings.hotkey_vk,
         ));
@@ -931,13 +940,13 @@ impl eframe::App for PaletteApp {
                 settings_panel_size(
                     self.window.last_work_area,
                     self.draft.settings.panel_size,
-                    dd_gui::theme::ListMetrics::of(self.draft.settings.density).row_h,
+                    crate::theme::ListMetrics::of(self.draft.settings.density).row_h,
                 )
             } else {
                 root_panel_size(
                     self.window.last_work_area,
                     self.draft.settings.panel_size,
-                    dd_gui::theme::ListMetrics::of(self.draft.settings.density).row_h,
+                    crate::theme::ListMetrics::of(self.draft.settings.density).row_h,
                 )
             };
             ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(egui::vec2(w, h)));
@@ -1053,13 +1062,13 @@ mod size_tests {
     // F2：尺寸推导函数新增 row_h 参数（密度档）。测试便捷包装 = 标准档 40
     // （F2 前唯一行为）；本地定义遮蔽 `use super::*` 的 glob 导入。
     fn root_panel_size(work: Option<(f32, f32)>, remembered: Option<(u32, u32)>) -> (f32, f32) {
-        super::root_panel_size(work, remembered, dd_gui::theme::ROW_H)
+        super::root_panel_size(work, remembered, crate::theme::ROW_H)
     }
     fn settings_panel_size(work: Option<(f32, f32)>, remembered: Option<(u32, u32)>) -> (f32, f32) {
-        super::settings_panel_size(work, remembered, dd_gui::theme::ROW_H)
+        super::settings_panel_size(work, remembered, crate::theme::ROW_H)
     }
     fn base_height_for_workarea(work_h: f32) -> f32 {
-        super::base_height_for_workarea(work_h, dd_gui::theme::ROW_H)
+        super::base_height_for_workarea(work_h, crate::theme::ROW_H)
     }
 
     #[test]
@@ -1193,14 +1202,14 @@ mod size_tests {
         close(
             super::base_height_for_workarea(
                 1040.0,
-                dd_gui::theme::ListMetrics::of(dd_gui::settings::ListDensity::Compact).row_h,
+                crate::theme::ListMetrics::of(crate::settings::ListDensity::Compact).row_h,
             ),
             524.0,
         );
         close(
             super::base_height_for_workarea(
                 1040.0,
-                dd_gui::theme::ListMetrics::of(dd_gui::settings::ListDensity::Relaxed).row_h,
+                crate::theme::ListMetrics::of(crate::settings::ListDensity::Relaxed).row_h,
             ),
             532.0,
         );
@@ -1261,7 +1270,7 @@ mod size_tests {
         app.pool
             .exts
             .push(crate::test_support::dying_ext(super::FILE_SEARCH_EXT_ID));
-        app.view.stack.push(dd_gui::navigation::PageState::nested(
+        app.view.stack.push(crate::navigation::PageState::nested(
             super::FILE_SEARCH_PAGE_ID,
             "文件搜索",
             super::FILE_SEARCH_EXT_ID,
@@ -1292,7 +1301,7 @@ mod size_tests {
         app.pool
             .exts
             .push(crate::test_support::dying_ext(super::FILE_SEARCH_EXT_ID));
-        app.view.stack.push(dd_gui::navigation::PageState::nested(
+        app.view.stack.push(crate::navigation::PageState::nested(
             "other.page",
             "别页",
             "com.ddrun.calc",
@@ -1377,7 +1386,7 @@ mod size_tests {
     #[test]
     fn backspace_not_consumed_when_go_back_disabled() {
         let mut app = crate::test_support::make_app();
-        app.view.stack.push(dd_gui::navigation::PageState::nested(
+        app.view.stack.push(crate::navigation::PageState::nested(
             super::FILE_SEARCH_PAGE_ID,
             "文件搜索",
             super::FILE_SEARCH_EXT_ID,
@@ -1404,7 +1413,7 @@ mod size_tests {
     fn backspace_go_back_enabled_nested_empty_pops() {
         let mut app = crate::test_support::make_app();
         app.draft.settings.backspace_go_back = true;
-        app.view.stack.push(dd_gui::navigation::PageState::nested(
+        app.view.stack.push(crate::navigation::PageState::nested(
             super::FILE_SEARCH_PAGE_ID,
             "文件搜索",
             super::FILE_SEARCH_EXT_ID,
@@ -1426,7 +1435,7 @@ mod size_tests {
     fn backspace_go_back_enabled_but_query_nonempty_keeps_editing() {
         let mut app = crate::test_support::make_app();
         app.draft.settings.backspace_go_back = true;
-        app.view.stack.push(dd_gui::navigation::PageState::nested(
+        app.view.stack.push(crate::navigation::PageState::nested(
             super::FILE_SEARCH_PAGE_ID,
             "文件搜索",
             super::FILE_SEARCH_EXT_ID,
@@ -1478,7 +1487,7 @@ mod size_tests {
         assert!(app.draft.settings_save_warned, "首次失败应置一次性提醒位");
         {
             let t = app.overlay.toast.as_ref().expect("首次失败应有错误 toast");
-            assert_eq!(t.kind, toast::ToastKind::Error, "失败口径 = Error");
+            assert_eq!(t.kind, toast_state::ToastKind::Error, "失败口径 = Error");
             assert!(
                 t.message.contains("设置保存失败") || t.message.contains("Failed to save settings"),
                 "文案应取 toast.settings_save_fail（zh/en），实得：{}",

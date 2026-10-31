@@ -341,8 +341,8 @@ fn message_loop(
                     log::info!(
                         "[dd-gui] 全局热键注册成功（seq={}）：{}+{}",
                         cmd.seq,
-                        dd_gui::settings::hotkey_mods_label(cmd.mods),
-                        dd_gui::settings::hotkey_vk_label(cmd.vk)
+                        crate::settings::hotkey_mods_label(cmd.mods),
+                        crate::settings::hotkey_vk_label(cmd.vk)
                     );
                     let _ = tx.send(HotkeyEvent::ReRegistered {
                         seq: cmd.seq,
@@ -541,7 +541,7 @@ fn message_loop_unix(
                     current = Some((mods, vk));
                     log::info!(
                         "[dd-gui] 全局热键注册成功：{}",
-                        dd_gui::settings::hotkey_combo_label(mods, vk)
+                        crate::settings::hotkey_combo_label(mods, vk)
                     );
                 }
                 Err(e) => log::debug!(
@@ -583,7 +583,7 @@ fn message_loop_unix(
                             log::info!(
                                 "[dd-gui] 全局热键注册成功（seq={}）：{}",
                                 cmd.seq,
-                                dd_gui::settings::hotkey_combo_label(cmd.mods, cmd.vk)
+                                crate::settings::hotkey_combo_label(cmd.mods, cmd.vk)
                             );
                             result = (true, true); // 成功时 rolled_back 无意义，恒 true
                         }

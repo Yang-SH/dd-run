@@ -808,8 +808,8 @@ mod tests {
     fn empty_query_orders_by_usage_count_desc() {
         let mut s = PanelState::new(sample_items());
         let mut map = std::collections::BTreeMap::new();
-        map.insert(dd_gui::usage::usage_key("ext.a", "copy"), 5u32);
-        map.insert(dd_gui::usage::usage_key("ext.a", "file"), 2u32);
+        map.insert(crate::usage::usage_key("ext.a", "copy"), 5u32);
+        map.insert(crate::usage::usage_key("ext.a", "file"), 2u32);
         s.set_usage(Some(std::sync::Arc::new(map)));
         let order: Vec<&str> = s.filtered().map(|(_, it)| it.id.as_str()).collect();
         assert_eq!(
@@ -828,7 +828,7 @@ mod tests {
         items.push(twin);
         let mut s = PanelState::new(items);
         let mut map = std::collections::BTreeMap::new();
-        map.insert(dd_gui::usage::usage_key("ext.a", "settings2"), 7u32);
+        map.insert(crate::usage::usage_key("ext.a", "settings2"), 7u32);
         s.set_query("open");
         let order: Vec<&str> = s.filtered().map(|(_, it)| it.id.as_str()).collect();
         assert_eq!(
@@ -851,7 +851,7 @@ mod tests {
     fn unsetting_usage_restores_pre_frecency_order() {
         let mut s = PanelState::new(sample_items());
         let mut map = std::collections::BTreeMap::new();
-        map.insert(dd_gui::usage::usage_key("ext.a", "copy"), 5u32);
+        map.insert(crate::usage::usage_key("ext.a", "copy"), 5u32);
         s.set_usage(Some(std::sync::Arc::new(map)));
         s.set_usage(None);
         let order: Vec<&str> = s.filtered().map(|(_, it)| it.id.as_str()).collect();
@@ -863,7 +863,7 @@ mod tests {
     fn passthrough_ignores_usage() {
         let mut s = PanelState::new(sample_items());
         let mut map = std::collections::BTreeMap::new();
-        map.insert(dd_gui::usage::usage_key("ext.a", "copy"), 5u32);
+        map.insert(crate::usage::usage_key("ext.a", "copy"), 5u32);
         s.set_passthrough();
         s.set_usage(Some(std::sync::Arc::new(map)));
         let order: Vec<&str> = s.filtered().map(|(_, it)| it.id.as_str()).collect();

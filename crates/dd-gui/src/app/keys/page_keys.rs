@@ -127,13 +127,13 @@ impl PaletteApp {
                 .esc_behavior
                 .decide(is_root, query_empty)
             {
-                dd_gui::settings::EscAction::ClearSearch => self.clear_current_query(ctx),
-                dd_gui::settings::EscAction::GoBack => {
+                crate::settings::EscAction::ClearSearch => self.clear_current_query(ctx),
+                crate::settings::EscAction::GoBack => {
                     if self.go_back_focused().is_none() {
                         self.hide(ctx);
                     }
                 }
-                dd_gui::settings::EscAction::Hide => self.hide(ctx),
+                crate::settings::EscAction::Hide => self.hide(ctx),
             }
             return;
         }

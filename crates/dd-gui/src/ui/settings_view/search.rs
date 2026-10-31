@@ -105,18 +105,18 @@ impl PaletteApp {
         let backspace_on = self.draft.settings.backspace_go_back;
         let click_on = self.draft.settings.single_click_activation; // T7
         let anim_on = self.draft.settings.ui_animations; // T8
-        let mut esc_picked: Option<dd_gui::settings::EscBehavior> = None;
+        let mut esc_picked: Option<crate::settings::EscBehavior> = None;
         let mut backspace_toggled = false;
         let mut click_toggled = false; // T7
         let mut anim_toggled = false; // T8
-        let labels: Vec<&str> = dd_gui::settings::EscBehavior::ALL
+        let labels: Vec<&str> = crate::settings::EscBehavior::ALL
             .iter()
             .map(|b| crate::text::t(lang, b.name_key()))
             .collect();
         // D42/K3：宽度自适应（原硬编码 200——zh 落下限 180 与语言卡一致，
         // 长英文选项撑宽封顶 260，消除英文文案溢出盒外）。
         let combo_w = dropdown_width(ui, &labels);
-        let selected_idx = dd_gui::settings::EscBehavior::ALL
+        let selected_idx = crate::settings::EscBehavior::ALL
             .iter()
             .position(|b| *b == esc_pref)
             .unwrap_or(0);
@@ -137,7 +137,7 @@ impl PaletteApp {
                 ui.vertical(|ui| {
                     ui.set_min_height(36.0);
                     ui.label(
-                        dd_gui::theme::semibold_title(crate::text::t(lang, "set.keys.name"), 14.0)
+                        crate::theme::semibold_title(crate::text::t(lang, "set.keys.name"), 14.0)
                             .color(p.text),
                     );
                     ui.add(
@@ -178,7 +178,7 @@ impl PaletteApp {
                     if let Some(idx) =
                         draw_fluent_dropdown(ui, selected_idx, &labels, combo_w, p, true)
                     {
-                        esc_picked = dd_gui::settings::EscBehavior::ALL.get(idx).copied();
+                        esc_picked = crate::settings::EscBehavior::ALL.get(idx).copied();
                     }
                 });
             });
@@ -292,8 +292,8 @@ impl PaletteApp {
         ctx: &egui::Context,
     ) {
         // 闭包外快照（闭包内只改 settings + 收集待删项）
-        let presets = dd_gui::settings::preset_search_engines();
-        let addable: Vec<dd_gui::settings::SearchEngine> = presets
+        let presets = crate::settings::preset_search_engines();
+        let addable: Vec<crate::settings::SearchEngine> = presets
             .iter()
             .filter(|pr| {
                 !self
@@ -305,7 +305,7 @@ impl PaletteApp {
             })
             .cloned()
             .collect();
-        let enabled: Vec<dd_gui::settings::SearchEngine> =
+        let enabled: Vec<crate::settings::SearchEngine> =
             self.draft.settings.search_engines.clone();
         let mut remove_name: Option<String> = None;
         let mut preset_picked: Option<String> = None;
@@ -327,7 +327,7 @@ impl PaletteApp {
                 ui.vertical(|ui| {
                     ui.set_min_height(36.0);
                     ui.label(
-                        dd_gui::theme::semibold_title(self.tr("set.search.name"), 14.0)
+                        crate::theme::semibold_title(self.tr("set.search.name"), 14.0)
                             .color(p.text),
                     );
                     ui.add_space(2.0);
@@ -533,7 +533,7 @@ impl PaletteApp {
                 .map(|rest| rest.split(['/', '?', '#']).next().unwrap_or(rest))
                 .unwrap_or("")
                 .to_string();
-            match dd_gui::settings::SearchEngine::new(&name, url.trim()) {
+            match crate::settings::SearchEngine::new(&name, url.trim()) {
                 Some(engine) => {
                     if self
                         .draft

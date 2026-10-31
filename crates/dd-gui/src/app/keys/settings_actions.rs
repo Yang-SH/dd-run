@@ -24,7 +24,7 @@ impl PaletteApp {
     /// 设置页语言切换（v4.13 D38）：更新偏好 + 重算生效语言 + 落盘 + 同步托盘
     /// 菜单语言（菜单每次右键即席创建，读共享原子量，无需重建托盘）；
     /// egui immediate mode 下一帧全量重绘即生效。纯内存 + 落盘操作，无失败路径。
-    pub(crate) fn apply_lang(&mut self, lang: dd_gui::settings::Lang) {
+    pub(crate) fn apply_lang(&mut self, lang: crate::settings::Lang) {
         if self.draft.settings.lang == lang {
             return;
         }
@@ -108,11 +108,11 @@ impl PaletteApp {
 
     // ── N5（2026-10-04）：设置导入 / 导出（本机迁移）──
 
-    /// 备份文件路径（数据根目录下 [`dd_gui::settings::BACKUP_FILE_NAME`]，
+    /// 备份文件路径（数据根目录下 [`crate::settings::BACKUP_FILE_NAME`]，
     /// 与 config.json 同目录——`config_file()` 不可定位 → `None`）。
     pub(crate) fn settings_backup_path() -> Option<std::path::PathBuf> {
         dd_host::manifest::config_file()
-            .map(|p| p.with_file_name(dd_gui::settings::BACKUP_FILE_NAME))
+            .map(|p| p.with_file_name(crate::settings::BACKUP_FILE_NAME))
     }
 
     /// 导出设置备份（原子写；成功 toast 带路径便于拷贝，失败 toast 不静默）。
@@ -161,8 +161,7 @@ impl PaletteApp {
                 return;
             }
         };
-        let imported = match dd_gui::settings::Settings::import_backup(&text, &self.draft.settings)
-        {
+        let imported = match crate::settings::Settings::import_backup(&text, &self.draft.settings) {
             Ok(s) => s,
             Err(e) => {
                 log::warn!("[dd-gui] 备份导入校验失败：{e}");
@@ -281,7 +280,7 @@ impl PaletteApp {
     pub(crate) fn apply_theme_pref(
         &mut self,
         ctx: &egui::Context,
-        pref: dd_gui::settings::ThemePref,
+        pref: crate::settings::ThemePref,
     ) {
         if self.draft.settings.theme == pref {
             return;
@@ -308,7 +307,7 @@ impl PaletteApp {
     pub(crate) fn apply_backdrop(
         &mut self,
         ctx: &egui::Context,
-        backdrop: dd_gui::settings::Backdrop,
+        backdrop: crate::settings::Backdrop,
     ) {
         if self.draft.settings.backdrop == backdrop {
             return;
@@ -348,7 +347,7 @@ impl PaletteApp {
     }
 
     /// T9：背景图适应方式（Fill / Stretch）——纯设置项，绘制层每帧读值。
-    pub(crate) fn apply_background_fit(&mut self, fit: dd_gui::settings::BgImageFit) {
+    pub(crate) fn apply_background_fit(&mut self, fit: crate::settings::BgImageFit) {
         if self.draft.settings.background_image_fit == fit {
             return;
         }
@@ -385,7 +384,7 @@ impl PaletteApp {
     /// 设置页「窗口圆角」（P3，2026-09-13）：落盘 + 即时重设 DWM 圆角偏好
     /// （属性幂等，与 egui 帧内容无关，无防闪面）。HWND 未捕获（首帧前）时
     /// 仅落盘——首帧 `refresh_backdrop` 会按设置应用。
-    pub(crate) fn apply_corner_pref(&mut self, pref: dd_gui::settings::CornerPref) {
+    pub(crate) fn apply_corner_pref(&mut self, pref: crate::settings::CornerPref) {
         if self.draft.settings.corner_pref == pref {
             return;
         }
@@ -402,7 +401,7 @@ impl PaletteApp {
     pub(crate) fn apply_border_mode(
         &mut self,
         ctx: &egui::Context,
-        mode: dd_gui::settings::BorderMode,
+        mode: crate::settings::BorderMode,
     ) {
         if self.draft.settings.border_mode == mode {
             return;
@@ -424,7 +423,7 @@ impl PaletteApp {
     /// `Palette::accent`——跨主题恒色）；关 = `None` 停画。材质未生效时调用方
     /// 本就不画描边，本函数不判 `backdrop_active`。
     fn border_color(&self, dark: bool) -> Option<egui::Color32> {
-        use dd_gui::settings::BorderMode;
+        use crate::settings::BorderMode;
         match self.draft.settings.border_mode {
             BorderMode::Neutral => Some(theme::Palette::of(dark).border_strong),
             BorderMode::Accent => Some(
@@ -454,7 +453,7 @@ impl PaletteApp {
         // ——设置值保持不动，清图后经 apply_background_path 重调本函数即恢复
         // 原材质），本函数内一律以 effective 判定。
         let effective = if self.draft.settings.background_image_path.is_some() {
-            dd_gui::settings::Backdrop::None
+            crate::settings::Backdrop::None
         } else {
             self.draft.settings.backdrop
         };
@@ -466,7 +465,7 @@ impl PaletteApp {
             crate::platform::apply_window_chrome(hwnd, self.draft.settings.corner_pref);
         }
         // ── 不透明化方向（backdrop = None）：先绘制不透明，后清材质 ──
-        if effective == dd_gui::settings::Backdrop::None {
+        if effective == crate::settings::Backdrop::None {
             if self.window.backdrop_active {
                 self.window.backdrop_active = false;
                 // M1：面板底回实色；M2：材质场景结束 → 停画描边。
@@ -517,7 +516,7 @@ impl PaletteApp {
 
     /// B1（2026-09-20）：Esc 键行为。纯设置项（无附加副作用），照既有范式
     /// 「落盘 + 日志」即可——按键分支每次读取生效值。
-    pub(crate) fn apply_esc_behavior(&mut self, b: dd_gui::settings::EscBehavior) {
+    pub(crate) fn apply_esc_behavior(&mut self, b: crate::settings::EscBehavior) {
         if self.draft.settings.esc_behavior == b {
             return;
         }
@@ -568,7 +567,7 @@ impl PaletteApp {
     pub(crate) fn apply_colorization(
         &mut self,
         ctx: &egui::Context,
-        mode: dd_gui::settings::ColorizationMode,
+        mode: crate::settings::ColorizationMode,
     ) {
         if self.draft.settings.colorization == mode {
             return;
@@ -636,7 +635,7 @@ impl PaletteApp {
     /// 范围**刻意不含**热键 / 语言 / 搜索引擎 / 扩展启停 / 自启 / 面板尺寸
     /// （那些属功能配置，重置外观不应改动）。
     pub(crate) fn apply_reset_appearance(&mut self, ctx: &egui::Context) {
-        let d = dd_gui::settings::Settings::default();
+        let d = crate::settings::Settings::default();
         self.apply_theme_pref(ctx, d.theme);
         self.apply_backdrop(ctx, d.backdrop);
         self.apply_material_opacity(ctx, d.material_opacity);
@@ -659,9 +658,9 @@ impl PaletteApp {
     /// 设置页改选「打开面板时显示」：立即生效（重算 root 首屏可见表）+ 持久化。
     pub(crate) fn apply_open_view(&mut self, ctx: &egui::Context, show_all: bool) {
         let view = if show_all {
-            dd_gui::settings::OpenView::All
+            crate::settings::OpenView::All
         } else {
-            dd_gui::settings::OpenView::Default
+            crate::settings::OpenView::Default
         };
         if self.draft.settings.open_view == view {
             return;
@@ -669,9 +668,9 @@ impl PaletteApp {
         log::debug!("[dd-gui] 首屏视图变更：{}", view.label());
         self.draft.settings.open_view = view;
         self.view.stack.root_mut().list.set_empty_view(if show_all {
-            dd_gui::state::EmptyQueryView::All
+            crate::state::EmptyQueryView::All
         } else {
-            dd_gui::state::EmptyQueryView::WithoutApps
+            crate::state::EmptyQueryView::WithoutApps
         });
         self.save_settings_with_feedback();
         ctx.request_repaint();

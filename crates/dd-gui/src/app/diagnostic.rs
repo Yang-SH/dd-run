@@ -102,8 +102,8 @@ impl PaletteApp {
             .collect();
         serde_json::json!({
             "meta": {
-                "host_version": dd_gui::aggregator::HOST_VERSION,
-                "protocol_version": dd_gui::aggregator::PROTOCOL_VERSION,
+                "host_version": crate::aggregator::HOST_VERSION,
+                "protocol_version": crate::aggregator::PROTOCOL_VERSION,
                 "os": std::env::consts::OS,
                 "exported_at": crate::crashlog::local_timestamp_rfc3339(),
             },

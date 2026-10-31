@@ -1,20 +1,20 @@
 //! §5.1（dd-run-改进分析.md）：使用频次（frecency）的应用侧装配——
 //! 启动加载 / 激活记录 / 排序快照注入 / 设置页重置。
 //!
-//! 数据权威副本在 `pool.usage`（[`dd_gui::usage::Usage`]）；`PanelState` 只持
+//! 数据权威副本在 `pool.usage`（[`crate::usage::Usage`]）；`PanelState` 只持
 //! `view.usage_scores` 快照参与排序。Root 列表被聚合整包替换（`aggregate.rs`
 //! 的 `*root_mut() = root`）会丢快照——两处重建点之后均调 [`PaletteApp::sync_usage_index`]
 //! 重新注入。
 
 use super::*;
-use crate::app::toast::ToastKind;
+use crate::app::toast_state::ToastKind;
 
 impl PaletteApp {
     /// bin 入口装配：从 `usage.json` 装载使用频次并注入排序快照。
     /// 刻意不在 [`PaletteApp::new`] 内做（保持纯注入——测试夹具不碰文件系统）。
     /// `pub`：调用方是 bin（`main.rs`），在 lib 外。
     pub fn load_usage(&mut self) {
-        self.pool.usage = dd_gui::usage::Usage::load();
+        self.pool.usage = crate::usage::Usage::load();
         self.sync_usage_index();
     }
 
@@ -64,9 +64,9 @@ impl PaletteApp {
 
 #[cfg(test)]
 mod tests {
+    use crate::state::PanelItem;
     use crate::state::PanelState;
     use crate::test_support::make_app;
-    use dd_gui::state::PanelItem;
     use dd_protocol::model::CommandRef;
 
     /// 激活记录：confirm_selected（找不到扩展、invoke 不发）仍计数 + 快照注入。

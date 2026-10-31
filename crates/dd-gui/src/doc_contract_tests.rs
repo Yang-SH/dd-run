@@ -29,7 +29,7 @@
 //!   行为锚点（kind == Info）已断言，像素回归由 B1 金图体系承接（后续金图
 //!   扩面时覆盖 Toast）。
 
-use crate::app::toast::{toast_duration_ms, ToastKind};
+use crate::app::toast_state::{toast_duration_ms, ToastKind};
 use crate::ext_client::ExtClient;
 use crate::ext_inprocess::InProcessExtension;
 use crate::test_support::{exiting_process, make_app};
@@ -227,10 +227,10 @@ fn poll_notifications_is_consuming_take() {
 fn exit_zero_drops_to_stub_without_crash_count() {
     let mut app = make_app();
     let ext_id = "com.example.graceful";
-    app.pool.sources.push(dd_gui::aggregator::SourceSummary {
+    app.pool.sources.push(crate::aggregator::SourceSummary {
         id: ext_id.to_string(),
         name: "Graceful".to_string(),
-        status: dd_gui::aggregator::SourceStatus::Warm { commands: 3 },
+        status: crate::aggregator::SourceStatus::Warm { commands: 3 },
     });
     app.pool.processes.push((
         ext_id.to_string(),
@@ -253,7 +253,7 @@ fn exit_zero_drops_to_stub_without_crash_count() {
     assert!(
         matches!(
             status,
-            dd_gui::aggregator::SourceStatus::Stub { commands: 3 }
+            crate::aggregator::SourceStatus::Stub { commands: 3 }
         ),
         "退出（EOF）回落 stub、保留命令数，实际 {status:?}"
     );

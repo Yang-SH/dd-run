@@ -49,7 +49,7 @@ impl PaletteApp {
                         ui.set_min_width(380.0f32.min(ui.available_width()));
                         // 标题 subtitle1 16·600 + 副题 caption 12 text3。
                         ui.label(
-                            dd_gui::theme::semibold_title(
+                            crate::theme::semibold_title(
                                 crate::text::t(lang, "set.hotkey.dialog_title"),
                                 16.0,
                             )
@@ -69,9 +69,9 @@ impl PaletteApp {
                             ui.with_layout(egui::Layout::top_down(egui::Align::Center), |ui| {
                                 ui.horizontal(|ui| match self.hotkeys.hotkey_pending {
                                     Some((mods, vk)) => {
-                                        let vk_label = dd_gui::settings::hotkey_vk_label(vk);
+                                        let vk_label = crate::settings::hotkey_vk_label(vk);
                                         let mut caps: Vec<String> =
-                                            dd_gui::settings::hotkey_mods_label(mods)
+                                            crate::settings::hotkey_mods_label(mods)
                                                 .split('+')
                                                 .map(str::to_string)
                                                 .collect();

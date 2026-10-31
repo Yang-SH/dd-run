@@ -23,7 +23,7 @@ impl PaletteApp {
         let mut trust_action: Option<(String, Decision)> = None;
         let lang = self.view.lang_effective;
         // 卡片头汇总：待批准数（页脚另有提示，但设置页是"处理现场"）与台账损坏提示。
-        let pending = dd_gui::aggregator::pending_count(&self.pool.trust);
+        let pending = crate::aggregator::pending_count(&self.pool.trust);
         let ledger_corrupt = matches!(self.pool.ledger_state, dd_host::trust::LedgerState::Corrupt);
         // R-20：解析失败清单（路径 + 原因），闭包外拷贝。
         let skipped = self.pool.skipped_manifests.clone();
@@ -51,7 +51,7 @@ impl PaletteApp {
                 ui.vertical(|ui| {
                     ui.set_min_height(36.0);
                     ui.label(
-                        dd_gui::theme::semibold_title(crate::text::t(lang, "set.ext.name"), 14.0)
+                        crate::theme::semibold_title(crate::text::t(lang, "set.ext.name"), 14.0)
                             .color(p.text),
                     );
                     ui.add_space(2.0);

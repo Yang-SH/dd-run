@@ -1,7 +1,7 @@
 //! 通用绘制原语：键帽、键位组、齿轮、返回键等。
 
-use dd_gui::settings::Lang;
-use dd_gui::theme;
+use crate::settings::Lang;
+use crate::theme;
 use eframe::egui;
 
 /// 页脚键位组：若干**键帽** + 说明文本（设计稿 01 `.panel-footer .keys`）。

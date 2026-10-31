@@ -1,10 +1,10 @@
 //! 崩溃保护：健康巡检、崩溃计数、熔断（协议 §11）。
 
+use crate::aggregator::SourceStatus;
 use crate::app::pool::WARM_IDLE_TTL;
 use crate::app::PaletteApp;
-use dd_gui::aggregator::SourceStatus;
-use dd_gui::robustness::CrashGuard;
-use dd_gui::robustness::MAX_CONSECUTIVE_CRASHES;
+use crate::robustness::CrashGuard;
+use crate::robustness::MAX_CONSECUTIVE_CRASHES;
 
 impl PaletteApp {
     /// 崩溃检测 + 连续崩溃保护（M4/协议 §11，A8）：
@@ -158,8 +158,8 @@ impl PaletteApp {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::aggregator::SourceSummary;
     use crate::test_support::{dying_client, make_app};
-    use dd_gui::aggregator::SourceSummary;
 
     // ── A8 崩溃恢复接线（进程退出 → 回落 stub + 记崩溃 + 熔断） ──
 

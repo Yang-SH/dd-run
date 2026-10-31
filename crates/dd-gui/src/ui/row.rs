@@ -1,10 +1,10 @@
 //! 列表行绘制。
 
+use crate::state::PanelItem;
+use crate::theme;
 use crate::ui::icons::draw_icon_cell;
 use crate::ui::icons::IconView;
 use crate::ui::widgets::text_width;
-use dd_gui::state::PanelItem;
-use dd_gui::theme;
 use eframe::egui;
 
 /// 文件结果右列（所在文件夹路径）宽度上限 = 可用宽 × 45%。

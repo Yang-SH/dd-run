@@ -1,8 +1,8 @@
 //! 测试共享夹具（仅 `cfg(test)` 编译）：应用构造器与死进程桩。
 
 use crate::app::PaletteApp;
-use dd_gui::state::PanelItem;
-use dd_gui::tray::TrayEvent;
+use crate::state::PanelItem;
+use crate::tray::TrayEvent;
 use dd_host::cache::ColdStartTimer;
 use dd_host::manifest::{Entry, LoadedExtension, Manifest};
 use dd_host::process::ExtensionProcess;
@@ -135,16 +135,16 @@ pub(crate) fn exiting_process(id: &str, code: i32) -> ExtensionProcess {
 
 /// 不依赖真实扩展 / 聚合的 PaletteApp（空 channel 注入）。
 pub(crate) fn make_app() -> PaletteApp {
-    make_app_with_settings(dd_gui::settings::Settings::default())
+    make_app_with_settings(crate::settings::Settings::default())
 }
 
 /// 指定 Settings 的 PaletteApp（N4：验证 warm 保活容量等配置在构造点被消费；
 /// 同 `make_app` 空 channel 注入，不触真实扩展 / 聚合 / 落盘）。
-pub(crate) fn make_app_with_settings(settings: dd_gui::settings::Settings) -> PaletteApp {
+pub(crate) fn make_app_with_settings(settings: crate::settings::Settings) -> PaletteApp {
     let (_ttx, tray_rx) = mpsc::channel::<TrayEvent>();
-    let (_atx, agg_rx) = mpsc::channel::<crate::app::aggregate::AggregateEvent>();
+    let (_atx, agg_rx) = mpsc::channel::<crate::app::aggregate_job::AggregateEvent>();
     PaletteApp::new(
-        dd_gui::hotkey::HotkeyThread::dummy(),
+        crate::hotkey::HotkeyThread::dummy(),
         tray_rx,
         Arc::new(AtomicBool::new(false)),
         agg_rx,
@@ -157,17 +157,17 @@ pub(crate) fn make_app_with_settings(settings: dd_gui::settings::Settings) -> Pa
 
 /// 指定热键事件通道的 PaletteApp（R-15：外部注入 `ReRegistered` / `Died`
 /// 驱动 `poll_hotkey` 状态位流转，不触真实 `RegisterHotKey`）。
-pub(crate) fn make_app_with(hotkey_rx: mpsc::Receiver<dd_gui::hotkey::HotkeyEvent>) -> PaletteApp {
+pub(crate) fn make_app_with(hotkey_rx: mpsc::Receiver<crate::hotkey::HotkeyEvent>) -> PaletteApp {
     let (_ttx, tray_rx) = mpsc::channel::<TrayEvent>();
-    let (_atx, agg_rx) = mpsc::channel::<crate::app::aggregate::AggregateEvent>();
+    let (_atx, agg_rx) = mpsc::channel::<crate::app::aggregate_job::AggregateEvent>();
     PaletteApp::new(
-        dd_gui::hotkey::HotkeyThread::for_events(hotkey_rx),
+        crate::hotkey::HotkeyThread::for_events(hotkey_rx),
         tray_rx,
         Arc::new(AtomicBool::new(false)),
         agg_rx,
         ColdStartTimer::new(),
         None,
-        dd_gui::settings::Settings::default(),
+        crate::settings::Settings::default(),
         Arc::new(AtomicBool::new(false)),
     )
 }

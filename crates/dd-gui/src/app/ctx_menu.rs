@@ -3,6 +3,8 @@
 use crate::app::PaletteApp;
 use crate::platform::reveal_in_folder;
 use crate::platform::run_as_admin;
+use crate::settings::Lang;
+use crate::state::PanelItem;
 use crate::text::default_action_glyph;
 use crate::text::footer_action_text;
 use crate::text::path_like;
@@ -12,9 +14,7 @@ use crate::text::CTX_GLYPH_COPY;
 use crate::text::CTX_GLYPH_DELETE;
 use crate::text::CTX_GLYPH_FOLDER;
 use crate::text::CTX_GLYPH_LINK;
-use dd_gui::settings::Lang;
-use dd_gui::state::PanelItem;
-use dd_gui::theme;
+use crate::theme;
 use dd_protocol::model::CommandItem;
 use eframe::egui;
 
@@ -213,7 +213,7 @@ impl PaletteApp {
                 };
                 let query = self.view.stack.current().list.query().to_owned();
                 let params =
-                    dd_gui::result::context_menu_invoke_params(command_id, &state.item_id, &query);
+                    crate::result::context_menu_invoke_params(command_id, &state.item_id, &query);
                 log::debug!(
                     "[dd-gui] 右键菜单：扩展动作 {}（ext={}）",
                     command_id,
@@ -266,8 +266,8 @@ pub(crate) fn context_menu_rows(lang: Lang, item: &PanelItem) -> Vec<CtxRow> {
     // N1（2026-10-04）：自定义直达命令专属菜单——默认动作 + 分隔线 + 删除
     // （spec「上下文菜单提供删除」）；不走静态类别映射（其 subtitle 是用户
     // 配置目标，不适用 管理员/定位 腿）。
-    if item.ext_id == dd_gui::aggregator::HOST_CUSTOM_EXT_ID {
-        if let Some(keyword) = item.id.strip_prefix(dd_gui::aggregator::CUSTOM_ITEM_PREFIX) {
+    if item.ext_id == crate::aggregator::HOST_CUSTOM_EXT_ID {
+        if let Some(keyword) = item.id.strip_prefix(crate::aggregator::CUSTOM_ITEM_PREFIX) {
             return vec![
                 CtxRow::Entry(CtxEntry {
                     glyph: default_action_glyph(item),

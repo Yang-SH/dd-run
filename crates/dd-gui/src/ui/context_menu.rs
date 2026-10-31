@@ -2,8 +2,8 @@
 
 use crate::app::ctx_menu::CtxRow;
 use crate::app::PaletteApp;
+use crate::theme;
 use crate::ui::widgets::text_width;
-use dd_gui::theme;
 use eframe::egui;
 
 impl PaletteApp {

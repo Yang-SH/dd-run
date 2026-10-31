@@ -16,7 +16,7 @@ impl PaletteApp {
     /// Win 系（Win+D/L/Tab…）不含：基础捕获本就录不进 Win 修饰（回落提示
     /// 已另行覆盖），LL 钩子可录但系统响应优先级更高，名单随真机反馈再扩。
     pub(crate) fn is_system_reserved_combo(mods: u32, vk: u32) -> bool {
-        let m = mods & dd_gui::settings::HOTKEY_MODS_MASK;
+        let m = mods & crate::settings::HOTKEY_MODS_MASK;
         matches!(
             (m, vk),
             (0x1, 0x20) // Alt+Space —— 窗口菜单
@@ -119,7 +119,7 @@ impl PaletteApp {
     pub(crate) fn apply_captured_hotkey(&mut self, mods: u32, vk: u32) {
         // 序号发号（0 保留给启动注册结果；u32 回绕不可能达，守卫仅为完备）。
         self.hotkeys.hotkey_seq = self.hotkeys.hotkey_seq.wrapping_add(1);
-        if self.hotkeys.hotkey_seq == dd_gui::hotkey::HOTKEY_SEQ_STARTUP {
+        if self.hotkeys.hotkey_seq == crate::hotkey::HOTKEY_SEQ_STARTUP {
             self.hotkeys.hotkey_seq = 1;
         }
         self.hotkeys.hotkey_confirm = Some(super::super::HotkeyConfirm {
@@ -131,7 +131,7 @@ impl PaletteApp {
         self.hotkeys.hotkey_apply_failed = false;
         self.hotkeys
             .hotkey
-            .re_register(dd_gui::hotkey::HotkeyCommand {
+            .re_register(crate::hotkey::HotkeyCommand {
                 seq: self.hotkeys.hotkey_seq,
                 mods,
                 vk,
@@ -197,8 +197,8 @@ impl PaletteApp {
     ///（捕获 UI 不支持 Win 修饰的局限已随 LL 钩子捕获解除，注释保留历史。）
     pub(crate) fn apply_hotkey_default(&mut self) {
         self.apply_captured_hotkey(
-            dd_gui::settings::HOTKEY_MODS_DEFAULT,
-            dd_gui::settings::HOTKEY_VK_DEFAULT,
+            crate::settings::HOTKEY_MODS_DEFAULT,
+            crate::settings::HOTKEY_VK_DEFAULT,
         );
     }
 }

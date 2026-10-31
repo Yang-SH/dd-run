@@ -29,9 +29,6 @@
 //!   初始隐藏），FilterBox + 分组列表 + 页脚键位提示，对应设计稿界面 01。
 
 // ── 2026-09-05 分层重构（docs/refactor-layering-plan.md 方案 1）──────────
-// main.rs 的实现拆入以下四个模块；`extern crate self` 使 lib 内部代码可以
-// 沿用 `dd_gui::` 全路径（与拆分前逐字一致，零行为影响）。
-extern crate self as dd_gui;
 
 pub mod aggregator;
 pub mod app;

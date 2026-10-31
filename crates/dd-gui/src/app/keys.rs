@@ -7,16 +7,16 @@
 
 pub(crate) use crate::app::ctx_menu::ctx_entry_count;
 pub(crate) use crate::app::PaletteApp;
+pub(crate) use crate::navigation::PageState;
+pub(crate) use crate::theme;
 pub(crate) use crate::ui::settings_view::SettingsCategory;
-pub(crate) use dd_gui::navigation::PageState;
-pub(crate) use dd_gui::theme;
 pub(crate) use dd_host::trust::{Decision, TrustLedger};
 pub(crate) use eframe::egui;
 pub(crate) use std::sync::mpsc;
 pub(crate) use std::time::Instant;
 
 mod hotkey_capture;
-mod navigation;
+mod page_keys;
 mod settings_actions;
 
 #[cfg(test)]
@@ -41,8 +41,8 @@ mod tests {
         // 负例：默认热键 Ctrl+Space（捕获默认路径不得出现警示）。
         assert!(
             !PaletteApp::is_system_reserved_combo(
-                dd_gui::settings::HOTKEY_MODS_DEFAULT,
-                dd_gui::settings::HOTKEY_VK_DEFAULT
+                crate::settings::HOTKEY_MODS_DEFAULT,
+                crate::settings::HOTKEY_VK_DEFAULT
             ),
             "Ctrl+Space 是默认热键，不应命中黑名单"
         );
@@ -66,9 +66,9 @@ mod tests {
     fn n4_warm_capacity_consumed_at_construction() {
         let app = crate::test_support::make_app();
         assert_eq!(app.pool.lru.capacity(), 8, "默认配置 → LRU 容量 8");
-        let settings = dd_gui::settings::Settings {
+        let settings = crate::settings::Settings {
             warm_capacity: 2,
-            ..dd_gui::settings::Settings::default()
+            ..crate::settings::Settings::default()
         };
         let app = crate::test_support::make_app_with_settings(settings);
         assert_eq!(app.pool.lru.capacity(), 2, "构造点读配置容量");
@@ -88,7 +88,7 @@ mod tests {
                     page_id: "sub".to_string(),
                 },
             );
-            *app.view.stack.root_mut() = dd_gui::navigation::PageState::root(vec![item]);
+            *app.view.stack.root_mut() = crate::navigation::PageState::root(vec![item]);
             app.view.stack.current_mut().list.move_down(); // 选中唯一项
             app
         };

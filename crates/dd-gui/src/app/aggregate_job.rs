@@ -10,12 +10,12 @@
 //! **仅测试夹具使用**（快照金图直构列表，不经 flatten），生产链路恒走
 //! Meta → Ext×N → Done。
 
+use crate::aggregator;
+use crate::aggregator::{ExtItems, SourceStatus};
 use crate::app::PaletteApp;
 use crate::ext_client::ExtClient;
+use crate::navigation::PageState;
 use dd_ext::ExtensionSpec;
-use dd_gui::aggregator;
-use dd_gui::aggregator::{ExtItems, SourceStatus};
-use dd_gui::navigation::PageState;
 use dd_host::cache::FrozenCache;
 use dd_host::manifest::LoadedExtension;
 use std::collections::HashMap;
@@ -59,7 +59,7 @@ pub struct ExtArrival {
 
 /// 一次性整包回传内容（`AggregateEvent::Full`，仅测试夹具）。
 pub struct AggregatePayload {
-    pub(crate) items: Vec<dd_gui::state::PanelItem>,
+    pub(crate) items: Vec<crate::state::PanelItem>,
     pub(crate) sources: Vec<aggregator::SourceSummary>,
     /// 保活客户端：`(扩展清单 id, 客户端)`（warm；frozen 读桩无客户端；M9 含内置 in-process）。
     pub(crate) processes: Vec<(String, ExtClient)>,
@@ -75,6 +75,27 @@ pub struct AggregatePayload {
     pub(crate) inproc_specs: HashMap<String, ExtensionSpec>,
 }
 
+impl AggregateEvent {
+    /// bench / 外部测试钩子：构造「聚合已完成」整包（`Full`）。[`AggregatePayload`]
+    /// 字段全为 `pub(crate)`，`benches/` 独立 crate 无法字面构造——本钩子为等价
+    /// 入口（语义同快照夹具 `snapshot_app_with` 的预发 payload：`items` 即首帧
+    /// 落地后的 Root 列表）。P2-4.5 `FuzzyMatcher` 放宽 `pub` 同款偏差记档；
+    /// `#[doc(hidden)]` 不进公开文档面，产品代码不调用。
+    #[doc(hidden)]
+    pub fn full_fixture(items: Vec<crate::state::PanelItem>) -> Self {
+        Self::Full(AggregatePayload {
+            items,
+            sources: Vec::new(),
+            processes: Vec::new(),
+            exts: Vec::new(),
+            trust: Default::default(),
+            ledger_state: dd_host::trust::LedgerState::Ok,
+            skipped: Vec::new(),
+            inproc_specs: Default::default(),
+        })
+    }
+}
+
 /// 后台线程执行首屏收集（不阻塞 UI，A12）：扫描 → 注入搜索引擎配置 →
 /// M3 分流（frozen 读桩 / fresh spawn）→ **完成序逐扩展回传** → 收尾。
 ///
@@ -87,7 +108,7 @@ pub fn spawn_aggregation(
     cache: Option<FrozenCache>,
     engines_json: String,
     disabled: Vec<String>,
-    lang: dd_gui::settings::Lang,
+    lang: crate::settings::Lang,
     ext_settings: std::collections::BTreeMap<String, std::collections::BTreeMap<String, String>>,
 ) {
     thread::spawn(move || {
@@ -97,7 +118,7 @@ pub fn spawn_aggregation(
         // 语言——须在构造内置规格（`builtin_specs()` 内 `tr()`）**之前**设好，
         // 否则内置文案会停留在首次读到的语言（设置页切换语言后需重设）。
         dd_ext::i18n::set_lang(match lang {
-            dd_gui::settings::Lang::EnUs => dd_ext::i18n::Lang::EnUs,
+            crate::settings::Lang::EnUs => dd_ext::i18n::Lang::EnUs,
             _ => dd_ext::i18n::Lang::ZhCn,
         });
         // note（来源备注）不再进页脚（用户决策 2026-09-04）：丢弃即可，
@@ -271,10 +292,10 @@ impl PaletteApp {
         root.list.set_query(query);
         // 首屏视图（设置项）：默认功能 / 全部——真机反馈 2026-09-04
         root.list.set_empty_view(
-            if self.draft.settings.open_view == dd_gui::settings::OpenView::All {
-                dd_gui::state::EmptyQueryView::All
+            if self.draft.settings.open_view == crate::settings::OpenView::All {
+                crate::state::EmptyQueryView::All
             } else {
-                dd_gui::state::EmptyQueryView::WithoutApps
+                crate::state::EmptyQueryView::WithoutApps
             },
         );
         // 「搜索应用」关（2026-09-12）：根页排除「应用」类项
@@ -344,10 +365,10 @@ impl PaletteApp {
         let mut root = PageState::root(payload.items);
         root.list.set_query(query);
         root.list.set_empty_view(
-            if self.draft.settings.open_view == dd_gui::settings::OpenView::All {
-                dd_gui::state::EmptyQueryView::All
+            if self.draft.settings.open_view == crate::settings::OpenView::All {
+                crate::state::EmptyQueryView::All
             } else {
-                dd_gui::state::EmptyQueryView::WithoutApps
+                crate::state::EmptyQueryView::WithoutApps
             },
         );
         root.list.set_apps_hidden(!self.draft.settings.search_apps);

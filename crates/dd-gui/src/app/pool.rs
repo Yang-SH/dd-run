@@ -1,8 +1,8 @@
 //! warm 进程池：LRU 保活、进程取还、桩回落与复热标记。
 
+use crate::aggregator::SourceStatus;
 use crate::app::PaletteApp;
 use crate::ext_client::ExtClient;
-use dd_gui::aggregator::SourceStatus;
 use dd_host::manifest::LoadedExtension;
 use dd_protocol::messages::{GetItemsResult, InvokeParams};
 use dd_protocol::model::CommandResult;
@@ -11,7 +11,7 @@ use std::time::Duration;
 
 // M3 LRU 保活容量（设计文档 §6.3"最近 N 个"；超出则 close+释放、命令回落 stub，A7）。
 // N4（2026-10-03）起容量可配置（`Settings.warm_capacity`，1–16，默认
-// `dd_gui::settings::WARM_CAPACITY_DEFAULT` = 原 8 编译期常量——M1–M4 内存
+// `crate::settings::WARM_CAPACITY_DEFAULT` = 原 8 编译期常量——M1–M4 内存
 // 基线在该默认下维持有效），实际容量在 `PaletteApp::new` 读配置构造。
 /// warm 进程**空闲超时回收**阈值（C 批次性能打磨，2026-09-10）。
 ///
