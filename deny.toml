@@ -1,0 +1,27 @@
+# 许可证门禁（清单 §2.1 / 路线图 S1，2026-10-28 实测口径）：
+# cargo-deny 0.20.2 对 Cargo.lock 全量依赖逐许可证校验。
+# 允许清单 = 实测 encounter 集合（cargo deny check licenses 全绿的最小集），
+# 新增依赖若引入清单外许可证 → 本门禁 fail，须在此逐条审批后扩充并注记理由。
+[graph]
+all-features = false
+
+[licenses]
+version = 2
+allow = [
+  "MIT",
+  "Apache-2.0",
+  "BSD-2-Clause",
+  "BSD-3-Clause",
+  "ISC",
+  "Unicode-3.0",
+  # ── 逐条审批注记（2026-10-28 实测）──
+  "BSL-1.0",            # clipboard-win / error-code（Boost 许可，宽松等同 MIT）
+  "MPL-2.0",            # nucleo / nucleo-matcher（文件级弱 copyleft，库形态使用）
+  "OFL-1.1",            # epaint_default_fonts 内嵌字体文件（egui 内置字体，随产品分发）
+  "Ubuntu-font-1.0",    # 同上（Ubuntu 字体内嵌授权）
+  "Zlib",               # miniz_oxide 等（zlib 许可，宽松）
+]
+
+[bans]
+multiple-versions = "warn"   # 传递依赖多版本：观察口径（egui/winit 生态常态），发现即评估不阻塞
+wildcards = "warn"    # 工作区内部 path 依赖按惯例不带版本约束，观察口径
