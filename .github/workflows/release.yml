@@ -69,6 +69,20 @@ jobs:
           Add-Content $env:GITHUB_PATH
           "$env:USERPROFILE\.rustup\toolchains\1.98.0-x86_64-pc-windows-gnu\lib\rustlib\x86_64-pc-windows-gnu\bin\self-contained"
 
+      # 终修（同 ci.yml check/snapshot——rustup self-contained dlltool 的 as
+      # 依赖链在 runner 上不可用，显式改指 mingw-w64 自足工具链）。
+      - name: Install mingw-w64 toolchain (choco)
+        run: choco install mingw -y --no-progress
+
+      - name: Route -C dlltool to mingw-w64 dlltool
+        run: |
+          $base = "C:\ProgramData\chocolatey\lib\mingw\tools\install"
+          $dt = Get-ChildItem $base -Directory | ForEach-Object { Join-Path $_.FullName "mingw64\bin\dlltool.exe" } | Where-Object { Test-Path $_ } | Select-Object -First 1
+          if (-not $dt) { throw "mingw-w64 dlltool not found under $base" }
+          Add-Content $env:GITHUB_ENV "RUSTFLAGS=-C link-self-contained=yes -C dlltool=$dt"
+          Write-Host "RUSTFLAGS routed, dlltool = $dt"
+          & $dt --version
+
       - name: Cache cargo
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
 
