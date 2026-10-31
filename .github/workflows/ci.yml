@@ -83,8 +83,22 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "dlltool self-test exit = $LASTEXITCODE ($dt)" }
           $lib = Get-Item "$t\kernel32.dll_imports.lib" -ErrorAction SilentlyContinue
           if (-not $lib -or $lib.Length -eq 0) { throw "dlltool self-test produced no/empty import library ($dt)" }
-          Write-Host "dlltool self-test OK ($($lib.Length) bytes) — routing via GITHUB_ENV"
-          Add-Content $env:GITHUB_ENV "RUSTFLAGS=-C link-self-contained=yes -C dlltool=$dt"
+          Write-Host "dlltool self-test OK ($($lib.Length) bytes)"
+          # R5 实证（run 41153531585）：runner 精简 rust-mingw 连导入库集也被
+          # 裁剪（ld: cannot find -lshlwapi；本机同版本全量集含 40+ .a 且有
+          # libshlwapi.a）。只拷缺失的 Win32 API 导入库入独立 shim 目录追加
+          # -L——目录内仅此一文件，不可能遮蔽 self-contained 的 CRT 库；
+          # CRT（crt2.o / msvcrt / mingwex / gcc）仍全走 rustup 自带，规避
+          # choco UCRT 变体与 rust std 的 MSVCRT 运行时混用。
+          $root = Split-Path (Split-Path $dt)
+          $slim = "$env:USERPROFILE\.rustup\toolchains\1.98.0-x86_64-pc-windows-gnu\lib\rustlib\x86_64-pc-windows-gnu\lib\self-contained"
+          Write-Host "rust-mingw lib\self-contained: $((Get-ChildItem $slim -Filter *.a -ErrorAction SilentlyContinue).Count) .a files; libshlwapi.a present = $(Test-Path "$slim\libshlwapi.a")"
+          $shim = "$env:TEMP\mingw-extra-libs"
+          New-Item -ItemType Directory -Force -Path $shim | Out-Null
+          Copy-Item (Join-Path $root "lib\libshlwapi.a") $shim -Force
+          Write-Host "shim dir = $shim ($((Get-ChildItem $shim).Count) file)"
+          Add-Content $env:GITHUB_ENV "RUSTFLAGS=-C link-self-contained=yes -C dlltool=$dt -C link-arg=-L$shim"
+          Write-Host "RUSTFLAGS routed via GITHUB_ENV"
 
       - name: Cache cargo
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
@@ -238,8 +252,8 @@ jobs:
           rustup component add rust-mingw
           rustup component add clippy rustfmt
 
-      # 终修（同 check job，run 41152821754 诊断定案）：dlltool 显式改指
-      # choco mingw-w64 自足工具链，安装后运行时搜索落盘路径 + 真实 def 自测。
+      # 终修（同 check job，R4/R5 诊断定案）：dlltool 改指 choco mingw-w64 +
+      # 精简集缺失的 Win32 导入库（libshlwapi.a）经独立 shim 目录追加 -L。
       - name: Install mingw-w64 toolchain (choco)
         run: choco install mingw -y --no-progress
 
@@ -257,8 +271,14 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "dlltool self-test exit = $LASTEXITCODE ($dt)" }
           $lib = Get-Item "$t\kernel32.dll_imports.lib" -ErrorAction SilentlyContinue
           if (-not $lib -or $lib.Length -eq 0) { throw "dlltool self-test produced no/empty import library ($dt)" }
-          Write-Host "dlltool self-test OK ($($lib.Length) bytes) — routing via GITHUB_ENV"
-          Add-Content $env:GITHUB_ENV "RUSTFLAGS=-C link-self-contained=yes -C dlltool=$dt"
+          Write-Host "dlltool self-test OK ($($lib.Length) bytes)"
+          $root = Split-Path (Split-Path $dt)
+          $shim = "$env:TEMP\mingw-extra-libs"
+          New-Item -ItemType Directory -Force -Path $shim | Out-Null
+          Copy-Item (Join-Path $root "lib\libshlwapi.a") $shim -Force
+          Write-Host "shim dir = $shim ($((Get-ChildItem $shim).Count) file)"
+          Add-Content $env:GITHUB_ENV "RUSTFLAGS=-C link-self-contained=yes -C dlltool=$dt -C link-arg=-L$shim"
+          Write-Host "RUSTFLAGS routed via GITHUB_ENV"
 
       - name: Cache cargo
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
