@@ -84,19 +84,28 @@ jobs:
           $lib = Get-Item "$t\kernel32.dll_imports.lib" -ErrorAction SilentlyContinue
           if (-not $lib -or $lib.Length -eq 0) { throw "dlltool self-test produced no/empty import library ($dt)" }
           Write-Host "dlltool self-test OK ($($lib.Length) bytes)"
-          # R5 实证（run 41153531585）：runner 精简 rust-mingw 连导入库集也被
-          # 裁剪（ld: cannot find -lshlwapi；本机同版本全量集含 40+ .a 且有
-          # libshlwapi.a）。只拷缺失的 Win32 API 导入库入独立 shim 目录追加
-          # -L——目录内仅此一文件，不可能遮蔽 self-contained 的 CRT 库；
-          # CRT（crt2.o / msvcrt / mingwex / gcc）仍全走 rustup 自带，规避
-          # choco UCRT 变体与 rust std 的 MSVCRT 运行时混用。
+          # R5/R6 实证（run 41153531585 / 41154617400）：runner 精简 rust-mingw
+          # 的导入库集被裁剪（ld: cannot find -lshlwapi；本机同版本全量集含
+          # 40+ .a 且有 libshlwapi.a），且 choco 布局为目标 sysroot 子目录
+          # （mingw64\x86_64-w64-mingw32\lib\，非 mingw64\lib\）。以
+          # libshlwapi.a 为锚定位后拷贝全部**非 CRT**导入库入独立 shim 目录：
+          # CRT 关键集（msvcrt / mingwex / gcc 系 / pthread / moldname /
+          # iconv / stdc++）显式排除——crt2.o 与 CRT 仍全走 rustup
+          # self-contained（choco 16.1.0 为 UCRT 变体，整链接器换道会与 rust
+          # std 的 MSVCRT 运行时混用，红线）；Win32 API 导入库 = 纯系统 DLL
+          # 桩，两工具链语义等同，多拷零风险，一次性消灭逐库补拷。
           $root = Split-Path (Split-Path $dt)
           $slim = "$env:USERPROFILE\.rustup\toolchains\1.98.0-x86_64-pc-windows-gnu\lib\rustlib\x86_64-pc-windows-gnu\lib\self-contained"
           Write-Host "rust-mingw lib\self-contained: $((Get-ChildItem $slim -Filter *.a -ErrorAction SilentlyContinue).Count) .a files; libshlwapi.a present = $(Test-Path "$slim\libshlwapi.a")"
+          $targetLib = Get-ChildItem $root -Recurse -Filter libshlwapi.a -ErrorAction SilentlyContinue | Select-Object -First 1 -ExpandProperty DirectoryName
+          if (-not $targetLib) { throw "libshlwapi.a not found anywhere under $root (mingw-w64 layout drift?)" }
+          Write-Host "target lib dir = $targetLib"
           $shim = "$env:TEMP\mingw-extra-libs"
           New-Item -ItemType Directory -Force -Path $shim | Out-Null
-          Copy-Item (Join-Path $root "lib\libshlwapi.a") $shim -Force
-          Write-Host "shim dir = $shim ($((Get-ChildItem $shim).Count) file)"
+          $exclude = @('libmsvcrt\.a$','libmingwex\.a$','libmingw32\.a$','libm\.a$','libgcc.*\.a$','libpthread\.a$','libwinpthread.*\.a$','libmoldname.*\.a$','libiconv\.a$','libstdc\+\+\.a$')
+          $copied = Get-ChildItem $targetLib -Filter *.a | Where-Object { $n = $_.Name; -not ($exclude | Where-Object { $n -match $_ }) } | Copy-Item -Destination $shim -Force -PassThru
+          if (-not $copied -or $copied.Count -lt 10) { throw "shim copy yielded only $(@($copied).Count) libs from $targetLib" }
+          Write-Host "shim dir = $shim ($(@($copied).Count) import libs, CRT excluded)"
           Add-Content $env:GITHUB_ENV "RUSTFLAGS=-C link-self-contained=yes -C dlltool=$dt -C link-arg=-L$shim"
           Write-Host "RUSTFLAGS routed via GITHUB_ENV"
 
@@ -273,10 +282,14 @@ jobs:
           if (-not $lib -or $lib.Length -eq 0) { throw "dlltool self-test produced no/empty import library ($dt)" }
           Write-Host "dlltool self-test OK ($($lib.Length) bytes)"
           $root = Split-Path (Split-Path $dt)
+          $targetLib = Get-ChildItem $root -Recurse -Filter libshlwapi.a -ErrorAction SilentlyContinue | Select-Object -First 1 -ExpandProperty DirectoryName
+          if (-not $targetLib) { throw "libshlwapi.a not found anywhere under $root (mingw-w64 layout drift?)" }
           $shim = "$env:TEMP\mingw-extra-libs"
           New-Item -ItemType Directory -Force -Path $shim | Out-Null
-          Copy-Item (Join-Path $root "lib\libshlwapi.a") $shim -Force
-          Write-Host "shim dir = $shim ($((Get-ChildItem $shim).Count) file)"
+          $exclude = @('libmsvcrt\.a$','libmingwex\.a$','libmingw32\.a$','libm\.a$','libgcc.*\.a$','libpthread\.a$','libwinpthread.*\.a$','libmoldname.*\.a$','libiconv\.a$','libstdc\+\+\.a$')
+          $copied = Get-ChildItem $targetLib -Filter *.a | Where-Object { $n = $_.Name; -not ($exclude | Where-Object { $n -match $_ }) } | Copy-Item -Destination $shim -Force -PassThru
+          if (-not $copied -or $copied.Count -lt 10) { throw "shim copy yielded only $(@($copied).Count) libs from $targetLib" }
+          Write-Host "shim dir = $shim ($(@($copied).Count) import libs, CRT excluded)"
           Add-Content $env:GITHUB_ENV "RUSTFLAGS=-C link-self-contained=yes -C dlltool=$dt -C link-arg=-L$shim"
           Write-Host "RUSTFLAGS routed via GITHUB_ENV"
 

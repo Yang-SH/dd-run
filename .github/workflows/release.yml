@@ -83,10 +83,14 @@ jobs:
           if (-not $lib -or $lib.Length -eq 0) { throw "dlltool self-test produced no/empty import library ($dt)" }
           Write-Host "dlltool self-test OK ($($lib.Length) bytes)"
           $root = Split-Path (Split-Path $dt)
+          $targetLib = Get-ChildItem $root -Recurse -Filter libshlwapi.a -ErrorAction SilentlyContinue | Select-Object -First 1 -ExpandProperty DirectoryName
+          if (-not $targetLib) { throw "libshlwapi.a not found anywhere under $root (mingw-w64 layout drift?)" }
           $shim = "$env:TEMP\mingw-extra-libs"
           New-Item -ItemType Directory -Force -Path $shim | Out-Null
-          Copy-Item (Join-Path $root "lib\libshlwapi.a") $shim -Force
-          Write-Host "shim dir = $shim ($((Get-ChildItem $shim).Count) file)"
+          $exclude = @('libmsvcrt\.a$','libmingwex\.a$','libmingw32\.a$','libm\.a$','libgcc.*\.a$','libpthread\.a$','libwinpthread.*\.a$','libmoldname.*\.a$','libiconv\.a$','libstdc\+\+\.a$')
+          $copied = Get-ChildItem $targetLib -Filter *.a | Where-Object { $n = $_.Name; -not ($exclude | Where-Object { $n -match $_ }) } | Copy-Item -Destination $shim -Force -PassThru
+          if (-not $copied -or $copied.Count -lt 10) { throw "shim copy yielded only $(@($copied).Count) libs from $targetLib" }
+          Write-Host "shim dir = $shim ($(@($copied).Count) import libs, CRT excluded)"
           Add-Content $env:GITHUB_ENV "RUSTFLAGS=-C link-self-contained=yes -C dlltool=$dt -C link-arg=-L$shim"
           Write-Host "RUSTFLAGS routed via GITHUB_ENV"
 
