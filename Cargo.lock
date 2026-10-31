@@ -1047,6 +1047,7 @@ dependencies = [
  "dd-host",
  "dd-protocol",
  "eframe",
+ "egui-wgpu",
  "egui_kittest",
  "global-hotkey",
  "image",
