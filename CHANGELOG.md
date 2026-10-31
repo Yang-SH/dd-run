@@ -21,6 +21,7 @@
 - **三栈取证**：三条二进制（0.2.1 装机版 glow / 10-25 产物 wgpu / HEAD 构建 glow）× GDI CopyFromScreen + PrintWindow(PW_RENDERFULLCONTENT)（双法三二进制全白）+ CUA 截屏（0.2.1 轮，白）；DWM 非 cloak、窗口位置正确、聚合正常（1235 命令）、panic 零——批次 D 记档的「环境级 OpenGL 呈现问题」归因修正为**呈现/合成层环境问题（MPO 硬件覆盖层首嫌，双渲染管线共性）**；kittest/wgpu 离屏全绿维持「非渲染栈代码问题」判定。
 - **wgpu 谜底（踩坑记档）**：`target/x86_64-pc-windows-gnu/release/` 为 P2-5.7 去 pin 前旧产物位——10-25 的 `--all-targets` 构建经 dev-deps 特性统一使 eframe 双渲染器（`Renderer::default() = Wgpu`）；**HEAD 真产物在 `target/release/`**，启动验证须用新位。
 - **波次④影响不变**：本机腿仍待人眼 oracle 分叉（MPO 提升成功 = 用户可见 → 用户会话解锁；覆盖层故障 = 驱动回滚 / MPO 禁用方向修复）。
+- **因果取证（同日续，排除法）**：AMD 驱动包与 IDD 三件（GameViewer ×2 / Oray）均 5-17 落盘、早于 10-07 正常期（排除）；热修 5-17 → 10-15/16 半年空档后连装三更新（**KB5127647 / KB5127648 / KB5127690**）= 破坏窗口内唯一系统变量、**最优因果候选**；修复候选 = 卸载三 KB 或 MPO 禁用（`OverlayTestMode=5`）——系统级，待维护者执行 + 人眼 oracle 终审。
 
 ### 波次③ 步骤 1–2——发版准备：CHANGELOG 归段 + snapshot 转阻塞（2026-10-31）
 
