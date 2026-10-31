@@ -62,26 +62,28 @@ jobs:
           # required 语义有版本出入，显式补装关闭该假设；已装则 no-op）。
           rustup component add rust-mingw
 
-      # 同 ci.yml check/snapshot：raw-dylib 的 dlltool 查找防御（发版产物同样
-      # 编译 windows-sys 依赖链；部分 rustc 版本只按 PATH 查找）。
-      - name: Ensure dlltool discoverable (raw-dylib, windows-gnu)
-        run: >
-          Add-Content $env:GITHUB_PATH
-          "$env:USERPROFILE\.rustup\toolchains\1.98.0-x86_64-pc-windows-gnu\lib\rustlib\x86_64-pc-windows-gnu\bin\self-contained"
-
-      # 终修（同 ci.yml check/snapshot——rustup self-contained dlltool 的 as
-      # 依赖链在 runner 上不可用，显式改指 mingw-w64 自足工具链）。
+      # 终修（同 ci.yml check/snapshot，run 41152821754 诊断定案）：runner 的
+      # rust-mingw self-contained 无 as.exe（dlltool spawn 即死），改指 choco
+      # mingw-w64 自足工具链；运行时搜索落盘路径 + 真实 def 自测。
       - name: Install mingw-w64 toolchain (choco)
         run: choco install mingw -y --no-progress
 
-      - name: Route -C dlltool to mingw-w64 dlltool
+      - name: Route -C dlltool to mingw-w64 dlltool (with self-test)
         run: |
-          $base = "C:\ProgramData\chocolatey\lib\mingw\tools\install"
-          $dt = Get-ChildItem $base -Directory | ForEach-Object { Join-Path $_.FullName "mingw64\bin\dlltool.exe" } | Where-Object { Test-Path $_ } | Select-Object -First 1
-          if (-not $dt) { throw "mingw-w64 dlltool not found under $base" }
-          Add-Content $env:GITHUB_ENV "RUSTFLAGS=-C link-self-contained=yes -C dlltool=$dt"
-          Write-Host "RUSTFLAGS routed, dlltool = $dt"
+          $dt = Get-ChildItem "C:\ProgramData\mingw64","C:\ProgramData\chocolatey\lib\mingw" -Recurse -Filter dlltool.exe -ErrorAction SilentlyContinue | Select-Object -First 1 -ExpandProperty FullName
+          if (-not $dt) { $c = Get-Command dlltool.exe -ErrorAction SilentlyContinue; if ($c) { $dt = $c.Source } }
+          if (-not $dt) { throw "mingw-w64 dlltool.exe not found after choco install" }
+          Write-Host "dlltool = $dt"
           & $dt --version
+          $t = "$env:TEMP\dt-verify"
+          New-Item -ItemType Directory -Force -Path $t | Out-Null
+          Set-Content -Path "$t\kernel32.dll_imports.def" -Value "LIBRARY kernel32.dll`nEXPORTS`n  CreateMutexW"
+          & $dt -d "$t\kernel32.dll_imports.def" -D kernel32.dll -l "$t\kernel32.dll_imports.lib" -m i386:x86-64 -f --64 --no-leading-underscore --temp-prefix kernel32.dll
+          if ($LASTEXITCODE -ne 0) { throw "dlltool self-test exit = $LASTEXITCODE ($dt)" }
+          $lib = Get-Item "$t\kernel32.dll_imports.lib" -ErrorAction SilentlyContinue
+          if (-not $lib -or $lib.Length -eq 0) { throw "dlltool self-test produced no/empty import library ($dt)" }
+          Write-Host "dlltool self-test OK ($($lib.Length) bytes) — routing via GITHUB_ENV"
+          Add-Content $env:GITHUB_ENV "RUSTFLAGS=-C link-self-contained=yes -C dlltool=$dt"
 
       - name: Cache cargo
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2

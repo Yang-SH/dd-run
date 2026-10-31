@@ -57,51 +57,34 @@ jobs:
           Add-Content $env:GITHUB_PATH
           "$env:USERPROFILE\.rustup\toolchains\1.98.0-x86_64-pc-windows-gnu\lib\rustlib\x86_64-pc-windows-gnu\bin\self-contained"
 
-      # 2026-10-31 三轮考古（1.99.1 / 1.95.0 / 1.98.0 逐一钉扎均同一签名：
-      # exit≠0 + 空 stderr，本机同版本全绿）——导入表实证 dlltool 自身依赖
-      # 与 ld 同款（可加载），其 spawn 的 as.exe 额外依赖 libintl-8 /
-      # libzstd / zlib1 + UCRT；精简 self-contained 目录无这些文件。此步
-      # 采集 runner 一次性证据（目录内容 / 直接执行 / Defender 记录），
-      # dlltool 修固后随回写提交移除。
-      - name: Diagnose dlltool (one-shot evidence)
-        continue-on-error: true
-        run: |
-          $sc = "$env:USERPROFILE\.rustup\toolchains\1.98.0-x86_64-pc-windows-gnu\lib\rustlib\x86_64-pc-windows-gnu\bin\self-contained"
-          Write-Host "== rustc =="
-          rustc --version
-          Write-Host "== self-contained listing =="
-          Get-ChildItem $sc -Force | Select-Object Name, Length | Format-Table -AutoSize | Out-String -Width 120 | Write-Host
-          Write-Host "== dlltool --version =="
-          & "$sc\dlltool.exe" --version
-          Write-Host "== dlltool direct run (CI-form args, CWD=workspace) =="
-          $wd = "D:\a\dd-run\dd-run"
-          Set-Location $wd
-          New-Item -ItemType Directory -Force -Path "$wd\target\dt-diag" | Out-Null
-          Set-Content -Path "$wd\target\dt-diag\kernel32.dll_imports.def" -Value "LIBRARY kernel32.dll`nEXPORTS`n  CreateMutexW"
-          & "$sc\dlltool.exe" -d "$wd\target\dt-diag\kernel32.dll_imports.def" -D kernel32.dll -l "$wd\target\dt-diag\kernel32.dll_imports.lib" -m i386:x86-64 -f --64 --no-leading-underscore --temp-prefix kernel32.dll
-          Write-Host "direct exit = $LASTEXITCODE"
-          Get-ChildItem "$wd\target\dt-diag" -ErrorAction SilentlyContinue | Select-Object Name, Length | Format-Table -AutoSize | Out-String -Width 120 | Write-Host
-          Write-Host "== as.exe load test =="
-          & "$sc\as.exe" --version
-          Write-Host "as exit = $LASTEXITCODE"
-          Write-Host "== Defender detections (first 5) =="
-          Get-MpThreatDetection -ErrorAction SilentlyContinue | Select-Object -First 5 | Format-List | Out-String -Width 120 | Write-Host
-
-      # 终修：dlltool 显式改指 mingw-w64 自足工具链（choco 预装通道）——
-      # dlltool + as + libintl-8 / libzstd / zlib1 全部同目录，无跨目录
-      # spawn / 加载依赖；rustup self-contained 精简版的 as 缺失问题绕开。
-      # link-self-contained=yes 保留（CRT / 链接器腿已三轮实证可用）。
+      # 终修（2026-10-31 四轮考古定案，诊断步证据见 run 41152821754）：runner
+      # 的 rust-mingw self-contained = 精简集（dlltool / ld / gcc-wrapper /
+      # libwinpthread，无 as.exe 无 libintl-8 / libzstd / zlib1——诊断步列目录
+      # 实证；本机同 commit hash 的 1.98.0 却为全量 10 项），dlltool(2.44)
+      # 生成 raw-dylib 导入库须 spawn as → CreateProcess 失败 → exit 1 / 0 字
+      # 节 .lib。改指 choco mingw-w64（niXman 16.1.0）：dlltool + as + 全部
+      # DLL 同目录自足；安装后运行时搜索实际落盘路径（choco 布局随版本漂移，
+      # 硬编码已在 R4 实证失效）并做真实 def 自测，失败明文报错。
+      # link-self-contained=yes 保留（CRT / 链接器腿四轮 CI 实证可用）。
       - name: Install mingw-w64 toolchain (choco)
         run: choco install mingw -y --no-progress
 
-      - name: Route -C dlltool to mingw-w64 dlltool
+      - name: Route -C dlltool to mingw-w64 dlltool (with self-test)
         run: |
-          $base = "C:\ProgramData\chocolatey\lib\mingw\tools\install"
-          $dt = Get-ChildItem $base -Directory | ForEach-Object { Join-Path $_.FullName "mingw64\bin\dlltool.exe" } | Where-Object { Test-Path $_ } | Select-Object -First 1
-          if (-not $dt) { throw "mingw-w64 dlltool not found under $base" }
-          Add-Content $env:GITHUB_ENV "RUSTFLAGS=-C link-self-contained=yes -C dlltool=$dt"
-          Write-Host "RUSTFLAGS routed, dlltool = $dt"
+          $dt = Get-ChildItem "C:\ProgramData\mingw64","C:\ProgramData\chocolatey\lib\mingw" -Recurse -Filter dlltool.exe -ErrorAction SilentlyContinue | Select-Object -First 1 -ExpandProperty FullName
+          if (-not $dt) { $c = Get-Command dlltool.exe -ErrorAction SilentlyContinue; if ($c) { $dt = $c.Source } }
+          if (-not $dt) { throw "mingw-w64 dlltool.exe not found after choco install" }
+          Write-Host "dlltool = $dt"
           & $dt --version
+          $t = "$env:TEMP\dt-verify"
+          New-Item -ItemType Directory -Force -Path $t | Out-Null
+          Set-Content -Path "$t\kernel32.dll_imports.def" -Value "LIBRARY kernel32.dll`nEXPORTS`n  CreateMutexW"
+          & $dt -d "$t\kernel32.dll_imports.def" -D kernel32.dll -l "$t\kernel32.dll_imports.lib" -m i386:x86-64 -f --64 --no-leading-underscore --temp-prefix kernel32.dll
+          if ($LASTEXITCODE -ne 0) { throw "dlltool self-test exit = $LASTEXITCODE ($dt)" }
+          $lib = Get-Item "$t\kernel32.dll_imports.lib" -ErrorAction SilentlyContinue
+          if (-not $lib -or $lib.Length -eq 0) { throw "dlltool self-test produced no/empty import library ($dt)" }
+          Write-Host "dlltool self-test OK ($($lib.Length) bytes) — routing via GITHUB_ENV"
+          Add-Content $env:GITHUB_ENV "RUSTFLAGS=-C link-self-contained=yes -C dlltool=$dt"
 
       - name: Cache cargo
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
@@ -255,25 +238,27 @@ jobs:
           rustup component add rust-mingw
           rustup component add clippy rustfmt
 
-      # 同 check：raw-dylib 的 dlltool 查找防御（快照测试同样编译 dev 依赖链）。
-      - name: Ensure dlltool discoverable (raw-dylib, windows-gnu)
-        run: >
-          Add-Content $env:GITHUB_PATH
-          "$env:USERPROFILE\.rustup\toolchains\1.98.0-x86_64-pc-windows-gnu\lib\rustlib\x86_64-pc-windows-gnu\bin\self-contained"
-
-      # 终修（同 check job——rustup self-contained dlltool 的 as 依赖链在
-      # runner 上不可用，显式改指 mingw-w64 自足工具链）。
+      # 终修（同 check job，run 41152821754 诊断定案）：dlltool 显式改指
+      # choco mingw-w64 自足工具链，安装后运行时搜索落盘路径 + 真实 def 自测。
       - name: Install mingw-w64 toolchain (choco)
         run: choco install mingw -y --no-progress
 
-      - name: Route -C dlltool to mingw-w64 dlltool
+      - name: Route -C dlltool to mingw-w64 dlltool (with self-test)
         run: |
-          $base = "C:\ProgramData\chocolatey\lib\mingw\tools\install"
-          $dt = Get-ChildItem $base -Directory | ForEach-Object { Join-Path $_.FullName "mingw64\bin\dlltool.exe" } | Where-Object { Test-Path $_ } | Select-Object -First 1
-          if (-not $dt) { throw "mingw-w64 dlltool not found under $base" }
-          Add-Content $env:GITHUB_ENV "RUSTFLAGS=-C link-self-contained=yes -C dlltool=$dt"
-          Write-Host "RUSTFLAGS routed, dlltool = $dt"
+          $dt = Get-ChildItem "C:\ProgramData\mingw64","C:\ProgramData\chocolatey\lib\mingw" -Recurse -Filter dlltool.exe -ErrorAction SilentlyContinue | Select-Object -First 1 -ExpandProperty FullName
+          if (-not $dt) { $c = Get-Command dlltool.exe -ErrorAction SilentlyContinue; if ($c) { $dt = $c.Source } }
+          if (-not $dt) { throw "mingw-w64 dlltool.exe not found after choco install" }
+          Write-Host "dlltool = $dt"
           & $dt --version
+          $t = "$env:TEMP\dt-verify"
+          New-Item -ItemType Directory -Force -Path $t | Out-Null
+          Set-Content -Path "$t\kernel32.dll_imports.def" -Value "LIBRARY kernel32.dll`nEXPORTS`n  CreateMutexW"
+          & $dt -d "$t\kernel32.dll_imports.def" -D kernel32.dll -l "$t\kernel32.dll_imports.lib" -m i386:x86-64 -f --64 --no-leading-underscore --temp-prefix kernel32.dll
+          if ($LASTEXITCODE -ne 0) { throw "dlltool self-test exit = $LASTEXITCODE ($dt)" }
+          $lib = Get-Item "$t\kernel32.dll_imports.lib" -ErrorAction SilentlyContinue
+          if (-not $lib -or $lib.Length -eq 0) { throw "dlltool self-test produced no/empty import library ($dt)" }
+          Write-Host "dlltool self-test OK ($($lib.Length) bytes) — routing via GITHUB_ENV"
+          Add-Content $env:GITHUB_ENV "RUSTFLAGS=-C link-self-contained=yes -C dlltool=$dt"
 
       - name: Cache cargo
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
