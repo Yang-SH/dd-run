@@ -2011,24 +2011,388 @@ mod sys {
     }
 }
 
-/// 非 Windows 占位（P4 Windows 优先）：编译恒成立，功能待对应平台轮实现。
+/// 非 Windows 实现（S3，2026-10-31）：macOS 扫描 `/Applications`（与
+/// `~/Applications`，`.app` 包经 `open` 启动）；Linux 解析 `.desktop`
+/// （`/usr/share/applications` + `~/.local/share/applications`，`Exec`
+/// 去字段码后直连 argv）+ PATH 逐目录扫可执行位。图标统一回落 glyph
+/// （跨平台图标抽取不属本腿，记档）；N2 用户屏蔽名单的注入通道
+/// （`CONFIGURED_BLOCKLIST`）为 cfg(windows)，unix 暂不接（后续批次）。
+/// 枚举结果进程级缓存（OnceLock，同 Windows `APP_CACHE` 口径）。
 #[cfg(not(windows))]
 mod sys {
     use super::*;
     use crate::Effect;
+    use dd_protocol::model::{CommandRef, Icon, IconKind};
+    use std::path::{Path, PathBuf};
+    use std::sync::OnceLock;
 
-    pub fn top_level_commands() -> Vec<CommandItem> {
-        // macOS 扫描 /Applications；Linux 读 .desktop + PATH：TODO 对应平台轮
-        Vec::new()
+    const MAX_APPS: usize = 400;
+    const FALLBACK_GLYPH: &str = "\u{E7C4}"; // 与 Windows 分支同回落 glyph
+
+    enum Launch {
+        /// macOS：`open <bundle>`（LaunchServices 解析 .app）。
+        MacOpen(PathBuf),
+        /// Linux：直连 argv（.desktop `Exec` 去字段码 / PATH 可执行）。
+        Cmd { program: String, args: Vec<String> },
     }
 
-    pub fn handle_invoke(_params: &InvokeParams) -> (CommandResult, Vec<Effect>) {
-        (
-            CommandResult::ShowToast {
-                message: "应用枚举：当前平台尚未实现（P4 Windows 优先）".to_string(),
-                duration_ms: Some(2_500),
-            },
-            Vec::new(),
-        )
+    struct App {
+        title: String,
+        subtitle: Option<String>,
+        icon: Icon,
+        launch: Launch,
+    }
+
+    fn icon_fallback() -> Icon {
+        Icon {
+            kind: IconKind::Glyph,
+            value: FALLBACK_GLYPH.to_string(),
+        }
+    }
+
+    fn push_app(out: &mut Vec<App>, title: String, subtitle: Option<String>, launch: Launch) {
+        if out.len() >= MAX_APPS || title.is_empty() {
+            return;
+        }
+        // 同名去重（先到先得）：.desktop 与 PATH 可执行、多 PATH 目录间的
+        // 重复条目只留第一处（列表干净优先于来源完备）。
+        if out.iter().any(|a| a.title == title) {
+            return;
+        }
+        out.push(App {
+            title,
+            subtitle,
+            icon: icon_fallback(),
+            launch,
+        });
+    }
+
+    // ── macOS ──
+
+    /// 扫描目录下的 `.app` 包（仅顶层一层——/Applications 的嵌套子目录是
+    /// 厂商归类，不是应用）；title = 包目录名去 `.app` 后缀。
+    fn macos_apps(dir: &Path, out: &mut Vec<App>) {
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            return;
+        };
+        for p in entries.flatten() {
+            let path = p.path();
+            let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
+                continue;
+            };
+            let Some(stem) = name.strip_suffix(".app") else {
+                continue;
+            };
+            if path.is_dir() {
+                push_app(out, stem.to_string(), None, Launch::MacOpen(path));
+            }
+        }
+    }
+
+    // ── Linux ──
+
+    /// 解析单个 `.desktop` 文本 → `(Name, Exec)`。仅收 `[Desktop Entry]` 节；
+    /// `NoDisplay` / `Hidden` 为真、`Type` 非 Application（含缺省按规范视为
+    /// Application）、缺 `Name` / `Exec` → None（调用方跳过）。
+    fn parse_desktop(text: &str) -> Option<(String, String)> {
+        let mut name = None;
+        let mut exec = None;
+        let mut hidden = false;
+        let mut in_entry = false;
+        for line in text.lines() {
+            let line = line.trim();
+            if line.starts_with('[') {
+                in_entry = line == "[Desktop Entry]";
+                continue;
+            }
+            if !in_entry {
+                continue;
+            }
+            let Some((k, v)) = line.split_once('=') else {
+                continue;
+            };
+            match k.trim() {
+                "Name" => name = Some(v.trim().to_string()),
+                "Exec" => exec = Some(v.trim().to_string()),
+                "NoDisplay" if v.trim().eq_ignore_ascii_case("true") => hidden = true,
+                "Hidden" if v.trim().eq_ignore_ascii_case("true") => hidden = true,
+                "Type" if !v.trim().is_empty() && v.trim() != "Application" => return None,
+                _ => {}
+            }
+        }
+        match (name, exec, hidden) {
+            (Some(name), Some(exec), false) if !name.is_empty() && !exec.is_empty() => {
+                Some((name, exec))
+            }
+            _ => None,
+        }
+    }
+
+    /// `.desktop` 的 `Exec` 值 → argv（首词 + 参数）。规范：独立字段码
+    /// （`%f` `%F` `%u` `%U` `%d` `%D` `%n` `%N` `%i` `%c` `%k`，`%%` 同）
+    /// 由启动方展开——本扩展不传参，直接丢弃；引号段合并为单 token
+    /// （Desktop Entry Spec 的引号规则最小实现：成对 `"` / `'`）。
+    fn exec_to_argv(exec: &str) -> Option<(String, Vec<String>)> {
+        let is_field_code = |t: &str| {
+            t.len() == 2 && t.starts_with('%') && t.as_bytes()[1].is_ascii_alphabetic() || t == "%%"
+        };
+        let mut tokens: Vec<String> = Vec::new();
+        let mut cur = String::new();
+        let mut quote: Option<char> = None;
+        let mut has_token = false;
+        for ch in exec.chars() {
+            match quote {
+                Some(q) if ch == q => quote = None,
+                Some(_) => cur.push(ch),
+                None if ch == '"' || ch == '\'' => {
+                    quote = Some(ch);
+                    has_token = true;
+                }
+                None if ch.is_whitespace() => {
+                    if has_token {
+                        tokens.push(std::mem::take(&mut cur));
+                        has_token = false;
+                    }
+                }
+                None => {
+                    cur.push(ch);
+                    has_token = true;
+                }
+            }
+        }
+        if has_token {
+            tokens.push(cur);
+        }
+        let mut iter = tokens.into_iter().filter(|t| !is_field_code(t));
+        let program = iter.next()?;
+        Some((program, iter.collect()))
+    }
+
+    /// PATH 逐目录扫可执行位（同名去重，先到先得；仅顶层一层文件）。
+    fn path_executables(path_var: &str, out: &mut Vec<App>) {
+        for dir in path_var.split(':').filter(|d| !d.is_empty()) {
+            let Ok(entries) = std::fs::read_dir(dir) else {
+                continue;
+            };
+            use std::os::unix::fs::PermissionsExt;
+            for p in entries.flatten() {
+                let path = p.path();
+                let Ok(md) = p.metadata() else {
+                    continue;
+                };
+                if !md.is_file() || md.permissions().mode() & 0o111 == 0 {
+                    continue;
+                }
+                let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
+                    continue;
+                };
+                push_app(
+                    out,
+                    name.to_string(),
+                    Some(dir.to_string()),
+                    Launch::Cmd {
+                        program: path.to_string_lossy().to_string(),
+                        args: Vec::new(),
+                    },
+                );
+            }
+        }
+    }
+
+    fn app_list() -> &'static Vec<App> {
+        static APPS: OnceLock<Vec<App>> = OnceLock::new();
+        APPS.get_or_init(|| {
+            let mut out: Vec<App> = Vec::new();
+            if cfg!(target_os = "macos") {
+                macos_apps(Path::new("/Applications"), &mut out);
+                if let Some(home) = std::env::var_os("HOME") {
+                    macos_apps(&PathBuf::from(home).join("Applications"), &mut out);
+                }
+            } else {
+                for dir in [
+                    "/usr/share/applications",
+                    &format!(
+                        "{}/.local/share/applications",
+                        std::env::var("HOME").unwrap_or_default()
+                    ),
+                ] {
+                    let Ok(entries) = std::fs::read_dir(dir) else {
+                        continue;
+                    };
+                    for p in entries.flatten() {
+                        let path = p.path();
+                        if path.extension().and_then(|e| e.to_str()) != Some("desktop") {
+                            continue;
+                        }
+                        let Ok(text) = std::fs::read_to_string(&path) else {
+                            continue;
+                        };
+                        let Some((name, exec)) = parse_desktop(&text) else {
+                            continue;
+                        };
+                        let Some((program, args)) = exec_to_argv(&exec) else {
+                            continue;
+                        };
+                        push_app(&mut out, name, None, Launch::Cmd { program, args });
+                    }
+                }
+                if let Ok(path_var) = std::env::var("PATH") {
+                    path_executables(&path_var, &mut out);
+                }
+            }
+            out
+        })
+    }
+
+    pub fn top_level_commands() -> Vec<CommandItem> {
+        app_list()
+            .iter()
+            .enumerate()
+            .map(|(i, app)| CommandItem {
+                id: format!("apps.run.{i}"),
+                title: app.title.clone(),
+                subtitle: app.subtitle.clone(),
+                icon: Some(app.icon.clone()),
+                section: Some(tr("应用", "Apps").to_string()),
+                tags: None,
+                details: None,
+                text_to_suggest: None,
+                more_commands: None,
+                command: CommandRef::Invoke,
+            })
+            .collect()
+    }
+
+    pub fn handle_invoke(params: &InvokeParams) -> (CommandResult, Vec<Effect>) {
+        let idx: usize = params
+            .id
+            .strip_prefix("apps.run.")
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(usize::MAX);
+        let Some(app) = app_list().get(idx) else {
+            return (
+                CommandResult::ShowToast {
+                    message: tr(
+                        "应用不存在或列表已变化：{}",
+                        "App not found or list changed: {}",
+                    )
+                    .replace("{}", &params.id),
+                    duration_ms: Some(2_500),
+                },
+                Vec::new(),
+            );
+        };
+        let spawned = match &app.launch {
+            Launch::MacOpen(path) => std::process::Command::new("open")
+                .arg(path)
+                .spawn()
+                .map(|_| ()),
+            Launch::Cmd { program, args } => std::process::Command::new(program)
+                .args(args)
+                .spawn()
+                .map(|_| ()),
+        };
+        match spawned {
+            Ok(()) => (CommandResult::Dismiss, Vec::new()),
+            Err(e) => (
+                CommandResult::ShowToast {
+                    message: tr("启动 {} 失败：{e}", "Failed to launch {}: {e}")
+                        .replace("{e}", &e.to_string())
+                        .replace("{}", &app.title),
+                    duration_ms: Some(3_000),
+                },
+                Vec::new(),
+            ),
+        }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        /// S3：.desktop 解析——NoDisplay / Hidden / 非 Application / 缺 Exec
+        /// 全部跳过；`Type` 缺省（规范默认 Application）放行。
+        #[test]
+        fn parse_desktop_filters_nondisplay_and_requires_exec() {
+            assert!(parse_desktop("not a desktop").is_none());
+            assert!(
+                parse_desktop("[Desktop Entry]\nName=X\n").is_none(),
+                "缺 Exec"
+            );
+            assert!(
+                parse_desktop("[Desktop Entry]\nName=X\nExec=x %U\nNoDisplay=true\n").is_none(),
+                "NoDisplay=true 跳过"
+            );
+            assert!(
+                parse_desktop("[Desktop Entry]\nName=X\nExec=x\nHidden=true\n").is_none(),
+                "Hidden=true 跳过"
+            );
+            assert!(
+                parse_desktop("[Desktop Entry]\nName=X\nExec=x\nType=Link\n").is_none(),
+                "Type=Link 跳过"
+            );
+            let ok = parse_desktop("[Desktop Entry]\nName=计算器\nExec=calc %U\n").unwrap();
+            assert_eq!(ok, ("计算器".to_string(), "calc %U".to_string()));
+            let no_type = parse_desktop("[Desktop Entry]\nName=Y\nExec=y\n").unwrap();
+            assert_eq!(no_type.0, "Y");
+        }
+
+        /// S3：Exec → argv——独立字段码丢弃、引号段合并且内部空格保留。
+        #[test]
+        fn exec_to_argv_strips_field_codes_and_respects_quotes() {
+            let (p, a) = exec_to_argv("google-chrome-stable %U").unwrap();
+            assert_eq!(p, "google-chrome-stable");
+            assert!(a.is_empty());
+            let (p, a) = exec_to_argv("/usr/bin/code -n %F").unwrap();
+            assert_eq!(p, "/usr/bin/code");
+            assert_eq!(a, vec!["-n"]);
+            let (p, a) = exec_to_argv("sh -c \"exec foo --bar=1\" %k").unwrap();
+            assert_eq!(p, "sh");
+            assert_eq!(a, vec!["-c", "exec foo --bar=1"]);
+            assert!(exec_to_argv("%U").is_none(), "纯字段码 → 无程序词");
+        }
+
+        /// S3：PATH 扫描——可执行位判据 + 同名先到先得去重。
+        #[test]
+        fn path_executables_dedupe_and_require_exec_bit() {
+            let d1 = std::env::temp_dir().join(format!("ddext-path1-{}", std::process::id()));
+            let d2 = std::env::temp_dir().join(format!("ddext-path2-{}", std::process::id()));
+            let _ = std::fs::remove_dir_all(&d1);
+            let _ = std::fs::remove_dir_all(&d2);
+            std::fs::create_dir_all(&d1).unwrap();
+            std::fs::create_dir_all(&d2).unwrap();
+            use std::os::unix::fs::PermissionsExt;
+            let exe = d1.join("mytool");
+            std::fs::write(&exe, "#!/bin/sh\n").unwrap();
+            std::fs::set_permissions(&exe, std::fs::Permissions::from_mode(0o755)).unwrap();
+            let noexec = d1.join("plain");
+            std::fs::write(&noexec, "data").unwrap();
+            std::fs::set_permissions(&noexec, std::fs::Permissions::from_mode(0o644)).unwrap();
+            let dup = d2.join("mytool");
+            std::fs::write(&dup, "#!/bin/sh\n").unwrap();
+            std::fs::set_permissions(&dup, std::fs::Permissions::from_mode(0o755)).unwrap();
+            let mut out = Vec::new();
+            path_executables(&format!("{}:{}", d1.display(), d2.display()), &mut out);
+            let _ = (std::fs::remove_dir_all(&d1), std::fs::remove_dir_all(&d2));
+            let names: Vec<&str> = out.iter().map(|a| a.title.as_str()).collect();
+            assert_eq!(names, vec!["mytool"], "plain 无执行位跳过；d2 同名去重");
+            assert_eq!(out[0].subtitle.as_deref(), Some(d1.to_str().unwrap()));
+        }
+
+        /// S3（macOS 门内）：/Applications 扫描——仅 .app 目录、去后缀命名。
+        #[test]
+        #[cfg(target_os = "macos")]
+        fn macos_apps_scans_bundles() {
+            let d = std::env::temp_dir().join(format!("ddext-apps-{}", std::process::id()));
+            let _ = std::fs::remove_dir_all(&d);
+            std::fs::create_dir_all(d.join("Foo.app")).unwrap();
+            std::fs::create_dir_all(d.join("Bar.app/Contents")).unwrap();
+            std::fs::write(d.join("notes.txt"), "x").unwrap();
+            let mut out = Vec::new();
+            macos_apps(&d, &mut out);
+            let _ = std::fs::remove_dir_all(&d);
+            let titles: Vec<&str> = out.iter().map(|a| a.title.as_str()).collect();
+            assert_eq!(titles, vec!["Foo", "Bar"], "仅 .app 目录、去后缀");
+        }
     }
 }

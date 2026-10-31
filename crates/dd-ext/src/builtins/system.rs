@@ -7,9 +7,10 @@
 //! - 执行成功 → `Dismiss`（关闭面板）；spawn 失败 → `ShowToast` 报错。
 //!
 //! 平台策略（P4 决策：Windows 优先）：Windows 实现 `rundll32` / `shutdown`
-//! 真实命令（本机真机验证）；macOS / Linux 分支为**编译恒成立占位**
-//! （顶层命令空 + invoke 提示未实现），待相应平台轮实现
-//! （macOS `pmset`/`osascript`；Linux `systemctl`，见设计文档 §7 平台列）。
+//! 真实命令（本机真机验证）；macOS / Linux 自 S3 起为**真实现**——macOS
+//! `pmset`/`osascript`（System Events）、Linux `systemctl`/`loginctl`（见
+//! not(windows) `sys` 分支）；执行语义（Confirm 门禁 / 危险项三项）跨平台
+//! 同构，实机行为随波次④ O6 ④ 会话复验。
 //! 参考实现：[`docs/m4-record.md`](../../docs/m4-record.md) P4 决策。
 
 use crate::{i18n::tr, ExtensionSpec};
@@ -304,24 +305,360 @@ mod sys {
     }
 }
 
-/// 非 Windows 占位（P4 Windows 优先）：编译恒成立，功能待对应平台轮实现。
+/// 非 Windows 实现（S3，2026-10-31）：macOS 走 `pmset` / `osascript`（System
+/// Events，锁屏快捷键路径需辅助功能权限——真机腿 O6 ④ 复验）；Linux 走
+/// systemd 通道（`systemctl` suspend/poweroff/reboot + `loginctl`
+/// lock-session/terminate-session，均为无 root 用户命令）。决策层（Confirm
+/// 门禁 / 危险项三项）与 Windows 分支同构同语义；执行走直接 spawn（无控制台
+/// 窗口问题）。
 #[cfg(not(windows))]
 mod sys {
     use super::*;
     use crate::Effect;
+    use dd_protocol::model::{CommandRef, Icon, IconKind};
 
-    pub fn top_level_commands() -> Vec<CommandItem> {
-        // macOS（pmset/osascript）与 Linux（systemctl）命令表：TODO 对应平台轮
-        Vec::new()
+    /// 一条系统命令：id / 标题 / 副标题 / 确认描述 / 是否危险 / 程序 / 参数。
+    pub struct SystemCommand {
+        pub id: &'static str,
+        pub title: &'static str,
+        pub subtitle: &'static str,
+        /// Confirm 对话框描述（仅危险项使用）
+        pub confirm_description: &'static str,
+        /// 危险操作（关机/重启/注销）需 `Confirm` 二次确认
+        pub dangerous: bool,
+        pub program: &'static str,
+        pub args: &'static [&'static str],
     }
 
-    pub fn handle_invoke(_params: &InvokeParams) -> (CommandResult, Vec<Effect>) {
-        (
-            CommandResult::ShowToast {
-                message: "系统命令：当前平台尚未实现（P4 Windows 优先）".to_string(),
+    /// 系统命令表（与 Windows 表同构：5 项 / 危险项 3；文案经 `tr`）。
+    pub fn commands() -> &'static [SystemCommand] {
+        static CELL: std::sync::OnceLock<Vec<SystemCommand>> = std::sync::OnceLock::new();
+        CELL.get_or_init(|| {
+            if cfg!(target_os = "macos") {
+                vec![
+                    SystemCommand {
+                        id: "system.lock",
+                        title: tr("锁屏", "Lock Screen"),
+                        subtitle: tr(
+                            "锁定屏幕（System Events；首次使用需授予辅助功能权限）",
+                            "Lock the screen (System Events; Accessibility permission required on first use)",
+                        ),
+                        confirm_description: "",
+                        dangerous: false,
+                        program: "osascript",
+                        args: &[
+                            "-e",
+                            "tell application \"System Events\" to keystroke \"q\" using {command down, control down}",
+                        ],
+                    },
+                    SystemCommand {
+                        id: "system.sleep",
+                        title: tr("睡眠", "Sleep"),
+                        subtitle: tr(
+                            "使计算机进入睡眠（可唤醒，pmset）",
+                            "Put the computer to sleep (wakeable, pmset)",
+                        ),
+                        confirm_description: "",
+                        dangerous: false,
+                        program: "pmset",
+                        args: &["sleepnow"],
+                    },
+                    SystemCommand {
+                        id: "system.shutdown",
+                        title: tr("关机", "Shut Down"),
+                        subtitle: tr(
+                            "关闭计算机（⚠ 危险，需二次确认）",
+                            "Shut down the computer (⚠ dangerous, needs confirmation)",
+                        ),
+                        confirm_description: tr(
+                            "计算机会立即关闭，未保存的工作将丢失。",
+                            "The computer will shut down immediately; unsaved work will be lost.",
+                        ),
+                        dangerous: true,
+                        program: "osascript",
+                        args: &["-e", "tell application \"System Events\" to shut down"],
+                    },
+                    SystemCommand {
+                        id: "system.restart",
+                        title: tr("重启", "Restart"),
+                        subtitle: tr(
+                            "重启计算机（⚠ 危险，需二次确认）",
+                            "Restart the computer (⚠ dangerous, needs confirmation)",
+                        ),
+                        confirm_description: tr(
+                            "计算机会立即重启，未保存的工作将丢失。",
+                            "The computer will restart immediately; unsaved work will be lost.",
+                        ),
+                        dangerous: true,
+                        program: "osascript",
+                        args: &["-e", "tell application \"System Events\" to restart"],
+                    },
+                    SystemCommand {
+                        id: "system.logoff",
+                        title: tr("注销", "Sign Out"),
+                        subtitle: tr(
+                            "注销当前用户（⚠ 危险，需二次确认）",
+                            "Sign out the current user (⚠ dangerous, needs confirmation)",
+                        ),
+                        confirm_description: tr(
+                            "当前会话将结束，未保存的工作可能丢失。",
+                            "The current session will end; unsaved work may be lost.",
+                        ),
+                        dangerous: true,
+                        program: "osascript",
+                        args: &["-e", "tell application \"System Events\" to log out"],
+                    },
+                ]
+            } else {
+                vec![
+                    SystemCommand {
+                        id: "system.lock",
+                        title: tr("锁屏", "Lock Screen"),
+                        subtitle: tr(
+                            "锁定当前会话（loginctl，systemd）",
+                            "Lock the current session (loginctl, systemd)",
+                        ),
+                        confirm_description: "",
+                        dangerous: false,
+                        program: "loginctl",
+                        args: &["lock-session"],
+                    },
+                    SystemCommand {
+                        id: "system.sleep",
+                        title: tr("睡眠", "Sleep"),
+                        subtitle: tr(
+                            "使计算机进入睡眠（可唤醒，systemctl suspend）",
+                            "Put the computer to sleep (wakeable, systemctl suspend)",
+                        ),
+                        confirm_description: "",
+                        dangerous: false,
+                        program: "systemctl",
+                        args: &["suspend"],
+                    },
+                    SystemCommand {
+                        id: "system.shutdown",
+                        title: tr("关机", "Shut Down"),
+                        subtitle: tr(
+                            "关闭计算机（⚠ 危险，需二次确认）",
+                            "Shut down the computer (⚠ dangerous, needs confirmation)",
+                        ),
+                        confirm_description: tr(
+                            "计算机会立即关闭，未保存的工作将丢失。",
+                            "The computer will shut down immediately; unsaved work will be lost.",
+                        ),
+                        dangerous: true,
+                        program: "systemctl",
+                        args: &["poweroff"],
+                    },
+                    SystemCommand {
+                        id: "system.restart",
+                        title: tr("重启", "Restart"),
+                        subtitle: tr(
+                            "重启计算机（⚠ 危险，需二次确认）",
+                            "Restart the computer (⚠ dangerous, needs confirmation)",
+                        ),
+                        confirm_description: tr(
+                            "计算机会立即重启，未保存的工作将丢失。",
+                            "The computer will restart immediately; unsaved work will be lost.",
+                        ),
+                        dangerous: true,
+                        program: "systemctl",
+                        args: &["reboot"],
+                    },
+                    SystemCommand {
+                        id: "system.logoff",
+                        title: tr("注销", "Sign Out"),
+                        subtitle: tr(
+                            "结束当前会话（⚠ 危险，需二次确认）",
+                            "End the current session (⚠ dangerous, needs confirmation)",
+                        ),
+                        confirm_description: tr(
+                            "当前会话将结束，未保存的工作可能丢失。",
+                            "The current session will end; unsaved work may be lost.",
+                        ),
+                        dangerous: true,
+                        program: "loginctl",
+                        args: &["terminate-session"],
+                    },
+                ]
+            }
+        })
+        .as_slice()
+    }
+
+    pub fn top_level_commands() -> Vec<CommandItem> {
+        commands()
+            .iter()
+            .map(|c| CommandItem {
+                id: c.id.to_string(),
+                title: c.title.to_string(),
+                subtitle: Some(c.subtitle.to_string()),
+                icon: Some(Icon {
+                    kind: IconKind::Glyph,
+                    value: "\u{E7E8}".to_string(), // PowerButton
+                }),
+                section: Some(tr("系统", "System").to_string()),
+                tags: Some(if c.dangerous {
+                    vec!["system".to_string(), "danger".to_string()]
+                } else {
+                    vec!["system".to_string()]
+                }),
+                details: None,
+                text_to_suggest: None,
+                more_commands: None,
+                command: CommandRef::Invoke,
+            })
+            .collect()
+    }
+
+    /// 纯决策层（无副作用，可安全单测）：与 Windows 分支同语义——未知 id →
+    /// `Err(ShowToast)`；危险命令未经确认 → `Err(Confirm{is_critical:true})`；
+    /// 否则 `Ok(cmd)` 交由 `launch` 执行。
+    fn decide(params: &InvokeParams) -> Result<&'static SystemCommand, CommandResult> {
+        let confirmed = params
+            .context
+            .as_ref()
+            .and_then(|c| c.confirmed)
+            .unwrap_or(false);
+        let Some(cmd) = commands().iter().find(|c| c.id == params.id) else {
+            return Err(CommandResult::ShowToast {
+                message: tr("未知系统命令：{}", "Unknown system command: {}")
+                    .replace("{}", &params.id),
                 duration_ms: Some(2_500),
-            },
-            Vec::new(),
-        )
+            });
+        };
+        if cmd.dangerous && !confirmed {
+            return Err(CommandResult::Confirm {
+                title: tr("确认{}？", "Confirm {}?").replace("{}", cmd.title),
+                description: tr(
+                    "{}该操作无法撤销，确认要执行吗？",
+                    "{} This action cannot be undone. Continue?",
+                )
+                .replace("{}", cmd.confirm_description),
+                confirm_label: tr("执行{}", "Execute {}").replace("{}", cmd.title),
+                is_critical: true,
+            });
+        }
+        Ok(cmd)
+    }
+
+    pub fn handle_invoke(params: &InvokeParams) -> (CommandResult, Vec<Effect>) {
+        let cmd = match decide(params) {
+            Ok(cmd) => cmd,
+            Err(result) => return (result, Vec::new()),
+        };
+        match launch(cmd.program, cmd.args) {
+            Ok(()) => (CommandResult::Dismiss, Vec::new()),
+            Err(e) => (
+                CommandResult::ShowToast {
+                    message: tr("执行 {} 失败：{e}", "Failed to run {}: {e}")
+                        .replace("{e}", &e.to_string())
+                        .replace("{}", cmd.program),
+                    duration_ms: Some(3_000),
+                },
+                Vec::new(),
+            ),
+        }
+    }
+
+    /// 启动系统命令（unix：直接 spawn，无控制台窗口问题）。
+    fn launch(program: &str, args: &[&str]) -> Result<(), String> {
+        std::process::Command::new(program)
+            .args(args)
+            .spawn()
+            .map(|_| ())
+            .map_err(|e| e.to_string())
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        #[test]
+        fn catalog_has_five_known_commands() {
+            assert_eq!(commands().len(), 5);
+            let ids: Vec<&str> = commands().iter().map(|c| c.id).collect();
+            assert_eq!(
+                ids,
+                vec![
+                    "system.lock",
+                    "system.sleep",
+                    "system.shutdown",
+                    "system.restart",
+                    "system.logoff"
+                ]
+            );
+            // 危险项恰好三项（与 Windows 表同构）
+            assert_eq!(commands().iter().filter(|c| c.dangerous).count(), 3);
+        }
+
+        #[test]
+        fn command_programs_follow_platform() {
+            if cfg!(target_os = "macos") {
+                assert!(commands()
+                    .iter()
+                    .all(|c| c.program == "osascript" || c.program == "pmset"));
+            } else {
+                assert!(commands()
+                    .iter()
+                    .all(|c| c.program == "systemctl" || c.program == "loginctl"));
+            }
+        }
+
+        #[test]
+        fn dangerous_command_first_invoke_confirms() {
+            let p = dd_protocol::messages::InvokeParams {
+                id: "system.shutdown".into(),
+                sender: dd_protocol::model::Sender::TopLevel,
+                context: None,
+            };
+            let result = decide(&p);
+            assert!(matches!(
+                result,
+                Err(CommandResult::Confirm {
+                    is_critical: true,
+                    ..
+                })
+            ));
+        }
+
+        #[test]
+        fn dangerous_command_confirmed_then_passes_gate() {
+            let ctx = dd_protocol::messages::InvokeContext {
+                query: None,
+                selected_item_id: None,
+                form_data: None,
+                confirmed: Some(true),
+            };
+            let p = dd_protocol::messages::InvokeParams {
+                id: "system.shutdown".into(),
+                sender: dd_protocol::model::Sender::TopLevel,
+                context: Some(ctx),
+            };
+            let cmd = decide(&p).expect("confirmed=true 应绕过确认门禁");
+            assert_eq!(cmd.id, "system.shutdown");
+        }
+
+        #[test]
+        fn safe_command_passes_gate_without_confirm() {
+            let p = dd_protocol::messages::InvokeParams {
+                id: "system.lock".into(),
+                sender: dd_protocol::model::Sender::TopLevel,
+                context: None,
+            };
+            let cmd = decide(&p).expect("安全命令无需确认");
+            assert_eq!(cmd.id, "system.lock");
+        }
+
+        #[test]
+        fn unknown_id_toasts() {
+            let p = dd_protocol::messages::InvokeParams {
+                id: "system.nope".into(),
+                sender: dd_protocol::model::Sender::TopLevel,
+                context: None,
+            };
+            let result = decide(&p);
+            assert!(matches!(result, Err(CommandResult::ShowToast { .. })));
+        }
     }
 }

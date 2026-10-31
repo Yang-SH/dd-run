@@ -14,8 +14,11 @@
 //! 避免继承宿主进程不确定的 CWD（真机反馈：从任意目录启动宿主时，终端起始目录
 //! 与相对路径命令的结果都会随启动位置漂移）。
 //!
-//! 平台策略（P4 决策：Windows 优先）：Windows 实现 `cmd`；macOS / Linux
-//! （`sh`/`$SHELL`）为**编译恒成立占位**，待对应平台轮实现。
+//! 平台策略（P4 决策：Windows 优先）：Windows 实现 `cmd`；macOS / Linux 自
+//! S3 起为**真实现**——macOS `open -a Terminal`、Linux 终端模拟器依序回退，
+//! 无头执行 = `$SHELL -c`（缺省 `/bin/sh`）；S-06 确认门跨平台承接（危险词
+//! 表按 unix 命令面重定，见 not(windows) `sys` 分支）；实机行为随波次④
+//! O6 ④ 会话复验。
 //! 参考实现：[`docs/m4-record.md`](../../docs/m4-record.md) P4 决策。
 
 use crate::{i18n::tr, ExtensionSpec};
@@ -726,28 +729,393 @@ mod sys {
     }
 }
 
-/// 非 Windows 占位（P4 Windows 优先）：编译恒成立，功能待对应平台轮实现。
+/// 非 Windows 实现（S3，2026-10-31）：macOS `open -a Terminal`、Linux 依序
+/// 尝试常见终端模拟器（首个在 PATH 者即用）；无头执行 = `$SHELL -c <query>`
+/// （缺省回落 `/bin/sh`）。**S-06 确认门跨平台承接**：危险词表按 unix 命令面
+/// 重定（rm/dd/mkfs/systemctl 系…），嵌套 shell 启动器（sudo/bash/eval…）
+/// 整段过门，R-10 多段切段加入 `;`（unix 语句分隔符），反引号 / `$()` 按
+/// O9 同款「可疑信号整体过门」处理。超时 / 摘要 / 主目录口径与 Windows
+/// 分支同构；输出恒按 UTF-8（无代码页问题）。
 #[cfg(not(windows))]
 mod sys {
     use super::*;
     use crate::Effect;
+    use std::process::{Command, Stdio};
+    use std::time::{Duration, Instant};
 
-    pub fn top_level_commands() -> Vec<CommandItem> {
-        // macOS / Linux：$SHELL 打开终端与执行，TODO 对应平台轮
-        Vec::new()
+    const EXEC_TIMEOUT_MS: u64 = 3_000;
+    const MAX_SUMMARY: usize = 120;
+
+    /// 用户主目录（unix = `HOME`）：终端起始目录与无头执行工作目录统一口径
+    /// （与 Windows 分支同一理由——不继承宿主 CWD）。
+    fn home_dir() -> Option<std::path::PathBuf> {
+        std::env::var_os("HOME").map(std::path::PathBuf::from)
     }
 
-    pub fn handle_invoke(_params: &InvokeParams) -> (CommandResult, Vec<Effect>) {
-        (
-            CommandResult::ShowToast {
-                message: tr(
-                    "Shell 命令：当前平台尚未实现（P4 Windows 优先）",
-                    "Shell commands: not implemented on this platform yet (P4: Windows first)",
+    /// 无头执行解释器：`$SHELL` 缺省回落 `/bin/sh`（计划口径；CI 容器亦保底）。
+    fn user_shell() -> String {
+        std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".to_string())
+    }
+
+    /// 在 PATH 上定位可执行文件（简单逐目录查找；取首个命中）。
+    fn first_on_path(name: &str) -> Option<std::path::PathBuf> {
+        let path = std::env::var_os("PATH")?;
+        use std::os::unix::fs::PermissionsExt;
+        for dir in std::env::split_paths(&path) {
+            let candidate = dir.join(name);
+            if let Ok(md) = std::fs::metadata(&candidate) {
+                if md.is_file() && md.permissions().mode() & 0o111 != 0 {
+                    return Some(candidate);
+                }
+            }
+        }
+        None
+    }
+
+    pub fn top_level_commands() -> Vec<CommandItem> {
+        vec![CommandItem {
+            id: "shell.open_terminal".to_string(),
+            title: tr("打开终端", "Open Terminal").to_string(),
+            subtitle: Some(
+                tr(
+                    "打开新的终端窗口（用户默认 shell）",
+                    "Open a new terminal window (user default shell)",
                 )
                 .to_string(),
-                duration_ms: Some(2_500),
-            },
-            Vec::new(),
-        )
+            ),
+            icon: Some(Icon {
+                kind: IconKind::Glyph,
+                value: "\u{E756}".to_string(),
+            }),
+            section: Some(tr("Shell", "Shell").to_string()),
+            tags: Some(vec!["shell".to_string(), "terminal".to_string()]),
+            details: None,
+            text_to_suggest: None,
+            more_commands: None,
+            command: CommandRef::Invoke,
+        }]
+    }
+
+    /// 命中即需二次确认的**危险命令名**（S-06 的 unix 命令面重定）：只列
+    /// 「显然不可逆或可致数据/系统损坏」的少数命令。比对同 Windows 判据：
+    /// 去路径、大小写敏感（unix 惯例——`RM` 不是 `rm`）。
+    const DANGEROUS_COMMANDS: &[&str] = &[
+        "rm",       // 删除文件/目录
+        "rmdir",    // 删除目录
+        "dd",       // 低级写盘（of=/dev/… 不可逆）
+        "mkfs",     // 建文件系统（清卷）
+        "shred",    // 覆写删除
+        "fdisk",    // 分区操作
+        "parted",   // 分区操作
+        "chmod",    // 递归改权限可致系统不可用
+        "chown",    // 递归改属主
+        "shutdown", // 关机
+        "reboot",   // 重启
+        "halt",     // 停机
+        "poweroff", // 关机
+        "init",     // 0/6 等价关机重启
+        "kill",     // 杀进程（-9 批量）
+        "killall",  // 按名批量杀
+        "pkill",    // 按模式批量杀
+        "userdel",  // 删用户
+        "groupdel", // 删组
+        "usermod",  // 改账号
+        "visudo",   // 改 sudo 配置
+    ];
+
+    /// 嵌套 shell / 等价破坏力启动器（O9 同款保守面）：段首词命中即整段过门
+    /// ——`sudo rm …`、`bash -c "rm …"`、`eval …` 的参数破坏力不进词表。
+    const NESTED_SHELL_HEADS: &[&str] = &[
+        "sudo", "su", "doas", "sh", "bash", "dash", "zsh", "fish", "eval", "exec", "xargs",
+    ];
+
+    /// 危险命令判定（纯函数，单测覆盖）：与 Windows 判据同构——首词去路径后
+    /// 比对（unix 无扩展名惯例，`./rm` 经去路径命中）；嵌套 shell 整段过门；
+    /// `sudo -e` 一类看第二词的组合表暂无（unix 危险项以首词为主）。
+    fn is_dangerous_command(query: &str) -> bool {
+        // split_whitespace 自略前导空白（clippy trim_split_whitespace）。
+        let mut words = query.split_whitespace();
+        let Some(head) = words.next() else {
+            return false;
+        };
+        let name = head.rsplit('/').next().unwrap_or(head);
+        DANGEROUS_COMMANDS.contains(&name) || NESTED_SHELL_HEADS.contains(&name)
+    }
+
+    /// 多段命令判定（R-10 的 unix 面）：`&&` / `|` / `;` / 换行切段后每段过门
+    /// ——`;` 为 unix 语句分隔符，与 `&` 同级保守；引号内的分隔符也会切段，
+    /// 属保守方向（宁可多问一次）。反引号与 `$()`（命令替换）按 O9「可疑信号
+    /// 整体过门」处理——替换体的破坏力无法词表覆盖。
+    fn is_dangerous_query(query: &str) -> bool {
+        query.contains('`')
+            || query.contains("$(")
+            || query
+                .split(['&', '|', ';', '\r', '\n'])
+                .any(is_dangerous_command)
+    }
+
+    pub fn handle_invoke(params: &InvokeParams) -> (CommandResult, Vec<Effect>) {
+        match params.id.as_str() {
+            "shell.open_terminal" => {
+                // 统一起始目录 = 用户主目录（同 Windows 分支口径）。macOS 走
+                // `open -a Terminal`；Linux 依序尝试常见终端模拟器（首个在
+                // PATH 者即用；各模拟器默认即启动用户 shell，无需传命令）。
+                let spawned = if cfg!(target_os = "macos") {
+                    let mut c = Command::new("open");
+                    c.args(["-a", "Terminal"]);
+                    if let Some(dir) = home_dir() {
+                        c.current_dir(dir);
+                    }
+                    c.spawn().map(|_| ()).map_err(|e| e.to_string())
+                } else {
+                    match ["x-terminal-emulator", "gnome-terminal", "konsole", "xfce4-terminal", "xterm"]
+                        .iter()
+                        .find_map(|t| first_on_path(t))
+                    {
+                        Some(term) => {
+                            let mut c = Command::new(term);
+                            if let Some(dir) = home_dir() {
+                                c.current_dir(dir);
+                            }
+                            c.spawn().map(|_| ()).map_err(|e| e.to_string())
+                        }
+                        None => Err(tr(
+                            "未找到终端模拟器（尝试 x-terminal-emulator / gnome-terminal / konsole / xfce4-terminal / xterm）",
+                            "No terminal emulator found (tried x-terminal-emulator / gnome-terminal / konsole / xfce4-terminal / xterm)",
+                        )
+                        .to_string()),
+                    }
+                };
+                match spawned {
+                    Ok(_) => (CommandResult::Dismiss, Vec::new()),
+                    Err(e) => (
+                        CommandResult::ShowToast {
+                            message: tr("打开终端失败：{e}", "Failed to open terminal: {e}")
+                                .replace("{e}", &e.to_string()),
+                            duration_ms: Some(3_000),
+                        },
+                        Vec::new(),
+                    ),
+                }
+            }
+            "shell.run.query" => {
+                let query = params
+                    .context
+                    .as_ref()
+                    .and_then(|c| c.query.as_deref())
+                    .unwrap_or("")
+                    .trim();
+                if query.is_empty() {
+                    return (
+                        CommandResult::ShowToast {
+                            message: tr(
+                                "输入要执行的命令后选择「运行 …」项，例如 echo hello",
+                                "Type a command to run, then pick the “Run …” item, e.g. echo hello",
+                            )
+                            .to_string(),
+                            duration_ms: Some(2_500),
+                        },
+                        Vec::new(),
+                    );
+                }
+                // S-06 确认门（unix 面）：危险命令 / 嵌套 shell / 多段 / 命令替换
+                // 先确认；确认后宿主带 confirmed=true 重发（§8.3）。
+                let confirmed = params
+                    .context
+                    .as_ref()
+                    .and_then(|c| c.confirmed)
+                    .unwrap_or(false);
+                if !confirmed && is_dangerous_query(query) {
+                    return (
+                        CommandResult::Confirm {
+                            title: tr("确认执行危险命令？", "Run this dangerous command?")
+                                .to_string(),
+                            description: tr(
+                                "将执行：{query}\n\ndd-run 不会拦截或沙箱化任何命令：确认后将以你的用户权限直接执行，请核对命令内容再继续。",
+                                "Will run: {query}\n\ndd-run does not block or sandbox commands: on confirm it runs with your user privileges as-is. Review the command before continuing.",
+                            )
+                            .replace("{query}", query),
+                            confirm_label: tr("执行", "Run").to_string(),
+                            is_critical: true,
+                        },
+                        Vec::new(),
+                    );
+                }
+                match run_capture(&user_shell(), &["-c", query]) {
+                    Ok(output) => {
+                        let summary = summarize(&output);
+                        (
+                            CommandResult::ShowToast {
+                                message: summary,
+                                duration_ms: Some(3_000),
+                            },
+                            Vec::new(),
+                        )
+                    }
+                    Err(e) => (
+                        CommandResult::ShowToast {
+                            message: tr("执行失败：{e}", "Execution failed: {e}")
+                                .replace("{e}", &e.to_string()),
+                            duration_ms: Some(3_000),
+                        },
+                        Vec::new(),
+                    ),
+                }
+            }
+            other => (
+                CommandResult::ShowToast {
+                    message: tr("未知 shell 命令：{other}", "Unknown shell command: {other}")
+                        .replace("{other}", other),
+                    duration_ms: Some(2_500),
+                },
+                Vec::new(),
+            ),
+        }
+    }
+
+    /// 无头执行并捕获输出：与 Windows 分支同一算法（先排空管道 → 轮询等待，
+    /// 超时 kill 不 join 读线程 → join 收集 → 合并 stdout/stderr）；工作目录
+    /// 统一用户主目录。
+    fn run_capture(program: &str, args: &[&str]) -> Result<String, String> {
+        let mut command = Command::new(program);
+        command
+            .args(args)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        if let Some(dir) = home_dir() {
+            command.current_dir(dir);
+        }
+        let mut child = command.spawn().map_err(|e| format!("spawn 失败：{e}"))?;
+
+        let stdout_reader = child.stdout.take().map(spawn_pipe_reader);
+        let stderr_reader = child.stderr.take().map(spawn_pipe_reader);
+
+        let deadline = Instant::now() + Duration::from_millis(EXEC_TIMEOUT_MS);
+        loop {
+            match child.try_wait().map_err(|e| e.to_string())? {
+                Some(_) => break,
+                None => {
+                    if Instant::now() >= deadline {
+                        let _ = child.kill();
+                        let _ = child.wait();
+                        return Err(format!("执行超时（>{EXEC_TIMEOUT_MS}ms），已终止"));
+                    }
+                    std::thread::sleep(Duration::from_millis(20));
+                }
+            }
+        }
+        let _ = child.wait();
+
+        let stdout_bytes = stdout_reader
+            .map(|h| h.join().unwrap_or_default())
+            .unwrap_or_default();
+        let stderr_bytes = stderr_reader
+            .map(|h| h.join().unwrap_or_default())
+            .unwrap_or_default();
+        let mut combined = decode_output(&stdout_bytes);
+        let stderr_text = decode_output(&stderr_bytes);
+        if !stderr_text.trim().is_empty() {
+            combined.push_str(&stderr_text);
+        }
+        Ok(combined)
+    }
+
+    fn spawn_pipe_reader<R: std::io::Read + Send + 'static>(
+        mut r: R,
+    ) -> std::thread::JoinHandle<Vec<u8>> {
+        std::thread::spawn(move || {
+            let mut buf = Vec::new();
+            let _ = r.read_to_end(&mut buf);
+            buf
+        })
+    }
+
+    /// 解码子进程输出：unix 恒 UTF-8（无 Windows 代码页问题），非法字节
+    /// lossy 不 panic。
+    fn decode_output(bytes: &[u8]) -> String {
+        String::from_utf8_lossy(bytes).into_owned()
+    }
+
+    /// 结果摘要：trim、压缩多余空行、截断加省略号（与 Windows 分支同构）。
+    fn summarize(output: &str) -> String {
+        let trimmed = output.trim();
+        if trimmed.is_empty() {
+            return tr("执行完成（无输出）", "Done (no output)").to_string();
+        }
+        let compact = trimmed
+            .lines()
+            .filter(|l| !l.trim().is_empty())
+            .collect::<Vec<_>>()
+            .join(" ");
+        if compact.chars().count() > MAX_SUMMARY {
+            let head: String = compact.chars().take(MAX_SUMMARY).collect();
+            format!("{head}…")
+        } else {
+            compact
+        }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        /// S3：unix 危险词面——rm/dd/systemctl 系命中；无害命令不命中；
+        /// 去路径生效（`/bin/rm` 命中）；大小写敏感（`RM` 不命中，unix 惯例）。
+        #[test]
+        fn danger_list_covers_unix_commands() {
+            assert!(is_dangerous_command("rm -rf /tmp/x"));
+            assert!(is_dangerous_command("/bin/rm -rf /tmp/x"));
+            assert!(is_dangerous_command("dd if=x of=/dev/sda"));
+            assert!(is_dangerous_command("shutdown -h now"));
+            assert!(!is_dangerous_command("echo hello"));
+            assert!(!is_dangerous_command("ls -la"));
+            assert!(!is_dangerous_command("RM -rf /"), "unix 大小写敏感");
+        }
+
+        /// S3：嵌套 shell 启动器整段过门（sudo/bash/eval…）。
+        #[test]
+        fn nested_shell_heads_require_confirm() {
+            assert!(is_dangerous_command("sudo apt install foo"));
+            assert!(is_dangerous_command("bash -c 'echo hi'"));
+            assert!(is_dangerous_command("eval $cmd"));
+            assert!(!is_dangerous_command("sudoless-pager"), "前缀同名不误伤");
+        }
+
+        /// S3：多段 + 命令替换——`;` 切段（unix 语句分隔符）与反引号 / `$()`
+        /// 整体过门（O9 同款保守面）。
+        #[test]
+        fn multi_segment_and_substitution_trigger_confirm() {
+            assert!(is_dangerous_query("echo hi; rm -rf /tmp/x"));
+            assert!(is_dangerous_query("echo hi && rm -rf /tmp/x"));
+            assert!(is_dangerous_query("echo `rm -rf /`"));
+            assert!(is_dangerous_query("echo $(rm -rf /)"));
+            assert!(!is_dangerous_query("echo hello; ls"));
+        }
+
+        /// S3：摘要——空输出、压缩、截断（与 Windows 分支同构）。
+        #[test]
+        fn summarize_trims_and_truncates() {
+            assert_eq!(summarize("  \n "), "执行完成（无输出）");
+            assert_eq!(summarize("a\n\n\nb"), "a b");
+            let long = "x".repeat(MAX_SUMMARY + 10);
+            let out = summarize(&long);
+            assert_eq!(out.chars().count(), MAX_SUMMARY + 1, "截断 + 省略号");
+            assert!(out.ends_with('…'));
+        }
+
+        /// S3：无头执行真跑（CI/本机 unix 侧均可——`/bin/sh` 恒在）。
+        #[test]
+        fn run_capture_echoes_output() {
+            let out = run_capture("/bin/sh", &["-c", "echo hello-s3"]).unwrap();
+            assert!(out.contains("hello-s3"));
+        }
+
+        /// S3：`$SHELL` 缺省回落 `/bin/sh`（计划口径）。
+        #[test]
+        fn user_shell_falls_back_to_bin_sh() {
+            if std::env::var_os("SHELL").is_none() {
+                assert_eq!(user_shell(), "/bin/sh");
+            }
+        }
     }
 }
