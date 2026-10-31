@@ -1,0 +1,57 @@
+# 协议 fuzz（清单 §2.2 / 实施计划 §2.4，2026-10-30）：夜间**观察模式**——
+# 连续七夜零 crash 后随 S4 发版收口转阻塞（节奏沿 snapshot / bench 的
+# 「首绿观察后转正」先例）。
+#
+# 为什么独立 workflow 文件：勿向 ci.yml 加 schedule——其触发器现仅
+# push(main) / pull_request，加了 schedule 会让 build / test / 三平台 /
+# snapshot / bench 全套门禁每晚全量重跑；本文件只挂 fuzz 一个 job。
+# 与计划模板的差异（记档）：① 省略 job 级 `if: event_name == 'schedule'`——
+# 本文件除 schedule 外另有 workflow_dispatch（release.yml 先例，push 后即可
+# 手动首跑验证工具链与 target 编译，不必等到首个夜间槽），if 会拦掉它；
+# ② crash 工件不走 actions/upload-artifact——仓库既无该 action 的 SHA pin
+# （O11 全 action SHA 钉扎纪律），crash 输入改 base64 进日志（匿名可查，
+# cargo-fuzz 仍落 fuzz/artifacts/ 本地工件）。
+#
+# 工具链：cargo-fuzz 需 nightly；`RUSTUP_TOOLCHAIN: nightly` 显式覆盖仓库
+# rust-toolchain.toml（env 优先级高于文件，check-linux job 同款手法）。
+name: fuzz
+
+on:
+  schedule:
+    - cron: '0 21 * * *' # 每晚 21:00 UTC（≈ 北京 05:00），维护者可调
+  workflow_dispatch:
+
+jobs:
+  fuzz:
+    name: protocol fuzz (nightly, observation)
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    continue-on-error: true # 观察模式：七夜零 crash 后随 S4 转阻塞
+    env:
+      RUSTUP_TOOLCHAIN: nightly
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Install toolchain (nightly, minimal)
+        run: rustup toolchain install nightly --profile minimal
+
+      - name: Install cargo-fuzz (prebuilt)
+        uses: taiki-e/install-action@ab6895351a88b908e96a4697860d4ffea5e57dbe # v2
+        with:
+          tool: cargo-fuzz
+
+      - name: Fuzz decoder (NDJSON framing)
+        run: cargo fuzz run decoder -- -max_total_time=600
+
+      - name: Fuzz envelope (NDJSON envelope validation)
+        run: cargo fuzz run envelope -- -max_total_time=600
+
+      - if: failure()
+        name: Dump crash inputs to log (base64)
+        run: |
+          ls -la fuzz/artifacts 2>/dev/null || true
+          for f in fuzz/artifacts/*/*; do
+            [ -f "$f" ] || continue
+            echo "== crash input: $f (base64) =="
+            base64 -w0 "$f"; echo
+          done

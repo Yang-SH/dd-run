@@ -1,0 +1,34 @@
+# 协议 fuzz（清单 §2.2 / 实施计划 §2.4，2026-10-30）：cargo-fuzz 惯例的独立
+# crate——自带隔离 [workspace] 表（根 workspace members = crates/* 不含本目录，
+# 显式声明防意外并入），主 Cargo.lock 零新增（本 crate 产出独立 fuzz/Cargo.lock）。
+[package]
+name = "dd-run-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+
+# cargo-fuzz ≥0.13 的清单识别标记（`cargo fuzz init` 模板自带；手写清单缺它
+# 会报 "does not look like a cargo-fuzz manifest"）。
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+dd-protocol = { path = "../crates/dd-protocol" }
+libfuzzer-sys = "0.4"
+
+[[bin]]
+name = "decoder"
+path = "fuzz_targets/decoder.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "envelope"
+path = "fuzz_targets/envelope.rs"
+test = false
+doc = false
+bench = false
+
+[workspace]
+members = ["."]

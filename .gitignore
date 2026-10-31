@@ -28,3 +28,9 @@ Cargo.lock.orig
 crates/dd-gui/tests/snapshots/*.diff.png
 crates/dd-gui/tests/snapshots/*.new.png
 crates/dd-gui/tests/snapshots/*.old.png
+
+# 清单 §2.2（2026-10-30）：cargo-fuzz 运行衍生物不入库——crash 工件 /
+# 覆盖报告 / fuzz 构建树；语料种子（fuzz/corpus/）与 fuzz/Cargo.lock 入库
+/fuzz/artifacts/
+/fuzz/coverage/
+/fuzz/target/
