@@ -224,22 +224,22 @@ jobs:
 
   # B1（dd-run-改进分析.md §3.2）：UI 快照金图 job——只在本 job 显式跑
   # （`-- --ignored`；快照测试已标 #[ignore]，常规 test/clippy 不触 wgpu）。
-  # Windows runner 走 DX12 WARP 软件适配器。**continue-on-error 先行观察**：
-  # 金图为本机 GPU 生成，WARP 与本地 GPU 的像素一致性未经实测——首绿后摘除
-  # 本标记转为阻塞门禁（届时若像素漂移，在 kittest.toml 调阈值或以 CI 出图）。
+  # Windows runner 走 WARP 软件适配器。**观察期结束，2026-10-31 转阻塞**
+  # （实施计划 §4.3）：转正依据 = 金图正典迁移 CI runner（R9 run 41157013020
+  # 于本 job 重生成入库，双向对称直方图实证为确定性环境差）+ R10
+  # （run 41157930401）全绿；本地 opt-in 比对失配属已知环境差异
+  # （snapshot_tests.rs 头注记）。镜像再轮换致失配 → 按下方步骤注记的
+  # 重生成流程迁移金图，勿调宽阈值（kittest max_failed_pixels 文档红线）。
   snapshot:
     name: UI snapshots (windows, WARP)
-    # 钉 windows-2022（2026-10-31 R7 实证定案）：金图（618fee2，10-25）最后一次
-    # CI 绿 = 旧 windows-latest 镜像的 WARP 渲染；10-25 镜像轮换后新 WARP 的
-    # 文字光栅化漂移 ~700 像素/图（R7 直方图：阈值 10.0 仍 706 失败 = 非_AA 噪音
-    # 的真实像素差）。本机对金图 6/6 全绿（批次零嫌疑）→ 漂移在 runner 侧。
-    # 钉回旧镜像环境使金图零改动复配、本地与 CI 同族；比 max_failed_pixels
-    # 容差（kittest 文档红线：>10 即可遮真实回归）与「金图正典迁移 CI」
-    # （本地 opt-in 比对永久失配）两案更优。若 2022 镜像退役 → 金图需随
-    # 新正典环境重生成（UPDATE_SNAPSHOTS=1），回写时记档。
+    # 钉 windows-2022（R7 引入；R8 实证 windows-2022/latest 同款镜像轮换即
+    # 同款 WARP 漂移，钉扎不构成跨轮换保证——保留为减少浮动面的弱钉扎）。
+    # 现行金图正典 = R9（run 41157013020）于本 job 环境重生成入库（见下方
+    # 步骤注记）；镜像再轮换 → 金图随新正典环境重生成迁移
+    # （UPDATE_SNAPSHOTS=1 流程），勿以调宽 max_failed_pixels 容差代替
+    # （kittest 文档红线：>10 即可遮真实回归）。
     runs-on: windows-2022
     timeout-minutes: 30
-    continue-on-error: true
     env:
       # 同 check（windows-gnu）：覆盖仓库 rust-toolchain.toml；钉 1.98.0 理由
       # 见 check job env 注记（1.95.0/1.99.1 的 rust-mingw dlltool 需外部
@@ -309,8 +309,10 @@ jobs:
   # §4.5（dd-run-改进分析.md）：性能趋势回归——PR base 与 head 各跑一遍
   # criterion bench（fast 参数压时长），共享 CARGO_TARGET_DIR 后用
   # tools/bench_compare.mjs 比中位数，退化 >20% 才红（runner 裸机噪音大，
-  # 高阈值防误报）。**continue-on-error 观察模式**：runner 噪音分布未经
-  # 实测，首绿观察后转阻塞（与 B1 snapshot 同节奏）；仅 PR 触发（push 全量
+  # 高阈值防误报）。**continue-on-error 观察模式维持**（2026-10-31 转阻塞
+  # 预检，实施计划 §4.3）：本 job 仅 PR 触发，而仓库 CI 历史全为 push
+  # （gh 实查零 PR run）——观察数据为零，按「观察数据不足不阻塞发版」
+  # 口径随下一 PR 周期转正（清单 §3.2 记因）；仅 PR 触发（push 全量
   # 跑双份 bench 纯烧时间，main 上的性能回归由 PR 阶段拦下）。
   bench:
     name: perf trend (linux, base vs head)
