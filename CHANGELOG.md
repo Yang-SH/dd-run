@@ -4,6 +4,15 @@
 
 ## [Unreleased]
 
+### CI 基建攻坚——main 全绿恢复 + fuzz 七夜时钟起算 + 金图正典迁移（2026-10-31）
+
+- **首跑三层根因逐层剥离（R1–R10，`5e5dc95..92b0276` 十提交；终局 run 41157930401 全 job success = main 自 10-25 以来首次全绿）**：
+  - **windows-gnu / snapshot 构建腿**：runner 精简版 rust-mingw（同 commit hash 的 1.98.0，runner 侧 self-contained 仅 5 文件、无 `as.exe` 与 `libintl-8`/`libzstd`/`zlib1`，本机全量 10 文件——诊断步铁证）使 dlltool 生成 raw-dylib 导入库时 spawn `as` 失败（exit 1 / 0 字节 .lib）。修 = `RUSTFLAGS -C dlltool=` 显式路由 choco mingw-w64（binutils 2.46，真实 def 自测通过）+ 非 CRT 导入库 shim 目录 `-L` 回退（精简集缺 `libshlwapi.a` 等；CRT 关键集显式排除——choco 为 UCRT 变体，与 rust std 的 MSVCRT 运行时混用为红线）；`RUSTUP_TOOLCHAIN` 钉 1.98.0 免疫镜像漂移（rustup `stable` 为冻结安装的归因纠错一并记档）。
+  - **macOS 测试腿**：新增 bookmarks 位次断言依赖 `read_dir` 目录序（APFS ≠ ext4，linux 侧绿属运气）——改集合成员断言。
+  - **fuzz 腿**：新版 cargo-fuzz 在 x86_64 Linux 默认 musl target（nightly minimal 无 musl std + ASan×静态 musl 不兼容）——两条 run 显式 `--target x86_64-unknown-linux-gnu`。
+  - **金图腿**：镜像轮换致 runner WARP 文字光栅化漂移（对 10-25 金图 ~700–9900 像素/图非 AA 噪音失配；本机同工作副本 6/6 全绿 = 批次零嫌疑；windows-2022/latest 同款 → 钉扎不成立）——**金图正典迁移 CI runner**：`UPDATE_SNAPSHOTS=1` 于 runner 重生成 + base64 分块落日志回传入库（fuzz 工件先例，O11 零新增 action）；双向对称直方图实证（791↔791 / 771↔771 / 722↔722 / 800↔800 / 791↔791 / 9877↔9877@1.0）为确定性环境差、非内容变化；本地 opt-in 比对自此失配属已知环境差异（`snapshot_tests.rs` 头注记记档），金图护栏职责由 CI snapshot job 独担。
+- **fuzz 七夜时钟起算**：绿灯首跑 run 41150767528（decoder / envelope 双 target 各 600s 步骤级 success）= 2026-10-31 起算；连续七夜 schedule（每晚 21:00 UTC）零 crash + ≥10⁷ 次执行 → 清单 §2.2 销项 + fuzz job 随 S4 发版收口转阻塞。
+
 ### S3——内置扩展跨平台 TODO ×4 清零（macOS / Linux 真实现）（2026-10-31）
 
 - **bookmarks**：macOS（`~/Library/Application Support/Google|Microsoft Edge`）与 Linux（`~/.config/google-chrome|microsoft-edge`）书签搜索——同套 Chromium JSON 扁平化 + mtime 门控缓存；空态占位条目（顶层恒非空）。
@@ -11,7 +20,7 @@
 - **system**：macOS `pmset` / `osascript`（System Events）、Linux `systemctl` / `loginctl`——锁屏/睡眠/关机/重启/注销 5 命令，危险项（关机/重启/注销）二次确认与 Windows 表同构。
 - **shell**：macOS `open -a Terminal`、Linux 终端模拟器依序回退（x-terminal-emulator → gnome-terminal → konsole → xfce4-terminal → xterm）；无头执行 `$SHELL -c`（缺省 `/bin/sh`），3 秒超时 + 输出摘要与 Windows 同构；**S-06 危险命令确认门跨平台承接**——unix 危险词表（rm/dd/mkfs/shutdown 系）+ 嵌套启动器（sudo/bash/eval…）整段过门 + 多段命令切段含 `;` + 反引号/`$()` 整体过门。
 - **验收**：`grep "TODO 对应平台轮"` = **0**；新增 unix 面单测 18 条（随 linux/macOS CI 门禁执行）；Windows 侧 `#[cfg(windows)]` 分支**零字节改动**（行为零变化，679/0/7 守恒）；跨目标 `cargo check`/`clippy -D warnings`（x86_64-unknown-linux-gnu + aarch64-apple-darwin）全绿。实机行为（macOS 辅助功能权限、Linux 桌面环境差异）随波次④ O6 ④ 会话复验。
-- **CI 基建修复（同批落地，待 CI 实证）**：`RUSTFLAGS=-C link-self-contained=yes` 加至 ci.yml（check / snapshot）与 release.yml（release）三处 windows-gnu job——根因 = runner 镜像 10-25 前后变更致 PATH 上 mingw gcc 丢失 sysroot（`crt2.o`/`-lkernel32` not found）；rustup gnu 工具链自带 self-contained CRT（crt2.o / libkernel32.a 等全套）经本地列目录实证齐全，flag 注入机制经本地最小 crate 构建实证（无 flag 0 引用 → 有 flag 链接行引用 self-contained，二进制可跑）。
+- **CI 基建修复（同批落地，已随 push 后攻坚实证，见上条「CI 基建攻坚」）**：`RUSTFLAGS=-C link-self-contained=yes` 加至 ci.yml（check / snapshot）与 release.yml（release）三处 windows-gnu job——根因 = runner 镜像 10-25 前后变更致 PATH 上 mingw gcc 丢失 sysroot（`crt2.o`/`-lkernel32` not found）；rustup gnu 工具链自带 self-contained CRT（crt2.o / libkernel32.a 等全套）经本地列目录实证齐全，flag 注入机制经本地最小 crate 构建实证（无 flag 0 引用 → 有 flag 链接行引用 self-contained，二进制可跑）。
 - **CI 基建发现（记档）**：gh 实查——main 自 **2026-10-25** 起 CI 两连红（windows-gnu + snapshot 双 job `x86_64-w64-mingw32-gcc` 链接失败；纯 docs 提交也红 = runner 镜像漂移非代码回归；linux/macOS job 绿）；上条修复即为处置，push 后首跑实证。
 
 ### 波次②步骤 6——P2-5.4 脚手架 conformance 端到端进 CI（2026-10-31）

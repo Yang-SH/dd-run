@@ -48,15 +48,6 @@ jobs:
           rustup component add rust-mingw
           rustup component add clippy rustfmt
 
-      # P2-4.5（2026-10-25 核对轮）：rustc 对 windows-gnu 的 raw-dylib 导入库生成
-      # 需 dlltool.exe，其位置在工具链 bin/self-contained/ 子目录——部分 rustc
-      # 版本（本机 1.98.0 实测）只按 PATH 查找。追加进 GITHUB_PATH；1.98.0 的
-      # dlltool（binutils 2.44）本就自足，此步为无害 no-op 防御。
-      - name: Ensure dlltool discoverable (raw-dylib, windows-gnu)
-        run: >
-          Add-Content $env:GITHUB_PATH
-          "$env:USERPROFILE\.rustup\toolchains\1.98.0-x86_64-pc-windows-gnu\lib\rustlib\x86_64-pc-windows-gnu\bin\self-contained"
-
       # 终修（2026-10-31 四轮考古定案，诊断步证据见 run 41152821754）：runner
       # 的 rust-mingw self-contained = 精简集（dlltool / ld / gcc-wrapper /
       # libwinpthread，无 as.exe 无 libintl-8 / libzstd / zlib1——诊断步列目录
