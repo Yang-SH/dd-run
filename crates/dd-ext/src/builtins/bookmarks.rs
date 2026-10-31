@@ -764,8 +764,16 @@ mod sys {
             collect_profiles(&tmp, "Chrome", &mut out);
             let _ = std::fs::remove_dir_all(&tmp);
             assert_eq!(out.len(), 2, "Default + Profile 1 含书签文件");
-            assert_eq!(out[0].1, "Chrome");
-            assert!(out[0].0.ends_with("Default/Bookmarks"));
+            assert!(
+                out.iter().all(|(_, b)| *b == "Chrome"),
+                "浏览器名恒为 Chrome"
+            );
+            // read_dir 位次平台相关（2026-10-31 CI 实证：macos APFS 与 linux
+            // ext4 目录序不同），断言集合成员而非位次。
+            assert!(
+                out.iter().any(|(p, _)| p.ends_with("Default/Bookmarks")),
+                "Default 配置档在列"
+            );
         }
     }
 }
