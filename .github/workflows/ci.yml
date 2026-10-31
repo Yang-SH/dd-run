@@ -304,30 +304,16 @@ jobs:
       - name: Cache cargo
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
 
-      # 一次性金图重生成（2026-10-31，回写提交即还原为比对模式）：windows-2022
-      # 与 windows-latest 同款 WARP 漂移（R7/R8 实证，~700-790 像素/图，阈值
-      # 10.0 仍 700+ 失败 = 非 AA 噪音的真实像素差）→ 镜像钉扎方案不成立，
-      # 金图正典迁移至 CI runner。UPDATE_SNAPSHOTS=1 重生成后 base64 分块落
-      # 日志（fuzz crash 工件先例，O11 零新增 action），本地解码入库后本步
-      # 还原为比对模式；本地 opt-in 比对自此与新金图失配（~700px 同幅反向
-      # 漂移）属已知环境差异，随回写记档。
-      - name: Snapshot tests (golden regeneration, one-shot)
-        shell: pwsh
-        run: |
-          $env:UPDATE_SNAPSHOTS = "1"
-          cargo test -p dd-gui --lib snapshot -- --ignored
-          if ($LASTEXITCODE -ne 0) { throw "snapshot regeneration run failed (exit $LASTEXITCODE)" }
-          Get-ChildItem "crates/dd-gui/tests/snapshots/*.png" |
-            Where-Object { $_.Name -notmatch '\.(diff|new|old)\.png$' } |
-            ForEach-Object {
-              $b64 = [Convert]::ToBase64String([IO.File]::ReadAllBytes($_.FullName))
-              Write-Host "== GOLDEN-BEGIN $($_.Name) size=$($_.Length) =="
-              for ($i = 0; $i -lt $b64.Length; $i += 4000) {
-                $j = [Math]::Min(4000, $b64.Length - $i)
-                Write-Host $b64.Substring($i, $j)
-              }
-              Write-Host "== GOLDEN-END $($_.Name) =="
-            }
+      # 金图正典 = CI runner（2026-10-31 迁移记档）：GH Windows 镜像 10-25
+      # 轮换后 WARP 文字光栅化漂移，与 10-25 金图 ~700-9900 像素/图失配
+      # （本机对旧金图 6/6 全绿 = 漂移在 runner 侧；windows-2022/latest 同款
+      # = 钉扎不成立；kittest max_failed_pixels 文档红线弃用）。现行金图 =
+      # R9（run 41157013020）于本 job 重生成后入库；新金图重生成流程 =
+      # 临时换 UPDATE_SNAPSHOTS=1 + base64 落日志回传（28ce0b6 先例）→
+      # 解码入库 → 还原本步。本机 opt-in 比对失配属已知环境差异（测试模块
+      # 头注记记档），护栏职责由本 job 独担。
+      - name: Snapshot tests (golden comparison)
+        run: cargo test -p dd-gui --lib snapshot -- --ignored
 
   # §4.5（dd-run-改进分析.md）：性能趋势回归——PR base 与 head 各跑一遍
   # criterion bench（fast 参数压时长），共享 CARGO_TARGET_DIR 后用

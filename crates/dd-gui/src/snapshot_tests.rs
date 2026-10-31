@@ -18,6 +18,15 @@
 //! `UPDATE_SNAPSHOTS=1 cargo test -p dd-gui --lib snapshot -- --ignored`；
 //! 快照文件在 `crates/dd-gui/tests/snapshots/`（kittest 默认位置）。
 //! 与产品体积零关联：dev-dependencies 不进任何产物。
+//!
+//! **金图正典环境（2026-10-31 迁移，CI 基建攻坚记档）**：GH Windows 镜像
+//! 10-25 轮换后，runner WARP 文字光栅化漂移（对 10-25 金图 ~700-9900 像素/
+//! 图失配，阈值 10.0 仍 700+ 失败 = 非 AA 噪音；本机同工作副本对旧金图
+//! 6/6 全绿 → 漂移在 runner 侧；windows-2022 与 windows-latest 同款 →
+//! 钉扎方案不成立）。现行金图 = CI runner 重生成正典（R9 run
+//! 41157013020 重生成，base64 落日志回传入库）；**本地 opt-in 比对自此
+//! 失配**（~700px 同幅镜像反向失配，逐图直方图与 runner 侧对称，本机
+//! 实测记档）——属已知环境差异，金图护栏职责由 CI snapshot job 独担。
 
 use crate::app::aggregate_job::{AggregateEvent, AggregatePayload};
 use crate::settings::{Settings, ThemePref};
