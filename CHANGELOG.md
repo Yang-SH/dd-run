@@ -18,7 +18,7 @@
 
 ### 面板呈现环境诊断深查（2026-11-01）
 
-- **三栈取证**：三条二进制（0.2.1 装机版 glow / 10-25 产物 wgpu / HEAD 构建 glow）× GDI CopyFromScreen + PrintWindow(PW_RENDERFULLCONTENT) + CUA 截屏**全部白帧**；DWM 非 cloak、窗口位置正确、聚合正常（1235 命令）、panic 零——批次 D 记档的「环境级 OpenGL 呈现问题」归因修正为**呈现/合成层环境问题（MPO 硬件覆盖层首嫌，双渲染管线共性）**；kittest/wgpu 离屏全绿维持「非渲染栈代码问题」判定。
+- **三栈取证**：三条二进制（0.2.1 装机版 glow / 10-25 产物 wgpu / HEAD 构建 glow）× GDI CopyFromScreen + PrintWindow(PW_RENDERFULLCONTENT)（双法三二进制全白）+ CUA 截屏（0.2.1 轮，白）；DWM 非 cloak、窗口位置正确、聚合正常（1235 命令）、panic 零——批次 D 记档的「环境级 OpenGL 呈现问题」归因修正为**呈现/合成层环境问题（MPO 硬件覆盖层首嫌，双渲染管线共性）**；kittest/wgpu 离屏全绿维持「非渲染栈代码问题」判定。
 - **wgpu 谜底（踩坑记档）**：`target/x86_64-pc-windows-gnu/release/` 为 P2-5.7 去 pin 前旧产物位——10-25 的 `--all-targets` 构建经 dev-deps 特性统一使 eframe 双渲染器（`Renderer::default() = Wgpu`）；**HEAD 真产物在 `target/release/`**，启动验证须用新位。
 - **波次④影响不变**：本机腿仍待人眼 oracle 分叉（MPO 提升成功 = 用户可见 → 用户会话解锁；覆盖层故障 = 驱动回滚 / MPO 禁用方向修复）。
 
