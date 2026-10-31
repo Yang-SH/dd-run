@@ -14,16 +14,20 @@ jobs:
     runs-on: windows-latest
     timeout-minutes: 30
     env:
-      # A1：仓库 rust-toolchain.toml（channel 1.95.0）优先级高于 `rustup default`
-      # ——本 job 必须锁 gnu 宿主工具链（自带 self-contained 链接器，见下），
-      # 用 RUSTUP_TOOLCHAIN 显式覆盖（该变量优先于 rust-toolchain.toml）。
-      # 钉到 1.95.0（= MSRV）而非浮动 stable（2026-10-31 首跑实证）：镜像预装
-      # stable 已漂至 1.99.1，其 rust-mingw 砍掉 self-contained 的 as.exe 与
-      # 配套 DLL，dlltool 生成 raw-dylib 导入库时 CreateProcess 失败且空
-      # stderr 静默（本机装 1.99.1 复现 EXIT=1 / 0 字节 .lib；1.95.0 同测全好，
-      # PowerShell 最小 PATH 亦自足）——浮动 stable 让镜像版本漂移直接打进
-      # 门禁（10-25 crt2.o 漂移同因，一并免疫）。
-      RUSTUP_TOOLCHAIN: 1.95.0-x86_64-pc-windows-gnu
+      # A1：仓库 rust-toolchain.toml（channel 1.95.0 = MSRV）优先级高于
+      # `rustup default`——本 job 必须锁 gnu 宿主工具链（自带 self-contained
+      # 链接器，见下），用 RUSTUP_TOOLCHAIN 显式覆盖（该变量优先于
+      # rust-toolchain.toml）。
+      # 钉 1.98.0 而非浮动 stable / MSRV 1.95.0（2026-10-31 两轮 CI + 本机
+      # 逐一考古实证）：rust-mingw 在 1.95.0 与 1.99.1 的 self-contained
+      # 目录均不含 as.exe（本地列目录实证），其 dlltool（binutils 2.42）
+      # 生成 raw-dylib 导入库需 CreateProcess 外部汇编器，找不到即静默死
+      # （EXIT=1 / 0 字节 .lib，两个版本本机均复现，与 runner 签名一致；
+      # PATH 垫 as.exe / 三元组前缀 shim 均救不回——非 PATH 查找）；1.98.0
+      # （binutils 2.44）dlltool 自足，最小 PATH 亦过。镜像浮动 stable
+      # （10-31 时点 1.99.1）与此一并免疫。MSRV 1.95 由 rust-toolchain.toml
+      # 保有，本机 1.95.0-gnu 全量 check 已单独验证（台账记档）。
+      RUSTUP_TOOLCHAIN: 1.98.0-x86_64-pc-windows-gnu
       # CI 基建修复（2026-10-31）：runner 镜像 10-25 前后变更，PATH 上的
       # x86_64-w64-mingw32-gcc 丢失自家 sysroot（crt2.o / crtbegin.o /
       # -lkernel32 全部 not found，纯 docs 提交也红——非代码回归）。显式启用
@@ -35,10 +39,10 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
-      - name: Install toolchain (1.95.0-x86_64-pc-windows-gnu)
+      - name: Install toolchain (1.98.0-x86_64-pc-windows-gnu)
         run: |
-          rustup toolchain install 1.95.0-x86_64-pc-windows-gnu --profile minimal
-          rustup default 1.95.0-x86_64-pc-windows-gnu
+          rustup toolchain install 1.98.0-x86_64-pc-windows-gnu --profile minimal
+          rustup default 1.98.0-x86_64-pc-windows-gnu
           # link-self-contained=yes 的载体（rust-mingw 在 minimal profile 下的
           # required 语义有版本出入，显式补装关闭该假设；已装则 no-op）。
           rustup component add rust-mingw
@@ -46,12 +50,12 @@ jobs:
 
       # P2-4.5（2026-10-25 核对轮）：rustc 对 windows-gnu 的 raw-dylib 导入库生成
       # 需 dlltool.exe，其位置在工具链 bin/self-contained/ 子目录——部分 rustc
-      # 版本（本机 1.98.0 实测）只按 PATH 查找。追加进 GITHUB_PATH；若 runner
-      # 工具链本就无需 dlltool 则为无害 no-op（2026-10-31 钉扎后路径随 1.95.0）。
+      # 版本（本机 1.98.0 实测）只按 PATH 查找。追加进 GITHUB_PATH；1.98.0 的
+      # dlltool（binutils 2.44）本就自足，此步为无害 no-op 防御。
       - name: Ensure dlltool discoverable (raw-dylib, windows-gnu)
         run: >
           Add-Content $env:GITHUB_PATH
-          "$env:USERPROFILE\.rustup\toolchains\1.95.0-x86_64-pc-windows-gnu\lib\rustlib\x86_64-pc-windows-gnu\bin\self-contained"
+          "$env:USERPROFILE\.rustup\toolchains\1.98.0-x86_64-pc-windows-gnu\lib\rustlib\x86_64-pc-windows-gnu\bin\self-contained"
 
       - name: Cache cargo
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
@@ -186,19 +190,20 @@ jobs:
     timeout-minutes: 30
     continue-on-error: true
     env:
-      # 同 check（windows-gnu）：覆盖仓库 rust-toolchain.toml；钉 1.95.0（=
-      # MSRV）理由见 check job env 注记——1.99.1 的 rust-mingw dlltool 回归。
-      RUSTUP_TOOLCHAIN: 1.95.0-x86_64-pc-windows-gnu
+      # 同 check（windows-gnu）：覆盖仓库 rust-toolchain.toml；钉 1.98.0 理由
+      # 见 check job env 注记（1.95.0/1.99.1 的 rust-mingw dlltool 需外部
+      # 汇编器且 self-contained 不含 as.exe，1.98.0 自足）。
+      RUSTUP_TOOLCHAIN: 1.98.0-x86_64-pc-windows-gnu
       # CI 基建修复（2026-10-31）：同 check job——显式启用自带 self-contained
       # CRT，链接不再依赖 runner 预装 mingw 的完整性（10-25 起镜像漂移）。
       RUSTFLAGS: -C link-self-contained=yes
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
-      - name: Install toolchain (1.95.0-x86_64-pc-windows-gnu)
+      - name: Install toolchain (1.98.0-x86_64-pc-windows-gnu)
         run: |
-          rustup toolchain install 1.95.0-x86_64-pc-windows-gnu --profile minimal
-          rustup default 1.95.0-x86_64-pc-windows-gnu
+          rustup toolchain install 1.98.0-x86_64-pc-windows-gnu --profile minimal
+          rustup default 1.98.0-x86_64-pc-windows-gnu
           # link-self-contained=yes 的载体（rust-mingw 在 minimal profile 下的
           # required 语义有版本出入，显式补装关闭该假设；已装则 no-op）。
           rustup component add rust-mingw
@@ -208,7 +213,7 @@ jobs:
       - name: Ensure dlltool discoverable (raw-dylib, windows-gnu)
         run: >
           Add-Content $env:GITHUB_PATH
-          "$env:USERPROFILE\.rustup\toolchains\1.95.0-x86_64-pc-windows-gnu\lib\rustlib\x86_64-pc-windows-gnu\bin\self-contained"
+          "$env:USERPROFILE\.rustup\toolchains\1.98.0-x86_64-pc-windows-gnu\lib\rustlib\x86_64-pc-windows-gnu\bin\self-contained"
 
       - name: Cache cargo
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
