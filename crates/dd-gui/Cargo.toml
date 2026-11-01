@@ -95,7 +95,7 @@ egui_kittest = { version = "0.36", features = ["wgpu", "snapshot", "eframe"] }
 # 清单 §2.4（2026-10-29）：panel_draw 判定腿的硬件适配器变体——绕开 kittest
 # 默认「CPU 软件适配器优先」选择器需显式构造 `WgpuSetupCreateNew`（类型在
 # egui-wgpu）。树内已有同版本（egui_kittest → egui-wgpu 0.36.2）→ lock 零新增。
-egui-wgpu = "0.36"
+egui-wgpu = "0.37"
 
 # ── §4.5（dd-run-改进分析.md）：性能门槛 bench（仅 dev/测试编译，不进产物）──
 # 首屏热路径基线：FuzzyMatcher::score / set_query（含 recompute_visible）/ flatten。
