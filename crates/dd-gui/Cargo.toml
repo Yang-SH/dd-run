@@ -37,7 +37,7 @@ chrono = "0.4"
 # `FontDefinitions::default()` 在无该特性时返回空集，platform.rs 以其作基底
 # 的叠加逻辑不受影响。副作用：用户数据（书签/结果标题）中的 emoji 不再有
 # NotoEmoji 兜底，属接受的取舍（真机走查腿复核）。
-eframe = { version = "0.36", default-features = false, features = ["glow", "x11", "wayland"] } # x11/wayland：Linux 后端（O6 首批，Windows/macOS 目标无作用）
+eframe = { version = "0.37", default-features = false, features = ["glow", "x11", "wayland"] } # x11/wayland：Linux 后端（O6 首批，Windows/macOS 目标无作用）
 windows-sys = { version = "0.61", features = [
     "Win32_Foundation",
     "Win32_UI_Input_KeyboardAndMouse",
@@ -90,7 +90,7 @@ global-hotkey = "0.8"
 #（刻意不注入系统字体：runner 镜像更新会漂移；内置字体无 CJK，中文渲染为
 # 方块但同样逐字节确定，布局回归不受影响）。lock 新增依赖仅 dev 面。
 [dev-dependencies]
-eframe = { version = "0.36", features = ["default_fonts"] }
+eframe = { version = "0.37", features = ["default_fonts"] }
 egui_kittest = { version = "0.36", features = ["wgpu", "snapshot", "eframe"] }
 # 清单 §2.4（2026-10-29）：panel_draw 判定腿的硬件适配器变体——绕开 kittest
 # 默认「CPU 软件适配器优先」选择器需显式构造 `WgpuSetupCreateNew`（类型在
