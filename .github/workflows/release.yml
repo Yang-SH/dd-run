@@ -95,7 +95,7 @@ jobs:
           Write-Host "RUSTFLAGS routed via GITHUB_ENV"
 
       - name: Cache cargo
-        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
 
       # O14 密钥仪式配套（核对产出修正）：secret DDRUN_SIGN_KEY 存的是 64 字符
       # hex 种子**内容**，而 package.sh §6.5 签名钩子按**文件路径**消费（-f 判定
@@ -198,7 +198,7 @@ jobs:
         run: rustup toolchain install stable --profile minimal && rustup default stable
 
       - name: Cache cargo
-        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
 
       # package.sh 非 Windows 分支：显式 --target 宿主三元组（§5.7 去 pin 后
       # 与宿主默认一致，保留为显式声明；与 ci.yml 门禁 CARGO_BUILD_TARGET 同语义），
@@ -237,7 +237,7 @@ jobs:
         run: rustup toolchain install stable --profile minimal && rustup default stable
 
       - name: Cache cargo
-        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
 
       - name: Build & package (macOS tar.gz)
         run: bash tools/package.sh

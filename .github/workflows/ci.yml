@@ -101,7 +101,7 @@ jobs:
           Write-Host "RUSTFLAGS routed via GITHUB_ENV"
 
       - name: Cache cargo
-        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
 
       # §5.7：config.toml 不再钉扎 build.target——构建 target = RUSTUP_TOOLCHAIN
       # 的宿主三元组（windows-gnu）；rustup 的 gnu 工具链自带 self-contained
@@ -185,7 +185,7 @@ jobs:
         run: rustup toolchain install stable --profile minimal && rustup default stable
 
       - name: Cache cargo
-        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
 
       - name: Build (workspace, all targets)
         run: cargo build --workspace --all-targets
@@ -293,7 +293,7 @@ jobs:
           Write-Host "RUSTFLAGS routed via GITHUB_ENV"
 
       - name: Cache cargo
-        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
 
       # 金图正典 = CI runner（2026-10-31 迁移记档）：GH Windows 镜像 10-25
       # 轮换后 WARP 文字光栅化漂移，与 10-25 金图 ~700-9900 像素/图失配
@@ -333,7 +333,7 @@ jobs:
         run: rustup toolchain install stable --profile minimal && rustup default stable
 
       - name: Cache cargo
-        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
 
       - name: Checkout PR base as sibling worktree
         run: git worktree add ../dd-run-base "${{ github.event.pull_request.base.sha }}"
@@ -371,7 +371,7 @@ jobs:
         run: rustup toolchain install stable --profile minimal && rustup default stable
 
       - name: Cache cargo
-        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
 
       - name: Build (workspace, all targets)
         run: cargo build --workspace --all-targets
