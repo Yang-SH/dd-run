@@ -25,6 +25,12 @@
 - **Duplication 探针尝试（time-boxed，已放弃；核对轮口径修正）**：自建 DXGI Desktop Duplication 探针（Rust + windows crate，%TEMP% 零仓库改动）——**有证据的发现**：面板开启、查询光标持续闪烁的 ~30s 窗口内零帧（逐轮 HRESULT 确认 WAIT_TIMEOUT）= **面板内容（含光标闪烁）未达桌面合成**——与 GDI/PrintWindow/CUA 三栈白帧构成四个独立 API 族的一致证据；**无证据而撤回的声称**：「连 Start 动画都零帧 → API 整体失聪」——对照腿因按键投递两次失败（`activation_failed`）从未发生，不成立；探针路径放弃，decisive oracle = 人眼。
 - **扫描输出测定（对照腿复活探针后的决定性发现）**：`start calc` 开窗触发帧事件但**帧内容 = 全屏平坦暗灰**（无任何窗口内容；BGRA8 非 HDR）；DXGI 拓扑实证 RX 580 唯一 attached 输出即探针目标、GameViewer IDD 无 DXGI 输出 → **本地 scanout 与桌面合成断裂**（OS 级全机性；合成层正常——用户正常交互）→ dd-run 面板白帧 = 合成内的应用级 present 失败、与 scanout 断裂相互独立；用户视角（极可能远程读合成）与四栈捕获同源 → **面板白帧对用户视角同样成立**；波次④解锁 = KB 卸载 / MPO 禁用后以四栈捕获复测（无需本地屏）。
 
+### 面板白帧修复闭环 + 批次 D/E 真机冒烟补齐（2026-11-01）
+
+- **修复（MPO 禁用，维护者选定先试）**：`HKLM\SOFTWARE\Microsoft\Windows\Dwm\OverlayTestMode=5` + `HKLM\SOFTWARE\Microsoft\Windows\DxgKrnl\DisableOverlays=1` 双值 UAC 提权写入并回读验证——执行前口径核验：本机实为 **Win11 25H2（build 26200）**，经典值在 24H2+ 已不可靠（Winhance #494），25H2 主效值 = `DxgKrnl\DisableOverlays`，双值并写；删值 + 重启即回退。
+- **四栈复测（3 绿 1 残）**：GDI CopyFromScreen（distinct 85 / white 0.3%，修复前 99.3% 白）、PrintWindow FRC（86 / 0.5%）、CUA 窗口截屏（2763 完整内容）三栈见面板内容 + 全屏 GDI 对照 1357 色 = **合成层疾病解除、波次④解锁**；DXGI duplication 全屏纯黑 = 本地 scanout 断裂残病仍在（形态由平坦暗灰变异为纯黑），独立于应用级 present、不阻塞远程操作视角（本地物理屏恢复需求保留 KB 卸载候选）。
+- **批次 D/E 冒烟五腿全绿（§6.3 余腿）**：热键唤起逐坐标吻合 + 方向键选中跟随 / Enter 执行三证（toast「已写入剪贴板」+ 剪贴板实测「= 2」+ usage 双计数）/ Esc 隐藏与设置页返回（与 `GoBack` 语义逐字吻合）/ 设置页外观与扩展卡全渲染（与 config.json 逐项一致）/ Ctrl+F 本机按设计优雅降级（文件搜索扩展缺位 toast）。清场复原：usage.json 还原、常驻 0.2.1 重启、config.json 零触碰。
+
 ### 波次③ 步骤 1–2——发版准备：CHANGELOG 归段 + snapshot 转阻塞（2026-10-31）
 
 - **CHANGELOG 归段**（[实施计划](./docs/实施计划-2026-10-28.md) §4.2 / 清单 §6.2）：`[Unreleased]` **27 个批次小节**逐节清点零丢失，归段为 `[0.3.0]` 发版段并补本「发布摘要」；核对轮补载批次 A（platform 目录化，10-21 落库漏登）专节——**发版段计 28 节**；**版本号 0.3.0** 依据 §4.2 内容判据（含批次 B–E 结构重构 + 三个新门禁 → 建议 minor，tag 前可由维护者改定）；README 中英版本口径 v0.2.1 → v0.3.0 同步（产物字节数沿 0.2.1 实测值，随发版批以 0.3.0 产物实测回填；顺带修正 README 叙事行「v0.2.0 published」漏更 v0.2.1 的存量问题）。
