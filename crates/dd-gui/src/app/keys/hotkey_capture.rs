@@ -138,6 +138,63 @@ impl PaletteApp {
             });
     }
 
+    /// N17：命令槽绑定保存（对话框「保存」路径，capture_target = CommandSlot）
+    /// ——校验（关键词命中 / 组合键冲突 / 槽位上限）→ 写设置 + 落盘 + 槽位
+    /// 同步注册；失败行内报错（`command_slot_err`）+ 候选保留可重试；成功关
+    /// 捕获 + toast。**不走 slot 0 的 seq 确认流**：槽位注册无「失败回滚」语义
+    /// （失败槽位不生效，设置卡如实呈现），结果经 CommandSlots 事件 toast。
+    pub(crate) fn apply_command_slot(&mut self, mods: u32, vk: u32) {
+        let hk = crate::settings::CommandHotkey {
+            mods,
+            vk,
+            keyword: self.hotkeys.command_slot_keyword.clone(),
+        };
+        match self.draft.settings.validate_command_hotkey(&hk) {
+            Err(e) => {
+                self.hotkeys.hotkey_apply_failed = false;
+                self.hotkeys.command_slot_err = Some(e);
+            }
+            Ok(()) => {
+                self.draft.settings.command_hotkeys.push(hk);
+                self.save_settings_with_feedback();
+                self.sync_command_hotkey_slots();
+                self.end_hotkey_capture();
+                self.hotkeys.command_slot_err = None;
+                self.show_toast(
+                    crate::text::t(self.view.lang_effective, "toast.command_slot_saved"),
+                    Some(4_000),
+                );
+            }
+        }
+    }
+
+    /// N17：命令热键槽同步——按 `settings.command_hotkeys` 打包发线程批量重
+    /// 注册（generation 自增配对；slot 0 不动）。设置卡增删/启动装配共用。
+    pub fn sync_command_hotkey_slots(&mut self) {
+        self.hotkeys.slots_generation = self.hotkeys.slots_generation.wrapping_add(1);
+        let generation = self.hotkeys.slots_generation;
+        let slots: Vec<(u32, u32)> = self
+            .draft
+            .settings
+            .command_hotkeys
+            .iter()
+            .map(|h| (h.mods, h.vk))
+            .collect();
+        #[cfg(windows)]
+        {
+            let packed = crate::hotkey::pack_command_slots(&slots);
+            self.hotkeys.hotkey.re_register_slots(packed, generation);
+        }
+        #[cfg(not(windows))]
+        {
+            let mut arr = [(0u32, 0u32); 3];
+            for (i, (m, v)) in slots.iter().take(3).enumerate() {
+                arr[i] = (*m, *v);
+            }
+            self.hotkeys.hotkey.re_register_slots(arr, generation);
+        }
+    }
+
     /// 退出捕获模式并卸载钩子（Esc / 取消 / 超时 / 隐藏 / 保存成功共用出口）。
     /// 候选一并丢弃；**在途确认保留**——注册结果仍会回发，成功照常落设置
     ///（热键已真实注册，设置必须记录），失败转 toast（对话框已关，行内不可见）。
@@ -161,6 +218,27 @@ impl PaletteApp {
             self.end_hotkey_capture();
             return;
         }
+        self.hotkeys.capture_target = crate::app::CaptureTarget::Slot0;
+        self.hotkeys.command_slot_err = None;
+        self.begin_capture();
+    }
+
+    /// N17：设置页「录制组合键」（命令槽绑定）——与 slot 0 捕获共用模态，
+    /// `capture_target = CommandSlot`：对话框「保存」按目标路由（校验 +
+    /// 槽位同步，不走 seq 确认流）；关键词在对话框内下拉选择。
+    pub(crate) fn start_command_hotkey_capture(&mut self) {
+        if self.hotkeys.hotkey_capturing {
+            self.end_hotkey_capture();
+            return;
+        }
+        self.hotkeys.capture_target = crate::app::CaptureTarget::CommandSlot;
+        self.hotkeys.command_slot_err = None;
+        self.hotkeys.command_slot_keyword = String::new();
+        self.begin_capture();
+    }
+
+    /// 捕获公共装配（flags + LL 钩子异步安装；Windows 主路径 + egui 回落）。
+    fn begin_capture(&mut self) {
         self.hotkeys.hotkey_capturing = true;
         self.hotkeys.capture_started = Some(Instant::now());
         self.hotkeys.capture_failed = false;

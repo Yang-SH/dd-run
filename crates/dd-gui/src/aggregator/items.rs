@@ -133,6 +133,13 @@ pub fn custom_command_items(cmds: &[CustomCommand], lang: Lang) -> Vec<PanelItem
             } else {
                 c.target.clone()
             };
+            // 加固④（2026-11-22）：失效直达行结构化标记——渲染层右列 danger
+            // 「路径不存在」按 tag 判定（is_file_item 的 "files" tag 先例；副标题
+            // 前缀文案匹配受语言切换影响，弃用）。
+            let mut tags = segs;
+            if missing {
+                tags.push("invalid".to_string());
+            }
             PanelItem {
                 id: format!("{CUSTOM_ITEM_PREFIX}{primary}"),
                 ext_id: HOST_CUSTOM_EXT_ID.to_string(),
@@ -140,7 +147,7 @@ pub fn custom_command_items(cmds: &[CustomCommand], lang: Lang) -> Vec<PanelItem
                 subtitle,
                 section: section.clone(),
                 icon: None,
-                tags: segs,
+                tags,
                 result_category: Some(section.clone()),
                 pinyin: crate::state::pinyin_haystack(&c.title),
                 command: dd_protocol::model::CommandRef::Invoke,
@@ -198,8 +205,158 @@ fn category_label_for(ext_id: &str, lang: Lang) -> &'static str {
         "system" => "cat.system",
         "websearch" => "cat.websearch",
         "bookmarks" => "cat.bookmarks",
+        // N16：窗口切换器（com.ddrun.windows）
+        "windows" => "cat.windows",
         // calc / shell / 第三方统一归为「命令」
         _ => "cat.command",
     };
     text::t(lang, key)
+}
+
+// ── N11：空查询首屏——置顶分组与最近文件（2026-11-22）────────────────────────
+
+/// N11：置顶键判族——apps 行 id 随枚举漂移（N2 注记）→ `app:{显示名}` 片段键
+/// （与屏蔽名单同机制反相）；其余走稳定 `usage_key(ext_id, item_id)` 族。
+pub fn pin_key_for(item: &PanelItem) -> String {
+    if item.ext_id == "com.ddrun.apps" {
+        format!("app:{}", item.title)
+    } else {
+        crate::usage::usage_key(&item.ext_id, &item.id)
+    }
+}
+
+/// N11：按 `pinned_keys`（添加序）抽出置顶项并重标分组——组内保持置顶添加序
+/// （不按频次重排，方案 §4.6 边界）；命中项从原分组移出（避免同项双显）。
+/// 返回 (置顶组, 其余项)；键未命中任何条目时静默跳过（应用已卸载等失效键）。
+pub fn extract_pinned(
+    items: Vec<PanelItem>,
+    pinned_keys: &[String],
+    pinned_section: &str,
+) -> (Vec<PanelItem>, Vec<PanelItem>) {
+    let mut pinned = Vec::new();
+    let mut taken = vec![false; items.len()];
+    for key in pinned_keys {
+        for (i, item) in items.iter().enumerate() {
+            if !taken[i] && pin_key_for(item) == *key {
+                taken[i] = true;
+                let mut it = item.clone();
+                it.section = pinned_section.to_string();
+                pinned.push(it);
+                break;
+            }
+        }
+    }
+    let rest = items
+        .into_iter()
+        .enumerate()
+        .filter(|(i, _)| !taken[*i])
+        .map(|(_, it)| it)
+        .collect();
+    (pinned, rest)
+}
+
+/// N11：Recent 目录条目（枚举原始态——PanelItem 组装与 fs 枚举解耦，可注入
+/// fixture 单测）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RecentEntry {
+    /// lnk 文件完整路径（条目 id 与执行目标共用）。
+    pub path: String,
+    /// 文件名（含 .lnk 扩展名；标题取去扩展名 stem）。
+    pub name: String,
+    /// 修改时间（排序键 = mtime 降序）。
+    pub modified: std::time::SystemTime,
+}
+
+/// N11：枚举 Recent 目录 `*.lnk`，mtime 降序前 `limit` 条。目录不存在/读取
+/// 失败 → 空表（首屏无该分组，不产生错误态）；扩展名大小写不敏感。
+pub fn enumerate_recent(dir: &std::path::Path, limit: usize) -> Vec<RecentEntry> {
+    let Ok(rd) = std::fs::read_dir(dir) else {
+        return Vec::new();
+    };
+    let mut out: Vec<RecentEntry> = rd
+        .filter_map(|e| e.ok())
+        .filter(|e| {
+            e.path()
+                .extension()
+                .and_then(|x| x.to_str())
+                .map(|x| x.eq_ignore_ascii_case("lnk"))
+                .unwrap_or(false)
+        })
+        .filter_map(|e| {
+            let modified = e.metadata().ok()?.modified().ok()?;
+            Some(RecentEntry {
+                path: e.path().display().to_string(),
+                name: e.file_name().to_string_lossy().into_owned(),
+                modified,
+            })
+        })
+        .collect();
+    out.sort_by_key(|b| std::cmp::Reverse(b.modified));
+    out.truncate(limit);
+    out
+}
+
+/// N11：最近文件条目组装（宿主虚拟：id = `recent:<路径>`，宿主内部分发
+/// `open_path`——零 COM，不解析 lnk 目标，直接执行 lnk 本体；标题 = 去扩展名
+/// 文件名，副标题 = 修改日期[本地时区]。失效 lnk 不预校验——执行失败走既有
+/// 错误 toast，方案 §4.6 口径）。
+pub fn recent_file_item(entry: &RecentEntry, section: &str, lang: Lang) -> PanelItem {
+    // 用 `file_stem` 去扩展名（对 `.lnk` / `.LNK` / 混合大小写一致——与枚举侧
+    // 的大小写不敏感过滤对齐；2026-11-22 复核轮）。
+    let title = std::path::Path::new(&entry.name)
+        .file_stem()
+        .map(|s| s.to_string_lossy().into_owned())
+        .unwrap_or_else(|| entry.name.clone());
+    let date = chrono::DateTime::<chrono::Local>::from(entry.modified)
+        .format("%Y-%m-%d %H:%M")
+        .to_string();
+    PanelItem {
+        id: format!("recent:{}", entry.path),
+        ext_id: HOST_CUSTOM_EXT_ID.to_string(),
+        pinyin: crate::state::pinyin_haystack(&title),
+        title,
+        subtitle: date,
+        section: section.to_string(),
+        icon: None,
+        tags: Vec::new(),
+        result_category: Some(category_label_for(HOST_CUSTOM_EXT_ID, lang).to_string()),
+        command: dd_protocol::model::CommandRef::Invoke,
+        more_commands: Vec::new(),
+    }
+}
+
+// ── N18：文本片段（2026-11-22）──────────────────────────────────────────────
+
+/// N18：文本片段 → 宿主虚拟条目（N1 同范式）：id = `snippet:{keyword}`（宿主
+/// 内部分发 → 剪贴板）、title = name（拼音索引含关键词）、subtitle = 正文首行
+/// 截断预览（>80 字符或含换行补省略号）、分组「片段」。纯函数可单测。
+pub fn snippet_items(
+    snippets: &[crate::settings::Snippet],
+    section: &str,
+    lang: Lang,
+) -> Vec<PanelItem> {
+    snippets
+        .iter()
+        .map(|sn| {
+            let first_line = sn.text.lines().next().unwrap_or("");
+            let mut preview: String = first_line.chars().take(80).collect();
+            if sn.text.contains('\n') || sn.text.chars().count() > preview.chars().count() {
+                preview.push('…');
+            }
+            let title = sn.name.clone();
+            PanelItem {
+                id: format!("snippet:{}", sn.keyword),
+                ext_id: HOST_CUSTOM_EXT_ID.to_string(),
+                pinyin: crate::state::pinyin_haystack(&format!("{title} {}", sn.keyword)),
+                title,
+                subtitle: preview,
+                section: section.to_string(),
+                icon: None,
+                tags: vec![sn.keyword.clone()],
+                result_category: Some(category_label_for(HOST_CUSTOM_EXT_ID, lang).to_string()),
+                command: dd_protocol::model::CommandRef::Invoke,
+                more_commands: Vec::new(),
+            }
+        })
+        .collect()
 }

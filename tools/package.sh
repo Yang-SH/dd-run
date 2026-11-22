@@ -129,13 +129,19 @@ if [ -d "$SELF_CONTAINED" ]; then
 fi
 TOOLCHAIN="+stable-x86_64-pc-windows-gnu"
 
-REL="target/x86_64-pc-windows-gnu/release"
+# 2026-11-22（核对轮）：显式 `--target` 与 REL 对齐——`config.toml` 自 P2-5.7 起
+# 不再钉扎 `build.target`，不带 `--target` 时产物落 `target/release`，而 REL 指向
+# `target/<triple>/release` → 会**静默拷到旧代际二进制**（实测：dist 出
+# 16,205,312 B 的 10-25 旧件，当次新构建的 9,263,104 B 未被取用；sidecar 同为
+# 10-11 旧件 832,512 B）。两条路径都显式声明，避免「构建成功但包是旧的」。
+TARGET="x86_64-pc-windows-gnu"
+REL="target/${TARGET}/release"
 EMBED="crates/dd-gui/assets/embed"
 
 # 2) 构建 dd-ext（release）——产出 5 个内置 bin（dev/调试 + 第三方兼容，不内嵌）
 #    与文件搜索 sidecar dd-ext-search.exe（下一步复制到 dist/extensions.d/）。
 echo "==> [1/4] 构建 dd-ext（release）"
-cargo ${TOOLCHAIN} build --release -p dd-ext
+cargo ${TOOLCHAIN} build --release --target "$TARGET" -p dd-ext
 
 # 3) 清理 assets/embed/ 中残留的内置 exe（M9 起不再内嵌；确保 build.rs 恒生成空表）。
 echo "==> [2/4] 清理内嵌目录（M9 起不再内嵌内置）"
@@ -144,7 +150,7 @@ rm -f "$EMBED"/*.exe
 
 # 4) 构建宿主 dd-gui → 产物 dd-run.exe（build.rs 见 assets/embed 无 exe → 不内嵌）。
 echo "==> [3/4] 构建宿主 dd-gui（→ dd-run.exe，纯宿主单文件）"
-cargo ${TOOLCHAIN} build --release -p dd-gui --bin dd-run
+cargo ${TOOLCHAIN} build --release --target "$TARGET" -p dd-gui --bin dd-run
 
 # 5) 归集单文件到 dist/
 echo "==> [4/4] 产出单文件到 dist/"
@@ -165,7 +171,7 @@ cp examples/extensions.d/com.ddrun.filesearch.json dist/extensions.d/
 # 跳过，产物不含 .sig，宿主对随包扩展回落信任同意流（R-12 钉扎仍生效）。
 if [ -n "${DDRUN_SIGN_KEY:-}" ] && [ -f "${DDRUN_SIGN_KEY}" ]; then
   echo "==> 签发随包扩展 .sig（发行方钥，O14/F12 批次二）"
-  cargo ${TOOLCHAIN} build --release -p dd-run-cli
+  cargo ${TOOLCHAIN} build --release --target "$TARGET" -p dd-run-cli
   "${REL}/dd-run-cli.exe" --sign-ext \
     --manifest dist/extensions.d/com.ddrun.filesearch.json \
     --exe dist/extensions.d/dd-ext-search.exe \
@@ -179,7 +185,7 @@ fi
 # dist/dev 的 dd-run-cli.exe 是 O14 批次二之前的版本，缺 --gen-sign-key 等子命令）。
 DEV="dist/dev"
 mkdir -p "$DEV"
-cargo ${TOOLCHAIN} build --release -p dd-run-cli -p dd-ext-sample
+cargo ${TOOLCHAIN} build --release --target "$TARGET" -p dd-run-cli -p dd-ext-sample
 cp "${REL}/dd-run-cli.exe"   "$DEV/" 2>/dev/null || true
 cp "${REL}/dd-ext-sample.exe" "$DEV/" 2>/dev/null || true
 echo "（可选自检工具已放 $DEV/：dd-run-cli.exe、dd-ext-sample.exe）"

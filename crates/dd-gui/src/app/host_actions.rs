@@ -315,6 +315,64 @@ impl PaletteApp {
         log::debug!("[dd-gui] 应用已加入屏蔽名单：{name}");
     }
 
+    /// N11（2026-11-22）：置顶/取消置顶切换——pinned_keys 幂等切换（达上限
+    /// 淘汰最旧）+ 落盘 + 重聚合脏标记（下一次重聚合后置顶分组即时生效）。
+    pub(crate) fn toggle_pinned(&mut self, key: String) {
+        let added = crate::settings::toggle_pinned_key(&mut self.draft.settings.pinned_keys, &key);
+        self.save_settings_with_feedback();
+        self.draft.engines_dirty = true;
+        self.show_toast(
+            self.tr(if added {
+                "toast.pinned"
+            } else {
+                "toast.unpinned"
+            }),
+            None,
+        );
+        log::debug!("[dd-gui] 置顶切换：{key} → {added}");
+    }
+
+    /// N11：打开最近文件条目（`recent:<路径>` → `platform::open_path` 双击
+    /// 等价；失效/失败 → 既有错误 toast——方案 §4.6「失效 lnk 走既有失败
+    /// toast」口径）。
+    pub(crate) fn open_recent_file(&mut self, path: &str) {
+        match crate::platform::open_path(path) {
+            Ok(()) => log::debug!("[dd-gui] 打开最近文件：{path}"),
+            Err(e) => self.show_error_toast(self.tr("toast.recent_open_fail").replace("{e}", &e)),
+        }
+    }
+
+    /// N18：复制片段到剪贴板（R-07 工作线程队列——UI 线程不阻塞；结果 toast
+    /// 由 poll_clipboard_results 统一反馈；S-07 上限语义沿用）。
+    pub(crate) fn copy_snippet(&mut self, keyword: &str) {
+        let Some(sn) = self
+            .draft
+            .settings
+            .snippets
+            .iter()
+            .find(|x| x.keyword == keyword)
+            .cloned()
+        else {
+            log::warn!("[dd-gui] 片段 {keyword} 已不存在（配置已删除），忽略复制");
+            return;
+        };
+        match self.view.clipboard_tx.as_ref() {
+            Some(tx) => {
+                let _ = tx.send(crate::app::clipboard_worker::ClipboardRequest {
+                    ext_id: crate::aggregator::HOST_CUSTOM_EXT_ID.to_string(),
+                    text: sn.text,
+                });
+            }
+            None => {
+                self.show_error_toast(
+                    self.tr("toast.clipboard_fail")
+                        .replace("{id}", "snippet")
+                        .replace("{e}", "clipboard worker unavailable"),
+                );
+            }
+        }
+    }
+
     /// N19（2026-11-21）：一键转自定义命令——把来源条目的 title/target/kind
     /// **预填**进设置卡输入缓冲（不静默写配置；关键词留空由用户填写）。
     pub(crate) fn prefill_custom_command(

@@ -368,6 +368,10 @@ impl PaletteApp {
         let warm_selected = self.draft.settings.warm_capacity as usize - 1;
         let mut warm_picked: Option<u8> = None;
         let warm_combo_w = dropdown_width(ui, &warm_labels);
+        // 加固③：临界实时提示数据（克隆进闭包避免借位冲突）——已装扩展数
+        // （内置 + sidecar 清单，pool.exts）vs 当前容量。
+        let warm_installed = self.pool.exts.len();
+        let warm_cap = self.draft.settings.warm_capacity as usize;
         draw_settings_card_frame(ui, p, self.window.backdrop_active, |card| {
             card.horizontal(|ui| {
                 ui.spacing_mut().item_spacing.x = 0.0;
@@ -406,6 +410,28 @@ impl PaletteApp {
                                 )
                                 .wrap(),
                             );
+                            // 加固③：临界实时提示——已装 N 个 / 容量 M；N ≥ M 时
+                            // 追加 danger 警告行（纯展示防呆，不动池逻辑/默认值）。
+                            ui.add_space(2.0);
+                            ui.label(
+                                egui::RichText::new(
+                                    crate::text::t(lang_eff, "set.warm_capacity.dynamic")
+                                        .replace("{n}", &warm_installed.to_string())
+                                        .replace("{m}", &warm_cap.to_string()),
+                                )
+                                .size(12.0)
+                                .color(p.text3),
+                            );
+                            if warm_installed >= warm_cap {
+                                ui.label(
+                                    egui::RichText::new(crate::text::t(
+                                        lang_eff,
+                                        "set.warm_capacity.warn",
+                                    ))
+                                    .size(12.0)
+                                    .color(p.danger),
+                                );
+                            }
                         });
                     });
                 });
@@ -503,6 +529,10 @@ impl PaletteApp {
         // 脏标记（下一次重聚合后首屏「直达」分组同步）。
         self.draw_custom_commands_card(ui, p);
 
+        // ── 卡 6.5：文本片段（N18，2026-11-22）──面板内搜片段 → Enter 复制
+        // 剪贴板（`;keyword` 全局展开维持缓办——§3.2 输入伪造面）。
+        self.draw_snippets_card(ui, p);
+
         // ── 卡 7：导入 / 导出设置（N5，2026-10-04）──本机迁移（两步确认
         // 范式复用「恢复默认外观」卡；导出 = 数据目录备份文件，导入覆盖）。
         self.draw_backup_card(ui, p);
@@ -514,6 +544,239 @@ impl PaletteApp {
         // ── 卡 9：关于（§5.2，2026-10-25）──版本展示 + 手动检查更新 +
         // 「启动时检查」开关（默认关；不做自动安装，原案口径）。
         self.draw_about_card(ui, p);
+
+        // ── 卡 10：命令热键（N17，2026-11-22）──第二热键基建：≤3 槽全局组合
+        // 键直接触发自定义命令（复用 N1 执行体；面板隐藏态亦生效）。
+        self.draw_command_hotkey_card(ui, p);
+    }
+
+    /// 常规栏「命令热键」卡（N17，2026-11-22）：第二热键基建——≤3 槽全局
+    /// 组合键直接触发自定义命令。绑定行（组合键 → 关键词 + 删除）+「录制
+    /// 组合键」（复用捕获模态，capture_target = CommandSlot；对话框内选
+    /// 关键词后保存，校验失败行内报错）。绑定属机器态随导入保留本机现值。
+    pub(super) fn draw_command_hotkey_card(&mut self, ui: &mut egui::Ui, p: &theme::Palette) {
+        let lang = self.view.lang_effective;
+        let mut delete_idx: Option<usize> = None;
+        let mut record_clicked = false;
+        let bindings = self.draft.settings.command_hotkeys.clone();
+        let full = bindings.len() >= crate::settings::COMMAND_HOTKEY_CAP;
+        draw_settings_card_frame(ui, p, self.window.backdrop_active, |card| {
+            card.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = 0.0;
+                let (icon_rect, _) =
+                    ui.allocate_exact_size(egui::vec2(16.0, 16.0), egui::Sense::hover());
+                ui.painter().text(
+                    icon_rect.center() + egui::vec2(0.0, 1.0),
+                    egui::Align2::CENTER_CENTER,
+                    '\u{E92E}', // KeyboardStandard：命令热键语义
+                    egui::FontId::proportional(16.0),
+                    p.text2,
+                );
+                ui.add_space(12.0);
+                ui.vertical(|ui| {
+                    ui.set_min_height(36.0);
+                    ui.label(
+                        crate::theme::semibold_title(
+                            crate::text::t(lang, "set.commandhotkey.name"),
+                            14.0,
+                        )
+                        .color(p.text),
+                    );
+                    ui.add_space(2.0);
+                    ui.add(
+                        egui::Label::new(
+                            egui::RichText::new(crate::text::t(lang, "set.commandhotkey.desc"))
+                                .size(12.0)
+                                .color(p.text3),
+                        )
+                        .wrap(),
+                    );
+                });
+            });
+            card.add_space(8.0);
+            for (i, h) in bindings.iter().enumerate() {
+                card.horizontal(|ui| {
+                    ui.add_space(28.0);
+                    ui.label(
+                        egui::RichText::new(crate::settings::hotkey_combo_label(h.mods, h.vk))
+                            .size(13.0)
+                            .monospace()
+                            .color(p.text),
+                    );
+                    ui.add_space(12.0);
+                    ui.label(
+                        egui::RichText::new(format!("→ {}", h.keyword))
+                            .size(12.0)
+                            .color(p.text3),
+                    );
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if fluent_button_small(
+                            ui,
+                            crate::text::t(lang, "set.commandhotkey.delete"),
+                            p,
+                        ) {
+                            delete_idx = Some(i);
+                        }
+                    });
+                });
+                card.add_space(4.0);
+            }
+            card.add_space(4.0);
+            card.horizontal(|ui| {
+                ui.add_space(28.0);
+                if !full
+                    && fluent_button_small(ui, crate::text::t(lang, "set.commandhotkey.record"), p)
+                {
+                    record_clicked = true;
+                }
+            });
+        });
+        if let Some(i) = delete_idx {
+            self.draft.settings.command_hotkeys.remove(i);
+            self.save_settings_with_feedback();
+            self.sync_command_hotkey_slots();
+        }
+        if record_clicked {
+            self.start_command_hotkey_capture();
+        }
+    }
+
+    /// 常规栏「文本片段」卡（N18，2026-11-22）：一档 = 面板内搜片段 → Enter
+    /// 复制剪贴板。列表行（名称 → 关键词 + 删除）+ 添加表单（名称 / 关键词 /
+    /// 多行正文；校验失败行内报错）。`;keyword` 全局展开维持缓办（§3.2）。
+    pub(super) fn draw_snippets_card(&mut self, ui: &mut egui::Ui, p: &theme::Palette) {
+        let lang = self.view.lang_effective;
+        let mut delete_kw: Option<String> = None;
+        let mut add_clicked = false;
+        let snippets = self.draft.settings.snippets.clone();
+        let full = snippets.len() >= crate::settings::SNIPPET_CAP;
+        draw_settings_card_frame(ui, p, self.window.backdrop_active, |card| {
+            card.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = 0.0;
+                let (icon_rect, _) =
+                    ui.allocate_exact_size(egui::vec2(16.0, 16.0), egui::Sense::hover());
+                ui.painter().text(
+                    icon_rect.center() + egui::vec2(0.0, 1.0),
+                    egui::Align2::CENTER_CENTER,
+                    '\u{E8C8}', // Copy：片段复制语义
+                    egui::FontId::proportional(16.0),
+                    p.text2,
+                );
+                ui.add_space(12.0);
+                ui.vertical(|ui| {
+                    ui.set_min_height(36.0);
+                    ui.label(
+                        crate::theme::semibold_title(
+                            crate::text::t(lang, "set.snippet.name"),
+                            14.0,
+                        )
+                        .color(p.text),
+                    );
+                    ui.add_space(2.0);
+                    ui.add(
+                        egui::Label::new(
+                            egui::RichText::new(crate::text::t(lang, "set.snippet.desc"))
+                                .size(12.0)
+                                .color(p.text3),
+                        )
+                        .wrap(),
+                    );
+                });
+            });
+            card.add_space(8.0);
+            for sn in &snippets {
+                card.horizontal(|ui| {
+                    ui.add_space(28.0);
+                    ui.label(egui::RichText::new(&sn.name).size(13.0).color(p.text));
+                    ui.add_space(12.0);
+                    ui.label(
+                        egui::RichText::new(format!("→ {}", sn.keyword))
+                            .size(12.0)
+                            .color(p.text3),
+                    );
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if fluent_button_small(ui, crate::text::t(lang, "set.snippet.delete"), p) {
+                            delete_kw = Some(sn.keyword.clone());
+                        }
+                    });
+                });
+            }
+            if !snippets.is_empty() {
+                card.add_space(8.0);
+            }
+            // ── 添加表单（名称 / 关键词 / 多行正文）──
+            card.horizontal(|ui| {
+                ui.add_space(28.0);
+                ui.label(
+                    egui::RichText::new(crate::text::t(lang, "set.snippet.name_label"))
+                        .size(12.0)
+                        .color(p.text2),
+                );
+                ui.add(
+                    egui::TextEdit::singleline(&mut self.draft.snippet_name_buf)
+                        .desired_width(140.0),
+                );
+                ui.add_space(12.0);
+                ui.label(
+                    egui::RichText::new(crate::text::t(lang, "set.snippet.keyword_label"))
+                        .size(12.0)
+                        .color(p.text2),
+                );
+                ui.add(
+                    egui::TextEdit::singleline(&mut self.draft.snippet_keyword_buf)
+                        .desired_width(120.0),
+                );
+            });
+            card.add_space(4.0);
+            card.horizontal(|ui| {
+                ui.add_space(28.0);
+                ui.label(
+                    egui::RichText::new(crate::text::t(lang, "set.snippet.text_label"))
+                        .size(12.0)
+                        .color(p.text2),
+                );
+                ui.add(
+                    egui::TextEdit::multiline(&mut self.draft.snippet_text_buf)
+                        .desired_rows(3)
+                        .desired_width(f32::INFINITY),
+                );
+            });
+            if let Some(e) = &self.draft.snippet_err {
+                card.horizontal(|ui| {
+                    ui.add_space(28.0);
+                    ui.label(egui::RichText::new(e).size(12.0).color(p.danger));
+                });
+            }
+            card.add_space(4.0);
+            card.horizontal(|ui| {
+                ui.add_space(28.0);
+                if !full && fluent_button_small(ui, crate::text::t(lang, "set.snippet.add"), p) {
+                    add_clicked = true;
+                }
+            });
+        });
+        if let Some(kw) = delete_kw {
+            if self.draft.settings.remove_snippet(&kw) {
+                self.save_settings_with_feedback();
+                self.draft.engines_dirty = true;
+            }
+        }
+        if add_clicked {
+            let name = self.draft.snippet_name_buf.clone();
+            let keyword = self.draft.snippet_keyword_buf.clone();
+            let text = self.draft.snippet_text_buf.clone();
+            match self.draft.settings.add_snippet(&name, &keyword, &text) {
+                Ok(()) => {
+                    self.draft.snippet_name_buf.clear();
+                    self.draft.snippet_keyword_buf.clear();
+                    self.draft.snippet_text_buf.clear();
+                    self.draft.snippet_err = None;
+                    self.save_settings_with_feedback();
+                    self.draft.engines_dirty = true;
+                }
+                Err(e) => self.draft.snippet_err = Some(e),
+            }
+        }
     }
 
     /// 常规栏「关于」卡（§5.2）：当前版本 + 「检查更新」按钮 + 「启动时检查」
@@ -521,6 +784,10 @@ impl PaletteApp {
     pub(super) fn draw_about_card(&mut self, ui: &mut egui::Ui, p: &theme::Palette) {
         let lang = self.view.lang_effective;
         let mut check_clicked = false;
+        let mut download_clicked = false;
+        // O17：下载态快照（克隆避免闭包借位冲突；`update_rx.is_some()` 覆盖检查在途）。
+        let downloading = self.view.update_downloading || self.view.update_rx.is_some();
+        let update_available = self.view.update_available.clone();
         let autostart_check_on = self.draft.settings.check_updates;
         let mut autostart_check_toggled = false;
         draw_settings_card_frame(ui, p, self.window.backdrop_active, |card| {
@@ -573,9 +840,30 @@ impl PaletteApp {
                     check_clicked = true;
                 }
             });
+            // O17：Available 态第二行——「下载新版」（下载在途改显进行中文案，
+            // 不渲染按钮防重复触发；不做自替换，下载+校验+指引边界承原案）。
+            if update_available.is_some() {
+                card.add_space(8.0);
+                card.horizontal(|ui| {
+                    ui.add_space(28.0);
+                    if downloading {
+                        ui.label(
+                            egui::RichText::new(crate::text::t(lang, "set.about.downloading"))
+                                .size(12.0)
+                                .color(p.text3),
+                        );
+                    } else if fluent_button_small(ui, crate::text::t(lang, "set.about.download"), p)
+                    {
+                        download_clicked = true;
+                    }
+                });
+            }
         });
         if check_clicked {
             self.start_update_check();
+        }
+        if download_clicked {
+            self.start_update_download();
         }
         if autostart_check_toggled {
             self.draft.settings.check_updates = !autostart_check_on;
@@ -656,8 +944,27 @@ impl PaletteApp {
                 "set.backup.import"
             },
         );
+        // 加固②：备份环一键恢复按钮（两步武装确认，同导入按钮口径；恒可用
+        // ——无备份时点击给出可读失败 toast，不静默）。
+        let restore_armed = self
+            .draft
+            .backup_restore_armed
+            .map(|t| t.elapsed() < ARM_WINDOW)
+            .unwrap_or(false);
+        if self.draft.backup_restore_armed.is_some() && !restore_armed {
+            self.draft.backup_restore_armed = None; // 超时自动撤销
+        }
+        let restore_label = crate::text::t(
+            lang,
+            if restore_armed {
+                "set.backup.restore_armed"
+            } else {
+                "set.backup.restore"
+            },
+        );
         let mut export_clicked = false;
         let mut import_clicked = false;
+        let mut restore_clicked = false;
         let backup_path = Self::settings_backup_path();
 
         draw_settings_card_frame(ui, p, self.window.backdrop_active, |card| {
@@ -708,7 +1015,7 @@ impl PaletteApp {
                 }
             }
             card.add_space(4.0);
-            // ── 动作行：导出 + 导入并覆盖（两步确认）──
+            // ── 动作行：导出 + 导入并覆盖（两步确认）+ 备份环恢复（两步确认）──
             card.horizontal(|ui| {
                 ui.add_space(28.0);
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -716,6 +1023,8 @@ impl PaletteApp {
                     ui.add_space(8.0);
                     export_clicked =
                         fluent_button(ui, crate::text::t(lang, "set.backup.export"), p);
+                    ui.add_space(8.0);
+                    restore_clicked = fluent_button(ui, restore_label, p);
                 });
             });
         });
@@ -729,6 +1038,15 @@ impl PaletteApp {
                 self.import_settings_backup(ui.ctx());
             } else {
                 self.draft.settings_import_armed = Some(Instant::now());
+                ui.ctx().request_repaint_after(ARM_WINDOW); // 超时后重绘 → 按钮复原
+            }
+        }
+        if restore_clicked {
+            if restore_armed {
+                self.draft.backup_restore_armed = None;
+                self.restore_from_backup_ring(ui.ctx());
+            } else {
+                self.draft.backup_restore_armed = Some(Instant::now());
                 ui.ctx().request_repaint_after(ARM_WINDOW); // 超时后重绘 → 按钮复原
             }
         }

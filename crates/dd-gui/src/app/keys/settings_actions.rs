@@ -172,8 +172,22 @@ impl PaletteApp {
                 return;
             }
         };
-        // UI 即时项先经既有 apply 链（各自内部检查差异 + 落盘 + ctx 生效；
-        // 须在整体赋值前调用——赋值后差值归零会跳过 set_theme 等副作用）。
+        // UI 即时项经公共应用链（加固②抽段：N5 文件导入与备份环一键恢复共用）。
+        self.apply_imported_settings(ctx, imported);
+        log::info!("[dd-gui] 设置备份已导入并应用（{}）", path.display());
+        self.show_toast(self.tr("toast.settings_import_ok"), Some(4_000));
+    }
+
+    /// 加固②（2026-11-22）：导入应用链公共尾段（apply 链 + 落盘 + 重聚合脏
+    /// 标记）——N5 文件导入与备份环一键恢复共用（行为逐位一致）。UI 即时项
+    /// 先经既有 apply 链（各自内部检查差异 + 落盘 + ctx 生效；须在整体赋值前
+    /// 调用——赋值后差值归零会跳过 set_theme 等副作用）；toast 由调用方按
+    /// 语义自选（导入 ok / 恢复 restored）。
+    pub(crate) fn apply_imported_settings(
+        &mut self,
+        ctx: &eframe::egui::Context,
+        imported: crate::settings::Settings,
+    ) {
         self.apply_theme_pref(ctx, imported.theme);
         self.apply_backdrop(ctx, imported.backdrop);
         self.apply_material_opacity(ctx, imported.material_opacity);
@@ -204,8 +218,73 @@ impl PaletteApp {
         self.draft.engines_dirty = true;
         self.save_settings_with_feedback();
         ctx.request_repaint();
-        log::info!("[dd-gui] 设置备份已导入并应用（{}）", path.display());
-        self.show_toast(self.tr("toast.settings_import_ok"), Some(4_000));
+    }
+
+    /// 加固②（2026-11-22）：一键恢复——读备份环最新档（`config.json.bak.1`，
+    /// 加固①滚动备份）→ import_backup 通道（机器态保留本机现值）→ 公共应用
+    /// 链 → toast。备份不存在/校验失败 → Error toast（不静默）。
+    /// 偏离记档：实施计划原设计「确认对话框（PendingConfirm）」——该框架面向
+    /// 命令执行确认（command_id 载荷），复用为设置动作确认属抽象错配；恢复
+    /// 目标 = 上一次保存态（误触代价 = 重做一次修改）——采用与同卡导入按钮
+    /// 相同的**两步武装确认**（armed 窗口，UI 层）。
+    pub(crate) fn restore_from_backup_ring(&mut self, ctx: &eframe::egui::Context) {
+        let Some(cfg) = dd_host::manifest::config_file() else {
+            self.show_error_toast(
+                self.tr("toast.settings_restore_fail")
+                    .replace("{e}", "数据目录不可定位"),
+            );
+            return;
+        };
+        let (b1, _, _) = crate::settings::backup_ring_paths(&cfg);
+        let text = match std::fs::read_to_string(&b1) {
+            Ok(t) => t,
+            Err(e) => {
+                log::warn!("[dd-gui] 备份环读取失败（{}）：{e}", b1.display());
+                self.show_error_toast(
+                    self.tr("toast.settings_restore_fail")
+                        .replace("{e}", &e.to_string()),
+                );
+                return;
+            }
+        };
+        let imported = match crate::settings::Settings::import_backup(&text, &self.draft.settings) {
+            Ok(s) => s,
+            Err(e) => {
+                log::warn!("[dd-gui] 备份环导入校验失败：{e}");
+                self.show_error_toast(
+                    self.tr("toast.settings_restore_fail")
+                        .replace("{e}", &e.to_string()),
+                );
+                return;
+            }
+        };
+        self.apply_imported_settings(ctx, imported);
+        self.show_toast(self.tr("toast.settings_restored"), Some(4_000));
+        log::info!("[dd-gui] 已从备份环恢复设置（{}）", b1.display());
+    }
+
+    /// 加固②（2026-11-22）：启动骤降检测——config custom_commands 较备份环
+    /// 最新档（bak.1）骤降（严格小于一半且备份非空）→ Error toast 指引设置页
+    /// 「从上次备份恢复」。备份缺失/损坏/空表 = 无基线，静默不虚警。
+    /// `pub`：调用方是 bin（main.rs 启动装配），在 lib 外（load_usage 先例）。
+    pub fn check_startup_config_drop(&mut self) {
+        let Some(cfg) = dd_host::manifest::config_file() else {
+            return;
+        };
+        let (b1, _, _) = crate::settings::backup_ring_paths(&cfg);
+        let backup = std::fs::read_to_string(&b1).ok();
+        let current = &self.draft.settings.custom_commands;
+        if let Some(n) = crate::settings::detect_custom_commands_drop(current, backup.as_deref()) {
+            log::warn!(
+                "[dd-gui] 启动骤降检测：custom_commands {} 条，备份环最新档 {} 条",
+                current.len(),
+                n
+            );
+            self.show_error_toast(
+                self.tr("toast.config_drop_detected")
+                    .replace("{n}", &n.to_string()),
+            );
+        }
     }
 
     /// 设置页扩展**信任决策**（S-05，2026-09-24）：写台账 → 落盘 → 立即重聚合。

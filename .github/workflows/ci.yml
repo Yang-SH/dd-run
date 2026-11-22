@@ -127,6 +127,21 @@ jobs:
       - name: Docs consistency (docscan)
         run: node tools/docscan.mjs
 
+      # 加固⑤ 补挂（2026-11-22）：search sidecar 的 conformance 腿。search 是独立
+      # sidecar（不在 builtin_specs，不能走 in-process），须先装配扩展目录：拷清单
+      # + 已构建的 dd-ext-search.exe（上一步 --all-targets 已产出）。**观察态**
+      # （continue-on-error）——runner 无 Everything 时页面条目为空、断言覆盖有限，
+      # 首跑行为需一个 PR 周期确认后按 snapshot/bench 先例转阻塞。
+      - name: Conformance smoke (search sidecar, assembled, observation)
+        continue-on-error: true
+        shell: pwsh
+        run: |
+          $dir = Join-Path $env:RUNNER_TEMP 'conf-search'
+          New-Item -ItemType Directory -Force -Path $dir | Out-Null
+          Copy-Item examples/extensions.d/com.ddrun.filesearch.json $dir
+          Copy-Item target/debug/dd-ext-search.exe (Join-Path $dir 'dd-ext-search.exe')
+          cargo run -p dd-run-cli -- --conformance --extensions-dir $dir --ext-id com.ddrun.filesearch
+
   # O3 依赖治理（docs/optimization-plan.md §2.5）：与平台无关，放 linux runner 最快。
   # - cargo-audit：RustSec 漏洞扫描，发现 vulnerability 即失败（默认门槛；unmaintained/
   #   informational 只警告不阻塞，避免第三方仓库的软性告警卡死 CI）。

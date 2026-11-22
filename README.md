@@ -26,12 +26,12 @@ Its architecture and extension contracts are **distilled from Microsoft PowerToy
 ## Highlights
 
 - **Keyboard-first**: the entire core loop (summon → search → select → execute → back → close) is 100% keyboard-driven.
-- **5 built-in extensions + file-search sidecar**: Apps, Calculator, System, Web Search, Shell run in-process; File Search (Everything-backed, Windows; press `Ctrl+F` in the panel) ships as a separate sidecar process.
+- **7 built-in extensions + file-search sidecar**: Apps, Calculator, System, Web Search, Bookmarks, Shell, Windows (window switcher) run in-process; File Search (Everything-backed, Windows; press `Ctrl+F` in the panel) ships as a separate sidecar process.
 - **Pinyin matching**: CJK app names match by full Pinyin and initials (e.g. `jsq` → 计算器).
 - **Settings pages** (open with `Ctrl+,`): appearance (light/dark theme, Mica/Acrylic material), general (autostart, customizable global hotkey — default `Win+Alt+Space`), search-engine management (preset + custom engines with `{q}` templates), extension management (enable/disable per extension).
 - **Localized UI**: the panel follows the system display language.
 - **Fast & isolated**: built-in extensions are always ready (in-process, no launch cost); third-party and the file-search sidecar launch lazily via frozen/stub/LRU; the file-search sidecar runs in its own process, so its crash can't take the host down.
-- **Portable distribution**: `dist/dd-run-0.3.0.exe` (~8.4 MB; `strip = "symbols"`; byte size re-measured per release — v0.2.1 measured 8,722,944 bytes) is a single file bundling the host and the five built-in extensions in-process (no embedded exes since M9). The file-search extension ships as a sidecar in `dist/extensions.d/` and is discovered automatically next to the executable. No installer: unzip the release zip and run. macOS / Linux get portable `tar.gz` builds (single binary + runtime-dependency README; file search absent by design).
+- **Portable distribution**: `dist/dd-run-0.3.0.exe` (~8.4 MB; `strip = "symbols"`; byte size re-measured per release — v0.2.1 measured 8,722,944 bytes) is a single file bundling the host and the seven built-in extensions in-process (no embedded exes since M9). The file-search extension ships as a sidecar in `dist/extensions.d/` and is discovered automatically next to the executable. No installer: unzip the release zip and run. macOS / Linux get portable `tar.gz` builds (single binary + runtime-dependency README; file search absent by design).
 - **User data in one place**: the data dir holds `config.json` (settings), `usage.json` (usage frequency, resettable in Settings), `extensions.d/`, `cache/`, and `logs/` (run log + panic log) — `%APPDATA%\dd-run` on Windows, `~/Library/Application Support/dd-run` on macOS, `$XDG_CONFIG_HOME/dd-run` (default `~/.config/dd-run`) on Linux. The settings page can open the log folder and export a diagnosis report (single JSON).
 
 ## Goals and non-goals
@@ -54,14 +54,14 @@ Its architecture and extension contracts are **distilled from Microsoft PowerToy
 
 ## Build and packaging
 
-> **Hard rule: the host is a single file — the five built-in extensions run in-process (no embedded exes).**
+> **Hard rule: the host is a single file — the seven built-in extensions run in-process (no embedded exes).**
 > Release layout = `dist/dd-run-<version>.exe` + `dist/extensions.d/` (file-search sidecar), zipped as a whole and attached to the GitHub Release. Unzip and run; no installer.
 
 | Item | Detail |
 |---|---|
 | Entry artifact | `dist/dd-run-0.3.0.exe` (Windows, ~8.4 MB — byte size re-measured per release, v0.2.1 = 8,722,944; version tracks `crates/dd-gui/Cargo.toml`) |
 | Non-Windows packages (O6) | `dist/dd-run-<ver>-linux-<arch>.tar.gz` / `dist/dd-run-<ver>-macos-<arch>.tar.gz`: single `dd-run` binary + `README-dist.txt` (runtime system-library list, data dir, notes). File-search sidecar is Windows-only and not bundled; no signing surface on these packages. System fonts are required (CJK font such as `fonts-noto-cjk` for Chinese text) |
-| Bundling (M9) | The five built-in extensions are compiled in-process: the host drives `dd_ext::serve_line` directly, so no extension exes are embedded. `dd-gui/build.rs` embeds an empty table; `assets/embed/` is a leftover scratch dir and is gitignored |
+| Bundling (M9) | The seven built-in extensions are compiled in-process: the host drives `dd_ext::serve_line` directly, so no extension exes are embedded. `dd-gui/build.rs` embeds an empty table; `assets/embed/` is a leftover scratch dir and is gitignored |
 | Sidecar | The file-search extension (`dd-ext-search.exe` + `com.ddrun.filesearch.json`) ships in `dist/extensions.d/`; the host scans an `extensions.d/` next to the executable (batch 7.5), so the zip is unzip & run — precedence: user data dir > sidecar > built-ins |
 | Naming | `dd-run.exe` = GUI host (crate stays `dd-gui`); the M0 CLI is renamed `dd-run-cli.exe` (keeps self-check ability, yields the artifact name) |
 | One-command package | `bash tools/package.sh` — platform-branched: on Windows it uses the `+stable-x86_64-pc-windows-gnu` toolchain (build `dd-ext` → build `dd-gui --bin dd-run` → copy single-file artifact + collect sidecar into `dist/`; a bare `cargo` on MSVC fails to find `std`); on Linux/macOS it builds the host with an explicit `--target <host triple>` (identical to the host default since §5.7 unpinned the target; kept as an explicit declaration) and packs the `tar.gz` |

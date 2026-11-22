@@ -48,6 +48,13 @@ pub(crate) enum CtxAction {
         target: String,
         kind: crate::settings::CustomCommandKind,
     },
+    /// N11（2026-11-22）：置顶/取消置顶（宿主侧配置操作：pinned_keys 幂等切换
+    /// + 落盘 + 重聚合脏标记；键策略两族见 `aggregator::pin_key_for`）。
+    TogglePin { key: String },
+    /// N18：复制片段（宿主侧：按关键词查片段 → 剪贴板队列）。
+    CopySnippet { keyword: String },
+    /// N18：删除此片段（宿主侧配置操作：移除 + 落盘 + 重聚合脏标记）。
+    DeleteSnippet { keyword: String },
 }
 
 /// 右键菜单项（10B.1：图标 glyph 16 + 名称 body1 14 + 快捷键 caption1/fg3）。
@@ -90,7 +97,19 @@ impl PaletteApp {
         item: &PanelItem,
         anchor: egui::Pos2,
     ) {
-        let rows = context_menu_rows(self.view.lang_effective, item);
+        // N11：置顶态与可钉判定——仅根页条目（嵌套页/设置页不可钉）；direct:
+        // 查询态条目无持久语义，不钉。键族见 `aggregator::pin_key_for`。
+        let current = self.view.stack.current();
+        let pin_state = if current.page_id.is_none()
+            && !current.is_settings
+            && !item.id.starts_with(crate::aggregator::DIRECT_ITEM_PREFIX)
+        {
+            let key = crate::aggregator::pin_key_for(item);
+            Some(self.draft.settings.pinned_keys.contains(&key))
+        } else {
+            None
+        };
+        let rows = context_menu_rows_with_pin(self.view.lang_effective, item, pin_state);
         log::debug!(
             "[dd-gui] 右键菜单：item={} category={:?}（{} 项）",
             item.id,
@@ -221,6 +240,28 @@ impl PaletteApp {
                 self.open_settings();
                 ctx.request_repaint();
             }
+            CtxAction::TogglePin { key } => {
+                // N11：宿主侧配置操作——pinned_keys 幂等切换 + 落盘 + 重聚合
+                // 脏标记（下一次重聚合后置顶分组即时生效；菜单已随 take 关闭）。
+                self.toggle_pinned(key.clone());
+                ctx.request_repaint();
+            }
+            CtxAction::CopySnippet { keyword } => {
+                // N18：复制片段（R-07 队列同径；toast 由 poll 统一反馈）。
+                self.copy_snippet(keyword);
+            }
+            CtxAction::DeleteSnippet { keyword } => {
+                // N18：宿主侧配置操作——移除 + 落盘 + 重聚合脏标记。
+                if self.draft.settings.remove_snippet(keyword) {
+                    self.save_settings_with_feedback();
+                    self.draft.engines_dirty = true;
+                    self.show_toast(
+                        self.tr("toast.snippet_deleted").replace("{kw}", keyword),
+                        None,
+                    );
+                }
+                ctx.request_repaint();
+            }
             CtxAction::Extension { command_id } => {
                 // 与 Default 相同的防陈旧校验（ext_id 取自当前列表项），
                 // 以 `sender=context_menu` + `selected_item_id` 回调扩展 invoke。
@@ -290,13 +331,70 @@ fn glyph_from_command(cmd: &CommandItem) -> char {
 /// 数据不可得时该项**不出现**（而非禁用）——不渲染无法兑现的动作。
 /// 菜单标签按 `lang` 走 i18n 表（v4.13 D38）；`result_category` 的中文值是
 /// 协议侧数据（比对用），不翻译。
+/// 不可钉）时尾部追加分隔线 + 置顶/取消置顶项；本包装供单测使用。
+#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) fn context_menu_rows(lang: Lang, item: &PanelItem) -> Vec<CtxRow> {
+    context_menu_rows_with_pin(lang, item, None)
+}
+
+/// N11：带置顶态的菜单映射——`pin` = `Some(已置顶?)` 时追加「置顶/取消置顶」
+/// 项（宿主侧配置动作；根页条目通用尾项）。`None` = 不可钉（嵌套页 / 设置页 /
+/// direct: 查询态条目），不出现该行。
+pub(crate) fn context_menu_rows_with_pin(
+    lang: Lang,
+    item: &PanelItem,
+    pin: Option<bool>,
+) -> Vec<CtxRow> {
+    let pin_label = |pinned: bool| -> String {
+        crate::text::t(lang, if pinned { "ctx.unpin" } else { "ctx.pin" }).to_string()
+    };
+    let pin_row = |pinned: bool| -> CtxRow {
+        CtxRow::Entry(CtxEntry {
+            glyph: crate::text::CTX_GLYPH_PIN,
+            label: pin_label(pinned),
+            shortcut: "",
+            action: CtxAction::TogglePin {
+                key: crate::aggregator::pin_key_for(item),
+            },
+        })
+    };
+    // N18（2026-11-22）：文本片段专属菜单——默认（= 复制，Enter 同径）+
+    // 分隔线 + 复制 + 分隔线 + 删除此片段（宿主侧配置动作，
+    // DeleteCustomCommand 同型）。
+    if let Some(kw) = item.id.strip_prefix("snippet:") {
+        return vec![
+            CtxRow::Entry(CtxEntry {
+                glyph: default_action_glyph(item),
+                label: footer_action_text(lang, item),
+                shortcut: "↵ Enter",
+                action: CtxAction::Default,
+            }),
+            CtxRow::Separator,
+            CtxRow::Entry(CtxEntry {
+                glyph: CTX_GLYPH_COPY,
+                label: crate::text::t(lang, "ctx.copy_text").to_string(),
+                shortcut: "",
+                action: CtxAction::CopySnippet {
+                    keyword: kw.to_string(),
+                },
+            }),
+            CtxRow::Separator,
+            CtxRow::Entry(CtxEntry {
+                glyph: CTX_GLYPH_DELETE,
+                label: crate::text::t(lang, "set.snippet.delete").to_string(),
+                shortcut: "",
+                action: CtxAction::DeleteSnippet {
+                    keyword: kw.to_string(),
+                },
+            }),
+        ];
+    }
     // N1（2026-10-04）：自定义直达命令专属菜单——默认动作 + 分隔线 + 删除
     // （spec「上下文菜单提供删除」）；不走静态类别映射（其 subtitle 是用户
     // 配置目标，不适用 管理员/定位 腿）。
     if item.ext_id == crate::aggregator::HOST_CUSTOM_EXT_ID {
         if let Some(keyword) = item.id.strip_prefix(crate::aggregator::CUSTOM_ITEM_PREFIX) {
-            return vec![
+            let mut rows = vec![
                 CtxRow::Entry(CtxEntry {
                     glyph: default_action_glyph(item),
                     label: footer_action_text(lang, item),
@@ -313,6 +411,12 @@ pub(crate) fn context_menu_rows(lang: Lang, item: &PanelItem) -> Vec<CtxRow> {
                     },
                 }),
             ];
+            // N11：自定义命令行同享置顶（键 = 宿主稳定 id 族，usage_key）。
+            if let Some(pinned) = pin {
+                rows.push(CtxRow::Separator);
+                rows.push(pin_row(pinned));
+            }
+            return rows;
         }
         // N10：URL/路径直达条目专属菜单——默认动作 + 分隔线 + 复制（链接/路径
         // 按目标形态重分类）+ N19 转存（真机核对轮 2026-11-22 补：直达行是
@@ -489,6 +593,11 @@ pub(crate) fn context_menu_rows(lang: Lang, item: &PanelItem) -> Vec<CtxRow> {
         }
         // 命令 / 设置 / 未知类别：仅默认动作（10B.2）
         _ => {}
+    }
+    // N11：置顶/取消置顶（根页条目通用尾项；独立分隔组，方案 §4.6 右键动作）。
+    if let Some(pinned) = pin {
+        rows.push(CtxRow::Separator);
+        rows.push(pin_row(pinned));
     }
     rows
 }

@@ -137,3 +137,32 @@ pub(crate) fn get_items_on(
 ) -> Result<GetItemsResult, String> {
     proc.get_items(page_id, search).map_err(|e| e.to_string())
 }
+
+// ── 加固③：池约束回归（2026-11-22）──────────────────────────────────────────
+#[cfg(test)]
+mod b3_tests {
+    use crate::test_support::{dying_client, make_app};
+
+    /// 固化「单归还单驱逐」约束（方案附录 C.3 LRU 级联驱逐观察项的机制防线，
+    /// 分析 v1.1 §3.2-B1 建议）：容量 2 + 4 扩展逐次归还 → 集合大小恒 ≤ 容量
+    ///（满容后每次归还恰好挤出一个）且刚归还者必在池内（victim ≠ ext_id）。
+    /// 夹具 = 已退出子进程客户端（驱逐 close 对已退出进程无害，机制同径）。
+    #[test]
+    fn b3_store_warm_process_single_eviction_per_return() {
+        let mut app = make_app();
+        app.pool.lru.set_capacity(2);
+        for i in 0..4 {
+            let id = format!("ext{i}");
+            app.store_warm_process(id.clone(), dying_client(&id));
+            assert!(
+                app.pool.processes.len() <= 2,
+                "归还 ext{i} 后池大小 {} 超容（级联驱逐回归）",
+                app.pool.processes.len()
+            );
+            assert!(
+                app.pool.processes.iter().any(|(x, _)| *x == id),
+                "刚归还的 {id} 被驱逐（victim == ext_id 回归）"
+            );
+        }
+    }
+}

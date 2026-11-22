@@ -57,9 +57,9 @@ impl BuiltinSpec {
     }
 }
 
-/// MVP 5 个内置扩展 + N3 书签（第 6 个，仅 in-process；与 `crates/dd-ext/src/bin/*.rs`
-/// 的 `spec()` / `builtins::bookmarks::spec()` 对齐：
-/// `frozen` = 扩展自述；宿主落桩策略由 [`BuiltinSpec::host_frozen`] 派生）。
+/// MVP 5 个内置扩展 + N3 书签（第 6 个）+ N16 窗口切换器（第 7 个，仅
+/// in-process；与 `crates/dd-ext/src/bin/*.rs` 的 `spec()` / `builtins::*`
+/// 对齐：`frozen` = 扩展自述；宿主落桩策略由 [`BuiltinSpec::host_frozen`] 派生）。
 pub const BUILTINS: &[BuiltinSpec] = &[
     BuiltinSpec {
         exe: "dd-ext-apps",
@@ -114,6 +114,17 @@ pub const BUILTINS: &[BuiltinSpec] = &[
         // 含兜底能力 → host_frozen=false（§6.3 fresh）
         frozen: true,
         has_fallback: true,
+        capabilities: &[],
+    },
+    BuiltinSpec {
+        exe: "dd-ext-windows",
+        id: "com.ddrun.windows",
+        name: "Windows",
+        // 窗口列表随时变 → fresh（不落磁盘桩；N16 仅 in-process，无独立 bin
+        // 薄壳，exe 字段为名义名——注册元数据与 dd-ext builtins::windows::spec()
+        // 对齐防漂移，bookmarks 同款）
+        frozen: false,
+        has_fallback: false,
         capabilities: &[],
     },
 ];
@@ -243,11 +254,12 @@ mod tests {
                 "com.ddrun.system",
                 "com.ddrun.websearch",
                 "com.ddrun.bookmarks",
-                "com.ddrun.shell"
+                "com.ddrun.shell",
+                "com.ddrun.windows"
             ]
         );
         // 扩展自述 frozen 与 crates/dd-ext 各 spec().frozen 对齐
-        //（防漂移哨兵）：Apps / Bookmarks fresh、其余 4 个自述"顶层固定可缓存"。
+        //（防漂移哨兵）：Apps / Bookmarks / Windows fresh、其余 4 个自述"顶层固定可缓存"。
         let frozen_map: Vec<(&str, bool)> = BUILTINS.iter().map(|s| (s.id, s.frozen)).collect();
         assert_eq!(
             frozen_map,
@@ -258,6 +270,7 @@ mod tests {
                 ("com.ddrun.websearch", true),
                 ("com.ddrun.bookmarks", false),
                 ("com.ddrun.shell", true),
+                ("com.ddrun.windows", false),
             ]
         );
         // 兜底能力与 crates/dd-ext 各 spec().has_fallback 对齐
@@ -282,6 +295,7 @@ mod tests {
                 ("com.ddrun.websearch", false), // 含兜底 → fresh
                 ("com.ddrun.bookmarks", false), // 自述 fresh（书签文件随时可变）
                 ("com.ddrun.shell", false),     // 含兜底 → fresh
+                ("com.ddrun.windows", false),   // 自述 fresh（窗口列表随时可变）
             ]
         );
         // §6.3：含兜底能力者一律 fresh
@@ -334,9 +348,9 @@ mod tests {
         assert!(exts.is_empty(), "目录无 exe → 不注册任何内置扩展");
     }
 
-    /// M9：in-process 注册**不依赖**磁盘 exe——始终返回全部 6 个内置
-    ///（N3 起含 bookmarks），元数据（id / frozen 策略 / capabilities）与
-    /// 注册表一致。
+    /// M9：in-process 注册**不依赖**磁盘 exe——始终返回全部 7 个内置
+    ///（N3 起含 bookmarks、N16 起 windows），元数据（id / frozen 策略 /
+    /// capabilities）与注册表一致。
     #[test]
     fn builtin_registrations_needs_no_exe() {
         let exts = builtin_registrations();
@@ -350,12 +364,13 @@ mod tests {
                 "com.ddrun.websearch",
                 "com.ddrun.bookmarks",
                 "com.ddrun.shell",
+                "com.ddrun.windows",
             ],
-            "in-process 注册恒返回全部 6 个内置（无需 exe 存在）"
+            "in-process 注册恒返回全部 7 个内置（无需 exe 存在）"
         );
         // 宿主缓存策略口径不变：含兜底者 fresh（§6.3）
         let frozen: Vec<bool> = exts.iter().map(|e| e.manifest.frozen).collect();
-        assert_eq!(frozen, vec![false, false, true, false, false, false]);
+        assert_eq!(frozen, vec![false, false, true, false, false, false, false]);
         // command 为名义路径（不会被 spawn），与 BUILTINS[*].exe 对齐
         for (ext, spec) in exts.iter().zip(BUILTINS) {
             assert_eq!(

@@ -32,9 +32,8 @@ pub(crate) fn toast_duration_ms(kind: ToastKind, requested: Option<u64>) -> u64 
 /// 后续协议若扩展意图，只需在此枚举加映射。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ToastKind {
-    /// 接口预留（协议 `ShowToast` 暂无意图字段；宿主暂无确定 success 语义
-    /// 路径——calc 求值结果由扩展侧 Toast 文本呈现）。协议扩展意图后启用。
-    #[allow(dead_code)]
+    /// 成功意图（O17 起宿主侧启用：更新下载校验通过；协议扩展意图字段落地后
+    /// 供扩展 `ShowToast` 用——枚举即留接口）。
     Success,
     Error,
     Info,

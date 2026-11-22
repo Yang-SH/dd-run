@@ -13,6 +13,9 @@ pub mod calc;
 pub mod shell;
 pub mod system;
 pub mod websearch;
+/// N16（2026-11-22）：窗口切换器（仅 in-process、无独立 bin 薄壳——bookmarks
+/// 同款；非 Windows 构建空表）。
+pub mod windows;
 
 /// 运行期构造全部内置扩展规格（按生效语言 `DDRUN_LANG` 选文案）。
 pub fn builtin_specs() -> Vec<ExtensionSpec> {
@@ -23,5 +26,6 @@ pub fn builtin_specs() -> Vec<ExtensionSpec> {
         system::spec(),
         websearch::spec(),
         shell::spec(),
+        windows::spec(),
     ]
 }

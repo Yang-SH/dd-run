@@ -12,6 +12,8 @@ pub(crate) mod diagnostic;
 pub(crate) mod e2e;
 pub(crate) mod fallback_flow;
 pub(crate) mod health;
+/// N14 子项（2026-11-22）：`?` 键位速查页（宿主静态页，PageStack 推页）。
+pub(crate) mod help_page;
 pub(crate) mod host_actions;
 pub(crate) mod invoke;
 pub(crate) mod keys;
@@ -255,6 +257,25 @@ pub(crate) struct HotkeyState {
     /// R-15：全局热键**未注册**（启动注册失败 / 热键线程死亡）——设置页
     /// 热键卡「未注册」徽标与错误 toast 的依据；重注册成功后复位。
     pub(crate) hotkey_unregistered: bool,
+    /// N17：命令热键槽批量注册 generation（发号器；配对回发事件）。
+    pub(crate) slots_generation: u32,
+    /// N17：捕获目标（slot 0 面板热键 / 命令槽新绑定——捕获模态共用）。
+    pub(crate) capture_target: CaptureTarget,
+    /// N17：命令槽绑定对话框的关键词选择缓冲（ComboBox 选中项主关键词）。
+    pub(crate) command_slot_keyword: String,
+    /// N17：命令槽绑定行内错误（校验失败原因；成功绑定/取消时清除）。
+    pub(crate) command_slot_err: Option<String>,
+}
+
+/// N17：捕获目标——捕获模态共用，保存按目标路由（slot 0 走 seq 确认流、
+/// 命令槽走校验 + 槽位同步）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub(crate) enum CaptureTarget {
+    /// 面板唤起热键（slot 0，既有路径）。
+    #[default]
+    Slot0,
+    /// 命令热键槽新绑定（N17）。
+    CommandSlot,
 }
 
 /// C1 拆片③（dd-run-改进分析.md §3.1）：设置草稿——宿主设置本体、离开设置页
@@ -294,6 +315,13 @@ pub(crate) struct SettingsDraft {
     /// N5（2026-10-04）：「导入并覆盖」两步确认武装置位（同
     /// `appearance_reset_armed` 范式：5s 未确认自动撤销）。
     pub(crate) settings_import_armed: Option<std::time::Instant>,
+    /// 加固②：备份环一键恢复的两步武装确认时刻（同 import armed 口径）。
+    pub(crate) backup_restore_armed: Option<std::time::Instant>,
+    /// N18：片段添加表单缓冲（名称 / 关键词 / 多行正文）与行内错误。
+    pub(crate) snippet_name_buf: String,
+    pub(crate) snippet_keyword_buf: String,
+    pub(crate) snippet_text_buf: String,
+    pub(crate) snippet_err: Option<String>,
     /// T9：背景图卡路径输入缓冲（绘制层状态跨帧存活，不落盘；reset / 导入
     /// 在 apply 链内同步）。
     pub(crate) bg_path_buf: String,
@@ -348,6 +376,17 @@ pub(crate) struct UiViewState {
     pub(crate) usage_scores: Option<crate::usage::UsageScores>,
     /// §5.2：检查更新结果接收端（`Some` = 检查在途；结果消费后置 None）。
     pub(crate) update_rx: Option<Receiver<crate::update_check::UpdateStatus>>,
+    /// O17：最近一次检查到的可用新版本（`Available` 态留存，关于卡「下载新版」
+    /// 按钮数据源；`UpToDate` / `Failed` 消费时清空）。
+    pub(crate) update_available: Option<String>,
+    /// O17：更新下载在途（curl 后台线程；期间关于卡不渲染下载按钮）。
+    pub(crate) update_downloading: bool,
+    /// N20：搜索历史（history.json 装载；去重置顶、上限 50）。
+    pub(crate) search_history: Vec<String>,
+    /// N20：历史回填游标（`Some(i)` = 当前框内容来自 `search_history[i]`；
+    /// 用户手输或隐藏即失效）。Ctrl+↑ = 更旧（i+1）、Ctrl+↓ = 更新（i-1，
+    /// 越过最新回空框）。
+    pub(crate) history_nav: Option<usize>,
 }
 
 /// C1 拆片⑤（dd-run-改进分析.md §3.1）：扩展池——聚合通道与进行态、保活客户端、
@@ -357,6 +396,8 @@ pub(crate) struct ExtPool {
     /// R-03：已对哪些扩展弹过「入站队列溢出」toast——每扩展每会话至多一次
     ///（连续溢出只刷日志不重复轰炸；与 settings_save_warned 同口径）。
     pub(crate) overflow_warned: HashSet<String>,
+    /// N11：Recent 枚举 30 s 门控快照（空查询首屏「最近文件」分组）。
+    pub(crate) recent_cache: Option<(Instant, Vec<crate::aggregator::RecentEntry>)>,
     /// 首屏聚合事件接收端（C2 三段式流：Meta → Ext×N → Done）。
     pub(crate) aggregate_rx: Option<Receiver<AggregateEvent>>,
     /// 聚合是否仍在进行（列表区显示加载态——C2 起仅**零项期**显示骨架，
@@ -586,6 +627,11 @@ impl PaletteApp {
                 capture_started: None,
                 capture_failed: false,
                 hotkey_unregistered: false,
+                // N17：命令热键槽（generation 发号器 / 捕获目标 / 对话框缓冲）。
+                slots_generation: 0,
+                capture_target: CaptureTarget::Slot0,
+                command_slot_keyword: String::new(),
+                command_slot_err: None,
             },
             draft: SettingsDraft {
                 settings_save_warned: false,
@@ -603,12 +649,19 @@ impl PaletteApp {
                 apps_cfg_open: false,
                 apps_blocklist_buf: String::new(),
                 settings_import_armed: None,
+                backup_restore_armed: None,
+                // N18：片段添加表单缓冲（初始空）。
+                snippet_name_buf: String::new(),
+                snippet_keyword_buf: String::new(),
+                snippet_text_buf: String::new(),
+                snippet_err: None,
                 bg_path_buf: String::new(),
                 bg_err: None,
                 settings_category: SettingsCategory::default(),
             },
             pool: ExtPool {
                 overflow_warned: HashSet::new(),
+                recent_cache: None,
                 aggregate_rx: Some(aggregate_rx),
                 aggregating: true,
                 arrived: Vec::new(),
@@ -687,6 +740,12 @@ impl PaletteApp {
                 usage_scores: None,
                 // §5.2：检查更新在途接收端（按钮/启动自动检查触发）。
                 update_rx: None,
+                // O17：Available 版本留存与下载进行位（初始无）。
+                update_available: None,
+                update_downloading: false,
+                // N20：搜索历史（bin 装载 load_query_history；游标帧态）。
+                search_history: Vec::new(),
+                history_nav: None,
             },
         }
     }
@@ -1504,5 +1563,32 @@ mod size_tests {
         app.report_settings_save_failure(true);
         assert!(app.overlay.toast.is_none(), "成功路径不应有 toast");
         assert!(app.draft.settings_save_warned, "flag 每会话不复位");
+    }
+}
+
+/// 2026-11-22（真机腿抓出的第二处同类缺陷）：`FILE_SEARCH_EXT_ID` 必须与仓库内
+/// sidecar 清单 `id` 逐字一致——N12 的宿主键位门控与 conformance 的 `section`
+/// 断言都曾误写成不存在的 `com.ddrun.search`，导致整条链路静默失效。
+#[cfg(test)]
+mod file_search_id_tests {
+    use super::*;
+
+    #[test]
+    fn file_search_ext_id_matches_sidecar_manifest() {
+        let path = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../examples/extensions.d/com.ddrun.filesearch.json"
+        );
+        let text = std::fs::read_to_string(path).expect("sidecar 清单应存在（仓库内）");
+        let v: serde_json::Value = serde_json::from_str(&text).expect("清单应为合法 JSON");
+        assert_eq!(
+            v.get("id").and_then(|x| x.as_str()),
+            Some(FILE_SEARCH_EXT_ID),
+            "清单 id 与 dd-gui 门控常量漂移"
+        );
+        assert_eq!(
+            FILE_SEARCH_PAGE_ID, "files.results",
+            "页 id 与 search.rs 对齐"
+        );
     }
 }

@@ -84,13 +84,20 @@ pub(crate) fn draw_item_row(
                 // 文件结果：右列显示**所在文件夹路径**，替代来源类别标签。理由：
                 // ① B5 把路径挪进 hover tooltip 后，文件搜索结果「看不到文件在哪」
                 //    （真机反馈）；② 文件结果的类别标签恒为「命令」
-                //    （`category_label_for` 对 `com.ddrun.search` 走 `cat.command`
+                //    （`category_label_for` 对 `com.ddrun.filesearch` 走 `cat.command`
                 //    兜底），对该结果无信息量；③ 行高仍取 `m.row_h`（D8 40px /
                 //    密度档同构），**不动几何契约**——两行方案已被
                 //    `docs/icons-typography-plan.md` §5.3 明确不采纳。
                 // 非文件结果：维持类别标签（「应用 / 网页 / 系统」等）不变。
                 let file_item = is_file_item(item);
-                let trail_full: Option<String> = if file_item {
+                // 加固④：失效直达行（"invalid" tag，数据层 items.rs 打标）→ 右列
+                // danger「路径不存在」（文案取副标题首段 = 数据层已本地化前缀，
+                // 与 tooltip 同源、免 lang 透传）；invoke 拒绝 toast 双层保留。
+                let invalid_trail = invalid_direct_trail(item);
+                let invalid_direct = invalid_trail.is_some();
+                let trail_full: Option<String> = if invalid_direct {
+                    invalid_trail
+                } else if file_item {
                     // 只显示父目录——文件名已在标题，右列重复无意义；中段省略
                     // 后首段保留盘符、尾段保留最靠近文件的父目录，定位信息最大化。
                     Some(file_location(&item.subtitle).to_string())
@@ -160,7 +167,9 @@ pub(crate) fn draw_item_row(
                             ui.add_sized(
                                 egui::vec2(trail_w, m.title_pt + 2.0),
                                 egui::Label::new(
-                                    egui::RichText::new(disp).size(m.cat_pt).color(p.text3),
+                                    egui::RichText::new(disp)
+                                        .size(m.cat_pt)
+                                        .color(if invalid_direct { p.danger } else { p.text3 }),
                                 )
                                 .truncate(),
                             );
@@ -234,6 +243,18 @@ pub(crate) fn draw_item_row(
 /// 但副标题是说明文案（「输入关键词搜索本地文件」）而非路径，不能误判。
 fn is_file_item(item: &PanelItem) -> bool {
     item.tags.iter().any(|t| t == "files") && looks_like_path(&item.subtitle)
+}
+
+/// 加固④：失效直达行右列文本（"invalid" tag + 副标题首段已本地化前缀；
+/// 非失效 / 非直达行 → None）。纯函数可单测；绘制处据此染 danger 色。
+fn invalid_direct_trail(item: &PanelItem) -> Option<String> {
+    if item.id.starts_with(crate::aggregator::CUSTOM_ITEM_PREFIX)
+        && item.tags.iter().any(|t| t == "invalid")
+    {
+        item.subtitle.split_once(' ').map(|(p, _)| p.to_string())
+    } else {
+        None
+    }
 }
 
 // ── N6：标题高亮渲染 ────────────────────────────────────────────────────────
@@ -462,5 +483,42 @@ mod tests {
         );
         assert!(out.contains('\u{2026}'), "应含中段省略号");
         assert_eq!(out.chars().count(), 24, "总长度应为 24（含 1 省略号）");
+    }
+}
+
+// ── 加固④：失效直达行右列（2026-11-22）──────────────────────────────────────
+#[cfg(test)]
+mod b4_tests {
+    use super::*;
+
+    /// invalid_direct_trail：失效直达行 → 副标题首段（数据层已本地化前缀）；
+    /// 非失效 / 非直达 / 无前缀 → None。
+    #[test]
+    fn b4_invalid_direct_trail_extracts_localized_prefix() {
+        let mut item = crate::state::PanelItem {
+            id: "custom:gone".into(),
+            ext_id: "com.ddrun.host".into(),
+            title: "缺失".into(),
+            subtitle: r"路径不存在 C:\x.txt".into(),
+            section: String::new(),
+            icon: None,
+            tags: vec!["gone".into(), "invalid".into()],
+            result_category: None,
+            pinyin: String::new(),
+            command: dd_protocol::model::CommandRef::Invoke,
+            more_commands: Vec::new(),
+        };
+        assert_eq!(
+            invalid_direct_trail(&item).as_deref(),
+            Some("路径不存在"),
+            "首段 = 数据层已本地化前缀"
+        );
+        // 非直达行（无 custom: 前缀）→ None
+        item.id = "app:4".into();
+        assert_eq!(invalid_direct_trail(&item), None);
+        // 直达行但无 invalid tag → None
+        item.id = "custom:gone".into();
+        item.tags = vec!["gone".into()];
+        assert_eq!(invalid_direct_trail(&item), None);
     }
 }

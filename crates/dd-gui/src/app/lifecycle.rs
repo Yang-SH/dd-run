@@ -127,6 +127,11 @@ impl PaletteApp {
         self.persist_panel_size(ctx);
         // N21：隐藏前落盘面板位置（仅 Remember 档；best-effort 同口径）。
         self.persist_panel_position(ctx);
+        // N20：隐藏前记录查询历史（非空 query 才记——方案「激活或隐藏」双时机
+        // 之一）+ 回填游标复位（下次唤起干净状态）。
+        let query = self.view.stack.current().list.query().to_owned();
+        self.record_query_history(&query);
+        self.view.history_nav = None;
         // 隐藏当帧继续绘制真实内容一次，避免 present 纯色空帧的「闪黑」
         // （见 `paint_hide_frame` 字段注释）。
         self.window.paint_hide_frame = true;
@@ -252,6 +257,50 @@ impl PaletteApp {
                         self.hide(ctx);
                     } else {
                         self.show(ctx);
+                    }
+                }
+                HotkeyEvent::Trigger { slot } => {
+                    // N17：命令热键槽触发——按槽位查绑定表执行对应自定义命令
+                    //（面板隐藏态亦生效；关键词失效 = 配置已删除，静默忽略与
+                    // run_custom_command 同口径）。捕获期不拦截（用户显式绑定
+                    // 的全局动作；slot 0 的捕获期守卫仅针对面板切换语义）。
+                    let idx = slot as usize;
+                    let keyword = self
+                        .draft
+                        .settings
+                        .command_hotkeys
+                        .get(idx.saturating_sub(1))
+                        .map(|h| h.keyword.clone());
+                    match keyword {
+                        Some(kw) => {
+                            log::debug!("[dd-gui] 命令热键槽 {slot} 触发：{kw}");
+                            self.run_custom_command(&format!(
+                                "{prefix}{kw}",
+                                prefix = crate::aggregator::CUSTOM_ITEM_PREFIX
+                            ));
+                        }
+                        None => {
+                            log::warn!("[dd-gui] 命令热键槽 {slot} 无绑定（配置已清空），忽略")
+                        }
+                    }
+                }
+                HotkeyEvent::CommandSlots {
+                    generation,
+                    ok_mask,
+                } => {
+                    // N17：槽注册结果——generation 匹配当前请求才反馈（陈旧
+                    // 事件忽略）；全成功静默（设置卡即时呈现绑定），部分失败
+                    // Error toast（组合键可能被占用）。
+                    let n = self.draft.settings.command_hotkeys.len().min(3);
+                    let expected = if n == 0 { 0u8 } else { (1u8 << n) - 1 };
+                    if generation == self.hotkeys.slots_generation && ok_mask != expected {
+                        log::warn!(
+                            "[dd-gui] 命令热键槽部分注册失败（ok_mask={ok_mask:#04b} / 期望 {expected:#04b}）"
+                        );
+                        self.show_error_toast(
+                            crate::text::t(self.view.lang_effective, "toast.command_slots_partial")
+                                .to_string(),
+                        );
                     }
                 }
                 HotkeyEvent::ReRegistered {

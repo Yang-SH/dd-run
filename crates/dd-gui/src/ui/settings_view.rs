@@ -272,6 +272,9 @@ impl PaletteApp {
                     self.draw_search_behavior_card(ui, &p);
                     ui.add_space(8.0); // 卡片间距 8px（§08.1）
                     self.draw_search_engine_card(ui, &p, &ctx);
+                    // N20：搜索历史卡（记录开关 + 清空）。
+                    ui.add_space(8.0);
+                    self.draw_history_card(ui, &p);
                 }
                 SettingsCategory::Extensions => self.draw_extensions_card(ui, &p),
             }

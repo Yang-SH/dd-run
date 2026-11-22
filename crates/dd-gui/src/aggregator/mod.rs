@@ -39,7 +39,10 @@ mod spawn;
 // `pub use` 再导出，调用方的既有路径（含 benches/hot_paths.rs 的 bench 引用）
 // 保持不变。
 pub use env::{inject_ext_settings, inject_websearch_env};
-pub use items::{custom_command_items, flatten, to_panel_item, url_path_direct_item};
+pub use items::{
+    custom_command_items, enumerate_recent, extract_pinned, flatten, pin_key_for, recent_file_item,
+    snippet_items, to_panel_item, url_path_direct_item, RecentEntry,
+};
 pub use model::{
     CollectResult, ExtItems, SourceStatus, SourceSummary, CUSTOM_ITEM_PREFIX, DIRECT_ITEM_PREFIX,
     HOST_CUSTOM_EXT_ID, HOST_VERSION, PROTOCOL_VERSION,
@@ -942,5 +945,186 @@ mod tests {
         }];
         let (_, sources) = flatten(&per_ext, Lang::ZhCn);
         assert!(matches!(sources[0].status, SourceStatus::Failed { .. }));
+    }
+}
+
+// ── N11：空查询首屏（2026-11-22）─────────────────────────────────────────────
+#[cfg(test)]
+mod n11_tests {
+    use super::*;
+    use crate::settings::Lang;
+    use crate::state::PanelItem;
+    use std::time::{Duration, SystemTime};
+
+    /// 最小宿主条目（与 to_panel_item 产物同形；占位字段零语义）。
+    fn item(ext_id: &str, id: &str, title: &str, section: &str) -> PanelItem {
+        PanelItem {
+            id: id.to_string(),
+            ext_id: ext_id.to_string(),
+            title: title.to_string(),
+            subtitle: String::new(),
+            section: section.to_string(),
+            icon: None,
+            tags: Vec::new(),
+            result_category: None,
+            pinyin: String::new(),
+            command: dd_protocol::model::CommandRef::Invoke,
+            more_commands: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn n11_pin_key_two_families() {
+        assert_eq!(
+            pin_key_for(&item("com.ddrun.apps", "4", "记事本", "应用")),
+            "app:记事本",
+            "apps 族 = 显示名片段键（id 随枚举漂移）"
+        );
+        assert_eq!(
+            pin_key_for(&item("com.ddrun.host", "custom:gh", "GitHub", "直达")),
+            crate::usage::usage_key("com.ddrun.host", "custom:gh"),
+            "稳定 id 族 = usage_key"
+        );
+    }
+
+    #[test]
+    fn n11_extract_pinned_keeps_add_order_and_relabels() {
+        let items = vec![
+            item("com.ddrun.apps", "1", "A", "应用"),
+            item("com.ddrun.host", "custom:b", "B", "直达"),
+            item("com.ddrun.apps", "2", "C", "应用"),
+            item("com.ddrun.bookmarks", "bm", "D", "书签"),
+        ];
+        let keys = vec![
+            "app:C".to_string(),
+            crate::usage::usage_key("com.ddrun.host", "custom:b"),
+        ];
+        let (pinned, rest) = extract_pinned(items, &keys, "置顶");
+        assert_eq!(
+            pinned.iter().map(|i| i.title.as_str()).collect::<Vec<_>>(),
+            ["C", "B"],
+            "组序 = 置顶添加序（非列表序）"
+        );
+        assert!(pinned.iter().all(|i| i.section == "置顶"), "重标分组");
+        assert_eq!(
+            rest.iter().map(|i| i.title.as_str()).collect::<Vec<_>>(),
+            ["A", "D"],
+            "命中项移出原分组（避免同项双显）"
+        );
+        // 失效键（应用已卸载）：静默跳过
+        let (pinned2, rest2) = extract_pinned(rest, &["app:不存在".to_string()], "置顶");
+        assert!(pinned2.is_empty() && rest2.len() == 2);
+    }
+
+    #[test]
+    fn n11_enumerate_recent_mtime_desc_cap_and_ext_filter() {
+        let dir = std::env::temp_dir().join(format!("ddrun-n11-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut paths = Vec::new();
+        for i in 0..12u32 {
+            let p = dir.join(format!("f{i:02}.lnk"));
+            std::fs::write(&p, b"").unwrap();
+            paths.push(p);
+        }
+        let txt = dir.join("note.txt");
+        std::fs::write(&txt, b"").unwrap();
+        let base = SystemTime::UNIX_EPOCH;
+        for (i, p) in paths.iter().enumerate() {
+            let f = std::fs::File::options().write(true).open(p).unwrap();
+            f.set_times(
+                std::fs::FileTimes::new()
+                    .set_modified(base + Duration::from_secs(3600 * (i as u64 + 1))),
+            )
+            .unwrap();
+        }
+        let out = enumerate_recent(&dir, 10);
+        assert_eq!(out.len(), 10, "cap 10");
+        assert_eq!(out[0].name, "f11.lnk", "mtime 降序（最新在前）");
+        assert_eq!(out[9].name, "f02.lnk", "最旧两条被 cap 截去");
+        assert!(!out.iter().any(|e| e.name == "note.txt"), "非 .lnk 排除");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn n11_recent_file_item_shape() {
+        let e = RecentEntry {
+            path: r"C:\x\Recent\报告 v2.lnk".to_string(),
+            name: "报告 v2.lnk".to_string(),
+            modified: SystemTime::UNIX_EPOCH,
+        };
+        let it = recent_file_item(&e, "最近文件", Lang::ZhCn);
+        assert_eq!(it.title, "报告 v2", "标题去扩展名");
+        assert!(it.id.starts_with("recent:"), "id = recent:<路径>");
+        assert_eq!(it.ext_id, HOST_CUSTOM_EXT_ID, "宿主虚拟条目");
+        assert_eq!(it.section, "最近文件");
+        assert!(!it.pinyin.is_empty(), "标题进拼音索引（宿主管线口径）");
+        assert!(matches!(it.command, dd_protocol::model::CommandRef::Invoke));
+    }
+}
+
+// ── 加固④：失效直达行结构化标记（2026-11-22）────────────────────────────────
+#[cfg(test)]
+mod b4_tests {
+    use super::*;
+    use crate::settings::CustomCommandKind;
+
+    /// 失效 path 型直达命令 → 条目携带 "invalid" tag（渲染层右列 danger 标记
+    /// 的判定面；副标题前缀文案不变）。有效命令 / url 型 → 无 tag。
+    #[test]
+    fn b4_missing_path_carries_invalid_tag() {
+        use crate::settings::{CustomCommand, Lang};
+        let cmds = vec![
+            CustomCommand::new("缺失", "gone", CustomCommandKind::Path, r"C:\不存在\x.txt")
+                .unwrap(),
+            CustomCommand::new("有效", "ok", CustomCommandKind::Path, r"C:\Windows").unwrap(),
+            CustomCommand::new("网页", "gh", CustomCommandKind::Url, "https://github.com").unwrap(),
+        ];
+        let items = custom_command_items(&cmds, Lang::ZhCn);
+        let by_key = |kw: &str| {
+            items
+                .iter()
+                .find(|i| i.id.ends_with(kw))
+                .unwrap_or_else(|| panic!("条目 {kw} 缺失"))
+        };
+        assert!(
+            by_key("gone").tags.iter().any(|t| t == "invalid"),
+            "失效 path 条目携带 invalid tag"
+        );
+        assert!(
+            !by_key("ok").tags.iter().any(|t| t == "invalid"),
+            "有效命令无 invalid tag"
+        );
+        assert!(
+            !by_key("gh").tags.iter().any(|t| t == "invalid"),
+            "url 型不做失效检测（零网络姿态）"
+        );
+    }
+}
+
+// ── N18：文本片段条目（2026-11-22）──────────────────────────────────────────
+#[cfg(test)]
+mod n18_tests {
+    use super::*;
+    use crate::settings::{Lang, Snippet};
+
+    /// 片段条目形态：id = `snippet:<关键词>`、拼音索引含关键词、副标题首行
+    /// 截断预览（多行 → 省略号）、分组「片段」。
+    #[test]
+    fn n18_snippet_items_shape() {
+        let snippets = vec![Snippet::new("邮箱签名", "mail", "Best regards.\n第二行").unwrap()];
+        let items = snippet_items(&snippets, "片段", Lang::ZhCn);
+        assert_eq!(items.len(), 1);
+        let it = &items[0];
+        assert_eq!(it.id, "snippet:mail");
+        assert_eq!(it.title, "邮箱签名");
+        assert_eq!(it.subtitle, "Best regards.…", "首行预览 + 省略号（含换行）");
+        assert_eq!(it.section, "片段");
+        // 拼音索引 = 标题汉字（pinyin_haystack 跳过非汉字——ASCII 关键词的
+        // 「关键词即搜」走 tags 通道，与 N1 自定义命令同机制）。
+        assert!(!it.pinyin.is_empty(), "标题拼音索引（宿主管线）");
+        assert!(
+            it.tags.iter().any(|t| t == "mail"),
+            "关键词即搜（tags 通道）"
+        );
     }
 }

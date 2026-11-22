@@ -127,6 +127,20 @@ pub struct Settings {
     /// 自定义直达命令（N1，2026-10-04）：关键词 → URL / 本地路径。聚合期
     /// 转为宿主虚拟条目进首屏；默认空 = 无直达命令。
     pub custom_commands: Vec<CustomCommand>,
+    /// N11（2026-11-22）：空查询首屏置顶键表（上限 20，clamp）——两族键：
+    /// 稳定 id 族 = `usage_key(ext_id, item_id)`、apps 族 = `app:{显示名}` 片段键
+    /// （apps 条目 id 随枚举漂移，N2 注记）。业务态：随 N5 导出迁移（非机器态）。
+    pub pinned_keys: Vec<String>,
+    /// N20（2026-11-22）：记录搜索历史开关（默认开；关 = 停止记录 + 清空既有
+    /// ——写设置即生效）。历史本体存独立 `history.json`（个人态，文件隔离
+    /// 天然不随 N5 导出迁移）；本开关属用户偏好随导出。
+    pub record_search_history: bool,
+    /// N17（2026-11-22）：命令热键绑定表（≤3 槽，上限 clamp）——机器态随 N5
+    /// 导入保留本机现值（导出物含字段供参考）。
+    pub command_hotkeys: Vec<CommandHotkey>,
+    /// N18（2026-11-22）：文本片段库（一档：面板内搜 → Enter 复制；上限
+    /// [`SNIPPET_CAP`]）。业务态随 N5 导出迁移；`;keyword` 全局展开维持缓办。
+    pub snippets: Vec<Snippet>,
     /// 内置扩展用户可调配置（N2，2026-10-04）：`ext_id → (键 → 值)`。
     /// 聚合期经 `aggregator::inject_ext_settings` 注入扩展 `entry.env` 内存
     /// 副本（变量名 `DD_EXT_CFG_<KEY 大写>`）；in-process 内置另走内存通道
@@ -325,6 +339,10 @@ impl Default for Settings {
             search_steam_games: false,
             warm_capacity: WARM_CAPACITY_DEFAULT,
             custom_commands: Vec::new(),
+            pinned_keys: Vec::new(),
+            record_search_history: true,
+            command_hotkeys: Vec::new(),
+            snippets: Vec::new(),
             ext_settings: BTreeMap::new(),
             unknown: BTreeMap::new(),
             read_only: false,
@@ -419,6 +437,10 @@ impl Settings {
             "search_steam_games",
             "warm_capacity",
             "custom_commands",
+            "pinned_keys",
+            "record_search_history",
+            "command_hotkeys",
+            "snippets",
             "ext_settings",
             // N5 导出物版本标记：随导出物写入、导入时由 parse_json 读走后
             // 不再回写（写盘方是 config.json，不是备份文件）——归为已知键，
@@ -674,6 +696,54 @@ impl Settings {
                 })
                 .collect();
         }
+        // N11（2026-11-22）：置顶键表——字段缺失（旧版本配置）→ 默认空；
+        // 逐条收字符串、去空串，上限 20 clamp（保留前 20，防导入膨胀）。
+        if let Some(arr) = v.get("pinned_keys").and_then(|a| a.as_array()) {
+            s.pinned_keys = arr
+                .iter()
+                .filter_map(|x| x.as_str())
+                .map(str::to_string)
+                .filter(|k| !k.is_empty())
+                .take(PINNED_KEYS_CAP)
+                .collect();
+        }
+        // N20（2026-11-22）：搜索历史开关（默认开——字段缺失回落 true）。
+        if let Some(b) = v.get("record_search_history").and_then(|b| b.as_bool()) {
+            s.record_search_history = b;
+        }
+        // N18（2026-11-22）：文本片段——字段缺失（旧版本配置）→ 默认空；
+        // 逐条经 `Snippet::new` 校验规范化，非法条目跳过；上限 200 clamp。
+        if let Some(arr) = v.get("snippets").and_then(|a| a.as_array()) {
+            s.snippets = arr
+                .iter()
+                .filter_map(|e| {
+                    Snippet::new(
+                        e.get("name").and_then(|x| x.as_str())?,
+                        e.get("keyword").and_then(|x| x.as_str())?,
+                        e.get("text").and_then(|x| x.as_str())?,
+                    )
+                })
+                .take(SNIPPET_CAP)
+                .collect();
+        }
+        // N17（2026-11-22）：命令热键绑定——字段缺失（旧版本配置）→ 默认空；
+        // 逐条校验（mods/vk 非零、keyword 非空），非法条目跳过；上限 3 clamp。
+        if let Some(arr) = v.get("command_hotkeys").and_then(|a| a.as_array()) {
+            s.command_hotkeys = arr
+                .iter()
+                .filter_map(|e| {
+                    let mods = e.get("mods").and_then(|x| x.as_u64())? as u32;
+                    let vk = e.get("vk").and_then(|x| x.as_u64())? as u32;
+                    let keyword = e.get("keyword").and_then(|x| x.as_str())?.to_string();
+                    (mods != 0 && vk != 0 && !keyword.is_empty()).then_some(CommandHotkey {
+                        mods,
+                        vk,
+                        keyword,
+                    })
+                })
+                .take(COMMAND_HOTKEY_CAP)
+                .collect();
+        }
         // 内置扩展用户可调配置（N2，2026-10-04）：字段缺失（旧版本配置）→
         // 默认空；逐条校验（ext_id 非空、值仅收字符串），非字符串值跳过。
         if let Some(obj) = v.get("ext_settings").and_then(|x| x.as_object()) {
@@ -768,6 +838,30 @@ impl Settings {
                     })
                 })
                 .collect::<Vec<_>>(),
+            "pinned_keys": self.pinned_keys,
+            "record_search_history": self.record_search_history,
+            "command_hotkeys": self
+                .command_hotkeys
+                .iter()
+                .map(|h| {
+                    serde_json::json!({
+                        "mods": h.mods,
+                        "vk": h.vk,
+                        "keyword": h.keyword,
+                    })
+                })
+                .collect::<Vec<_>>(),
+            "snippets": self
+                .snippets
+                .iter()
+                .map(|sn| {
+                    serde_json::json!({
+                        "name": sn.name,
+                        "keyword": sn.keyword,
+                        "text": sn.text,
+                    })
+                })
+                .collect::<Vec<_>>(),
             "ext_settings": self.ext_settings,
         });
         // 已知键覆盖同名未知键（正常不相交；防御键集漂移）
@@ -848,17 +942,37 @@ impl Settings {
     }
 
     /// [`save`] 的可注入核心（单测不触真实 config.json）。
+    /// 加固①（2026-11-22）：**durable 写**（tmp sync_all 后 rename——显式保存
+    /// 低频，崩溃窗口压到零；高频路径 `persist_panel_size`/`persist_panel_position`
+    /// 保持 [`atomic_write`] 快速分层）+ **滚动备份环**：custom_commands 与盘上
+    /// 版本不同才轮转旧 config 进 `config.json.bak.1..3`（无变更保存不触发，
+    /// 控制写放大；读旧文件失败 = 首存不轮转）。
     fn save_to(&self, path: &std::path::Path) -> bool {
-        match atomic_write(path, self.to_json_string().as_bytes()) {
+        if let Ok(old) = std::fs::read_to_string(path) {
+            let (b1, b2, b3) = backup_ring_paths(path);
+            rotate_settings_backup(&b1, &b2, &b3, &old, &self.custom_commands);
+        }
+        // 加固②：显式保存审计（字节量 / 命令条目数 / 耗时 → dd-run.log；
+        // B-2 异常可从此 grep 出「保存 → 为空」窗口的时间线）。
+        let payload = self.to_json_string();
+        let started = std::time::Instant::now();
+        let ok = match atomic_write_durable(path, payload.as_bytes()) {
             Ok(()) => {
-                log::info!("[dd-gui] 设置已保存：{}", path.display());
+                log::info!(
+                    "[dd-gui] 设置已保存：{}（{} B / custom_commands {} 条 / {:?}）",
+                    path.display(),
+                    payload.len(),
+                    self.custom_commands.len(),
+                    started.elapsed()
+                );
                 true
             }
             Err(e) => {
                 log::warn!("[dd-gui] 配置写入失败（{}）：{e}", path.display());
                 false
             }
-        }
+        };
+        ok
     }
 
     /// [`save_to`] 的可注入形态（A4，仅测试编译）：`writer` 注入写盘失败，
@@ -905,7 +1019,7 @@ impl Settings {
     /// N5：备份落盘（原子写，同 [`Self::save`] 的 R-02 机制；返回成败供
     /// 调用方 toast——失败静默会「看似成功」）。
     pub fn save_backup_to(&self, path: &std::path::Path) -> bool {
-        match atomic_write(path, self.export_backup().as_bytes()) {
+        match atomic_write_durable(path, self.export_backup().as_bytes()) {
             Ok(()) => {
                 log::info!("[dd-gui] 设置备份已导出：{}", path.display());
                 true
@@ -942,7 +1056,69 @@ impl Settings {
         s.panel_last_pos = current.panel_last_pos;
         s.hotkey_mods = current.hotkey_mods;
         s.hotkey_vk = current.hotkey_vk;
+        // N17：命令热键绑定属机器态（组合键占用属机器环境，与 hotkey_mods/vk
+        // 同族——导入期自动注册有冲突风险；导出物仍含该字段供参考）
+        s.command_hotkeys = current.command_hotkeys.clone();
         Ok(s)
+    }
+}
+
+/// N17（2026-11-22）：命令热键绑定（第二热键基建，≤3 槽）——全局组合键直接
+/// 触发对应**自定义命令**（复用 N1 执行体 `run_custom_command`，S-03 白名单
+/// 天然生效；面板隐藏态亦生效）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CommandHotkey {
+    /// 修饰键掩码（settings 位约定：ALT=1/CONTROL=2/SHIFT=4/WIN=8）。
+    pub mods: u32,
+    /// 主键虚拟键码。
+    pub vk: u32,
+    /// 触发的自定义命令**主关键词**（必须命中既有 `CustomCommand`）。
+    pub keyword: String,
+}
+
+/// N17：命令热键槽位上限（方案 §4.12：≤3 槽；slot 0 = 面板 toggle 不占）。
+pub const COMMAND_HOTKEY_CAP: usize = 3;
+
+/// N18（2026-11-22）：文本片段（一档：面板内搜片段 → Enter 复制）。
+/// `;keyword` 全局展开**不做**（缓办边界 §3.2——输入伪造面）；占位符 / 批量
+/// 导入不做（方案 §4.13 边界）。业务态随 N5 导出迁移。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Snippet {
+    /// 显示名（首屏条目标题，生成拼音索引）。
+    pub name: String,
+    /// 匹配关键词（规范化同 CustomCommand：trim / 小写 / 拒空白；首屏唯一）。
+    pub keyword: String,
+    /// 片段正文（Enter 复制到剪贴板；单条 ≤ [`SNIPPET_TEXT_CAP`] 字符）。
+    pub text: String,
+}
+
+/// N18：片段条目上限。
+pub const SNIPPET_CAP: usize = 200;
+/// N18：单条片段正文字符上限（clamp；方案 §4.13 口径）。
+pub const SNIPPET_TEXT_CAP: usize = 5000;
+
+impl Snippet {
+    /// 构造并规范化：name/text trim、keyword 按 CustomCommand 同规则（trim /
+    /// 小写 / 拒空白）；text 超 [`SNIPPET_TEXT_CAP`] 截断；任一必填为空 → None。
+    pub fn new(name: &str, keyword: &str, text: &str) -> Option<Self> {
+        let name = name.trim();
+        let text = text.trim();
+        let keyword = keyword.trim().to_lowercase();
+        if name.is_empty() || keyword.is_empty() || text.is_empty() {
+            return None;
+        }
+        if keyword.split_whitespace().count() != 1 {
+            return None;
+        }
+        let mut text = text.to_string();
+        if text.chars().count() > SNIPPET_TEXT_CAP {
+            text = text.chars().take(SNIPPET_TEXT_CAP).collect();
+        }
+        Some(Self {
+            name: name.to_string(),
+            keyword,
+            text,
+        })
     }
 }
 
@@ -962,6 +1138,85 @@ pub const BACKUP_FILE_NAME: &str = "dd-settings-backup.json";
 /// 「新版本导出 → 旧版本导入」的字段差异）。
 pub const BACKUP_VERSION_KEY: &str = "exported_from";
 
+/// N11：置顶键表上限（方案 §4.6 口径；parse clamp 与新增淘汰共用）。
+pub(crate) const PINNED_KEYS_CAP: usize = 20;
+
+/// N11：置顶键幂等切换——存在即移除（返回 false = 取消置顶）；不存在则追加
+/// （达上限先淘汰最旧[队首]，返回 true = 已置顶）。纯函数，调用方负责落盘 +
+/// 重聚合脏标记。
+pub(crate) fn toggle_pinned_key(keys: &mut Vec<String>, key: &str) -> bool {
+    if let Some(idx) = keys.iter().position(|k| k == key) {
+        keys.remove(idx);
+        return false;
+    }
+    while keys.len() >= PINNED_KEYS_CAP {
+        keys.remove(0);
+    }
+    keys.push(key.to_string());
+    true
+}
+
+impl Settings {
+    /// N17：命令热键绑定校验（设置卡「保存」用；错误给可读原因）——
+    /// ① 组合键完整且含修饰（Ctrl/Alt/Win，与主热键捕获口径一致）；
+    /// ② 主关键词必须命中既有自定义命令；③ 组合键不得与主热键 / 既有槽位
+    /// 重复；④ 关键词不得与既有槽位重复；⑤ 槽位未满。
+    pub fn validate_command_hotkey(&self, hk: &CommandHotkey) -> Result<(), String> {
+        if hk.mods == 0 || hk.vk == 0 {
+            return Err("组合键不完整（须含修饰键与主键）".into());
+        }
+        if hk.mods & HOTKEY_MODS_MASK == 0 {
+            return Err("须含 Ctrl / Alt / Win 修饰键".into());
+        }
+        if !self
+            .custom_commands
+            .iter()
+            .any(|c| c.primary_keyword() == hk.keyword)
+        {
+            return Err(format!("关键词「{}」未命中任何自定义命令", hk.keyword));
+        }
+        if self.hotkey_mods == hk.mods && self.hotkey_vk == hk.vk {
+            return Err("与面板唤起热键重复".into());
+        }
+        if let Some(dup) = self
+            .command_hotkeys
+            .iter()
+            .find(|h| h.mods == hk.mods && h.vk == hk.vk)
+        {
+            return Err(format!("组合键已被绑定（关键词「{}」）", dup.keyword));
+        }
+        if self.command_hotkeys.iter().any(|h| h.keyword == hk.keyword) {
+            return Err(format!("关键词「{}」已被绑定", hk.keyword));
+        }
+        if self.command_hotkeys.len() >= COMMAND_HOTKEY_CAP {
+            return Err("命令热键槽位已满（上限 3）".into());
+        }
+        Ok(())
+    }
+
+    /// N18：新增片段（设置卡「添加」用）——规范化 + 校验（必填 / 关键词
+    /// 规范化 / 关键词唯一 / 槽位上限），成功即入表（调用方落盘 + 重聚合）。
+    pub fn add_snippet(&mut self, name: &str, keyword: &str, text: &str) -> Result<(), String> {
+        if self.snippets.len() >= SNIPPET_CAP {
+            return Err(format!("片段数已达上限（{}）", SNIPPET_CAP));
+        }
+        let sn = Snippet::new(name, keyword, text)
+            .ok_or_else(|| "名称 / 关键词 / 内容不能为空，关键词不得含空白".to_string())?;
+        if self.snippets.iter().any(|x| x.keyword == sn.keyword) {
+            return Err(format!("关键词「{}」已被占用", sn.keyword));
+        }
+        self.snippets.push(sn);
+        Ok(())
+    }
+
+    /// N18：删除片段（按关键词；不存在返回 false）。
+    pub fn remove_snippet(&mut self, keyword: &str) -> bool {
+        let before = self.snippets.len();
+        self.snippets.retain(|x| x.keyword != keyword);
+        self.snippets.len() != before
+    }
+}
+
 /// 原子写盘（R-02）：同目录写 `.tmp` 临时文件后 `rename` 覆盖目标。
 ///
 /// 写盘中途崩溃/断电只丢 `.tmp`，目标文件要么保持完整旧内容、要么已整体
@@ -973,6 +1228,77 @@ pub const BACKUP_VERSION_KEY: &str = "exported_from";
 /// `pub(crate)`（§5.1）：`usage::Usage::save` 复用同一原子写语义。
 pub(crate) fn atomic_write(path: &std::path::Path, bytes: &[u8]) -> std::io::Result<()> {
     atomic_write_with(path, bytes, atomic_writer)
+}
+
+/// 加固①（2026-11-22）：durable 变体——tmp 落盘后 `sync_all` 再 rename
+///（FlushFileBuffers 语义由 [`std::fs::File::sync_all`] 承载）。仅显式保存链
+/// 使用（save / save_to / save_backup_to——低频且恰是 B-2 异常最可疑窗口）；
+/// 高频路径保持 [`atomic_write`] 快速分层，与上方「刻意不做 fsync」注释的
+/// 设计意图不冲突（按频率分层）。
+pub(crate) fn atomic_write_durable(path: &std::path::Path, bytes: &[u8]) -> std::io::Result<()> {
+    atomic_write_with(path, bytes, durable_writer)
+}
+
+/// 生产 durable 写入器：显式句柄写入 + `sync_all`（确保落盘后再 rename）。
+fn durable_writer(tmp: &std::path::Path, bytes: &[u8]) -> std::io::Result<()> {
+    use std::io::Write as _;
+    let mut f = std::fs::File::create(tmp)?;
+    f.write_all(bytes)?;
+    f.sync_all()
+}
+
+/// 加固①：滚动备份环文件名（config.json 同目录；上限 3）。
+const BACKUP_RING: [&str; 3] = [
+    "config.json.bak.1",
+    "config.json.bak.2",
+    "config.json.bak.3",
+];
+
+/// 加固②：启动骤降检测纯函数——当前命令数**严格小于**备份解析数的一半且
+/// 备份非空 → `Some(备份条数)`（调用方 toast 指引恢复）；备份缺失/损坏（parse
+/// 回落空表）/空表 → `None`（无基线可比，不制造虚警）。
+pub(crate) fn detect_custom_commands_drop(
+    current: &[CustomCommand],
+    backup: Option<&str>,
+) -> Option<usize> {
+    let bak_cc = Settings::parse_json(backup?).custom_commands;
+    if bak_cc.is_empty() {
+        return None;
+    }
+    (current.len() * 2 < bak_cc.len()).then_some(bak_cc.len())
+}
+
+/// 加固①：环内三路径（config.json 同目录；无父目录回落当前目录——防御）。
+pub(crate) fn backup_ring_paths(
+    config: &std::path::Path,
+) -> (std::path::PathBuf, std::path::PathBuf, std::path::PathBuf) {
+    let dir = config.parent().unwrap_or_else(|| std::path::Path::new("."));
+    (
+        dir.join(BACKUP_RING[0]),
+        dir.join(BACKUP_RING[1]),
+        dir.join(BACKUP_RING[2]),
+    )
+}
+
+/// 加固①：备份环轮转——旧 config 的 custom_commands 与当前不同才轮转：
+/// bak2→bak3、bak1→bak2、旧全文→bak1（[`atomic_write`] 快速路径——环写入
+/// 本身低频备份，主 config 写盘才是 durable 层）。无变更返回 false 不动环。
+/// B-2 异常形态（保存→发现为空的窗口内丢命令）的最小兜底：任一时刻环内
+/// 至少保留最近三次含命令变更的旧配置。
+pub(crate) fn rotate_settings_backup(
+    bak1: &std::path::Path,
+    bak2: &std::path::Path,
+    bak3: &std::path::Path,
+    old_config_text: &str,
+    current: &[CustomCommand],
+) -> bool {
+    if Settings::parse_json(old_config_text).custom_commands == *current {
+        return false;
+    }
+    // 环轮转（rename 目标不存在时忽略——环未满属常态）
+    let _ = std::fs::rename(bak2, bak3);
+    let _ = std::fs::rename(bak1, bak2);
+    atomic_write(bak1, old_config_text.as_bytes()).is_ok()
 }
 
 /// 生产写入器：整文件写入（`std::fs::write`）。

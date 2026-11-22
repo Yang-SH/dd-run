@@ -1127,7 +1127,13 @@ fn to_command_item(entry: &FileEntry, budget: &IconBudget) -> CommandItem {
         // 真实 Shell 图标（`Icon::Path`）优先，失败回落类别 glyph（`entry_icon`）
         icon: Some(entry_icon(entry, budget)),
         section: Some(tr("文件", "Files").to_string()),
-        tags: Some(vec!["files".to_string()]),
+        // N12：目录子项携带 `dir` 标签（宿主目录行 Enter 进入浏览的判定面；
+        // 协议零改动，tags 既有字段——search-file.md v3.14）。
+        tags: Some(if entry.is_dir {
+            vec!["files".to_string(), "dir".to_string()]
+        } else {
+            vec!["files".to_string()]
+        }),
         details: Some(Details {
             title: entry.name.clone(),
             body: format!(
@@ -1322,6 +1328,51 @@ fn get_file_items(params: &GetItemsParams) -> GetItemsResult {
     result
 }
 
+/// N12（2026-11-22）：目录浏览——`search_text` 形如「存在的目录路径」时返回
+/// 该目录直接子项（纯 `read_dir`，条目上限 `limit`）。目录不存在 / 读取失败 →
+/// `None`（调用方回落常规搜索）；排序 = 名称（浏览语义，非评分）；条目上限
+/// 沿用 `RESULT_LIMIT`（search-file.md v3.14 权威口径）。fixture 可单测。
+fn list_dir_children(dir_query: &str, limit: usize) -> Option<Vec<FileEntry>> {
+    let trimmed = dir_query.trim_end_matches(['\\', '/']);
+    let mut base = trimmed.to_string();
+    // 盘符根归一化："C:" → "C:\"（Path 语义下 "C:" 解析为该盘当前目录）；
+    // 全分隔符查询（"C:\"）trim 后为 "C:" 同样落入本分支。
+    if base.len() == 2 && base.as_bytes()[1] == b':' {
+        base.push('\\');
+    }
+    let p = std::path::Path::new(&base);
+    if !p.is_dir() {
+        return None;
+    }
+    let mut out: Vec<FileEntry> = std::fs::read_dir(p)
+        .ok()?
+        .filter_map(|e| e.ok())
+        .filter_map(|e| {
+            let md = e.metadata().ok()?;
+            let name = e.file_name().to_string_lossy().into_owned();
+            let is_dir = md.is_dir();
+            Some(FileEntry {
+                dir: base.clone(),
+                name,
+                size: if is_dir { 0 } else { md.len() },
+                modified: md
+                    .modified()
+                    .ok()
+                    .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                    .map(|d| d.as_secs() as i64)
+                    .unwrap_or(0),
+                modified_raw: chrono::DateTime::<chrono::Local>::from(md.modified().ok()?)
+                    .format("%Y-%m-%d %H:%M")
+                    .to_string(),
+                is_dir,
+            })
+        })
+        .collect();
+    out.sort_by_key(|e| e.name.to_lowercase());
+    out.truncate(limit);
+    Some(out)
+}
+
 /// 可用性注入版（§9.3 L1：单测不依赖 Everything/es.exe——离线确定性）。
 fn get_file_items_with(params: &GetItemsParams, available: bool) -> GetItemsResult {
     let query = params.search_text.as_deref().unwrap_or("").trim();
@@ -1333,6 +1384,31 @@ fn get_file_items_with(params: &GetItemsParams, available: bool) -> GetItemsResu
             t.query_ms = 0.0;
             t.score_ms = 0.0;
             t.icon_ms = 0.0;
+            t.items = items.len();
+        });
+        return GetItemsResult {
+            items,
+            has_more_items: false,
+            is_loading: false,
+        };
+    }
+    // N12（2026-11-22）：目录浏览分支——search_text = 存在的目录路径（尾部 `\`
+    // 可省）→ 直接子项。**置于 !available 之前**：纯 `read_dir` 零 Everything
+    // 依赖，Everything 不可用时目录浏览仍可用；目录不存在 → 回落常规链路
+    // （容错非契约，search-file.md v3.14 权威口径）。
+    if let Some(children) = list_dir_children(query, RESULT_LIMIT) {
+        let t_icon = Instant::now();
+        let budget = IconBudget::new(ICON_SYNC_BUDGET);
+        let items: Vec<CommandItem> = children
+            .iter()
+            .map(|e| to_command_item(e, &budget))
+            .collect();
+        let icon_ms = elapsed_ms(t_icon);
+        patch_timing(|t| {
+            t.kind = "dir";
+            t.channel = "none";
+            t.score_ms = 0.0;
+            t.icon_ms = icon_ms;
             t.items = items.len();
         });
         return GetItemsResult {
@@ -2751,5 +2827,55 @@ mod tests {
         let fb = fallback_commands();
         assert_eq!(fb.len(), 1);
         assert_eq!(glyph(&fb[0]), GLYPH_SEARCH, "fallback 入口应为搜索图标");
+    }
+
+    /// N12（2026-11-22）：目录浏览——search_text = 存在的目录路径 → 直接子项
+    /// （目录行带 "dir" 标签；尾 `\` 可省；**available=false 仍可用**——纯 fs
+    /// 零 Everything 依赖，§9.3 L1 离线确定性口径）；不存在的路径 → 回落常规
+    /// 链路（本例离线 → guide）。
+    #[test]
+    fn n12_dir_browse_lists_children_offline_and_falls_back() {
+        let dir = std::env::temp_dir().join(format!("ddrun-n12-{}", std::process::id()));
+        std::fs::create_dir_all(dir.join("sub")).unwrap();
+        std::fs::write(dir.join("f.txt"), b"x").unwrap();
+        let q = dir.display().to_string();
+        let mk = |st: String| GetItemsParams {
+            page_id: PAGE_ID.into(),
+            search_text: Some(st),
+        };
+        let r = get_file_items_with(&mk(q.clone()), false);
+        assert_eq!(r.items.len(), 2, "直接子项 = sub + f.txt");
+        let sub = r
+            .items
+            .iter()
+            .find(|i| i.title == "sub")
+            .expect("目录子项存在");
+        assert!(
+            sub.tags
+                .as_ref()
+                .map(|t| t.iter().any(|x| x == "dir"))
+                .unwrap_or(false),
+            "目录子项带 dir 标签"
+        );
+        assert!(
+            r.items
+                .iter()
+                .find(|i| i.title == "f.txt")
+                .map(|i| !i
+                    .tags
+                    .as_ref()
+                    .map(|t| t.iter().any(|x| x == "dir"))
+                    .unwrap_or(true))
+                .unwrap_or(false),
+            "文件子项无 dir 标签"
+        );
+        // 尾 `\` 形态同样命中
+        let r2 = get_file_items_with(&mk(format!("{q}\\")), false);
+        assert_eq!(r2.items.len(), 2, "尾 \\ 可省");
+        // 不存在的路径 → 回落常规链路（离线 = guide）
+        let r3 = get_file_items_with(&mk(dir.join("nope").display().to_string()), false);
+        assert_eq!(r3.items.len(), 1, "回落链路（离线 guide）");
+        assert_eq!(r3.items[0].id, "files.guide");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

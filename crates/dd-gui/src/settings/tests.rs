@@ -1112,3 +1112,348 @@ fn c4_write_stamps_current_schema_version() {
     let v: serde_json::Value = serde_json::from_str(&out).unwrap();
     assert_eq!(v["schema_version"], Settings::SCHEMA_VERSION);
 }
+
+// ── N11：置顶键表（2026-11-22）──────────────────────────────────────────────
+
+#[test]
+fn n11_pinned_keys_parse_missing_defaults_and_cap() {
+    // 字段缺失（旧版本配置）→ 默认空
+    assert!(Settings::parse_json("{}").pinned_keys.is_empty());
+    // clamp：>20 截前 20
+    let keys: Vec<String> = (0..25).map(|i| format!("k{i:02}")).collect();
+    let json = format!(r#"{{"pinned_keys": {}}}"#, serde_json::json!(keys));
+    let s = Settings::parse_json(&json);
+    assert_eq!(s.pinned_keys.len(), PINNED_KEYS_CAP);
+    assert_eq!(s.pinned_keys[0], "k00", "保留前 20");
+    assert_eq!(s.pinned_keys[19], "k19");
+    // 空串过滤
+    let s = Settings::parse_json(r#"{"pinned_keys": ["", "ok"]}"#);
+    assert_eq!(s.pinned_keys, vec!["ok".to_string()]);
+}
+
+#[test]
+fn n11_toggle_pinned_key_idempotent_and_evicts_oldest() {
+    let mut keys = Vec::new();
+    assert!(toggle_pinned_key(&mut keys, "a"));
+    assert_eq!(keys, vec!["a".to_string()]);
+    assert!(!toggle_pinned_key(&mut keys, "a"), "再切 = 取消置顶");
+    assert!(keys.is_empty());
+    for i in 0..PINNED_KEYS_CAP {
+        assert!(toggle_pinned_key(&mut keys, &format!("k{i:02}")));
+    }
+    assert!(toggle_pinned_key(&mut keys, "new"));
+    assert_eq!(keys.len(), PINNED_KEYS_CAP, "上限不破");
+    assert_eq!(keys[0], "k01", "最旧 k00 淘汰腾位");
+    assert_eq!(keys[19], "new");
+}
+
+#[test]
+fn n11_pinned_keys_survive_export_import_roundtrip() {
+    // N5 口径：pinned_keys 属业务态随导出迁移（非机器态剥离）
+    let s = Settings {
+        pinned_keys: vec!["a".into(), "b".into()],
+        ..Settings::default()
+    };
+    let parsed = Settings::parse_json(&s.export_backup());
+    assert_eq!(parsed.pinned_keys, vec!["a".to_string(), "b".to_string()]);
+    // 往返再落 config（to_json_string）同样保真
+    let parsed = Settings::parse_json(&parsed.to_json_string());
+    assert_eq!(parsed.pinned_keys, vec!["a".to_string(), "b".to_string()]);
+}
+
+// ── 加固①：fsync 分层 + 滚动备份环（2026-11-22）────────────────────────────
+
+#[test]
+fn b1_durable_write_content_correct() {
+    let dir = std::env::temp_dir().join(format!("ddrun-b1a-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let p = dir.join("x.json");
+    assert!(atomic_write_durable(&p, b"hello").is_ok());
+    assert_eq!(std::fs::read(&p).unwrap(), b"hello");
+    // tmp 残留清理断言（rename 成功后 .tmp 不在）
+    assert!(!dir.join("x.json.tmp").exists());
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn b1_rotate_backup_ring_order_cap_and_noop() {
+    let dir = std::env::temp_dir().join(format!("ddrun-b1b-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let (b1, b2, b3) = (
+        dir.join(BACKUP_RING[0]),
+        dir.join(BACKUP_RING[1]),
+        dir.join(BACKUP_RING[2]),
+    );
+    for p in [&b1, &b2, &b3] {
+        let _ = std::fs::remove_file(p);
+    }
+    let cc_of = |t: &str, k: &str| {
+        vec![CustomCommand::new(t, k, CustomCommandKind::Path, "C:\\x").unwrap()]
+    };
+    let snap = |cc: &Vec<CustomCommand>| {
+        Settings {
+            custom_commands: cc.clone(),
+            ..Settings::default()
+        }
+        .to_json_string()
+    };
+    // 轮转 1：cc 变更 → bak1 = 旧全文
+    let cc0 = cc_of("T0", "t0");
+    let old0 = snap(&cc0);
+    let cc1 = cc_of("T1", "t1");
+    assert!(rotate_settings_backup(&b1, &b2, &b3, &old0, &cc1));
+    assert_eq!(std::fs::read_to_string(&b1).unwrap(), old0);
+    assert!(!b2.exists() && !b3.exists(), "环未满：仅 bak1");
+    // 轮转 2：bak1=新旧、bak2=上轮 bak1
+    let old1 = snap(&cc1);
+    let cc2 = cc_of("T2", "t2");
+    assert!(rotate_settings_backup(&b1, &b2, &b3, &old1, &cc2));
+    assert_eq!(std::fs::read_to_string(&b1).unwrap(), old1);
+    assert_eq!(std::fs::read_to_string(&b2).unwrap(), old0);
+    // 无变更 → no-op（返回 false，环不动）——旧盘文本 cc == 当前 cc
+    let old2 = snap(&cc2);
+    assert!(!rotate_settings_backup(&b1, &b2, &b3, &old2, &cc2));
+    assert_eq!(std::fs::read_to_string(&b1).unwrap(), old1, "环未动");
+    // cap 3：再轮转 2 次 → bak3 出现；最旧内容（old0）已被挤出
+    let cc3 = cc_of("T3", "t3");
+    let old3 = snap(&cc3);
+    let cc4 = cc_of("T4", "t4");
+    assert!(rotate_settings_backup(&b1, &b2, &b3, &old2, &cc3));
+    assert!(rotate_settings_backup(&b1, &b2, &b3, &old3, &cc4));
+    assert!(b3.exists(), "环满：bak3 出现");
+    assert_eq!(std::fs::read_to_string(&b1).unwrap(), old3);
+    assert_eq!(std::fs::read_to_string(&b2).unwrap(), old2);
+    assert_eq!(
+        std::fs::read_to_string(&b3).unwrap(),
+        old1,
+        "最旧 old0 已挤出环"
+    );
+    for p in [&b1, &b2, &b3] {
+        let _ = std::fs::remove_file(p);
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+// ── 加固②：骤降检测（2026-11-22）────────────────────────────────────────────
+
+#[test]
+fn b2_drop_detection_threshold_and_baseline() {
+    let cc_of = |n: usize| {
+        (0..n)
+            .map(|i| {
+                CustomCommand::new(
+                    &format!("T{i}"),
+                    &format!("t{i}"),
+                    CustomCommandKind::Path,
+                    "C:\\x",
+                )
+                .unwrap()
+            })
+            .collect::<Vec<_>>()
+    };
+    // 备份 10 条、当前 4 条（<一半）→ Some(10)
+    let bak = Settings {
+        custom_commands: cc_of(10),
+        ..Settings::default()
+    }
+    .to_json_string();
+    assert_eq!(detect_custom_commands_drop(&cc_of(4), Some(&bak)), Some(10));
+    // 50% 边界（5/10 = 恰半）→ 不告警（阈值 = 严格小于一半）
+    assert_eq!(detect_custom_commands_drop(&cc_of(5), Some(&bak)), None);
+    // 备份空表 / 缺失 / 损坏 → None（不虚警）
+    let empty_bak = Settings::default().to_json_string();
+    assert_eq!(
+        detect_custom_commands_drop(&cc_of(0), Some(&empty_bak)),
+        None
+    );
+    assert_eq!(detect_custom_commands_drop(&cc_of(4), None), None);
+    assert_eq!(
+        detect_custom_commands_drop(&cc_of(4), Some("garbage")),
+        None
+    );
+}
+
+// ── N20：搜索历史（2026-11-22）──────────────────────────────────────────────
+
+#[test]
+fn n20_record_search_history_default_on_and_roundtrip() {
+    assert!(Settings::default().record_search_history, "默认开");
+    let s = Settings {
+        record_search_history: false,
+        ..Settings::default()
+    };
+    // 开关属用户偏好随导出迁移
+    assert!(!Settings::parse_json(&s.export_backup()).record_search_history);
+    // 历史本体 = 独立 history.json，不在设置/备份序列化链路（文件隔离承载
+    // N5 剥离语义——导出物不含查询历史）
+    let v: serde_json::Value = serde_json::from_str(&s.export_backup()).unwrap();
+    assert!(v.get("queries").is_none() && v.get("search_history").is_none());
+}
+
+// ── N17：命令热键绑定（2026-11-22）──────────────────────────────────────────
+
+#[test]
+fn n17_command_hotkeys_parse_clamp_and_machine_state_preserved() {
+    // 字段缺失（旧版本配置）→ 默认空
+    assert!(Settings::parse_json("{}").command_hotkeys.is_empty());
+    // clamp：>3 截前 3；非法条目（vk 0 / keyword 空）跳过
+    let entries: Vec<String> = (0..5)
+        .map(|i| format!(r#"{{"mods": 3, "vk": {}, "keyword": "k{}"}}"#, 0x41 + i, i))
+        .collect();
+    let json = format!(r#"{{"command_hotkeys": [{}]}}"#, entries.join(","));
+    let s = Settings::parse_json(&json);
+    assert_eq!(s.command_hotkeys.len(), COMMAND_HOTKEY_CAP, "上限 3");
+    assert_eq!(s.command_hotkeys[0].keyword, "k0");
+    let s = Settings::parse_json(
+        r#"{"command_hotkeys": [{"mods": 3, "vk": 0, "keyword": "x"}, {"mods": 3, "vk": 65, "keyword": ""}]}"#,
+    );
+    assert!(s.command_hotkeys.is_empty(), "非法条目跳过");
+    // 机器态：导入保留本机现值（导出物含字段供参考）
+    let s = Settings {
+        command_hotkeys: vec![CommandHotkey {
+            mods: 3,
+            vk: 65,
+            keyword: "gh".into(),
+        }],
+        ..Settings::default()
+    };
+    let imported = Settings::import_backup(&s.export_backup(), &s).unwrap();
+    assert_eq!(
+        imported.command_hotkeys,
+        vec![CommandHotkey {
+            mods: 3,
+            vk: 65,
+            keyword: "gh".into()
+        }],
+        "导出含字段 + 导入保留本机现值（同 hotkey_mods/vk 族）"
+    );
+}
+
+#[test]
+fn n17_validate_command_hotkey_rules() {
+    let cc_of = |kw: &str| {
+        CustomCommand::new("GH", kw, CustomCommandKind::Url, "https://github.com").unwrap()
+    };
+    let mut s = Settings {
+        custom_commands: vec![cc_of("gh"), cc_of("gh2"), cc_of("gh3")],
+        ..Settings::default()
+    };
+    let err = s
+        .validate_command_hotkey(&CommandHotkey {
+            mods: 3,
+            vk: 0x47,
+            keyword: "nope".into(),
+        })
+        .unwrap_err();
+    assert!(err.contains("未命中"), "关键词校验：{err}");
+    // 命中 → Ok
+    assert!(s
+        .validate_command_hotkey(&CommandHotkey {
+            mods: 3,
+            vk: 0x47,
+            keyword: "gh".into(),
+        })
+        .is_ok());
+    // 与主热键重复（默认 Win+Alt+Space：mods 8|1=9? HOTKEY_MODS_DEFAULT = MOD_WIN|MOD_ALT）
+    let main = Settings::default();
+    let _ = main;
+    assert!(
+        s.validate_command_hotkey(&CommandHotkey {
+            mods: crate::settings::HOTKEY_MODS_DEFAULT,
+            vk: crate::settings::HOTKEY_VK_DEFAULT,
+            keyword: "gh".into(),
+        })
+        .is_err(),
+        "与面板唤起热键重复"
+    );
+    // 绑满 3 槽 → 上限；组合键重复 / 关键词重复（各槽关键词须互异——
+    // 关键词重复校验先于槽位上限触发）
+    for (i, (vk, kw)) in [(0x41u32, "gh"), (0x42, "gh2"), (0x43, "gh3")]
+        .iter()
+        .enumerate()
+    {
+        assert!(
+            s.validate_command_hotkey(&CommandHotkey {
+                mods: 3,
+                vk: *vk,
+                keyword: (*kw).into(),
+            })
+            .is_ok(),
+            "槽 {i} 可绑"
+        );
+        s.command_hotkeys.push(CommandHotkey {
+            mods: 3,
+            vk: *vk,
+            keyword: (*kw).into(),
+        });
+    }
+    assert!(
+        s.validate_command_hotkey(&CommandHotkey {
+            mods: 3,
+            vk: 0x44,
+            keyword: "gh".into(),
+        })
+        .is_err(),
+        "槽位已满"
+    );
+    assert!(
+        s.validate_command_hotkey(&CommandHotkey {
+            mods: 3,
+            vk: 0x41,
+            keyword: "gh3".into(),
+        })
+        .is_err(),
+        "组合键重复"
+    );
+}
+
+// ── N18：文本片段（2026-11-22）──────────────────────────────────────────────
+
+#[test]
+fn n18_snippet_add_remove_and_caps() {
+    let mut s = Settings::default();
+    // 规范化 + 正常添加
+    assert!(s
+        .add_snippet("  邮箱签名  ", "  Mail ", "  Best regards.\n多行正文  ")
+        .is_ok());
+    assert_eq!(s.snippets[0].keyword, "mail", "keyword 小写归一");
+    assert_eq!(s.snippets[0].text, "Best regards.\n多行正文", "trim");
+    // 关键词重复
+    assert!(s.add_snippet("x", "mail", "y").is_err(), "关键词唯一");
+    // 空必填 / 含空白关键词
+    assert!(s.add_snippet("", "k", "v").is_err());
+    assert!(s.add_snippet("n", "a b", "v").is_err(), "关键词拒空白");
+    // 单条 5000 字符截断
+    let long = "x".repeat(6000);
+    assert!(s.add_snippet("long", "long", &long).is_ok());
+    assert_eq!(
+        s.snippets.iter().last().unwrap().text.chars().count(),
+        SNIPPET_TEXT_CAP
+    );
+    // 删除
+    assert!(s.remove_snippet("mail"));
+    assert!(!s.remove_snippet("mail"), "再删 = false");
+}
+
+#[test]
+fn n18_snippets_parse_clamp_and_export_roundtrip() {
+    assert!(Settings::parse_json("{}").snippets.is_empty());
+    // clamp：>200 截前 200
+    let entries: Vec<String> = (0..205)
+        .map(|i| format!(r#"{{"name": "n{i}", "keyword": "k{i}", "text": "t{i}"}}"#))
+        .collect();
+    let json = format!(r#"{{"snippets": [{}]}}"#, entries.join(","));
+    let s = Settings::parse_json(&json);
+    assert_eq!(s.snippets.len(), SNIPPET_CAP, "上限 200");
+    // 业务态随 N5 导出迁移
+    let s = Settings {
+        snippets: vec![Snippet::new("签名", "mail", "Best regards.").unwrap()],
+        ..Settings::default()
+    };
+    let parsed = Settings::parse_json(&s.export_backup());
+    assert_eq!(
+        parsed.snippets,
+        vec![Snippet::new("签名", "mail", "Best regards.").unwrap()],
+        "随导出迁移"
+    );
+}

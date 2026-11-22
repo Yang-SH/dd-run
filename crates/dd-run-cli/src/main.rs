@@ -43,6 +43,11 @@ const PROTOCOL_VERSION: &str = "1.0";
 const HOST_VERSION: &str = env!("CARGO_PKG_VERSION");
 /// 仓库内示例扩展目录（M0 默认；发布后回落到 §2 的平台目录）。
 const SAMPLE_DIR: &str = "examples/extensions.d";
+/// 首方文件搜索扩展的实际 id（sidecar 清单 `com.ddrun.filesearch.json` 与
+/// `search.rs` 的 `EXT_ID` 一致）。加固⑤ 的 `section` 机检按此门控；单测
+/// `b5_files_ext_id_matches_sidecar_manifest` 锚定清单防漂移（初版曾误写
+/// 为不存在的 `com.ddrun.search`，断言恒不触发）。
+const FILES_EXT_ID: &str = "com.ddrun.filesearch";
 /// §8.3 `CommandResult` 的 8 种 `kind`（`--conformance` 据此校验 `invoke` 返回值）。
 const RESULT_KINDS: [&str; 8] = [
     "Dismiss",
@@ -1057,6 +1062,29 @@ fn conformance_after_open(
             check.fail("3a) items", issue);
         }
     }
+    // 加固⑤（2026-11-22）：文件类扩展顶层命令 `section` 机检——N10 真机走查
+    // 踩坑固化（sidecar 只设 section、宿主类别门控曾失配；断言反向锁数据
+    // 质量：宿主 fallback 兜底仅容错、非契约）。**id 口径修正（2026-11-22
+    // 核对轮）**：首方文件搜索扩展的实际 id 是 `com.ddrun.filesearch`
+    // （sidecar manifest 与 `search.rs` 的 `EXT_ID` 一致）；初版误写成
+    // `com.ddrun.search`（不存在）→ 断言恒不触发。调用方式（需先装配扩展
+    // 目录，search 是 sidecar 不在 `builtin_specs`）：
+    // `--conformance --extensions-dir <dir> --ext-id com.ddrun.filesearch`。
+    // CI conformance smoke 未含 search 腿（装配链随收口评估）。
+    if expected_id == FILES_EXT_ID {
+        let no_section = count_blank_section(&commands);
+        if no_section > 0 {
+            check.fail(
+                "3b) section",
+                format!("{no_section} 条顶层命令缺非空 `section`（文件类扩展 N10 固化）"),
+            );
+        } else {
+            check.pass(
+                "3b) section",
+                format!("{} 条顶层命令 section 齐全", commands.len()),
+            );
+        }
+    }
 
     // ④ fallback_commands（§6.2）—— 非空 ⟺ has_fallback
     //
@@ -1208,6 +1236,16 @@ fn conformance_after_open(
                     if blank > 0 {
                         problems.push(format!("`{page_id}`：{blank} 项的 `id` 缺失或为空"));
                     }
+                    // 加固⑤：文件类扩展 page items 同口径（section 非空；id 口径
+                    // 同 3b 段——首方文件搜索扩展实为 `com.ddrun.filesearch`）。
+                    if expected_id == FILES_EXT_ID {
+                        let no_section = count_blank_section(items);
+                        if no_section > 0 {
+                            problems.push(format!(
+                                "`{page_id}`：{no_section} 项缺非空 `section`（加固⑤ N10 固化）"
+                            ));
+                        }
+                    }
                 }
                 Err(e) => problems.push(format!("`{page_id}`：{e}")),
             }
@@ -1321,6 +1359,21 @@ fn tail(text: &str, n: usize) -> String {
     } else {
         chars[chars.len() - n..].iter().collect()
     }
+}
+
+/// 加固⑤：统计缺非空 `section` 的条目数（纯函数可单测——conformance 机检
+/// 只锁 sidecar 数据质量；宿主 fallback 兜底规则仅容错非契约）。
+fn count_blank_section(items: &[Value]) -> usize {
+    items
+        .iter()
+        .filter(|it| {
+            it.get("section")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .unwrap_or("")
+                .is_empty()
+        })
+        .count()
 }
 
 #[cfg(test)]
@@ -1460,5 +1513,40 @@ mod tests {
         assert_eq!(tail("abc", 5), "abc");
         assert_eq!(tail("", 5), "");
         assert_eq!(tail("中文诊断日志", 2), "日志");
+    }
+
+    /// 加固⑤：缺 section 计数（缺失 / 空白 / null 三形态；非空不计）。
+    #[test]
+    fn b5_count_blank_section_shapes() {
+        assert_eq!(
+            count_blank_section(&[serde_json::json!({"section": "文件"})]),
+            0
+        );
+        assert_eq!(
+            count_blank_section(&[serde_json::json!({}), serde_json::json!({"section": "  "})]),
+            2,
+            "缺失 + 纯空白均计"
+        );
+        assert_eq!(
+            count_blank_section(&[serde_json::json!({"section": null})]),
+            1
+        );
+    }
+
+    /// 加固⑤ 防漂移：门控用的 `FILES_EXT_ID` 必须与仓库内 sidecar 清单
+    /// 的 `id` 逐字一致（初版误写 `com.ddrun.search` → 断言恒不触发）。
+    #[test]
+    fn b5_files_ext_id_matches_sidecar_manifest() {
+        let path = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../examples/extensions.d/com.ddrun.filesearch.json"
+        );
+        let text = std::fs::read_to_string(path).expect("sidecar 清单应存在（仓库内）");
+        let v: Value = serde_json::from_str(&text).expect("清单应为合法 JSON");
+        assert_eq!(
+            v.get("id").and_then(Value::as_str),
+            Some(FILES_EXT_ID),
+            "清单 id 与 conformance 门控常量漂移"
+        );
     }
 }

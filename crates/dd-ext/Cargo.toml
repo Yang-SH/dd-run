@@ -50,6 +50,10 @@ windows-sys = { version = "0.61", features = [
     # N7：SendInput / INPUT / VK_* 音量与媒体虚拟键（system.rs，altrun 方案 §4.2）
     "Win32_UI_Input_KeyboardAndMouse",
     "Win32_Graphics_Gdi",
+    # N16：OpenProcess / QueryFullProcessImageNameW（窗口进程名提取，windows.rs）
+    "Win32_System_Threading",
+    # N16：DwmGetWindowAttribute / DWMWA_CLOAKED（UWP 幽灵窗口过滤，windows.rs）
+    "Win32_Graphics_Dwm",
 ] }
 
 # P2（everything-ipc 主通道，§9.2）：search.rs 直接连 Everything 的 IPC（WM_COPYDATA），

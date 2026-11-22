@@ -95,6 +95,66 @@ impl PaletteApp {
         }
     }
 
+    /// N20（2026-11-22）：「搜索历史」卡——记录开关（默认开）+ 清空按钮。
+    /// 开关关 = 停止记录 + 清空既有（写设置即生效）；历史本体存独立
+    /// history.json（个人态，文件隔离承载 N5 剥离语义——不随导出迁移）。
+    pub(super) fn draw_history_card(&mut self, ui: &mut egui::Ui, p: &theme::Palette) {
+        let lang = self.view.lang_effective;
+        let on = self.draft.settings.record_search_history;
+        let mut toggled = false;
+        let mut clear_clicked = false;
+        draw_settings_card_frame(ui, p, self.window.backdrop_active, |card| {
+            card.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = 0.0;
+                // 与其他卡卡头图标对齐的 16px 空槽位
+                ui.allocate_exact_size(egui::vec2(16.0, 16.0), egui::Sense::hover());
+                ui.add_space(12.0);
+                let left_w = (ui.available_width() - 40.0 - 16.0).max(160.0);
+                ui.allocate_ui(egui::vec2(left_w, 40.0), |ui| {
+                    ui.vertical(|ui| {
+                        ui.set_min_height(40.0);
+                        ui.label(
+                            egui::RichText::new(crate::text::t(lang, "set.history.name"))
+                                .size(14.0)
+                                .color(p.text),
+                        );
+                        ui.add_space(2.0);
+                        ui.add(
+                            egui::Label::new(
+                                egui::RichText::new(crate::text::t(lang, "set.history.desc"))
+                                    .size(12.0)
+                                    .color(p.text3),
+                            )
+                            .wrap(),
+                        );
+                    });
+                });
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    toggled = draw_switch_fn(ui, on, p);
+                });
+            });
+            card.add_space(8.0);
+            card.horizontal(|ui| {
+                ui.add_space(28.0);
+                if fluent_button_small(ui, crate::text::t(lang, "set.history.clear"), p) {
+                    clear_clicked = true;
+                }
+            });
+        });
+        if toggled {
+            self.draft.settings.record_search_history = !on;
+            self.save_settings_with_feedback();
+            if !on {
+                // 关闭 = 停止记录 + 清空既有（写设置即生效，方案 §4.15 口径）。
+                self.clear_query_history();
+            }
+        }
+        if clear_clicked {
+            self.clear_query_history();
+            self.show_toast(crate::text::t(lang, "toast.history_cleared"), None);
+        }
+    }
+
     /// 常规栏：「按键行为」卡（B1/B2，2026-09-20）——两行同卡：
     /// ① Esc 键行为（左侧标题描述 + 右侧 Fluent 下拉，排版同语言卡）；
     /// ② 退格键返回（左侧标题描述 + 右侧功能开关，排版同搜索应用卡）。

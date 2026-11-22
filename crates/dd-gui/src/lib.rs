@@ -46,6 +46,9 @@ pub mod fuzzy;
 pub mod hotkey;
 pub mod navigation;
 pub mod platform;
+/// N20（2026-11-22）：搜索历史——`history.json` 独立文件（个人态不随设置
+/// 迁移，文件隔离承载 N5 剥离语义）；去重置顶、上限 50。
+pub mod query_history;
 pub mod result;
 pub mod robustness;
 pub mod settings;

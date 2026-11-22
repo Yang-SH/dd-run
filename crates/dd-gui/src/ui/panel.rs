@@ -23,6 +23,11 @@ use eframe::egui;
 /// 搜索栏前缀搜索图标（Segoe MDL2 "Search" U+E721；设计稿 01 searchbar glyph）。
 pub(crate) const SEARCH_GLYPH: char = '\u{E721}';
 
+/// N20：查询框稳定 id 字符串（TextEdit `.id()` 绑定；page_keys 的 Ctrl+↑/↓
+/// 回填经 `TextEditState::load` 读光标在行首判定——egui 默认按位置派生 id，
+/// 跨帧不稳定，显式固定）。
+pub(crate) const QUERY_BOX_ID_STR: &str = "query_box";
+
 impl PaletteApp {
     // ── 渲染 ─────────────────────────────────────────────────
 
@@ -802,6 +807,8 @@ pub(crate) fn draw_searchbar(
     //    给 spinner，文本不再占满整行（避免与 spinner 重叠）。
     let resp = content_ui.add(
         egui::TextEdit::singleline(query)
+            // N20：稳定 id——page_keys 的 Ctrl+↑/↓ 回填需读光标在行首判定。
+            .id(egui::Id::new(QUERY_BOX_ID_STR))
             .frame(egui::Frame::new()) // 空 Frame：无底无边框，外观由外层 Frame 承担
             .hint_text(egui::RichText::new(placeholder).color(p.text3))
             .desired_width(if busy {

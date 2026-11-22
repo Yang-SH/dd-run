@@ -278,11 +278,41 @@ impl PaletteApp {
             &self.draft.settings.custom_commands,
             lang,
         ));
+        // N18（2026-11-22）：文本片段 → 宿主虚拟条目（分组「片段」；Enter 复制
+        // 剪贴板——R-07 工作线程同径）。
+        items.extend(aggregator::snippet_items(
+            &self.draft.settings.snippets,
+            crate::text::t(lang, "cat.snippets"),
+            lang,
+        ));
         // N10（2026-11-21）：URL/路径形态查询 → 宿主「打开」直达条目（常规结果
         // 之后、聚合尾部；S-03 白名单 / 「双击等价」执行，无信任面）。
         let query = self.view.stack.current().list.query().to_owned();
         if let Some(direct) = aggregator::url_path_direct_item(&query, lang) {
             items.push(direct);
+        }
+        // N11（2026-11-22）：空查询首屏——置顶分组前置（有命中才出现，组内保持
+        // 置顶添加序）+ 最近文件分组尾追（30 s 门控枚举 Recent；枚举到渲染窗口
+        // 内被删的失效 .lnk 在组装期静默剔除）。非空查询不生效（置顶键保留，
+        // 回空查询即复现）。
+        if query.is_empty() {
+            let (mut final_items, rest) = aggregator::extract_pinned(
+                items,
+                &self.draft.settings.pinned_keys,
+                crate::text::t(lang, "cat.pinned"),
+            );
+            final_items.extend(rest);
+            for entry in self.recent_entries() {
+                if !std::path::Path::new(&entry.path).exists() {
+                    continue; // 失效过滤（方案 §4.6 验收口径）
+                }
+                final_items.push(aggregator::recent_file_item(
+                    &entry,
+                    crate::text::t(lang, "cat.recent"),
+                    lang,
+                ));
+            }
+            items = final_items;
         }
         self.pool.sources = sources;
 
@@ -316,6 +346,30 @@ impl PaletteApp {
         *self.view.stack.root_mut() = root;
         // §5.1：Root 列表整包替换会丢排序快照，重建后重新注入（空表 = None no-op）。
         self.sync_usage_index();
+    }
+
+    /// N11：Recent 枚举 30 s 门控快照（`%APPDATA%\Microsoft\Windows\Recent`，
+    /// 定位 = config.json 同目录再上一级 = Roaming 根）。目录缺失/失败 → 空表；
+    /// 30 s 窗口内复用快照（rebuild 随流式聚合到达多次调用，防重复枚举）。
+    fn recent_entries(&mut self) -> Vec<aggregator::RecentEntry> {
+        const RECENT_TTL: std::time::Duration = std::time::Duration::from_secs(30);
+        const RECENT_LIMIT: usize = 10;
+        if let Some((at, entries)) = &self.pool.recent_cache {
+            if at.elapsed() < RECENT_TTL {
+                return entries.clone();
+            }
+        }
+        let dir = dd_host::manifest::config_file().and_then(|c| {
+            c.parent().and_then(|root| {
+                root.parent()
+                    .map(|roaming| roaming.join("Microsoft").join("Windows").join("Recent"))
+            })
+        });
+        let entries = dir
+            .map(|d| aggregator::enumerate_recent(&d, RECENT_LIMIT))
+            .unwrap_or_default();
+        self.pool.recent_cache = Some((std::time::Instant::now(), entries.clone()));
+        entries
     }
 
     /// ③ Done：收尾——停加载态、LRU 计入、A2 计时日志。

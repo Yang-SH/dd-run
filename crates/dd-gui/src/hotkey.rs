@@ -35,9 +35,29 @@ pub const HOTKEY_VK_DEFAULT: u32 = 0x20;
 /// 热键消息循环的注册 id（RegisterHotKey / UnregisterHotKey 共用）。
 #[cfg(windows)]
 const HOTKEY_ID: i32 = 0xDD01;
+/// N17：命令热键槽基址（slot 1..3 = 0xDD02..0xDD04；slot 0 = 面板 toggle，
+/// id 不变——现行为逐位回归）。
+#[cfg(windows)]
+const HOTKEY_SLOT_BASE: i32 = 0xDD02;
+/// N17：命令槽批量重注册消息（wParam = 3×12 位打包[mods<<8|vk，vk 0 = 空槽]，
+/// lParam = generation 配对）。
+#[cfg(windows)]
+const HOTKEY_SLOTS_MSG: u32 = 0x8003; // WM_APP + 3
 /// 热键线程自定义命令消息（PostThreadMessageW 携带 seq + mods/vk）。
 #[cfg(windows)]
 const HOTKEY_CMD_MSG: u32 = 0x8002; // WM_APP + 2
+
+/// N17：命令热键槽打包（Windows 线程消息载荷）——每槽 12 位（mods 4bit << 8 |
+/// vk 8bit），vk 0 = 空槽；3 槽 36 位装入 u64 低位。纯函数可单测（unpack 同径
+/// 校验由线程侧测试锁定）。可捕获键集（capture_vk 域）vk ≤ 0x7B、mods ≤ 0xF，
+/// 12 位/槽足够。
+pub(crate) fn pack_command_slots(slots: &[(u32, u32)]) -> u64 {
+    let mut packed = 0u64;
+    for (i, (mods, vk)) in slots.iter().take(3).enumerate() {
+        packed |= ((((*mods & 0xF) as u64) << 8) | (*vk & 0xFF) as u64) << (12 * i);
+    }
+    packed
+}
 
 /// 启动注册结果专用 seq（UI 据此区分「启动注册」与「改绑确认」两类事件；
 /// 改绑请求的 seq 从 1 起由 UI 递增，永不与 0 撞号）。
@@ -96,6 +116,12 @@ pub enum HotkeyEvent {
     /// R-15：热键线程异常死亡（`GetMessageW` 返回 -1 等）——全局热键失效，
     /// 宿主置「未注册」状态位并提示（面板打开时可见）。
     Died,
+    /// N17：命令热键槽触发（slot 1..3；宿主按绑定表分发执行自定义命令，
+    /// 面板隐藏态亦生效）。
+    Trigger { slot: u32 },
+    /// N17：命令热键槽批量注册结果（`generation` 配对；`ok_mask` 位 i =
+    /// 槽 i+1 注册成功——失败槽位由 UI 落 danger 行 + toast）。
+    CommandSlots { generation: u32, ok_mask: u8 },
 }
 
 /// 热键线程句柄 + 事件接收端 + 重注册入口。
@@ -111,7 +137,19 @@ pub struct HotkeyThread {
     /// 非 Windows：重注册命令发送端（Windows 走 PostThreadMessageW，无此字段；
     /// 线程创建失败时发送端对端已死，send 静默失败由 UI 确认超时兜底）。
     #[cfg(not(windows))]
-    cmd_tx: Option<Sender<HotkeyCommand>>,
+    cmd_tx: Option<Sender<UnixHotkeyCmd>>,
+}
+
+/// N17：非 Windows 命令（mpsc 无打包限制——结构体直传）。
+#[cfg(not(windows))]
+pub(crate) enum UnixHotkeyCmd {
+    /// slot 0 重绑定（seq 配对，与 Windows 侧 `HotkeyCommand` 同语义）。
+    Rebind(HotkeyCommand),
+    /// N17：命令热键槽批量重注册（generation 配对；vk 0 = 空槽）。
+    Slots {
+        generation: u32,
+        slots: [(u32, u32); 3],
+    },
 }
 
 impl HotkeyThread {
@@ -171,13 +209,28 @@ impl HotkeyThread {
         }
     }
 
+    /// N17：命令热键槽批量重注册（异步；结果经 [`HotkeyEvent::CommandSlots`]
+    /// 以 generation 配对回发）。slot 0（面板 toggle）不受影响。
+    #[cfg(windows)]
+    pub fn re_register_slots(&self, packed: u64, generation: u32) {
+        use windows_sys::Win32::UI::WindowsAndMessaging::PostThreadMessageW;
+        unsafe {
+            let _ = PostThreadMessageW(
+                self.thread_id,
+                HOTKEY_SLOTS_MSG,
+                packed as usize,
+                generation as isize,
+            );
+        }
+    }
+
     /// 非 Windows 平台：经 `global-hotkey` 注册热键并启动轮询线程（O6 批次三
     /// 真实现，语义与 Windows 侧逐位对齐——启动失败降级发
     /// [`HotkeyEvent::ReRegistered`](false)，线程创建失败同口径 R-05）。
     #[cfg(not(windows))]
     pub fn spawn(ctx: eframe::egui::Context, mods: u32, vk: u32) -> Self {
         let (tx, rx) = mpsc::channel::<HotkeyEvent>();
-        let (cmd_tx, cmd_rx) = mpsc::channel::<HotkeyCommand>();
+        let (cmd_tx, cmd_rx) = mpsc::channel::<UnixHotkeyCmd>();
         // 失败通知用克隆（tx 随闭包移交线程，创建失败时闭包被丢弃）
         let fail_tx = tx.clone();
         match thread::Builder::new()
@@ -217,7 +270,16 @@ impl HotkeyThread {
         // 对端已关闭（线程退出）时 send 返回 Err——静默放弃，UI 侧确认
         // 超时兜底（与 Windows 侧 PostThreadMessageW 返回 0 的忽略同口径）。
         if let Some(tx) = &self.cmd_tx {
-            let _ = tx.send(cmd);
+            let _ = tx.send(UnixHotkeyCmd::Rebind(cmd));
+        }
+    }
+
+    /// N17：命令热键槽批量重注册（异步；结果经 [`HotkeyEvent::CommandSlots`]
+    /// 以 generation 配对回发）。slot 0（面板 toggle）不受影响。
+    #[cfg(not(windows))]
+    pub fn re_register_slots(&self, slots: [(u32, u32); 3], generation: u32) {
+        if let Some(tx) = &self.cmd_tx {
+            let _ = tx.send(UnixHotkeyCmd::Slots { generation, slots });
         }
     }
 
@@ -319,7 +381,14 @@ fn message_loop(
                 break;
             }
             if msg.message == WM_HOTKEY {
-                let _ = tx.send(HotkeyEvent::Toggle);
+                // N17：槽位分派——slot 0 = 面板 toggle（逐位不变）；1..3 = 命令
+                // 热键槽（宿主按绑定表分发执行自定义命令，面板隐藏态亦生效）。
+                let slot = (msg.wParam as i32 - HOTKEY_ID) as u32;
+                if slot == 0 {
+                    let _ = tx.send(HotkeyEvent::Toggle);
+                } else {
+                    let _ = tx.send(HotkeyEvent::Trigger { slot });
+                }
                 ctx.request_repaint();
             } else if msg.message == HOTKEY_CMD_MSG {
                 // 重注册命令（seq 配对协议）：解旧注册新；失败自动回滚旧键并
@@ -373,6 +442,36 @@ fn message_loop(
                         rolled_back: re != 0,
                     });
                 }
+                ctx.request_repaint();
+            } else if msg.message == HOTKEY_SLOTS_MSG {
+                // N17：命令热键槽批量重注册（generation 配对；slot 0 不动）。
+                // 逐槽：解旧注册新（vk 0 = 空槽仅解注册）；失败槽位落日志，
+                // 结果 ok_mask 经事件回发（UI 按位落 danger 行）。
+                let packed = msg.wParam as u64;
+                let generation = msg.lParam as u32;
+                let mut ok_mask = 0u8;
+                for slot in 1..=3u32 {
+                    let v = (packed >> (12 * (slot as usize - 1))) & 0xFFF;
+                    let mods = (v >> 8) as u32;
+                    let vk = (v & 0xFF) as u32;
+                    let id = HOTKEY_SLOT_BASE + slot as i32 - 1;
+                    let _ = UnregisterHotKey(std::ptr::null_mut(), id);
+                    if vk != 0 {
+                        if RegisterHotKey(std::ptr::null_mut(), id, mods | MOD_NOREPEAT, vk) != 0 {
+                            ok_mask |= 1 << (slot - 1);
+                        } else {
+                            log::warn!(
+                                "[dd-gui] 命令热键槽 {slot} 注册失败（{}+{}）",
+                                crate::settings::hotkey_mods_label(mods),
+                                crate::settings::hotkey_vk_label(vk)
+                            );
+                        }
+                    }
+                }
+                let _ = tx.send(HotkeyEvent::CommandSlots {
+                    generation,
+                    ok_mask,
+                });
                 ctx.request_repaint();
             }
             let _ = TranslateMessage(&msg);
@@ -511,7 +610,7 @@ fn to_hotkey(mods: u32, vk: u32) -> Option<global_hotkey::hotkey::HotKey> {
 fn message_loop_unix(
     tx: Sender<HotkeyEvent>,
     ctx: eframe::egui::Context,
-    cmd_rx: Receiver<HotkeyCommand>,
+    cmd_rx: Receiver<UnixHotkeyCmd>,
     mods: u32,
     vk: u32,
 ) {
@@ -534,11 +633,17 @@ fn message_loop_unix(
 
     // 当前生效组合（重注册失败回滚源；None = 当前无生效热键）
     let mut current: Option<(u32, u32)> = None;
+    // N17：slot 0 的 global-hotkey 注册 id + 命令槽现值簿记（crate 无逐槽
+    // 反查——线程侧自持；id 0 = 未注册）。
+    let mut slot0_id: u32 = 0;
+    let mut slot_current: [(u32, u32, u32); 3] = [(0, 0, 0); 3];
     if let Some(m) = &manager {
         if let Some(hk) = to_hotkey(mods, vk) {
+            let id0 = hk.id();
             match m.register(hk) {
                 Ok(()) => {
                     current = Some((mods, vk));
+                    slot0_id = id0;
                     log::info!(
                         "[dd-gui] 全局热键注册成功：{}",
                         crate::settings::hotkey_combo_label(mods, vk)
@@ -560,80 +665,138 @@ fn message_loop_unix(
     }
 
     loop {
-        // 1) 重注册命令（非阻塞清空）：解旧键注册新键；失败自动回滚旧键并
-        //    回发失败事件——与 Windows 侧 message_loop 的 seq 协议一致。
+        // 1) 重注册命令（非阻塞清空）：slot 0 重绑定走 seq 协议（失败自动
+        //    回滚旧键并回发失败事件，与 Windows 侧一致）；N17 命令槽批量
+        //    重注册走 generation 配对。
         while let Ok(cmd) = cmd_rx.try_recv() {
-            let old = current;
-            // (ok, rolled_back)——match 全分支都会赋值，无需初始化
-            //（linux 构建曾报 unused_assignments：初始值从未被读）。
-            let result;
-            match (&manager, to_hotkey(cmd.mods, cmd.vk)) {
-                (Some(m), Some(hk)) => {
-                    if let Some(cur) = old {
-                        if let Some(old_hk) = to_hotkey(cur.0, cur.1) {
-                            // 解注册失败仅忽略（键可能已失效）；回滚成败由
-                            // 后续 register 判定
-                            let _ = m.unregister(old_hk);
-                        }
-                    }
-                    match m.register(hk) {
-                        Ok(()) => {
-                            current = Some((cmd.mods, cmd.vk));
-                            // 诊断日志：与 Windows 侧同口径（seq 供 UI 对账）
-                            log::info!(
-                                "[dd-gui] 全局热键注册成功（seq={}）：{}",
-                                cmd.seq,
-                                crate::settings::hotkey_combo_label(cmd.mods, cmd.vk)
-                            );
-                            result = (true, true); // 成功时 rolled_back 无意义，恒 true
-                        }
-                        Err(e) => {
-                            log::warn!(
-                                "[dd-gui] 新热键注册失败（seq={}，{}+{}，{e}），回滚旧键",
-                                cmd.seq,
-                                cmd.mods,
-                                cmd.vk
-                            );
-                            let mut rolled_back = false;
+            match cmd {
+                UnixHotkeyCmd::Rebind(cmd) => {
+                    let old = current;
+                    // (ok, rolled_back)——match 全分支都会赋值，无需初始化
+                    //（linux 构建曾报 unused_assignments：初始值从未被读）。
+                    let result;
+                    match (&manager, to_hotkey(cmd.mods, cmd.vk)) {
+                        (Some(m), Some(hk)) => {
+                            let new_id = hk.id();
                             if let Some(cur) = old {
                                 if let Some(old_hk) = to_hotkey(cur.0, cur.1) {
-                                    rolled_back = m.register(old_hk).is_ok();
-                                    if !rolled_back {
-                                        current = None; // 旧键回滚也失败：无任何生效热键
-                                    }
-                                } else {
-                                    current = None; // 旧键不可再映射：视同回滚失败
+                                    // 解注册失败仅忽略（键可能已失效）；回滚成败由
+                                    // 后续 register 判定
+                                    let _ = m.unregister(old_hk);
                                 }
                             }
-                            result = (false, rolled_back);
+                            match m.register(hk) {
+                                Ok(()) => {
+                                    current = Some((cmd.mods, cmd.vk));
+                                    slot0_id = new_id;
+                                    // 诊断日志：与 Windows 侧同口径（seq 供 UI 对账）
+                                    log::info!(
+                                        "[dd-gui] 全局热键注册成功（seq={}）：{}",
+                                        cmd.seq,
+                                        crate::settings::hotkey_combo_label(cmd.mods, cmd.vk)
+                                    );
+                                    result = (true, true); // 成功时 rolled_back 无意义，恒 true
+                                }
+                                Err(e) => {
+                                    log::warn!(
+                                        "[dd-gui] 新热键注册失败（seq={}，{}+{}，{e}），回滚旧键",
+                                        cmd.seq,
+                                        cmd.mods,
+                                        cmd.vk
+                                    );
+                                    let mut rolled_back = false;
+                                    if let Some(cur) = old {
+                                        if let Some(old_hk) = to_hotkey(cur.0, cur.1) {
+                                            rolled_back = m.register(old_hk).is_ok();
+                                            if !rolled_back {
+                                                current = None; // 旧键回滚也失败：无任何生效热键
+                                            }
+                                        } else {
+                                            current = None; // 旧键不可再映射：视同回滚失败
+                                        }
+                                    }
+                                    result = (false, rolled_back);
+                                }
+                            }
+                        }
+                        // manager 缺席（Wayland/无显示降级中）或新键不可映射：请求不
+                        // 执行。与 (Some, Some) 分支不同，此处**未解注册旧键**——旧键
+                        // 仍生效，rolled_back 依事件契约如实回发（旧键缺席 = 本就无
+                        // 生效热键；不变式：current 为 Some 蕴含 manager 为 Some）。
+                        _ => {
+                            log::warn!(
+                                "[dd-gui] 重注册请求无法执行（seq={}，manager 缺席或键不可映射）",
+                                cmd.seq
+                            );
+                            result = (false, old.is_some());
                         }
                     }
+                    let _ = tx.send(HotkeyEvent::ReRegistered {
+                        seq: cmd.seq,
+                        ok: result.0,
+                        rolled_back: result.1,
+                    });
+                    ctx.request_repaint();
                 }
-                // manager 缺席（Wayland/无显示降级中）或新键不可映射：请求不
-                // 执行。与 (Some, Some) 分支不同，此处**未解注册旧键**——旧键
-                // 仍生效，rolled_back 依事件契约如实回发（旧键缺席 = 本就无
-                // 生效热键；不变式：current 为 Some 蕴含 manager 为 Some）。
-                _ => {
-                    log::warn!(
-                        "[dd-gui] 重注册请求无法执行（seq={}，manager 缺席或键不可映射）",
-                        cmd.seq
-                    );
-                    result = (false, old.is_some());
+                UnixHotkeyCmd::Slots { generation, slots } => {
+                    // N17：命令热键槽批量重注册（generation 配对；vk 0 = 空槽
+                    // 仅解注册）。逐槽：解旧（失败忽略——键可能已失效）→ 注册
+                    // 新；失败槽位落日志，ok_mask 经事件回发（UI 按位落 danger
+                    // 行）。
+                    let mut ok_mask = 0u8;
+                    for (i, (mods, vk)) in slots.iter().enumerate() {
+                        let slot = i as u32 + 1;
+                        let (old_id, old_mods, old_vk) = slot_current[i];
+                        if old_id != 0 {
+                            if let (Some(m), Some(old_hk)) =
+                                (manager.as_ref(), to_hotkey(old_mods, old_vk))
+                            {
+                                let _ = m.unregister(old_hk);
+                            }
+                        }
+                        slot_current[i] = (0, 0, 0);
+                        if *vk != 0 {
+                            match (manager.as_ref(), to_hotkey(*mods, *vk)) {
+                                (Some(m), Some(hk)) => match m.register(hk) {
+                                    Ok(()) => {
+                                        ok_mask |= 1 << i;
+                                        slot_current[i] = (hk.id(), *mods, *vk);
+                                    }
+                                    Err(e) => {
+                                        log::warn!("[dd-gui] 命令热键槽 {slot} 注册失败（{e}）")
+                                    }
+                                },
+                                _ => log::warn!(
+                                    "[dd-gui] 命令热键槽 {slot} 键不可映射（{mods}+{vk}）"
+                                ),
+                            }
+                        }
+                    }
+                    let _ = tx.send(HotkeyEvent::CommandSlots {
+                        generation,
+                        ok_mask,
+                    });
+                    ctx.request_repaint();
                 }
             }
-            let _ = tx.send(HotkeyEvent::ReRegistered {
-                seq: cmd.seq,
-                ok: result.0,
-                rolled_back: result.1,
-            });
-            ctx.request_repaint();
         }
 
-        // 2) 全局热键事件：crate 按按下/释放各发一次，仅取按下（Toggle 语义
-        //    与 Windows WM_HOTKEY 一致）；窗口隐藏时 request_repaint 唤醒 egui。
+        // 2) 全局热键事件：crate 按按下/释放各发一次，仅取按下；窗口隐藏时
+        //    request_repaint 唤醒 egui。N17：按注册 id 分派——slot 0 = Toggle；
+        //    1..3 = 命令槽触发（宿主按绑定表分发执行）。
         while let Ok(ev) = GlobalHotKeyEvent::receiver().try_recv() {
             if ev.state() == HotKeyState::Pressed {
-                let _ = tx.send(HotkeyEvent::Toggle);
+                let id = ev.id();
+                if id != 0 && id == slot0_id {
+                    let _ = tx.send(HotkeyEvent::Toggle);
+                } else if let Some(pos) = slot_current
+                    .iter()
+                    .position(|(g, _, _)| *g != 0 && *g == id)
+                {
+                    let _ = tx.send(HotkeyEvent::Trigger {
+                        slot: pos as u32 + 1,
+                    });
+                }
                 ctx.request_repaint();
             }
         }
@@ -738,5 +901,24 @@ mod tests {
         assert_eq!(bare.key, Code::KeyA);
         // 主键不可映射 → None
         assert!(to_hotkey(0b1001, 0x5B).is_none());
+    }
+
+    /// N17：命令热键槽打包 roundtrip（12 位/槽：mods 4bit<<8 | vk 8bit；
+    /// 空槽 vk 0；3 槽互不串扰）。
+    #[test]
+    fn n17_pack_command_slots_roundtrip() {
+        let slots = [(3u32, 0x47u32), (0, 0), (0b1001, 0x20)];
+        let packed = pack_command_slots(&slots);
+        for (i, (mods, vk)) in slots.iter().enumerate() {
+            let v = (packed >> (12 * i)) & 0xFFF;
+            assert_eq!((v >> 8) as u32, mods & 0xF, "槽 {} mods", i + 1);
+            assert_eq!((v & 0xFF) as u32, vk & 0xFF, "槽 {} vk", i + 1);
+        }
+        // 超出 3 槽的输入截断（take(3)）
+        assert_eq!(
+            pack_command_slots(&[(1, 0x41), (2, 0x42), (4, 0x43), (8, 0x44)]),
+            pack_command_slots(&[(1, 0x41), (2, 0x42), (4, 0x43)]),
+            "仅前 3 槽参与打包"
+        );
     }
 }

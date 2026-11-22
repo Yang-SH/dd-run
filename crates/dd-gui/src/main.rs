@@ -182,6 +182,14 @@ fn main() -> eframe::Result {
             // §5.1：装载使用频次（usage.json → pool.usage → Root 排序快照）。
             // 保持 PaletteApp::new 纯注入（8 参数不变），文件系统副作用在此显式装配。
             app.load_usage();
+            // N20：装载搜索历史（history.json → 内存表；R-02 读写惯例同上）。
+            app.load_query_history();
+            // 加固②：启动骤降检测（config 命令数较备份环最新档骤降 → toast
+            // 指引设置页恢复；备份缺失/为空/损坏静默不虚警）。
+            app.check_startup_config_drop();
+            // N17：命令热键槽启动同步（settings.command_hotkeys → 线程批量
+            // 注册；slot 0 已在 spawn 时按 settings 注册）。
+            app.sync_command_hotkey_slots();
             // §5.2：启动时检查更新（settings.check_updates，默认关；结果落地为
             // toast——面板隐藏期间暂存，下次唤起可见）。
             app.maybe_autostart_update_check();

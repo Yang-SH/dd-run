@@ -26,12 +26,12 @@
 ## 特性一览
 
 - **键盘优先**：核心路径（唤起 → 搜索 → 选择 → 执行 → 返回 → 关闭）100% 可纯键盘完成。
-- **5 个内置扩展 + 文件搜索 sidecar**：应用、计算器、系统、网页搜索、Shell 进程内化运行；文件搜索（基于 Everything，仅 Windows；面板内 `Ctrl+F` 直达）以独立 sidecar 进程提供。
+- **7 个内置扩展 + 文件搜索 sidecar**：应用、计算器、系统、网页搜索、书签、Shell、窗口切换（Windows）进程内化运行；文件搜索（基于 Everything，仅 Windows；面板内 `Ctrl+F` 直达）以独立 sidecar 进程提供。
 - **拼音匹配**：中文名按全拼与首字母模糊命中（如 `jsq` → 计算器）。
 - **设置页**（`Ctrl+,` 打开）：外观（亮暗主题、Mica/Acrylic 材质）、常规（开机自启、自定义全局热键——默认 `Win+Alt+Space`）、搜索引擎管理（预设 + 自定义 `{q}` 模板引擎）、扩展管理（按扩展启停）。
 - **多语言**：面板 UI 跟随系统显示语言。
 - **快且隔离**：内置扩展常驻就绪（进程内化，无启动开销）；第三方与文件搜索 sidecar 经 frozen / stub / LRU 懒加载；文件搜索 sidecar 以独立进程运行，其崩溃不影响宿主。
-- **便携分发**：`dist/dd-run-0.3.0.exe`（约 8.4 MB；`strip = "symbols"`；字节数随发版产物实测回填——v0.2.1 实测 8,722,944 字节）是单文件，宿主与 5 个内置扩展进程内化打包（M9 起不再内嵌 exe）。文件搜索扩展以 sidecar 形态随 `dist/extensions.d/` 携带，宿主自动扫描可执行文件同目录。无安装器：解压发版 zip 即用。macOS / Linux 另有免安装 `tar.gz`（单二进制 + 运行时依赖 README；文件搜索按设计缺席）。
+- **便携分发**：`dist/dd-run-0.3.0.exe`（约 8.4 MB；`strip = "symbols"`；字节数随发版产物实测回填——v0.2.1 实测 8,722,944 字节）是单文件，宿主与 7 个内置扩展进程内化打包（M9 起不再内嵌 exe）。文件搜索扩展以 sidecar 形态随 `dist/extensions.d/` 携带，宿主自动扫描可执行文件同目录。无安装器：解压发版 zip 即用。macOS / Linux 另有免安装 `tar.gz`（单二进制 + 运行时依赖 README；文件搜索按设计缺席）。
 - **用户数据集中一处**：数据目录内存放 `config.json`（设置）、`usage.json`（使用频次，可在设置页重置）、`extensions.d/`、`cache/`、`logs/`（运行日志 + panic 取证）——Windows 为 `%APPDATA%\dd-run`，macOS 为 `~/Library/Application Support/dd-run`，Linux 为 `$XDG_CONFIG_HOME/dd-run`（缺省 `~/.config/dd-run`）。设置页可打开日志目录、导出诊断报告（单 JSON）。
 
 ## 目标与非目标
@@ -54,14 +54,14 @@
 
 ## 构建与打包
 
-> **硬原则：宿主是单文件——5 个内置扩展进程内化运行（不再内嵌 exe）。**
+> **硬原则：宿主是单文件——7 个内置扩展进程内化运行（不再内嵌 exe）。**
 > 发版布局 = `dist/dd-run-<version>.exe` + `dist/extensions.d/`（文件搜索 sidecar），整体 zip 附着 GitHub Release。解压即用，无安装器。
 
 | 项 | 说明 |
 |---|---|
 | 入口产物 | `dist/dd-run-0.3.0.exe`（Windows，约 8.4 MB——字节数随发版产物实测回填，v0.2.1 = 8,722,944；版本随 `crates/dd-gui/Cargo.toml` 升） |
 | 非 Windows 包（O6） | `dist/dd-run-<ver>-linux-<arch>.tar.gz` / `dist/dd-run-<ver>-macos-<arch>.tar.gz`：单二进制 `dd-run` + `README-dist.txt`（运行时系统库清单 / 数据目录 / 使用说明）。文件搜索 sidecar 为 Windows 专属不随包；这些包无签名面。运行需系统字体（中文需 CJK 字体，如 `fonts-noto-cjk`） |
-| 打包方式（M9） | 5 个内置扩展进程内化编译：宿主直接驱动 `dd_ext::serve_line`，不再内嵌任何扩展 exe；`dd-gui/build.rs` 内嵌空表，`assets/embed/` 为遗留临时目录，已 gitignore |
+| 打包方式（M9） | 7 个内置扩展进程内化编译：宿主直接驱动 `dd_ext::serve_line`，不再内嵌任何扩展 exe；`dd-gui/build.rs` 内嵌空表，`assets/embed/` 为遗留临时目录，已 gitignore |
 | Sidecar | 文件搜索扩展（`dd-ext-search.exe` + `com.ddrun.filesearch.json`）随 `dist/extensions.d/` 携带；宿主扫描可执行文件同目录的 `extensions.d/`（批次 7.5），zip 解压即用——优先级：用户数据目录 > sidecar > 内置 |
 | 入口命名 | `dd-run.exe` = GUI 宿主（crate 名仍 `dd-gui`）；M0 CLI 改名 `dd-run-cli.exe`（保留自检能力、让出产物名） |
 | 一键出包 | `bash tools/package.sh`——按平台分支：Windows 使用 `+stable-x86_64-pc-windows-gnu` 工具链（先 build `dd-ext` → build `dd-gui --bin dd-run` → 单文件产物与 sidecar 归集到 `dist/`；裸 `cargo` 在 MSVC 下会找不到 `std`）；Linux/macOS 以显式 `--target` 宿主三元组构建（§5.7 去 pin 后与宿主默认一致，保留为显式声明）并打 `tar.gz` |

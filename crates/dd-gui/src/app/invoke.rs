@@ -112,6 +112,8 @@ impl PaletteApp {
         // 记录在分派之前——即使后续 invoke 失败，"用户想用"这个事实仍成立）。
         self.record_usage(&item.ext_id, &item.id);
         let query = self.view.stack.current().list.query().to_owned();
+        // N20：激活即记录查询历史（开关关 = 不记录；空/纯空白 record 内跳过）。
+        self.record_query_history(&query);
         match &item.command {
             CommandRef::Invoke => {
                 let params = result::invoke_params(&item.id, &query);
@@ -133,12 +135,57 @@ impl PaletteApp {
 }
 
 impl PaletteApp {
+    // ── N20：搜索历史 ────────────────────────────────────────────────────────
+
+    /// 记录一条查询历史（开关关 = 不记录；trim、去重置顶、cap 50、即时原子
+    /// 落盘——文件小频次低，history.json 独立文件）。
+    pub(crate) fn record_query_history(&mut self, query: &str) {
+        if !self.draft.settings.record_search_history {
+            return;
+        }
+        crate::query_history::record(&mut self.view.search_history, query);
+        crate::query_history::save_history(&self.view.search_history);
+    }
+
+    /// 清空搜索历史（内存表 + history.json + 回填游标失效；「写设置即生效」
+    /// 口径——设置页开关关闭与「清空历史」按钮共用本路径）。
+    pub(crate) fn clear_query_history(&mut self) {
+        self.view.search_history.clear();
+        self.view.history_nav = None;
+        crate::query_history::clear_history();
+    }
+
+    /// bin 入口装配——history.json → 内存表（`pub`：调用方是 bin，在 lib 外；
+    /// load_usage 先例同口径——保持 `PaletteApp::new` 纯注入）。
+    pub fn load_query_history(&mut self) {
+        self.view.search_history = crate::query_history::load_history();
+    }
+}
+
+impl PaletteApp {
     /// `invoke` 分派：warm 进程在 → 直接后台执行；不在 → 桩复热（A6）。
     /// M4：熔断（连续崩溃，§11）的扩展**不再尝试 spawn**，等重启/手动重试。
     pub(crate) fn dispatch_invoke(&mut self, ext_id: &str, params: InvokeParams) {
         // N1（2026-10-04）：自定义直达命令走**宿主内部分发**（§3 惯例 ⑤）——
         // 不对应任何扩展进程，无 busy / 熔断面；`params.id` = `custom:{keyword}`。
         if ext_id == crate::aggregator::HOST_CUSTOM_EXT_ID {
+            // N18（2026-11-22）：文本片段条目（id = `snippet:<关键词>`）→ 剪贴板
+            // 队列（R-07 工作线程同径；S-07 上限/溯源语义沿用）。
+            if let Some(kw) = params.id.strip_prefix("snippet:") {
+                self.copy_snippet(kw);
+                return;
+            }
+            // N11（2026-11-22）：最近文件宿主条目（id = `recent:<路径>`）→
+            // open_path 直接执行（零信任面；失效 lnk → 既有失败 toast 口径）。
+            if let Some(path) = params.id.strip_prefix("recent:") {
+                self.open_recent_file(path);
+                return;
+            }
+            // N14 子项：`?` 速查页条目（id = `help:<n>`）——纯展示行，invoke
+            // 无动作（早退防「未知命令」误报 toast）。
+            if params.id.starts_with("help:") {
+                return;
+            }
             self.run_custom_command(&params.id);
             return;
         }

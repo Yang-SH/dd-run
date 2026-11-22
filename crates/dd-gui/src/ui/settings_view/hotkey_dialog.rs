@@ -48,18 +48,31 @@ impl PaletteApp {
                         // 内容宽 380（窄屏 clamp 到可用宽度，同 confirm.rs）。
                         ui.set_min_width(380.0f32.min(ui.available_width()));
                         // 标题 subtitle1 16·600 + 副题 caption 12 text3。
+                        // N17：按捕获目标路由标题（命令槽 / slot 0）——副题仅
+                        // slot 0 呈现（命令槽的说明在关键词选择行）。
+                        let is_command_slot =
+                            self.hotkeys.capture_target == crate::app::CaptureTarget::CommandSlot;
                         ui.label(
                             crate::theme::semibold_title(
-                                crate::text::t(lang, "set.hotkey.dialog_title"),
+                                crate::text::t(
+                                    lang,
+                                    if is_command_slot {
+                                        "set.commandhotkey.dialog_title"
+                                    } else {
+                                        "set.hotkey.dialog_title"
+                                    },
+                                ),
                                 16.0,
                             )
                             .color(p.text),
                         );
-                        ui.label(
-                            egui::RichText::new(crate::text::t(lang, "set.hotkey.dialog_sub"))
-                                .size(12.0)
-                                .color(p.text3),
-                        );
+                        if !is_command_slot {
+                            ui.label(
+                                egui::RichText::new(crate::text::t(lang, "set.hotkey.dialog_sub"))
+                                    .size(12.0)
+                                    .color(p.text3),
+                            );
+                        }
                         ui.add_space(8.0);
                         // 键帽预览区：固定高 48 水平居中（PowerToys：按住的
                         // 修饰键实时亮起；候选成立后显示完整组合键帽）。
@@ -156,6 +169,53 @@ impl PaletteApp {
                                 );
                             }
                         }
+                        // N17：命令槽绑定——关键词选择（必须命中既有自定义命令，
+                        // ComboBox = Fluent 下拉同款）+ 行内校验错误行。pending
+                        // 未捕获时不渲染（先录组合键）。
+                        if is_command_slot && self.hotkeys.hotkey_pending.is_some() {
+                            ui.add_space(8.0);
+                            ui.label(
+                                egui::RichText::new(crate::text::t(
+                                    lang,
+                                    "set.commandhotkey.keyword_label",
+                                ))
+                                .size(12.0)
+                                .color(p.text2),
+                            );
+                            let cmds = &self.draft.settings.custom_commands;
+                            let labels: Vec<String> = if cmds.is_empty() {
+                                vec![crate::text::t(lang, "set.commandhotkey.none").to_string()]
+                            } else {
+                                cmds.iter()
+                                    .map(|c| format!("{}（{}）", c.title, c.primary_keyword()))
+                                    .collect()
+                            };
+                            let label_refs: Vec<&str> = labels.iter().map(String::as_str).collect();
+                            let sel_idx = cmds
+                                .iter()
+                                .position(|c| {
+                                    c.primary_keyword() == self.hotkeys.command_slot_keyword
+                                })
+                                .unwrap_or(usize::MAX);
+                            let combo_w = dropdown_width(ui, &label_refs);
+                            if let Some(idx) = draw_fluent_dropdown(
+                                ui,
+                                sel_idx.min(labels.len().saturating_sub(1)),
+                                &label_refs,
+                                combo_w,
+                                p,
+                                true,
+                            ) {
+                                if let Some(c) = cmds.get(idx) {
+                                    self.hotkeys.command_slot_keyword =
+                                        c.primary_keyword().to_string();
+                                    self.hotkeys.command_slot_err = None;
+                                }
+                            }
+                            if let Some(e) = &self.hotkeys.command_slot_err {
+                                ui.label(egui::RichText::new(e).size(12.0).color(p.danger));
+                            }
+                        }
                         ui.add_space(16.0);
                         // ── 按钮行（高 32、间距 8、右对齐；视觉 [保存][重置][取消]）──
                         let row_w = ui.available_width();
@@ -186,13 +246,18 @@ impl PaletteApp {
                             egui::pos2(reset_rect.left() - 8.0 - save_w, row.min.y),
                             egui::vec2(save_w, 32.0),
                         );
-                        let unchanged = self.hotkeys.hotkey_pending
-                            == Some((
-                                self.draft.settings.hotkey_mods,
-                                self.draft.settings.hotkey_vk,
-                            ));
-                        let save_enabled =
-                            !applying && !unchanged && self.hotkeys.hotkey_pending.is_some();
+                        // N17：save 语义按目标分派——slot 0 保留「未改动禁用」；
+                        // 命令槽要求关键词已选（未选 = 禁用防误存）。
+                        let unchanged = !is_command_slot
+                            && self.hotkeys.hotkey_pending
+                                == Some((
+                                    self.draft.settings.hotkey_mods,
+                                    self.draft.settings.hotkey_vk,
+                                ));
+                        let save_enabled = !applying
+                            && !unchanged
+                            && self.hotkeys.hotkey_pending.is_some()
+                            && (!is_command_slot || !self.hotkeys.command_slot_keyword.is_empty());
                         // 保存 = accent 主按钮（禁用 = card 底 + text_disabled，
                         // 仍绘制但点击不生效——无候选 / 未改动 / 应用中）。
                         let (save_fill, save_tcol) = if save_enabled {
@@ -251,16 +316,27 @@ impl PaletteApp {
         if cancelled {
             self.end_hotkey_capture();
         } else if reset_clicked {
-            self.hotkeys.hotkey_pending = Some((
-                self.draft.settings.hotkey_mods,
-                self.draft.settings.hotkey_vk,
-            ));
+            if self.hotkeys.capture_target == crate::app::CaptureTarget::CommandSlot {
+                self.hotkeys.hotkey_pending = None; // N17：重录（无默认可预填）
+            } else {
+                self.hotkeys.hotkey_pending = Some((
+                    self.draft.settings.hotkey_mods,
+                    self.draft.settings.hotkey_vk,
+                ));
+            }
             self.hotkeys.hotkey_apply_failed = false;
+            self.hotkeys.command_slot_err = None;
         } else if save_clicked {
             if let Some((mods, vk)) = self.hotkeys.hotkey_pending {
-                // 确认流：结果在 poll_hotkey 按 seq 裁决——成功关窗写设置；
-                // 失败清 confirm + 行内报错（窗保持开、候选保留可重试）。
-                self.apply_captured_hotkey(mods, vk);
+                if self.hotkeys.capture_target == crate::app::CaptureTarget::CommandSlot {
+                    // N17：命令槽绑定——校验 + 写设置 + 槽位同步；失败行内
+                    // 报错（窗保持开、候选保留可重试），成功关窗 + toast。
+                    self.apply_command_slot(mods, vk);
+                } else {
+                    // 确认流：结果在 poll_hotkey 按 seq 裁决——成功关窗写设置；
+                    // 失败清 confirm + 行内报错（窗保持开、候选保留可重试）。
+                    self.apply_captured_hotkey(mods, vk);
+                }
             }
         }
     }
