@@ -39,10 +39,10 @@ mod spawn;
 // `pub use` 再导出，调用方的既有路径（含 benches/hot_paths.rs 的 bench 引用）
 // 保持不变。
 pub use env::{inject_ext_settings, inject_websearch_env};
-pub use items::{custom_command_items, flatten, to_panel_item};
+pub use items::{custom_command_items, flatten, to_panel_item, url_path_direct_item};
 pub use model::{
-    CollectResult, ExtItems, SourceStatus, SourceSummary, CUSTOM_ITEM_PREFIX, HOST_CUSTOM_EXT_ID,
-    HOST_VERSION, PROTOCOL_VERSION,
+    CollectResult, ExtItems, SourceStatus, SourceSummary, CUSTOM_ITEM_PREFIX, DIRECT_ITEM_PREFIX,
+    HOST_CUSTOM_EXT_ID, HOST_VERSION, PROTOCOL_VERSION,
 };
 pub use scan::{
     is_trusted, load_extension_sources, origin_of, pending_count, sidecar_extensions_dir,
@@ -124,6 +124,79 @@ mod tests {
         // 拼音索引：中文标题生成全拼+首字母；纯英文标题为空串（原字符即匹配域）
         assert_eq!(items[1].pinyin, "zhoubao zb", "周报 → zhoubao zb");
         assert_eq!(gh.pinyin, "", "纯英文标题拼音索引为空");
+    }
+
+    /// N10：URL/路径形态查询 → 宿主「打开」直达条目——http(s) 与盘符/UNC
+    /// 命中、裸域名与普通文本不命中（误报面边界）、id 内嵌目标、分组「直达」、
+    /// 拼音随 title。
+    #[test]
+    fn url_path_direct_item_classifies_query_shapes() {
+        let url =
+            url_path_direct_item("  https://github.com/a?b=c  ", Lang::ZhCn).expect("URL 命中");
+        assert_eq!(url.id, "direct:https://github.com/a?b=c");
+        assert_eq!(url.title, "打开 https://github.com/a?b=c");
+        assert_eq!(url.ext_id, HOST_CUSTOM_EXT_ID);
+        assert_eq!(url.section, "直达");
+        assert_eq!(url.result_category.as_deref(), Some("直达"));
+        assert_eq!(url.command, CommandRef::Invoke);
+        assert_eq!(url.pinyin, "", "纯英文标题拼音为空");
+
+        let path = url_path_direct_item(r"C:\Windows", Lang::ZhCn).expect("盘符路径命中");
+        assert_eq!(path.id, r"direct:C:\Windows");
+        assert_eq!(path.subtitle, r"C:\Windows");
+
+        let unc = url_path_direct_item(r"\\server\share\app.exe", Lang::EnUs).expect("UNC 命中");
+        assert_eq!(unc.id, r"direct:\\server\share\app.exe");
+        assert_eq!(unc.title, "Open \\\\server\\share\\app.exe");
+
+        for miss in ["github.com", "file.pdf", "2.5.1", "hello world", ""] {
+            assert!(
+                url_path_direct_item(miss, Lang::ZhCn).is_none(),
+                "{miss} 不应命中"
+            );
+        }
+    }
+
+    /// N19：多关键词自定义命令 → 虚拟条目——id 锚定主关键词（第一段）、全部
+    /// 段进 tags；path 型失效（target 不存在）→ 副标题前缀「路径不存在」。
+    #[test]
+    fn n19_custom_command_multi_keyword_items_and_missing_path() {
+        use crate::settings::CustomCommandKind;
+        let cmds = vec![
+            CustomCommand::new(
+                "GitHub",
+                "GH, github",
+                CustomCommandKind::Url,
+                "https://github.com",
+            )
+            .unwrap(),
+            CustomCommand::new(
+                "缺失报告",
+                "rep",
+                CustomCommandKind::Path,
+                r"C:\surely\not\here\报告.docx",
+            )
+            .unwrap(),
+        ];
+        let items = custom_command_items(&cmds, Lang::ZhCn);
+        let gh = &items[0];
+        assert_eq!(gh.id, "custom:gh", "id 锚定主关键词（第一段）");
+        assert_eq!(
+            gh.tags,
+            vec!["gh".to_string(), "github".to_string()],
+            "全部段进 tags"
+        );
+        assert_eq!(gh.subtitle, "https://github.com", "url 型无失效提示");
+        let missing = &items[1];
+        assert!(
+            missing.subtitle.starts_with("路径不存在"),
+            "path 型失效 → 副标题前缀提示（实得 {:?}）",
+            missing.subtitle
+        );
+        assert!(
+            missing.subtitle.contains(r"C:\surely\not\here\报告.docx"),
+            "目标仍可见"
+        );
     }
 
     #[test]

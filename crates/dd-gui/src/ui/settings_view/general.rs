@@ -422,6 +422,82 @@ impl PaletteApp {
             self.apply_warm_capacity(cap);
         }
 
+        // ── 卡 5.5：唤起位置（N21，2026-11-21）──opt-in 位置记忆；默认
+        // 「鼠标所在屏居中」= V-1 基线形态逐位不变。切换即时落盘（下次唤起
+        // 生效——位置语义在 show()/hide() 读写，本卡零即时窗口动作）。
+        ui.add_space(8.0);
+        let pos_labels = [
+            crate::text::t(lang_eff, "set.panel_pos.opt_cursor"),
+            crate::text::t(lang_eff, "set.panel_pos.opt_remember"),
+        ];
+        let pos_selected = match self.draft.settings.panel_pos_mode {
+            crate::settings::PanelPosMode::Cursor => 0usize,
+            crate::settings::PanelPosMode::Remember => 1usize,
+        };
+        let mut pos_picked: Option<usize> = None;
+        let pos_combo_w = dropdown_width(ui, &pos_labels);
+        draw_settings_card_frame(ui, p, self.window.backdrop_active, |card| {
+            card.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = 0.0;
+                let left_w = (ui.available_width() - pos_combo_w - 16.0).max(160.0);
+                ui.allocate_ui(egui::vec2(left_w, 40.0), |ui| {
+                    ui.horizontal(|ui| {
+                        ui.spacing_mut().item_spacing.x = 0.0;
+                        let (icon_rect, _) =
+                            ui.allocate_exact_size(egui::vec2(16.0, 16.0), egui::Sense::hover());
+                        ui.painter().text(
+                            icon_rect.center() + egui::vec2(0.0, 1.0),
+                            egui::Align2::CENTER_CENTER,
+                            '\u{E9F5}', // Processing：与预热容量卡同 glyph（无新增码位——覆盖检查零风险）
+                            egui::FontId::proportional(16.0),
+                            p.text2,
+                        );
+                        ui.add_space(12.0);
+                        ui.vertical(|ui| {
+                            ui.set_min_height(40.0);
+                            ui.label(
+                                crate::theme::semibold_title(
+                                    crate::text::t(lang_eff, "set.panel_pos.name"),
+                                    14.0,
+                                )
+                                .color(p.text),
+                            );
+                            ui.add_space(2.0);
+                            ui.add(
+                                egui::Label::new(
+                                    egui::RichText::new(crate::text::t(
+                                        lang_eff,
+                                        "set.panel_pos.desc",
+                                    ))
+                                    .size(12.0)
+                                    .color(p.text3),
+                                )
+                                .wrap(),
+                            );
+                        });
+                    });
+                });
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if let Some(idx) =
+                        draw_fluent_dropdown(ui, pos_selected, &pos_labels, pos_combo_w, p, true)
+                    {
+                        pos_picked = Some(idx);
+                    }
+                });
+            });
+        });
+        if let Some(idx) = pos_picked {
+            let mode = if idx == 1 {
+                crate::settings::PanelPosMode::Remember
+            } else {
+                crate::settings::PanelPosMode::Cursor
+            };
+            if self.draft.settings.panel_pos_mode != mode {
+                self.draft.settings.panel_pos_mode = mode;
+                self.save_settings_with_feedback();
+            }
+        }
+
         // ── 卡 6：自定义命令（N1，2026-10-04）──管理范式复用搜索引擎卡
         //（列表行 + 删除小按钮 + 底部添加区）；添加/删除即时落盘 + 置聚合
         // 脏标记（下一次重聚合后首屏「直达」分组同步）。
@@ -850,13 +926,13 @@ impl PaletteApp {
                 &self.draft.custom_target_buf,
             ) {
                 Some(c) => {
-                    if self
-                        .draft
-                        .settings
-                        .custom_commands
-                        .iter()
-                        .any(|x| x.keyword == c.keyword)
-                    {
+                    if self.draft.settings.custom_commands.iter().any(|x| {
+                        // N19：段级唯一——新命令的任一关键词段与既有任一段
+                        // 重复即拒绝（单关键词形态 = 单段，行为不变）。
+                        c.keyword
+                            .split(',')
+                            .any(|seg| x.keyword.split(',').any(|e| e == seg))
+                    }) {
                         self.draft.custom_add_err =
                             Some(crate::text::t(lang, "set.custom.dup_keyword").to_string());
                     } else {

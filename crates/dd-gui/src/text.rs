@@ -20,6 +20,9 @@ pub(crate) const CTX_GLYPH_LINK: char = '\u{E71B}'; // Link
 
 pub(crate) const CTX_GLYPH_DELETE: char = '\u{E74D}'; // Delete
 
+/// N19：右键「存为自定义命令」（Add 字形——Segoe 通用加号）。
+pub(crate) const CTX_GLYPH_SAVE: char = '\u{E710}'; // Add
+
 /// 默认动作 glyph（10B.0）：进入页 = FolderOpen、打开类（apps/system/websearch）
 /// = OpenFile、执行类 = Play。
 pub(crate) fn default_action_glyph(item: &PanelItem) -> char {
@@ -139,8 +142,38 @@ const I18N: &[(&str, &str, &str)] = &[
     ("ctx.copy_link", "复制链接", "Copy link"),
     ("ctx.copied", "已复制到剪贴板", "Copied to clipboard"),
     ("ctx.delete_custom", "删除此命令", "Delete this command"),
+    ("ctx.hide_app", "屏蔽此应用", "Hide this app"),
+    (
+        "ctx.hide_app_done",
+        "已屏蔽「{title}」——可在 设置 → 扩展 → 应用 → 用户屏蔽名单 恢复",
+        "Hidden \"{title}\" — restore it in Settings → Extensions → Apps → User blocklist",
+    ),
+    (
+        "ctx.hide_app_comma",
+        "显示名含逗号，请在 设置 → 扩展 → 应用 → 用户屏蔽名单 手动添加",
+        "Name contains a comma — add it manually in Settings → Extensions → Apps → User blocklist",
+    ),
     ("ctx.admin_fail", "以管理员身份运行失败：{e}", "Failed to run as administrator: {e}"),
     ("ctx.locate_fail", "打开所在位置失败：{e}", "Failed to open file location: {e}"),
+    // ── N10 URL/路径直达条目 ──
+    ("direct.open", "打开 {}", "Open {}"),
+    // ── N21 面板位置记忆 ──
+    ("set.panel_pos.name", "唤起位置", "Panel position"),
+    (
+        "set.panel_pos.desc",
+        "唤起时面板出现的位置；「记住上次位置」在隐藏时保存，恢复失败自动回落居中",
+        "Where the panel appears on summon; \"remember\" saves it on hide and falls back to centering if restore fails",
+    ),
+    ("set.panel_pos.opt_cursor", "鼠标所在屏居中", "Center on cursor screen"),
+    ("set.panel_pos.opt_remember", "记住上次位置", "Remember last position"),
+    // ── N19 自定义命令增强 ──
+    ("ctx.save_as_command", "存为自定义命令", "Save as custom command"),
+    ("n19.path_missing", "路径不存在", "Path not found"),
+    (
+        "n19.path_missing_invoke",
+        "路径不存在：{target}",
+        "Path not found: {target}",
+    ),
     // ── host/open_url 执行策略（S-03，2026-09-23）──
     (
         "toast.open_url_blocked",
@@ -541,7 +574,7 @@ const I18N: &[(&str, &str, &str)] = &[
     ("set.custom.add", "添加", "Add"),
     ("set.custom.delete", "删除", "Delete"),
     ("set.custom.title_hint", "名称（如 GitHub）", "Name (e.g. GitHub)"),
-    ("set.custom.keyword_hint", "关键词（如 gh）", "Keyword (e.g. gh)"),
+    ("set.custom.keyword_hint", "关键词（如 gh；多个用逗号分隔）", "Keyword (e.g. gh; comma-separate for multiple)"),
     (
         "set.custom.target_hint",
         "目标：https://… 或 C:\\path",

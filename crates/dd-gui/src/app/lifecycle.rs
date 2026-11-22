@@ -66,7 +66,21 @@ impl PaletteApp {
         // 按**目标尺寸**居中（不再读 stale `inner_rect`）：重开设置页后回到根页
         // 时，用根页尺寸定位而非残留的设置页大尺寸，消除位置跳动（issue：
         // 「切换设置项后关闭重开面板位置变化」）。
-        self.center_on_cursor(ctx, (w, h));
+        // N21：位置记忆（opt-in `panel_pos_mode = Remember` 且有存档）→ 恢复
+        // 记忆位置（按其所在屏工作区 clamp）；恢复失败或 Cursor 档（默认）→
+        // 既有居中路径逐位不变。
+        let restored = match self.draft.settings.panel_pos_mode {
+            crate::settings::PanelPosMode::Remember => match self.draft.settings.panel_last_pos {
+                Some((x, y)) => {
+                    self.restore_remembered_position(ctx, egui::pos2(x as f32, y as f32), (w, h))
+                }
+                None => false,
+            },
+            crate::settings::PanelPosMode::Cursor => false,
+        };
+        if !restored {
+            self.center_on_cursor(ctx, (w, h));
+        }
         ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(egui::vec2(w, h)));
         ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
         ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
@@ -111,6 +125,8 @@ impl PaletteApp {
         // v4.12 D37：隐藏前落盘本显示周期的拉伸尺寸（best-effort，见
         // `persist_panel_size`）——此时窗口尺寸即本周期最终尺寸。
         self.persist_panel_size(ctx);
+        // N21：隐藏前落盘面板位置（仅 Remember 档；best-effort 同口径）。
+        self.persist_panel_position(ctx);
         // 隐藏当帧继续绘制真实内容一次，避免 present 纯色空帧的「闪黑」
         // （见 `paint_hide_frame` 字段注释）。
         self.window.paint_hide_frame = true;
@@ -171,6 +187,24 @@ impl PaletteApp {
             );
             self.draft.settings.panel_size = next;
             self.save_settings_with_feedback();
+        }
+    }
+
+    /// N21（2026-11-21）：隐藏前落盘面板位置（仅 `PanelPosMode::Remember` 档；
+    /// best-effort 同 `persist_panel_size`——inner_rect 不可得即跳过）。
+    /// `Cursor` 档不写（旧存档保留无害：切回 Cursor 后不再读取）。
+    pub(crate) fn persist_panel_position(&mut self, ctx: &egui::Context) {
+        if self.draft.settings.panel_pos_mode != crate::settings::PanelPosMode::Remember {
+            return;
+        }
+        let Some(pos) = ctx.input(|i| i.viewport().inner_rect.map(|r| r.min)) else {
+            return; // inner_rect 不可得（无头/早期帧）：跳过
+        };
+        let p = (pos.x.round() as i32, pos.y.round() as i32);
+        if Some(p) != self.draft.settings.panel_last_pos {
+            self.draft.settings.panel_last_pos = Some(p);
+            self.save_settings_with_feedback();
+            log::debug!("[dd-gui] 面板位置落盘：({}, {})", p.0, p.1);
         }
     }
 

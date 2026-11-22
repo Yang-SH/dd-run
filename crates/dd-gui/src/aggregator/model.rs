@@ -15,6 +15,9 @@ pub const HOST_VERSION: &str = env!("CARGO_PKG_VERSION");
 pub const HOST_CUSTOM_EXT_ID: &str = "com.ddrun.host";
 /// N1：自定义直达命令条目 id 前缀（`custom:{keyword}`）。
 pub const CUSTOM_ITEM_PREFIX: &str = "custom:";
+/// N10（2026-11-21）：URL/路径直达条目 id 前缀（`direct:<目标>`——目标内嵌
+/// id，执行点重分类，配置无关、无删除竞态面）。
+pub const DIRECT_ITEM_PREFIX: &str = "direct:";
 
 /// 单个扩展的拉取结果（**不携带进程**，便于纯逻辑单测构造）。
 #[derive(Debug, Clone, PartialEq, Eq)]

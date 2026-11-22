@@ -17,6 +17,9 @@ const CAT_LABEL_MAX_W: f32 = 90.0;
 /// 中列标题与右列文本之间的间隙（px，与 B5 的 `cat_w + 12.0` 同口径）。
 const TRAIL_GAP: f32 = 12.0;
 
+// N6：新增 `highlight` 参数触发 clippy too_many_arguments（行渲染 UI 函数，
+// 参数均为同层句柄——拆分反而破坏调用点一致性，容许）。
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn draw_item_row(
     ui: &mut egui::Ui,
     item: &PanelItem,
@@ -25,6 +28,7 @@ pub(crate) fn draw_item_row(
     hover_enabled: bool,
     fills: theme::RowFills,
     m: theme::ListMetrics,
+    highlight: &[usize],
 ) -> egui::Response {
     let p = theme::Palette::of(ui.visuals().dark_mode);
 
@@ -125,9 +129,24 @@ pub(crate) fn draw_item_row(
                         .max_rect(title_box)
                         .layout(egui::Layout::left_to_right(egui::Align::Center)),
                 );
-                title_ui.add(
-                    egui::Label::new(egui::RichText::new(&item.title).size(m.title_pt)).truncate(),
-                );
+                if highlight.is_empty() {
+                    title_ui.add(
+                        egui::Label::new(egui::RichText::new(&item.title).size(m.title_pt))
+                            .truncate(),
+                    );
+                } else {
+                    // N6：命中字符段用强调色（`Palette::accent_stroke`——随
+                    // ColorizationMode 三档；暗色亮 / 亮色暗，两态文本对比度皆可）。
+                    title_ui.add(
+                        egui::Label::new(title_job(
+                            &item.title,
+                            highlight,
+                            m.title_pt,
+                            p.accent_stroke,
+                        ))
+                        .truncate(),
+                    );
+                }
                 // 右列：文件结果 = 所在文件夹路径（**中段省略**，无论文件名多长
                 // 都可见）；其余 = 类别标签。贴右最右。
                 if let Some(trail) = trail_full {
@@ -217,6 +236,57 @@ fn is_file_item(item: &PanelItem) -> bool {
     item.tags.iter().any(|t| t == "files") && looks_like_path(&item.subtitle)
 }
 
+// ── N6：标题高亮渲染 ────────────────────────────────────────────────────────
+
+/// N6：标题高亮 LayoutJob——命中**字符段**（升序下标聚合为连续段）用强调色，
+/// 其余段走占位色（`Color32::PLACEHOLDER` 在绘制期解析为默认文本色，与
+/// RichText 无色路径同源，明暗主题皆正确）。纯函数可单测（分段文本断言）。
+/// `highlight` = title 的字符下标（state 层 `title_highlight` 产出，升序去重；
+/// 越界下标被忽略——防御）。
+fn title_job(
+    title: &str,
+    highlight: &[usize],
+    title_pt: f32,
+    accent: egui::Color32,
+) -> egui::text::LayoutJob {
+    let font = theme::semibold(title_pt);
+    let hit: std::collections::HashSet<usize> = highlight.iter().copied().collect();
+    let mut job = egui::text::LayoutJob::default();
+    let mut seg_start = 0usize;
+    let mut seg_hit = hit.contains(&0);
+    for (i, (byte_pos, _)) in title.char_indices().enumerate() {
+        if i > 0 && hit.contains(&i) != seg_hit {
+            push_title_segment(
+                &mut job,
+                &title[seg_start..byte_pos],
+                seg_hit,
+                &font,
+                accent,
+            );
+            seg_start = byte_pos;
+            seg_hit = hit.contains(&i);
+        }
+    }
+    push_title_segment(&mut job, &title[seg_start..], seg_hit, &font, accent);
+    job
+}
+
+/// 单段入 job：命中段 = 强调色，常规段 = 占位色（绘制期解析默认文本色）。
+fn push_title_segment(
+    job: &mut egui::text::LayoutJob,
+    text: &str,
+    hit: bool,
+    font: &egui::FontId,
+    accent: egui::Color32,
+) {
+    let fmt = if hit {
+        egui::TextFormat::simple(font.clone(), accent)
+    } else {
+        egui::TextFormat::simple(font.clone(), egui::Color32::PLACEHOLDER)
+    };
+    job.append(text, 0.0, fmt);
+}
+
 /// 粗糙的绝对路径判别：`C:\` / `C:/` 盘符绝对路径，或 `\\` UNC 前缀。
 /// 只用于区分「路径副标题」与「说明文案副标题」，不追求完备。
 fn looks_like_path(s: &str) -> bool {
@@ -292,6 +362,39 @@ fn middle_ellipsis(ui: &egui::Ui, text: &str, font: &egui::FontId, max_w: f32) -
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// N6：高亮 LayoutJob 分段——连续命中段聚合、常规段走占位色、越界下标
+    /// 忽略、全命中/全不命中退化为单段。（egui 0.36：section 持 `byte_range`
+    /// 指回 `job.text`，分段文本按区间切片断言。）
+    #[test]
+    fn n6_title_job_segments_merge_contiguous_hits() {
+        fn seg_text(job: &egui::text::LayoutJob) -> Vec<&str> {
+            use egui::epaint::text::ByteRangeExt as _;
+            job.sections
+                .iter()
+                .map(|s| s.byte_range.slice(&job.text))
+                .collect()
+        }
+        // "Open Settings"：O(0) p(1) e(2) n(3) ' '(4) S(5) e(6) t(7) t(8) i(9) n(10) g(11) s(12)
+        let job = title_job("Open Settings", &[0, 1, 5, 6], 14.0, egui::Color32::RED);
+        assert_eq!(
+            seg_text(&job),
+            vec!["Op", "en ", "Se", "ttings"],
+            "连续命中段聚合"
+        );
+        // 命中段强调色 / 常规段占位色
+        assert_eq!(job.sections[0].format.color, egui::Color32::RED);
+        assert_eq!(job.sections[1].format.color, egui::Color32::PLACEHOLDER);
+        // 全命中 / 无命中 → 单段
+        let job = title_job("AB", &[0, 1], 14.0, egui::Color32::RED);
+        assert_eq!(job.sections.len(), 1);
+        assert_eq!(job.sections[0].format.color, egui::Color32::RED);
+        let job = title_job("AB", &[], 14.0, egui::Color32::RED);
+        assert_eq!(job.sections.len(), 1);
+        // 越界下标忽略
+        let job = title_job("AB", &[0, 7], 14.0, egui::Color32::RED);
+        assert_eq!(seg_text(&job), vec!["A", "B"]);
+    }
 
     #[test]
     fn looks_like_path_accepts_drive_and_unc() {

@@ -2,10 +2,13 @@
 //! 自 `aggregator.rs` 原块（765–897 行）逐字节搬入、零逻辑改动；
 //! 外部路径经 `aggregator/mod.rs` 的 `pub use` 桥保持不变。
 
-use crate::settings::{CustomCommand, Lang};
+use crate::settings::{CustomCommand, CustomCommandKind, Lang};
 use dd_protocol::model::CommandItem;
 
-use super::model::{ExtItems, SourceStatus, SourceSummary, CUSTOM_ITEM_PREFIX, HOST_CUSTOM_EXT_ID};
+use super::model::{
+    ExtItems, SourceStatus, SourceSummary, CUSTOM_ITEM_PREFIX, DIRECT_ITEM_PREFIX,
+    HOST_CUSTOM_EXT_ID,
+};
 use crate::state::PanelItem;
 use crate::text;
 
@@ -110,20 +113,78 @@ pub fn to_panel_item(
 pub fn custom_command_items(cmds: &[CustomCommand], lang: Lang) -> Vec<PanelItem> {
     let section = text::t(lang, "cat.custom").to_string();
     cmds.iter()
-        .map(|c| PanelItem {
-            id: format!("{CUSTOM_ITEM_PREFIX}{}", c.keyword),
-            ext_id: HOST_CUSTOM_EXT_ID.to_string(),
-            title: c.title.clone(),
-            subtitle: c.target.clone(),
-            section: section.clone(),
-            icon: None,
-            tags: vec![c.keyword.clone()],
-            result_category: Some(section.clone()),
-            pinyin: crate::state::pinyin_haystack(&c.title),
-            command: dd_protocol::model::CommandRef::Invoke,
-            more_commands: Vec::new(),
+        .map(|c| {
+            // N19：多关键词（逗号分隔）——主关键词 = 第一段（id 与右键删除
+            // 语义锚定），全部段进 tags（任一段可命中匹配）。
+            let segs: Vec<String> = c
+                .keyword
+                .split(',')
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .map(String::from)
+                .collect();
+            let primary = segs.first().cloned().unwrap_or_default();
+            // N19：path 型失效检测——target 不存在 → 副标题前缀提示（条目量
+            // 小，逐聚合 stat 成本 µs 级；invoke 侧同口径拒绝执行）。
+            let missing =
+                c.kind == CustomCommandKind::Path && !std::path::Path::new(&c.target).exists();
+            let subtitle = if missing {
+                format!("{} {}", text::t(lang, "n19.path_missing"), c.target)
+            } else {
+                c.target.clone()
+            };
+            PanelItem {
+                id: format!("{CUSTOM_ITEM_PREFIX}{primary}"),
+                ext_id: HOST_CUSTOM_EXT_ID.to_string(),
+                title: c.title.clone(),
+                subtitle,
+                section: section.clone(),
+                icon: None,
+                tags: segs,
+                result_category: Some(section.clone()),
+                pinyin: crate::state::pinyin_haystack(&c.title),
+                command: dd_protocol::model::CommandRef::Invoke,
+                more_commands: Vec::new(),
+            }
         })
         .collect()
+}
+
+/// N10（2026-11-21）：URL / 路径形态查询 → 宿主「打开」直达条目（聚合尾部
+/// 追加，排在常规结果之后）。
+///
+/// 判定复用 `text::url_like`（http(s) 前缀）/ `text::path_like`（盘符/UNC
+/// 形态）——**裸域名刻意不识别**（`2.5.1`/`file.pdf` 类误报面，altrun 方案
+/// §4.5 边界；N1 直达命令与书签覆盖该需求）。执行经
+/// `host_actions::run_custom_command` 的 `direct:` 分支：URL 走
+/// `open_url_execute`（S-03 白名单天然生效），路径走 `platform::open_path`
+/// 「双击等价」。`id = direct:<目标>` 内嵌目标（执行点重分类，无配置竞态）。
+/// 纯函数，可单测。
+pub fn url_path_direct_item(query: &str, lang: Lang) -> Option<PanelItem> {
+    let target = query.trim();
+    if target.is_empty() {
+        return None;
+    }
+    let is_url = text::url_like(target).is_some();
+    let is_path = text::path_like(target).is_some();
+    if !is_url && !is_path {
+        return None;
+    }
+    let section = text::t(lang, "cat.custom").to_string();
+    let title = text::t(lang, "direct.open").replace("{}", target);
+    Some(PanelItem {
+        id: format!("{DIRECT_ITEM_PREFIX}{target}"),
+        ext_id: HOST_CUSTOM_EXT_ID.to_string(),
+        subtitle: target.to_string(),
+        title,
+        section: section.clone(),
+        icon: None,
+        tags: Vec::new(),
+        result_category: Some(section),
+        pinyin: crate::state::pinyin_haystack(target),
+        command: dd_protocol::model::CommandRef::Invoke,
+        more_commands: Vec::new(),
+    })
 }
 
 /// 按扩展清单 id 推导结果类别显示标签（设计文档 §6.2 映射表）。

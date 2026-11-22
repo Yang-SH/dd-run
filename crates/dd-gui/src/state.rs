@@ -70,6 +70,37 @@ pub(crate) fn pinyin_haystack(s: &str) -> String {
     }
 }
 
+/// N6：拼音映射表的「非源字符」哨兵（haystack 中全拼与首字母之间的分隔空格，
+/// 不映射到 title 任何字符）。
+pub(crate) const PINYIN_SPAN_GAP: usize = usize::MAX;
+
+/// N6：拼音 haystack 的字符映射表——[`pinyin_haystack`] 产出的**每个字符**对应
+/// `s` 的哪个字符下标：全拼字符 → 源汉字下标；首字母字符 → 同一源汉字下标；
+/// 全拼与首字母之间的分隔空格 → [`PINYIN_SPAN_GAP`]。非汉字字符跳过（与
+/// [`pinyin_haystack`] 同一迭代口径，`enumerate` 保持字符对齐）。纯函数可单测；
+/// N6 高亮用（拼音命中的 haystack 字符下标经此映射回 title 字符）。
+pub(crate) fn pinyin_spans(s: &str) -> Vec<usize> {
+    use pinyin::ToPinyin;
+    let mut spans: Vec<usize> = Vec::new();
+    for (char_idx, p) in s.to_pinyin().enumerate() {
+        if let Some(p) = p {
+            for _ in 0..p.plain().chars().count() {
+                spans.push(char_idx);
+            }
+        }
+    }
+    if !spans.is_empty() {
+        // 与 pinyin_haystack 的 `if any` 分支逐位对齐：' ' 分隔 + 首字母串
+        spans.push(PINYIN_SPAN_GAP);
+        for (char_idx, p) in s.to_pinyin().enumerate() {
+            if p.is_some() {
+                spans.push(char_idx);
+            }
+        }
+    }
+    spans
+}
+
 impl PanelItem {
     /// 仅凭标题构造（id 缺省与标题相同，命令缺省为直接执行，无扩展来源）。
     pub fn new(title: impl Into<String>) -> Self {
@@ -156,6 +187,12 @@ pub struct PanelState {
     /// [`Self::set_usage`] 注入；`None` 时排序行为与本功能引入前逐字节一致
     /// （快照金图与既有测试不受影响的关键）。
     usage: Option<crate::usage::UsageScores>,
+    /// N6：标题高亮表——与 `visible` **平行**，每项 = 该行 title 的命中**字符
+    /// 下标**（升序去重；空 = 无高亮）。仅在非空查询 + 非 passthrough 的
+    /// 模糊重算分支产出（评分热路径零变化——indices 属二遍计算，只算可见行；
+    /// bench 面不受影响：set_query_2000 零命中、panel 组空查询）。空查询 /
+    /// 嵌套页恒 `None`（金图字节安全）。
+    title_highlights: Option<Vec<Vec<usize>>>,
 }
 
 impl PanelState {
@@ -193,6 +230,8 @@ impl PanelState {
             page_step: 10,
             // §5.1：默认未启用（应用侧启动加载 usage.json 后注入）。
             usage: None,
+            // N6：高亮表随查询重算产出；构造点空查询 → None（recompute 收口）。
+            title_highlights: None,
         };
         s.recompute_visible();
         s.reset_selection();
@@ -301,9 +340,64 @@ impl PanelState {
         truncated
     }
 
+    /// N10（2026-11-22 真机核对轮修正）：维护**查询态直达条目**（URL/路径形态
+    /// 查询 →「打开 …」）。`Some` = 以该项替换既有直达条目；`None` = 清除。
+    ///
+    /// 为什么在逐键路径维护：聚合重建（`rebuild_root_from_arrived`）仅在启动 /
+    /// 配置脏时发生（`restart_aggregation` 门控），其读取的查询恒为空——wave-1
+    /// 把直达条目注入挂在聚合重建上，实践中**永不出现**（真机 2026-11-22 核对
+    /// 轮抓出）。根页输入路径（`ui/panel.rs`）逐帧调用本方法；rebuild 处的注入
+    /// 保留为聚合时刻兜底（前缀去重，两处幂等）。
+    ///
+    /// **自行重算**：`items` 变化会使 `visible` 的索引失效，而调用方的
+    /// `set_query` 可能因同查询早退不再触发重算（Esc 清空后的下一帧等场景——
+    /// 首版实现漏掉此路径致索引越界 panic，真机抓出后修正）。同 id+同内容的
+    /// 重复注入零操作，稳态帧零重付。
+    pub fn set_direct_item(&mut self, item: Option<PanelItem>) {
+        let prefix = crate::aggregator::DIRECT_ITEM_PREFIX;
+        let recompute = |s: &mut Self| {
+            s.recompute_visible();
+            s.clamp_selection();
+        };
+        let existing = self.items.iter().position(|i| i.id.starts_with(prefix));
+        match (existing, item) {
+            (None, None) => {}
+            (Some(_), None) => {
+                self.items.retain(|i| !i.id.starts_with(prefix));
+                recompute(self);
+            }
+            (Some(pos), Some(new)) => {
+                if self.items[pos].id == new.id
+                    && self.items[pos].title == new.title
+                    && self.items[pos].subtitle == new.subtitle
+                {
+                    // 同条目重复注入（非打字帧逐帧调用）→ 零变化
+                } else {
+                    self.items.retain(|i| !i.id.starts_with(prefix));
+                    self.items.push(new);
+                    recompute(self);
+                }
+            }
+            (None, Some(new)) => {
+                self.items.push(new);
+                recompute(self);
+            }
+        }
+    }
+
     /// 当前查询下可见项个数（fallback 模式时 = fallback 长度）。
     pub fn visible_count(&self) -> usize {
         self.filtered().count()
+    }
+
+    /// N6：可见列表第 `idx` 项的标题命中**字符下标**（升序去重；空 = 无高亮）。
+    /// 空查询 / 嵌套页（passthrough）/ fallback 模式恒空切片；越界（含
+    /// fallback 模式的 fallback 下标——高亮表此时为空表）→ 空切片。
+    pub fn title_highlight(&self, idx: usize) -> &[usize] {
+        match &self.title_highlights {
+            Some(hs) => hs.get(idx).map(|v| v.as_slice()).unwrap_or(&[]),
+            None => &[],
+        }
     }
 
     /// 可见项迭代器（**fallback 模式下不二次过滤**——项已按查询渲染好）：
@@ -480,6 +574,7 @@ impl PanelState {
             // 嵌套页：扩展 get_items 已按查询过滤/排序完毕，宿主不再做二次模糊过滤，
             // 全量展示扩展返回顺序（文件搜索场景 Everything 结果自带相关性序）。
             self.visible = (0..n).collect();
+            self.title_highlights = None;
             return;
         }
         if self.query.trim().is_empty() {
@@ -509,6 +604,7 @@ impl PanelState {
                 });
             }
             self.visible = vis;
+            self.title_highlights = None;
             return;
         }
         let mut fm = crate::fuzzy::FuzzyMatcher::new(&self.query);
@@ -542,6 +638,16 @@ impl PanelState {
             })
         });
         self.visible = scored.into_iter().map(|(i, _)| i).collect();
+        // N6：标题高亮二遍算（仅可见行；评分路径未动）。title 直接命中 →
+        // title 字符下标；拼音命中 → 经 `pinyin_spans` 映射回源汉字；附属层
+        // 命中（title 与拼音均未中）→ 空表（不高亮标题）。空命中（visible 空）
+        // 时 collect 空迭代器，成本 ≈ 一次空 Vec 分配。
+        self.title_highlights = Some(
+            self.visible
+                .iter()
+                .map(|&i| fm.title_highlight(&self.items[i]))
+                .collect(),
+        );
         #[cfg(debug_assertions)]
         log::debug!(
             "[dd-gui] A3 过滤：{n} 项 → {} 命中，query {} 字符，耗时 {} µs",
@@ -585,6 +691,104 @@ impl PanelState {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// N6：拼音映射表与 haystack 逐字符对齐——全拼字符 → 源汉字、分隔空格 →
+    /// GAP、首字母字符 → 同一源汉字；混合中英标题的拉丁字符跳过但下标对齐。
+    #[test]
+    fn n6_pinyin_spans_align_with_haystack() {
+        let title = "计算器";
+        let hay = pinyin_haystack(title);
+        assert_eq!(hay, "jisuanqi jsq");
+        let spans = pinyin_spans(title);
+        assert_eq!(spans.len(), hay.chars().count(), "映射表与 haystack 等长");
+        assert_eq!(
+            spans,
+            vec![
+                0,
+                0, // j i → 汉字0（计）
+                1,
+                1,
+                1,
+                1, // s u a n → 汉字1（算）
+                2,
+                2,               // q i → 汉字2（器）
+                PINYIN_SPAN_GAP, // 分隔空格
+                0,
+                1,
+                2, // 首字母 j s q → 各自源汉字
+            ]
+        );
+        // 混合中英：「计算 A」→ 拉丁字符不进 haystack，但 enumerate 保持下标对齐
+        let mixed = "计算 A";
+        let hay2 = pinyin_haystack(mixed);
+        assert_eq!(hay2, "jisuan js");
+        let spans2 = pinyin_spans(mixed);
+        assert_eq!(spans2.len(), hay2.chars().count());
+        assert_eq!(spans2, vec![0, 0, 1, 1, 1, 1, PINYIN_SPAN_GAP, 0, 1]);
+        // 纯英文 → haystack 与 spans 皆空
+        assert!(pinyin_spans("Open Settings").is_empty());
+    }
+
+    /// N10（2026-11-22 真机核对轮修正）：查询态直达条目维护——URL 查询注入、
+    /// 换查询替换、非形态查询清除、id 前缀幂等（不重复堆积）。
+    #[test]
+    fn n10_set_direct_item_maintains_query_shaped_entry() {
+        let is_direct = |it: &PanelItem| it.id.starts_with(crate::aggregator::DIRECT_ITEM_PREFIX);
+        let mut s = PanelState::new(sample_items());
+        // URL 查询 → 注入直达条目且参与可见集（副标题精确命中应排首位附近）
+        let direct = crate::aggregator::url_path_direct_item(
+            "https://github.com",
+            crate::settings::Lang::ZhCn,
+        );
+        s.set_direct_item(direct);
+        s.set_query("https://github.com");
+        assert!(
+            s.filtered().any(|(_, it)| is_direct(it)),
+            "URL 查询下直达条目应可见"
+        );
+        // 换 URL → 旧条目被替换（不堆积）
+        let direct2 = crate::aggregator::url_path_direct_item(
+            "https://example.com",
+            crate::settings::Lang::ZhCn,
+        );
+        s.set_direct_item(direct2);
+        s.set_query("https://example.com");
+        assert_eq!(
+            s.filtered().filter(|(_, it)| is_direct(it)).count(),
+            1,
+            "直达条目恰一条（幂等替换）"
+        );
+        // 非形态查询 → 清除
+        s.set_direct_item(None);
+        s.set_query("github");
+        assert!(
+            s.filtered().all(|(_, it)| !is_direct(it)),
+            "清除后不再有直达条目"
+        );
+    }
+
+    /// N10 回归锚（真机 panic 2026-11-22）：Esc 清空路径先 `set_query("")`
+    /// （此刻直达条目仍在 items 中），下一帧 `set_direct_item(None)` 移除使
+    /// items 减一，随后的 `set_query("")` 因**同查询早退**不重算——首版实现
+    /// 的 `visible` 持过期索引，`filtered()` 越界 panic。修正后
+    /// `set_direct_item` 自足重算，本序列不得 panic 且无直达条目残留。
+    #[test]
+    fn n10_set_direct_item_clear_with_unchanged_query_no_stale_index() {
+        let mut s = PanelState::new(sample_items());
+        s.set_direct_item(crate::aggregator::url_path_direct_item(
+            "https://github.com",
+            crate::settings::Lang::ZhCn,
+        ));
+        s.set_query("https://github.com");
+        s.set_query(""); // Esc 清空：此刻 items 仍含直达条目
+        s.set_direct_item(None); // 下一帧清除（items 减一，自行重算）
+        s.set_query(""); // 同查询早退——不再重算
+        assert!(
+            s.filtered()
+                .all(|(_, it)| !it.id.starts_with(crate::aggregator::DIRECT_ITEM_PREFIX)),
+            "同查询早退路径下不得残留过期索引或直达条目"
+        );
+    }
 
     fn sample_items() -> Vec<PanelItem> {
         vec![

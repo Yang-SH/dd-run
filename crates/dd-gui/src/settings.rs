@@ -98,6 +98,13 @@ pub struct Settings {
     /// `None` = 从未手动拉伸，唤起用自适应基准 `APP_W/APP_H`）。
     /// 唤起时仍按光标所在屏工作区 clamp（小屏收缩），见 `app::root_panel_size`。
     pub panel_size: Option<(u32, u32)>,
+    /// N21：面板唤起定位模式（opt-in；默认 `Cursor` = 鼠标所在屏居中——
+    /// V-1 基线形态逐位不变）。
+    pub panel_pos_mode: PanelPosMode,
+    /// N21：记忆的面板位置（**逻辑点**整数对；仅 `Remember` 档在隐藏时落盘，
+    /// 唤起按目标屏工作区 clamp 恢复）。**机器态**——N5 导出剥离（同
+    /// `panel_size` 分辨率相关口径）。
+    pub panel_last_pos: Option<(i32, i32)>,
     /// 界面语言偏好（v4.13 D38：默认 FollowSystem；只存用户偏好——
     /// 运行时解析后的生效语言存 `PaletteApp.lang_effective`）。
     pub lang: Lang,
@@ -154,6 +161,34 @@ pub const HOTKEY_VK_DEFAULT: u32 = 0x20;
 /// 修饰键合法位掩码（Ctrl/Alt/Shift/Win），解析时剔除其余位。
 pub const HOTKEY_MODS_MASK: u32 = 0b1111;
 
+/// N21（2026-11-21）：面板唤起定位模式。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum PanelPosMode {
+    /// 鼠标所在屏居中（默认——V-1 基线形态逐位不变）。
+    #[default]
+    Cursor,
+    /// 记忆上次位置（隐藏时落盘 `panel_last_pos`；唤起按目标屏工作区
+    /// clamp 恢复；恢复失败回落居中）。
+    Remember,
+}
+
+impl PanelPosMode {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            PanelPosMode::Cursor => "cursor",
+            PanelPosMode::Remember => "remember",
+        }
+    }
+    /// 未知字符串 → `None`（调用方回落默认，与 CustomCommandKind::parse 同口径）。
+    pub fn parse(s: &str) -> Option<Self> {
+        match s {
+            "cursor" => Some(PanelPosMode::Cursor),
+            "remember" => Some(PanelPosMode::Remember),
+            _ => None,
+        }
+    }
+}
+
 /// N1（2026-10-04）：自定义直达命令的目标类型。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CustomCommandKind {
@@ -199,24 +234,51 @@ pub struct CustomCommand {
 }
 
 impl CustomCommand {
-    /// 构造并规范化：三字段 trim、去空；keyword 转小写且**不得含空白**
-    /// （关键词是单 token 别名）；任一为空 → `None`。
+    /// 构造并规范化：三字段 trim、去空；keyword 转小写且**不得含空白**。
+    ///
+    /// N19：keyword 支持**逗号分隔多关键词**——每段独立 trim / 小写 / 拒空白 /
+    /// 拒空段，段重复拒绝；规范化存储 = 规范段以 `,` 连接（**主关键词 = 第一段**，
+    /// 聚合条目 id 与右键删除语义锚定于此）。单关键词形态与 N1 行为逐字节一致。
+    /// 任一字段为空（无有效段）→ `None`。
     pub fn new(title: &str, keyword: &str, kind: CustomCommandKind, target: &str) -> Option<Self> {
         let title = title.trim();
-        let keyword = keyword.trim().to_lowercase();
         let target = target.trim();
-        if title.is_empty() || keyword.is_empty() || target.is_empty() {
+        if title.is_empty() || target.is_empty() {
             return None;
         }
-        if keyword.split_whitespace().count() != 1 {
+        let segs: Vec<String> = keyword
+            .split(',')
+            .map(|s| s.trim().to_lowercase())
+            .filter(|s| !s.is_empty())
+            .collect();
+        if segs.is_empty() {
             return None;
+        }
+        if segs.iter().any(|s| s.split_whitespace().count() != 1) {
+            return None;
+        }
+        // 段重复拒绝（大小写已归一；含同段重复与跨段重复）
+        for (i, s) in segs.iter().enumerate() {
+            if segs[i + 1..].iter().any(|t| t == s) {
+                return None;
+            }
         }
         Some(Self {
             title: title.to_string(),
-            keyword,
+            keyword: segs.join(","),
             kind,
             target: target.to_string(),
         })
+    }
+
+    /// N19：主关键词（第一段；单关键词形态 = 全串）。
+    pub fn primary_keyword(&self) -> &str {
+        self.keyword.split(',').next().unwrap_or_default()
+    }
+
+    /// N19：全部关键词段（已规范化的存储串切分）。
+    pub fn keyword_segments(&self) -> impl Iterator<Item = &str> {
+        self.keyword.split(',').filter(|s| !s.is_empty())
     }
 }
 
@@ -255,6 +317,8 @@ impl Default for Settings {
             check_updates: false,
             disabled_extensions: Vec::new(),
             panel_size: None,
+            panel_pos_mode: PanelPosMode::default(),
+            panel_last_pos: None,
             lang: Lang::default(),
             density: ListDensity::default(),
             search_apps: true,
@@ -345,6 +409,10 @@ impl Settings {
             "check_updates",
             "disabled_extensions",
             "panel_size",
+            // N21：唤起定位模式 + 记忆位置（后者为机器态，导出剥离——但
+            // config.json 本身要消费，归已知键）
+            "panel_pos_mode",
+            "panel_last_pos",
             "lang",
             "density",
             "search_apps",
@@ -572,6 +640,22 @@ impl Settings {
             .and_then(|x| x.as_u64())
             .map(|x| x.clamp(WARM_CAPACITY_MIN as u64, WARM_CAPACITY_MAX as u64) as u8)
             .unwrap_or(WARM_CAPACITY_DEFAULT);
+        // N21：唤起定位模式（旧版本缺失 / 未知值 → Cursor 默认）。
+        s.panel_pos_mode = v
+            .get("panel_pos_mode")
+            .and_then(|x| x.as_str())
+            .and_then(PanelPosMode::parse)
+            .unwrap_or_default();
+        // N21：记忆位置（旧版本缺失 / 损坏 / 非两元素整数数组 → None）。
+        s.panel_last_pos = v.get("panel_last_pos").and_then(|x| {
+            let a = x.as_array()?;
+            if a.len() != 2 {
+                return None;
+            }
+            let x = a[0].as_i64()?;
+            let y = a[1].as_i64()?;
+            Some((x as i32, y as i32))
+        });
         // 自定义直达命令（N1，2026-10-04）：字段缺失（旧版本配置）→ 默认空；
         // 逐条经 `CustomCommand::new` 校验规范化，非法条目跳过（与搜索引擎
         // 同口径）。
@@ -660,6 +744,11 @@ impl Settings {
             "disabled_extensions": self.disabled_extensions,
             "panel_size": match self.panel_size {
                 Some((w, h)) => serde_json::json!([w, h]),
+                None => serde_json::Value::Null,
+            },
+            "panel_pos_mode": self.panel_pos_mode.as_str(),
+            "panel_last_pos": match self.panel_last_pos {
+                Some((x, y)) => serde_json::json!([x, y]),
                 None => serde_json::Value::Null,
             },
             "lang": self.lang.as_str(),
@@ -804,6 +893,8 @@ impl Settings {
         let obj = v.as_object_mut().expect("同上，恒为对象");
         obj.remove("autostart");
         obj.remove("panel_size");
+        // N21：panel_last_pos 亦属机器/分辨率相关态——剥离同 panel_size 口径
+        obj.remove("panel_last_pos");
         obj.insert(
             BACKUP_VERSION_KEY.to_string(),
             serde_json::json!(crate::aggregator::HOST_VERSION),
@@ -847,6 +938,8 @@ impl Settings {
         let mut s = Settings::parse_json(text);
         s.autostart = current.autostart;
         s.panel_size = current.panel_size;
+        // N21：panel_last_pos 属机器态——同 panel_size 保留本机现值
+        s.panel_last_pos = current.panel_last_pos;
         s.hotkey_mods = current.hotkey_mods;
         s.hotkey_vk = current.hotkey_vk;
         Ok(s)

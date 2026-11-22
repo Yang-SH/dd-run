@@ -278,9 +278,14 @@ impl PaletteApp {
             &self.draft.settings.custom_commands,
             lang,
         ));
+        // N10（2026-11-21）：URL/路径形态查询 → 宿主「打开」直达条目（常规结果
+        // 之后、聚合尾部；S-03 白名单 / 「双击等价」执行，无信任面）。
+        let query = self.view.stack.current().list.query().to_owned();
+        if let Some(direct) = aggregator::url_path_direct_item(&query, lang) {
+            items.push(direct);
+        }
         self.pool.sources = sources;
 
-        let query = self.view.stack.current().list.query().to_owned();
         let selected = self
             .view
             .stack

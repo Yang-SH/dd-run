@@ -72,6 +72,36 @@ impl PaletteApp {
                 i.consume_key(egui::Modifiers::NONE, egui::Key::PageDown),
             )
         });
+        // N14（2026-11-21）：`Ctrl+1..9` 直开可见列表第 N 行 + `Ctrl+Enter`
+        // 定位/复制。与 Enter 同层消费（确认对话框 / 右键菜单分支已先行
+        // return，按键不穿透）；数字守卫复用 R-22 IME 组词口径（组词期
+        // Ctrl+数字 不误触——数字上屏是 IME 常态）。键位冲突已取证：page_keys
+        // 既有消费清单（Escape/↑↓/Enter/Tab/Shift+Tab/Ctrl+,/Ctrl+F/
+        // Shift+F10/Home/End/PgUp/PgDn/Backspace）无 Ctrl+数字与 Ctrl+Enter。
+        let ctrl_enter = ctx.input_mut(|i| i.consume_key(egui::Modifiers::CTRL, egui::Key::Enter));
+        let ctrl_digit: Option<u8> = (!ime_composing)
+            .then(|| {
+                ctx.input_mut(|i| {
+                    const DIGITS: [(egui::Key, u8); 9] = [
+                        (egui::Key::Num1, 1),
+                        (egui::Key::Num2, 2),
+                        (egui::Key::Num3, 3),
+                        (egui::Key::Num4, 4),
+                        (egui::Key::Num5, 5),
+                        (egui::Key::Num6, 6),
+                        (egui::Key::Num7, 7),
+                        (egui::Key::Num8, 8),
+                        (egui::Key::Num9, 9),
+                    ];
+                    for (key, n) in DIGITS {
+                        if i.consume_key(egui::Modifiers::CTRL, key) {
+                            return Some(n);
+                        }
+                    }
+                    None
+                })
+            })
+            .flatten();
 
         // 确认对话框活跃时：Enter=确认、Esc=取消，其余键不穿透到列表
         if self.overlay.confirm.is_some() {
@@ -179,6 +209,20 @@ impl PaletteApp {
         }
         if enter {
             self.confirm_selected();
+        }
+        // N14：Ctrl+Enter = 选中项定位/复制（右键同款动作的键盘可达路径）。
+        if ctrl_enter && !ime_composing {
+            self.ctrl_enter_selected(ctx);
+        }
+        // N14：Ctrl+1..9 = 置选中第 N 行（1 基）并激活；越界 no-op。
+        if let Some(n) = ctrl_digit {
+            let idx = n as usize - 1;
+            let in_bounds = idx < self.view.stack.current().list.visible_count();
+            if in_bounds {
+                self.view.stack.current_mut().list.set_selected(idx);
+                self.window.scroll_follow = true;
+                self.confirm_selected();
+            }
         }
         if ctrl_comma {
             self.open_settings();

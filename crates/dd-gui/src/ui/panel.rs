@@ -195,6 +195,18 @@ impl PaletteApp {
                 let query_changed = query != prev_query; // v3.3：渲染后变化检测（set_query 会 move query）
                 {
                     let page = self.view.stack.current_mut();
+                    // N10 真机核对轮修正（2026-11-22）：根页直达条目**逐键维护**——
+                    // 聚合重建仅在启动/配置脏时发生，其查询恒为空，wave-1 挂在
+                    // rebuild 上的注入实践中永不出现（真机抓出）。查询为 URL/路径
+                    // 形态 → 维护「打开 …」直达条目；其余查询 → 清除。嵌套页
+                    // （page_id 有值）不受影响——条目语义归扩展侧。
+                    if page.page_id.is_none() {
+                        let direct = crate::aggregator::url_path_direct_item(
+                            &query,
+                            self.view.lang_effective,
+                        );
+                        page.list.set_direct_item(direct);
+                    }
                     // R-23：截断发生时把输入框光标置尾（粘贴 300 字符 → 显示
                     // 前 256、光标落在文本末，续接输入语义自然）。
                     let truncated = page.list.set_query(query);
@@ -598,6 +610,9 @@ impl PaletteApp {
                                 hover_visual,
                                 row_fills,
                                 metrics,
+                                // N6：Root 列表的标题命中下标（空查询/嵌套页/fallback
+                                // 恒空切片；嵌套页本就走 passthrough 无本地模糊）。
+                                self.view.stack.current().list.title_highlight(*idx),
                             );
                             row_rects.push((*idx, resp.rect));
                             if Some(*idx) == selected {

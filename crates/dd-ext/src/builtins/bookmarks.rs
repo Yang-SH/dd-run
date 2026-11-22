@@ -1,7 +1,7 @@
 //! 内置扩展：浏览器书签搜索（N3，2026-10-04；future-features-plan §4.3）。
 //!
-//! - 数据：**只读**解析 Chromium 系书签 JSON（Chrome / Edge 的
-//!   `%LOCALAPPDATA%\<vendor>\User Data\<profile>\Bookmarks`），按文件 mtime
+//! - 数据：**只读**解析 Chromium 系书签 JSON（Chrome / Edge / Brave / Vivaldi
+//!   的 `%LOCALAPPDATA%\<vendor>\User Data\<profile>\Bookmarks`），按文件 mtime
 //!   门控增量重建（进程内缓存，未变文件不重解析）；索引条目设上限
 //!   （[`MAX_ENTRIES`]，超限截断 + 尾部提示条目）。
 //! - 交互：顶层命令 = 扁平化书签条目（文件夹路径进 `subtitle`，拼音索引由
@@ -36,8 +36,8 @@ pub fn spec() -> ExtensionSpec {
         id: EXT_ID,
         display_name: tr("书签", "Bookmarks"),
         description: tr(
-            "搜索并打开 Chromium 系浏览器（Chrome / Edge）的本地书签",
-            "Search and open local bookmarks from Chromium browsers (Chrome / Edge)",
+            "搜索并打开 Chromium 系浏览器（Chrome / Edge / Brave / Vivaldi）的本地书签",
+            "Search and open local bookmarks from Chromium browsers (Chrome / Edge / Brave / Vivaldi)",
         ),
         // 书签文件随时可变 → fresh（不落磁盘桩；解析随聚合进行 + mtime 门控）
         frozen: false,
@@ -190,18 +190,29 @@ mod sys {
 
     static INDEX: RwLock<Option<Arc<Index>>> = RwLock::new(None);
 
-    /// 书签源文件清单：Chrome / Edge 的 `User Data\<profile>\Bookmarks`
+    /// 候选 vendor 目录（N9：Chrome / Edge / Brave / Vivaldi 四家 Chromium 系，
+    /// 同构 `User Data\<profile>\Bookmarks` 布局）。纯函数（LOCALAPPDATA 注入）
+    /// ——单测直接覆盖，不触文件系统。
+    fn vendor_dirs(local: &Path) -> Vec<(PathBuf, &'static str)> {
+        vec![
+            (local.join(r"Google\Chrome\User Data"), "Chrome"),
+            (local.join(r"Microsoft\Edge\User Data"), "Edge"),
+            (
+                local.join(r"BraveSoftware\Brave-Browser\User Data"),
+                "Brave",
+            ),
+            (local.join(r"Vivaldi\User Data"), "Vivaldi"),
+        ]
+    }
+
+    /// 书签源文件清单：四家 Chromium 系浏览器的 `User Data\<profile>\Bookmarks`
     /// （每个含 Bookmarks 文件的子目录视为一个配置档）。
     fn bookmark_files() -> Vec<(PathBuf, &'static str)> {
         let Some(local) = std::env::var_os("LOCALAPPDATA") else {
             return Vec::new();
         };
-        let local = PathBuf::from(local);
         let mut out = Vec::new();
-        for (vendor_dir, browser) in [
-            (local.join(r"Google\Chrome\User Data"), "Chrome"),
-            (local.join(r"Microsoft\Edge\User Data"), "Edge"),
-        ] {
+        for (vendor_dir, browser) in vendor_dirs(&PathBuf::from(local)) {
             let Ok(profiles) = std::fs::read_dir(&vendor_dir) else {
                 continue;
             };
@@ -406,6 +417,28 @@ mod sys {
             }],
         )
     }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        /// N9：vendor 目录四家 Chromium 系（Chrome / Edge / Brave / Vivaldi，
+        /// 同构 `User Data` 布局）。
+        #[test]
+        fn vendor_dirs_cover_four_chromium_vendors() {
+            let local = Path::new(r"C:\Users\u\AppData\Local");
+            let dirs = vendor_dirs(local);
+            assert_eq!(dirs.len(), 4);
+            let names: Vec<&str> = dirs.iter().map(|(_, b)| *b).collect();
+            assert_eq!(names, vec!["Chrome", "Edge", "Brave", "Vivaldi"]);
+            assert!(dirs[0].0.ends_with(r"Google\Chrome\User Data"));
+            assert!(dirs[1].0.ends_with(r"Microsoft\Edge\User Data"));
+            assert!(dirs[2]
+                .0
+                .ends_with(r"BraveSoftware\Brave-Browser\User Data"));
+            assert!(dirs[3].0.ends_with(r"Vivaldi\User Data"));
+        }
+    }
 }
 
 #[cfg(not(windows))]
@@ -425,8 +458,8 @@ mod sys {
 
     const GLYPH: char = '\u{E718}'; // FavoriteStar（与 Windows 分支同 glyph）
 
-    /// 候选 vendor 目录（macOS / Linux × Chrome / Edge）。纯函数（home 注入）
-    /// ——单测直接覆盖，不触文件系统。
+    /// 候选 vendor 目录（macOS / Linux × Chrome / Edge / Brave / Vivaldi，N9）。
+    /// 纯函数（home 注入）——单测直接覆盖，不触文件系统。
     fn vendor_dirs(home: &Path) -> Vec<(PathBuf, &'static str)> {
         // macOS 与 Linux 的 Chromium 配置根不同；Edge 的目录名两家平台亦不同
         // （macOS 带空格 "Microsoft Edge"，Linux 为 "microsoft-edge"）。
@@ -435,12 +468,16 @@ mod sys {
             vec![
                 (base.join("Google/Chrome"), "Chrome"),
                 (base.join("Microsoft Edge"), "Edge"),
+                (base.join("BraveSoftware/Brave-Browser"), "Brave"),
+                (base.join("Vivaldi"), "Vivaldi"),
             ]
         } else {
             let base = home.join(".config");
             vec![
                 (base.join("google-chrome"), "Chrome"),
                 (base.join("microsoft-edge"), "Edge"),
+                (base.join("BraveSoftware/Brave-Browser"), "Brave"),
+                (base.join("vivaldi"), "Vivaldi"),
             ]
         }
     }
@@ -729,22 +766,28 @@ mod sys {
     mod tests {
         use super::*;
 
-        /// S3：vendor 目录随平台布局（macOS Application Support / Linux
-        /// .config），Chrome 与 Edge 各一；macOS Edge 目录名带空格。
+        /// S3 + N9：vendor 目录随平台布局（macOS Application Support / Linux
+        /// .config），四家 Chromium 系各一；macOS Edge 目录名带空格。
         #[test]
-        fn vendor_dirs_cover_chrome_and_edge_per_platform() {
+        fn vendor_dirs_cover_four_chromium_vendors_per_platform() {
             let home = Path::new("/home/u");
             let dirs = vendor_dirs(home);
-            assert_eq!(dirs.len(), 2, "Chrome + Edge");
-            assert_eq!(dirs[0].1, "Chrome");
-            assert_eq!(dirs[1].1, "Edge");
+            assert_eq!(dirs.len(), 4, "Chrome + Edge + Brave + Vivaldi");
+            let names: Vec<&str> = dirs.iter().map(|(_, b)| *b).collect();
+            assert_eq!(names, vec!["Chrome", "Edge", "Brave", "Vivaldi"]);
             let joined = |i: usize| dirs[i].0.to_string_lossy().replace('\\', "/");
             if cfg!(target_os = "macos") {
                 assert!(joined(0).ends_with("Library/Application Support/Google/Chrome"));
                 assert!(joined(1).ends_with("Library/Application Support/Microsoft Edge"));
+                assert!(
+                    joined(2).ends_with("Library/Application Support/BraveSoftware/Brave-Browser")
+                );
+                assert!(joined(3).ends_with("Library/Application Support/Vivaldi"));
             } else {
                 assert!(joined(0).ends_with(".config/google-chrome"));
                 assert!(joined(1).ends_with(".config/microsoft-edge"));
+                assert!(joined(2).ends_with(".config/BraveSoftware/Brave-Browser"));
+                assert!(joined(3).ends_with(".config/vivaldi"));
             }
         }
 

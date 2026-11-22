@@ -83,6 +83,53 @@ impl FuzzyMatcher {
         let h = Utf32Str::new(hay, &mut self.buf);
         self.pattern.score(h, &mut self.matcher)
     }
+
+    /// N6：标题高亮**字符下标**（升序去重；空 = 无高亮）——二遍计算，评分
+    /// 热路径（[`Self::score`]）不经过本函数。
+    ///
+    /// 取序：① title 直接命中（nucleo `Pattern::indices`——多 atom 索引逐
+    /// atom 追加不排序，`sort_unstable + dedup` 收口）；② title 未中而拼音
+    /// 索引命中 → 命中下标经 [`crate::state::pinyin_spans`] 映射回源汉字；
+    /// ③ 附属层命中（title 与拼音均未中，如 `brws` 命中 subtitle）→ 空
+    /// （不高亮标题）。空白查询 → 空。
+    pub fn title_highlight(&mut self, item: &PanelItem) -> Vec<usize> {
+        if self.blank {
+            return Vec::new();
+        }
+        if let Some(mut idx) = self.field_indices(&item.title) {
+            idx.sort_unstable();
+            idx.dedup();
+            return idx.into_iter().map(|i| i as usize).collect();
+        }
+        if !item.pinyin.is_empty() {
+            if let Some(mut idx) = self.field_indices(&item.pinyin) {
+                idx.sort_unstable();
+                idx.dedup();
+                let spans = crate::state::pinyin_spans(&item.title);
+                let mut out: Vec<usize> = idx
+                    .into_iter()
+                    .filter_map(|i| spans.get(i as usize).copied())
+                    .filter(|&t| t != crate::state::PINYIN_SPAN_GAP)
+                    .collect();
+                out.sort_unstable();
+                out.dedup();
+                return out;
+            }
+        }
+        Vec::new()
+    }
+
+    /// 单字段命中下标（空字段不参与；无命中 → `None`，局部追加的索引随
+    /// 每次调用的独立缓冲一起丢弃）。
+    fn field_indices(&mut self, hay: &str) -> Option<Vec<u32>> {
+        if hay.is_empty() {
+            return None;
+        }
+        let h = Utf32Str::new(hay, &mut self.buf);
+        let mut idx = Vec::new();
+        self.pattern.indices(h, &mut self.matcher, &mut idx)?;
+        Some(idx)
+    }
 }
 
 #[cfg(test)]
@@ -187,5 +234,51 @@ mod tests {
             a >> 32,
             "两条标题命中应同属标题层"
         );
+    }
+
+    // ── N6：标题高亮 ────────────────────────────────────────────────
+
+    /// N6：title 直接命中 → 命中字符下标（升序去重、界内）。
+    #[test]
+    fn highlight_title_direct_match() {
+        let mut fm = FuzzyMatcher::new("opst");
+        let idx = fm.title_highlight(&item("Open Settings", "", "", &[]));
+        assert!(!idx.is_empty());
+        assert_eq!(idx.first(), Some(&0), "o 首字符命中");
+        assert!(idx.windows(2).all(|w| w[0] < w[1]), "升序去重");
+        let n = "Open Settings".chars().count();
+        assert!(idx.iter().all(|&i| i < n), "界内");
+    }
+
+    /// N6：空白查询恒空；附属层命中（title 与拼音均未中）→ 标题不高亮。
+    #[test]
+    fn highlight_blank_and_secondary_miss_are_empty() {
+        let mut fm = FuzzyMatcher::new("   ");
+        assert!(
+            fm.title_highlight(&item("Open Settings", "", "", &[]))
+                .is_empty(),
+            "空白查询无高亮"
+        );
+        let mut fm2 = FuzzyMatcher::new("brws");
+        assert!(
+            fm2.title_highlight(&item("X", "Browse files", "", &[]))
+                .is_empty(),
+            "副标题命中不高亮标题"
+        );
+    }
+
+    /// N6：拼音命中 → 经 spans 映射回源汉字（全拼连续命中 = 全部三汉字；
+    /// 首字母命中非空且界内——nucleo 可能择全拼散点或首字母连续段，两者
+    /// 映射后均落源汉字界内）。
+    #[test]
+    fn highlight_pinyin_maps_back_to_hanzi() {
+        let mut fm = FuzzyMatcher::new("jisuanqi");
+        let idx = fm.title_highlight(&item("计算器", "", "", &[]));
+        assert_eq!(idx, vec![0, 1, 2], "全拼连续命中 → 三汉字全高亮");
+        let mut fm2 = FuzzyMatcher::new("jsq");
+        let idx2 = fm2.title_highlight(&item("计算器", "", "", &[]));
+        assert!(!idx2.is_empty(), "首字母命中非空");
+        assert!(idx2.iter().all(|&i| i < 3), "映射回源汉字界内");
+        assert!(idx2.windows(2).all(|w| w[0] < w[1]), "升序去重");
     }
 }

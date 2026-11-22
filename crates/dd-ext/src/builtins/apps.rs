@@ -1,7 +1,8 @@
 //! dd-ext-apps —— 内置「应用启动」扩展（`com.ddrun.apps`，⚙️ 平台相关）。
 //!
 //! 功能（M4 A10 核对点：Apps 枚举真实应用）：
-//! - 顶层命令 = 枚举的本地应用列表（进程内 `OnceLock` 缓存一次）；
+//! - 顶层命令 = 枚举的本地应用列表（进程内缓存 + **30 s 窗口门控重枚举**，
+//!   N15：新装应用免重启；窗口期满唤起即全量重枚举）；
 //! - **Windows**（对齐 PowerToys CmdPal「All Apps」的行为）：
 //!   - 主源：`shell:AppsFolder`（`FOLDERID_AppsFolder`）Shell 枚举——拿到的是
 //!     **应用本体**（UWP/打包应用 + 桌面应用），显示名与应用图标均由 Shell 解析，
@@ -324,19 +325,68 @@ mod sys {
         steam: bool,
     }
 
-    static APP_CACHE: OnceLock<Vec<App>> = OnceLock::new();
+    /// N15：重枚举最小间隔——面板唤起 → 聚合 → `top_level_commands` 命中
+    /// 本表；稳态下每 30 s 至多一次全量枚举（AppsFolder COM + 开始菜单 .lnk
+    /// 两源**一次完成**，真机验收含计时腿）。
+    const REENUM_MIN_INTERVAL: std::time::Duration = std::time::Duration::from_secs(30);
 
-    fn app_list() -> &'static Vec<App> {
-        APP_CACHE.get_or_init(|| negative_cached(enumerate_apps))
+    struct AppCacheInner {
+        apps: std::sync::Arc<Vec<App>>,
+        enumerated_at: std::time::Instant,
+    }
+
+    static APP_CACHE: OnceLock<std::sync::RwLock<Option<AppCacheInner>>> = OnceLock::new();
+
+    /// N15 纯门控（可单测）：无缓存 → 必枚举；有缓存且距上次枚举 < 间隔 →
+    /// 复用快照；窗口期满 → 重枚举。
+    fn should_reenumerate(cached_at: Option<std::time::Instant>, now: std::time::Instant) -> bool {
+        match cached_at {
+            None => true,
+            Some(t) => now.duration_since(t) >= REENUM_MIN_INTERVAL,
+        }
+    }
+
+    /// 应用列表快照（N15：30 s 窗口门控重枚举——原 `OnceLock` 一次缓存导致
+    /// 新装应用须**重启宿主**才可见；现窗口期满的聚合即全量重枚举）。
+    ///
+    /// **刻意不做「.lnk 根签名变化才重枚举」的窄门**：UWP/打包应用新装不产生
+    /// 开始菜单 .lnk，纯 `AppsFolder` 变化会被签名门漏掉——与「免重启」目标
+    /// 矛盾；成本由真机计时腿约束（altrun 方案 N15 验收）。
+    ///
+    /// 返回 `Arc` 快照：读路径零拷贝（调用方 `top_level_commands` / invoke
+    /// 索引寻址语义不变，`Arc<Vec<App>>` 自动解引用）。
+    fn app_list() -> std::sync::Arc<Vec<App>> {
+        let cell = APP_CACHE.get_or_init(|| std::sync::RwLock::new(None));
+        // 快路径：读锁下窗口未过期直接取（PoisonError → 跳过快路径走慢路径恢复）
+        if let Ok(guard) = cell.read() {
+            if let Some(inner) = guard.as_ref() {
+                if !should_reenumerate(Some(inner.enumerated_at), std::time::Instant::now()) {
+                    return inner.apps.clone();
+                }
+            }
+        }
+        // 慢路径：写锁 + 双检（并发聚合可能已完成本次窗口的重枚举）
+        let mut guard = cell.write().unwrap_or_else(|e| e.into_inner());
+        if let Some(inner) = guard.as_ref() {
+            if !should_reenumerate(Some(inner.enumerated_at), std::time::Instant::now()) {
+                return inner.apps.clone();
+            }
+        }
+        let apps = std::sync::Arc::new(negative_cached(enumerate_apps));
+        *guard = Some(AppCacheInner {
+            enumerated_at: std::time::Instant::now(),
+            apps: apps.clone(),
+        });
+        apps
     }
 
     /// R-04：枚举 + **负缓存**核心（`enumerate` 可注入供单测）。
     ///
     /// 内置扩展 panic 在宿主侧本有 M9 `catch_unwind` 兜底，但那不落缓存——枚举
-    /// 体 panic 后 `OnceLock` 保持未初始化，下一次聚合会**重新支付**全量枚举
-    /// （~400 应用 COM + 图标提取，死 UNC 场景还可能再挂一次网络超时）。此处
-    /// 就地接住并落**负缓存**（空列表随 `APP_CACHE` 落定），本进程内不再重付
-    /// 枚举；恢复口径与 R-04 会话级 Failed 一致（重启宿主）。
+    /// 体 panic 后下一次聚合会**重新支付**全量枚举（~400 应用 COM + 图标提取，
+    /// 死 UNC 场景还可能再挂一次网络超时）。此处就地接住并落**负缓存**（空列表
+    /// 随窗口落定）；N15 起恢复口径升级：窗口（30 s）期满的下一次聚合自动重试
+    /// ——不再依赖重启宿主（R-04 原口径的放宽，语义更优）。
     fn negative_cached(enumerate: impl FnOnce() -> Vec<App>) -> Vec<App> {
         match std::panic::catch_unwind(std::panic::AssertUnwindSafe(enumerate)) {
             Ok(apps) => apps,
@@ -1161,7 +1211,7 @@ mod sys {
     }
 
     pub fn top_level_commands() -> Vec<CommandItem> {
-        top_level_from(app_list(), &user_blocklist())
+        top_level_from(&app_list(), &user_blocklist())
     }
 
     /// N2（2026-10-04）：顶层命令构建（`top_level_commands` 的可注入核心，
@@ -1203,7 +1253,8 @@ mod sys {
             .strip_prefix("apps.run.")
             .and_then(|s| s.parse().ok())
             .unwrap_or(usize::MAX);
-        let Some(app) = app_list().get(idx) else {
+        let apps = app_list();
+        let Some(app) = apps.get(idx) else {
             return (
                 CommandResult::ShowToast {
                     message: tr(
@@ -1269,6 +1320,21 @@ mod sys {
     mod tests {
         use super::*;
         use dd_protocol::model::Sender;
+
+        /// N15：门控纯函数——无缓存必枚举；窗口内复用；窗口期满重枚举。
+        #[test]
+        fn reenumerate_gate_window() {
+            let now = std::time::Instant::now();
+            assert!(should_reenumerate(None, now), "无缓存必枚举");
+            let fresh = now
+                .checked_sub(std::time::Duration::from_secs(10))
+                .expect("回退 10 s 可行");
+            assert!(!should_reenumerate(Some(fresh), now), "窗口内复用快照");
+            let stale = now
+                .checked_sub(std::time::Duration::from_secs(31))
+                .expect("回退 31 s 可行");
+            assert!(should_reenumerate(Some(stale), now), "窗口期满重枚举");
+        }
 
         /// N2 夹具：最小 App（图标回落 glyph、AppsFolder 启动——单测不触 COM）。
         fn fixture_app(title: &str) -> App {
@@ -2269,7 +2335,8 @@ mod sys {
             .strip_prefix("apps.run.")
             .and_then(|s| s.parse().ok())
             .unwrap_or(usize::MAX);
-        let Some(app) = app_list().get(idx) else {
+        let apps = app_list();
+        let Some(app) = apps.get(idx) else {
             return (
                 CommandResult::ShowToast {
                     message: tr(
