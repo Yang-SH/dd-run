@@ -1073,10 +1073,28 @@ mod b4_tests {
     #[test]
     fn b4_missing_path_carries_invalid_tag() {
         use crate::settings::{CustomCommand, Lang};
+        // 跨平台夹具：`temp_dir()` 三平台恒存在；缺失路径由其下不存在的子项构成
+        // （原用 `C:\Windows` / `C:\不存在\x.txt`，在 check-linux/macos 上会误判——
+        // 2026-11-22 CI 抓出）。
+        let missing = std::env::temp_dir()
+            .join("ddrun-b4-definitely-missing")
+            .join("x.txt");
+        let valid = std::env::temp_dir();
         let cmds = vec![
-            CustomCommand::new("缺失", "gone", CustomCommandKind::Path, r"C:\不存在\x.txt")
-                .unwrap(),
-            CustomCommand::new("有效", "ok", CustomCommandKind::Path, r"C:\Windows").unwrap(),
+            CustomCommand::new(
+                "缺失",
+                "gone",
+                CustomCommandKind::Path,
+                &missing.to_string_lossy(),
+            )
+            .unwrap(),
+            CustomCommand::new(
+                "有效",
+                "ok",
+                CustomCommandKind::Path,
+                &valid.to_string_lossy(),
+            )
+            .unwrap(),
             CustomCommand::new("网页", "gh", CustomCommandKind::Url, "https://github.com").unwrap(),
         ];
         let items = custom_command_items(&cmds, Lang::ZhCn);
