@@ -51,6 +51,9 @@ const HOTKEY_CMD_MSG: u32 = 0x8002; // WM_APP + 2
 /// vk 8bit），vk 0 = 空槽；3 槽 36 位装入 u64 低位。纯函数可单测（unpack 同径
 /// 校验由线程侧测试锁定）。可捕获键集（capture_vk 域）vk ≤ 0x7B、mods ≤ 0xF，
 /// 12 位/槽足够。
+// 命令槽打包只服务 Windows 热键线程（Unix 走 id 反查）；单测仍需 → 双门控，
+// 避免 check-linux/macos 因 dead_code 失败（CI `-D warnings`）。
+#[cfg(any(windows, test))]
 pub(crate) fn pack_command_slots(slots: &[(u32, u32)]) -> u64 {
     let mut packed = 0u64;
     for (i, (mods, vk)) in slots.iter().take(3).enumerate() {

@@ -197,6 +197,10 @@ impl PaletteApp {
 
 /// N21 纯 clamp：把点 `(x, y)` 约束进工作区矩形内、窗口 `(win_w, win_h)`
 /// 完整可见。工作区比窗口还窄时钉在左/上缘（单测锚定）。
+/// 纯函数：把窗口左上角 clamp 进工作区（Windows 专用于记忆位置恢复；非 Windows
+/// 无调用方——`cfg(any(windows, test))` 避免 check-linux/macos 的 dead_code 阻断）。
+/// 单测锚定见 [`n21_clamp_to_work`]。
+#[cfg(any(windows, test))]
 fn clamp_to_work(x: f32, y: f32, work: (f32, f32, f32, f32), win_w: f32, win_h: f32) -> (f32, f32) {
     let (l, t, r, b) = work;
     let max_x = (r - win_w).max(l);

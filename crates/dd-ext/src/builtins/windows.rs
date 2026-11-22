@@ -54,6 +54,9 @@ pub(crate) struct WindowEntry {
 /// 自身（**实现细化记档**：进程名前缀 `dd-run` 排除替代 HWND 精确比对——
 /// in-process 拿宿主 HWND 需平台句柄透传，v1 从简；顺带排除其它 dd-run
 /// 实例，切换同类启动器无意义）。
+// 非 Windows 无 `enumerate_windows` 调用方（`imp` 为空表）→ `cfg(any(windows, test))`
+// 兼顾单测；不加会在 check-linux/macos 触发 dead_code（CI `-D warnings`）。
+#[cfg(any(windows, test))]
 fn keep(title: &str, process: &str, visible: bool, toolwindow: bool, cloaked: bool) -> bool {
     visible
         && !toolwindow
