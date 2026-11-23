@@ -1,5 +1,6 @@
-# 协议 fuzz（清单 §2.2 / 实施计划 §2.4，2026-10-30）：夜间**观察模式**——
-# 连续七夜零 crash 后随 S4 发版收口转阻塞（节奏沿 snapshot / bench 的
+# 协议 fuzz（清单 §2.2 / 实施计划 §2.4，2026-10-30）：夜间**阻塞模式**——
+# 观察期已于 2026-11-23 收口（七夜零 crash + 单轮 ≥10⁷ 次执行均满足），
+# 摘除 continue-on-error 随 S4 发版收口转正（节奏沿 snapshot / bench 的
 # 「首绿观察后转正」先例）。
 #
 # 为什么独立 workflow 文件：勿向 ci.yml 加 schedule——其触发器现仅
@@ -23,10 +24,9 @@ on:
 
 jobs:
   fuzz:
-    name: protocol fuzz (nightly, observation)
+    name: protocol fuzz (nightly)
     runs-on: ubuntu-latest
     timeout-minutes: 45
-    continue-on-error: true # 观察模式：七夜零 crash 后随 S4 转阻塞
     env:
       RUSTUP_TOOLCHAIN: nightly
     steps:

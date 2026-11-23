@@ -89,11 +89,17 @@
 - **修复**：捕获期临时注册独立 `RegisterHotKey` 接管键（id `0xDD05`，Alt+Space），借 Windows 注册即摘除投递链路的机制把该组合改投热键线程 → 新增 `HotkeyEvent::CaptureCombo` 落候选，对话框正常显示 keycap + takeover 中性说明，「保存」照常走 seq 确认流。捕获结束即注销；slot 0 当前已是 Alt+Space **且注册成功**时不重复注册（由 Toggle 翻译候选），启动注册失败时仍注册接管键（此时没有 Toggle 可翻译）；真实注册前先注销接管键，避免 `ERROR_HOTKEY_ALREADY_REGISTERED` 自锁。回落提示文案同步改为「Alt+Space 可录」。
 - 行为变更面：仅捕获期间（≤30s）其他程序的 Alt+Space 窗口菜单会被临时接管；非捕获态零变化。扩展协议 v1.0 契约零改动、lock 零新增依赖包。新增 5 条单测（workspace 751/0/7），fmt / clippy / 测试三关全绿；真机腿待用户会话。
 
+### 质量门禁：协议 fuzz 转阻塞（2026-11-23）
+
+- **夜间 fuzz job 转阻塞**：`.github/workflows/fuzz.yml` 摘除 `continue-on-error`（job 名去 observation）——此后夜间 fuzz 失败会标红，不再静默。
+- **验收实证**：自 2026-10-31 绿灯首跑起算连续 **20+ 夜零 crash**（gh 实查 11-12 → 11-23 连续 12 夜 schedule 全 success）；单轮执行量 `Done 19,279,144 runs in 601 second(s)`（decoder，≈1.93×10⁷ ≥ 10⁷ 阈值，envelope 同轮同门）。
+- 行为变更面：无用户可见变更（仅 CI 门禁加强）。扩展协议 v1.0 契约零改动、lock 零新增依赖包；测试 751/0/7 不变。
+
 ## [0.3.0] - 待发版（段日期随 §4.4 tag 回填）
 
 ### 发布摘要（自 0.2.1 起的变更）
 
-- **质量与安全门禁（波次① / S1 收口）**：`cargo-deny` 许可证 + bans 门禁直接阻塞进 CI（`deny.toml` = 实测最小允许集）；协议 fuzz `fuzz/` 独立 crate 双 target（decoder / envelope，断言永不 panic）+ 语料 20 枚 + 每夜观察 job（七夜零 crash 时钟 2026-10-31 起算，观察期满随发版收口转阻塞）；列表虚拟化经专项 bench 判定**永不立项**（panel 逐行绘制实测 3.88 ms ≤ 8 ms/帧）；security-audit 验收草案唯一未勾项回写勾销。
+- **质量与安全门禁（波次① / S1 收口）**：`cargo-deny` 许可证 + bans 门禁直接阻塞进 CI（`deny.toml` = 实测最小允许集）；协议 fuzz `fuzz/` 独立 crate 双 target（decoder / envelope，断言永不 panic）+ 语料 20 枚 + 每夜 fuzz job（七夜零 crash + 单轮 ≥10⁷ 次执行已于 2026-11-23 验收，job 转阻塞）；列表虚拟化经专项 bench 判定**永不立项**（panel 逐行绘制实测 3.88 ms ≤ 8 ms/帧）；security-audit 验收草案唯一未勾项回写勾销。
 - **结构重构（refactor-structure 批次 A–E，逐批纯搬运证明）**：批次 A platform 目录化（8 子模块，paths / shell 拆为可单测单元——落库时漏登 CHANGELOG，本段核对轮补载专节）→ B aggregator 目录化 → C theme 目录化 → D 命名消歧三组重命名 → E `dd_gui::` lib 内自引用清零（257 处 / 46 文件）；≥800 非空行单文件 8 → 6，三关 679/0/7 逐批守恒、release 产物零漂移（批次 B +512 B / +0.005% 符号量级，字节级如实记档）。
 - **工程与回归基建（改进分析批次 A–D / B1–B4 / C1–C5）**：构建可复现（`rust-toolchain.toml` 钉扎 MSRV）+ workspace 版本继承单点 + 发布产物 SHA256SUMS / build provenance 链；三平台 clippy 同门禁 + 非 Windows 字体发现 + 写盘失败注入去 OS 权限化；UI 快照金图 6 张（kittest，布局 / 间距 / 配色回归自此机器判定）+ docscan `--write-index` + git-cliff Release body + 契约「实现现状」注断言化 24 处；PaletteApp 六片拆分（像素级零行为证明）+ 首屏流式聚合（先到先渲染）+ 错误三边界（thiserror）+ 设置前向兼容 + 协议死字段收口。
 - **性能与功能增量（P2-4.5 / P2-5.1–5.7）**：criterion 四组 bench + CI 趋势回归 job（PR base vs head，>20% 退化判红，观察模式）；使用频次 frecency 排序（`usage.json` + 设置页使用数据卡）；检查更新（GitHub Releases 比对，系统 curl，零新依赖）；日志落盘 + 诊断卡（导出单 JSON 诊断报告）；`--ext-new` 扩展开发脚手架（一键生成 7 件 + conformance CI 模板）；`.cargo/config.toml` 去 `build.target` 钉扎（Linux/macOS 贡献者开箱即用）。
