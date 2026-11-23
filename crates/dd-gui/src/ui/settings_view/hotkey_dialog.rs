@@ -158,14 +158,25 @@ impl PaletteApp {
                             );
                         }
                         if let Some((mods, vk)) = self.hotkeys.hotkey_pending {
-                            if Self::is_system_reserved_combo(mods, vk) {
+                            if Self::is_menu_takeover_combo(mods, vk) {
+                                // 默认组合 Alt+Space：中性告知全局接管副作用，不劝阻。
+                                ui.label(
+                                    egui::RichText::new(crate::text::t(
+                                        lang,
+                                        "set.hotkey.warn_takeover",
+                                    ))
+                                    .size(12.0)
+                                    .color(p.accent),
+                                );
+                            } else if Self::is_system_reserved_combo(mods, vk) {
+                                // R-21 保留组合：仍劝阻，danger 色与中性说明区分。
                                 ui.label(
                                     egui::RichText::new(crate::text::t(
                                         lang,
                                         "set.hotkey.warn_reserved",
                                     ))
                                     .size(12.0)
-                                    .color(p.accent),
+                                    .color(p.danger),
                                 );
                             }
                         }

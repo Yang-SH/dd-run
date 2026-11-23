@@ -1,4 +1,4 @@
-//! Windows 全局热键：唤起/隐藏面板（默认 `Win+Alt+Space`，M6 批次 6.3 起可自定义）。
+//! Windows 全局热键：唤起/隐藏面板（默认 `Alt+Space`，M6 批次 6.3 起可自定义）。
 //!
 //! 实现：独立线程调用 [`RegisterHotKey`]（线程级热键），随后进入 `GetMessage`
 //! 消息循环；收到 `WM_HOTKEY` 后把 [`HotkeyEvent::Toggle`] 经 channel 发回主
@@ -22,14 +22,6 @@
 
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::thread;
-
-/// 热键修饰键默认值：Win + Alt（M6 起可自定义，持久化于 settings.hotkey_mods）。
-#[cfg(windows)]
-pub const HOTKEY_MODIFIERS_DEFAULT: u32 = windows_sys::Win32::UI::Input::KeyboardAndMouse::MOD_WIN
-    | windows_sys::Win32::UI::Input::KeyboardAndMouse::MOD_ALT;
-
-/// 热键键码默认值：空格（VK_SPACE = 0x20）。
-pub const HOTKEY_VK_DEFAULT: u32 = 0x20;
 
 /// 内部热键 id（仅本进程内区分多个热键用）。
 /// 热键消息循环的注册 id（RegisterHotKey / UnregisterHotKey 共用）。
@@ -827,9 +819,9 @@ mod tests {
         for cmd in [
             HotkeyCommand {
                 seq: 0,
-                mods: 0b1001,
+                mods: 0b0001,
                 vk: 0x20,
-            }, // 启动 Win+Alt+Space
+            }, // 启动 Alt+Space
             HotkeyCommand {
                 seq: 1,
                 mods: 0b0010,
@@ -889,14 +881,14 @@ mod tests {
         assert!(all.contains(Modifiers::SUPER));
     }
 
-    /// to_hotkey 组合：默认 Win+Alt+Space 可构造；空掩码走 None modifiers
+    /// to_hotkey 组合：默认 Alt+Space 可构造；空掩码走 None modifiers
     /// 分支；不可映射主键整体返回 None。
     #[cfg(not(windows))]
     #[test]
     fn to_hotkey_combines_mask_and_key() {
         use global_hotkey::hotkey::{Code, Modifiers};
-        let hk = to_hotkey(0b1001, 0x20).expect("Win+Alt+Space 应可构造");
-        assert_eq!(hk.mods, mods_mask_to_modifiers(0b1001));
+        let hk = to_hotkey(0b0001, 0x20).expect("Alt+Space 应可构造");
+        assert_eq!(hk.mods, mods_mask_to_modifiers(0b0001));
         assert_eq!(hk.key, Code::Space);
         // 空掩码：HotKey::new(None, _) 分支
         let bare = to_hotkey(0, 0x41).expect("裸键应可构造");

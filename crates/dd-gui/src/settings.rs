@@ -83,7 +83,7 @@ pub struct Settings {
     /// 在图上，用于压制高亮图片的干扰。
     pub background_image_tint_intensity: u8,
     /// 全局热键修饰键位掩码（M6 批次 6.3：MOD_ALT=1/CONTROL=2/SHIFT=4/WIN=8，
-    /// 不含 NOREPEAT——注册时由热键线程统一补）。默认 Win+Alt。
+    /// 不含 NOREPEAT——注册时由热键线程统一补）。默认 Alt。
     pub hotkey_mods: u32,
     /// 全局热键主键虚拟键码（默认 VK_SPACE = 0x20）。
     pub hotkey_vk: u32,
@@ -166,10 +166,10 @@ impl Settings {
     pub const SCHEMA_VERSION: u32 = 1;
 }
 
-/// 全局热键默认修饰键：Win + Alt（MOD_* 值：ALT=1/CONTROL=2/SHIFT=4/WIN=8，
-/// 与 hotkey.rs 的 windows-sys 常量一致；本 crate 纯逻辑不依赖 windows-sys，
-/// 用字面量 + 单测锚定）。不含 NOREPEAT——注册时由热键线程统一补。
-pub const HOTKEY_MODS_DEFAULT: u32 = 0b1000 | 0b0001;
+/// 全局热键默认修饰键：Alt（MOD_* 值：ALT=1/CONTROL=2/SHIFT=4/WIN=8；
+/// 本 crate 纯逻辑不依赖 windows-sys，用字面量 + 单测锚定）。
+/// 不含 NOREPEAT——注册时由热键线程统一补。
+pub const HOTKEY_MODS_DEFAULT: u32 = 0b0001;
 /// 全局热键默认主键：VK_SPACE。
 pub const HOTKEY_VK_DEFAULT: u32 = 0x20;
 /// 修饰键合法位掩码（Ctrl/Alt/Shift/Win），解析时剔除其余位。
@@ -578,7 +578,7 @@ impl Settings {
             .map(|x| x.clamp(0, 100) as u8)
             .unwrap_or(BG_IMAGE_TINT_DEFAULT);
         // 全局热键（M6 批次 6.3）：掩码先剔除非法位；剔除后无任何修饰键或字段
-        // 缺失/类型损坏 → 回落默认 Win+Alt + Space。
+        // 缺失/类型损坏 → 回落默认 Alt + Space。
         if let Some(m) = v.get("hotkey_mods").and_then(|m| m.as_u64()) {
             let masked = (m as u32) & HOTKEY_MODS_MASK;
             if masked & 0b1011 != 0 {

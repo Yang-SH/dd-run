@@ -3,11 +3,11 @@
 //! 职责（10C.1 规格表）：
 //! - 常驻托盘图标（应用 `.ico`，D22：逻辑 16×16，物理按 DPI 取档；
 //!   无 badge、无状态变化）；
-//! - 左键单击 = 切换面板（D23，与全局热键 `Win+Alt+Space` 同一语义）；
+//! - 左键单击 = 切换面板（D23，与全局热键 `Alt+Space` 同一语义）；
 //! - 右键 = 系统原生菜单（D24，`TrackPopupMenu`；固定 4 项见 [`menu_event`]），
 //!   弹出前 `SetForegroundWindow`（官方要求，否则点击菜单外不关闭）；
 //! - Tooltip / 菜单尾缀跟随当前热键组合（R-19，2026-09-30；原 D25 静态
-//!   `Win+Alt+Space`——改绑后展示错误组合）。
+//!   `Alt+Space`——改绑后展示错误组合）。
 //!
 //! 实现（对齐 [`hotkey`] 的线程模型）：独立线程创建隐藏窗口 → 注册托盘 →
 //! `GetMessage` 消息循环；事件经 channel 发回主线程并 `request_repaint()`
@@ -73,7 +73,7 @@ static TRAY_HOTKEY_LABEL: Mutex<String> = Mutex::new(String::new());
 
 /// 默认组合名（D38 静态口径的回归锚：未改绑时展示与原静态文案一致）。
 #[cfg(windows)]
-const DEFAULT_HOTKEY_LABEL: &str = "Win+Alt+Space";
+const DEFAULT_HOTKEY_LABEL: &str = "Alt+Space";
 
 /// 主线程写入当前热键组合名（启动 / 改绑注册成功时调用）。
 pub fn set_tray_hotkey_label(label: String) {
@@ -534,7 +534,7 @@ mod tests {
         assert_eq!(tray_hotkey_label(), DEFAULT_HOTKEY_LABEL);
         assert_eq!(
             tray_tooltip(&tray_hotkey_label()),
-            "dd-run — Win+Alt+Space",
+            "dd-run — Alt+Space",
             "默认组合展示必须与 D38 静态口径一致"
         );
         // ② 改绑：主线程写入新组合 → tooltip 与菜单尾缀取到新值。

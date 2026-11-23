@@ -6,12 +6,15 @@
 use super::*;
 
 impl PaletteApp {
-    /// R-21（2026-09-30）：系统**常用/保留**组合黑名单——捕获确认时警示、
-    /// 不阻止（与 PowerToys「可能错误触发检测」同语义；对话框内的「保存」
-    /// 即用户确认动作）。命中即全局劫持系统行为：
-    /// - `Alt+Space`：打开当前窗口菜单（RegisterHotKey 可成功，劫持一切应用）；
+    /// R-21（2026-09-30；2026-11-23 默认改 Alt+Space 后收窄）：系统**常用/保留**
+    /// 组合黑名单——捕获确认时警示、不阻止（与 PowerToys「可能错误触发检测」
+    /// 同语义；对话框内的「保存」即用户确认动作）。命中即全局劫持系统行为：
     /// - `Ctrl+Esc`：开始菜单；`Ctrl+Shift+Esc`：任务管理器；
     /// - `Alt+F4`：关闭窗口。
+    ///
+    /// `Alt+Space`（窗口菜单）已移出黑名单：RegisterHotKey 注册成功后该组合
+    /// 被系统从投递链路摘除、系统菜单自然不弹，是默认组合的已知副作用，改由
+    /// [`Self::is_menu_takeover_combo`] 给中性说明（不劝阻）。
     ///
     /// Win 系（Win+D/L/Tab…）不含：基础捕获本就录不进 Win 修饰（回落提示
     /// 已另行覆盖），LL 钩子可录但系统响应优先级更高，名单随真机反馈再扩。
@@ -19,11 +22,18 @@ impl PaletteApp {
         let m = mods & crate::settings::HOTKEY_MODS_MASK;
         matches!(
             (m, vk),
-            (0x1, 0x20) // Alt+Space —— 窗口菜单
-                | (0x2, 0x1B) // Ctrl+Esc —— 开始菜单
+            (0x2, 0x1B) // Ctrl+Esc —— 开始菜单
                 | (0x6, 0x1B) // Ctrl+Shift+Esc —— 任务管理器
                 | (0x1, 0x73) // Alt+F4 —— 关闭窗口
         )
+    }
+
+    /// Alt+Space 接管判定（2026-11-23）：Alt 掩码**精确等于**1 且主键 = VK_SPACE。
+    /// 与 R-21 黑名单分离——该组合注册成功后系统菜单不再弹出，是默认值带来的
+    /// 可控副作用，UI 给中性说明而非「建议更换」。
+    pub(crate) fn is_menu_takeover_combo(mods: u32, vk: u32) -> bool {
+        let m = mods & crate::settings::HOTKEY_MODS_MASK;
+        m == 0x1 && vk == 0x20
     }
 
     /// 热键捕获（M6 批次 6.3；2026-09-29 B 方案改造）：

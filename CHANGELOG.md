@@ -76,6 +76,12 @@
 
 - 宿主 exe 代码签名信任链评估记档入 docs（`code-signing-evaluation-2026-11-22.md`）：SignPath OSS（开源免费，建议首选）vs Azure Trusted Signing（备选）六维对照 + `release.yml` 签名插入点草案；**采不采纳由维护者拍板**。现有扩展 ed25519 `.sig` 与 GitHub attestation 信任链零改动、并行不悖。
 
+### 全局热键默认值 Alt+Space（2026-11-23）
+
+- **默认值切换**：全局唤起热键由 `Win+Alt+Space` 改为 **`Alt+Space`**（`HOTKEY_MODS_DEFAULT` 由 `0b1001` → `0b0001`，主键 `VK_SPACE` 不变），对齐 ALTRun 默认唤起键。**只影响新装 / 配置字段缺失或非法**；已存在用户配置原样生效（不迁移），需要时用设置页「恢复默认」一键切换。
+- **R-21 语义拆分**：系统保留组合黑名单由四组合收为三组合（Ctrl+Esc / Ctrl+Shift+Esc / Alt+F4，仍「建议更换」+ danger 警示色）；Alt+Space 移出黑名单，捕获对话框改中性接管说明（`set.hotkey.warn_takeover` + accent，不劝阻）——注册成功后 Windows 把整个组合从投递链路摘除，其他程序的窗口系统菜单自然不再弹出（真机两轮对照实测，无需 LL 钩子 / 子类化）。
+- **文案同步**：两处捕获回落提示的示例组合由 Alt+Space 改为 Ctrl+Esc；托盘 tooltip 兜底 = `dd-run — Alt+Space`。
+- 行为变更面：新装用户默认唤起键改变；所有应用失去 Alt+Space 窗口菜单（由 UI 文案明示）。扩展协议 v1.0 契约零改动、lock 零新增依赖包。测试 745 → 746（+1），三关全绿；真机腿待用户会话（前置：本机现值 Ctrl+Space，须先「恢复默认」）。
 
 ## [0.3.0] - 待发版（段日期随 §4.4 tag 回填）
 

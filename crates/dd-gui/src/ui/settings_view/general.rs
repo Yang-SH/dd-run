@@ -7,7 +7,7 @@ use super::*;
 
 impl PaletteApp {
     /// 常规栏（v4.8 功能态 + v4.9 Fluent 控件化）：「打开面板时显示」+
-    /// 「全局热键」（可改：更改 = 捕获模式、恢复默认 = Win+Alt+Space 一键还原）+
+    /// 「全局热键」（可改：更改 = 捕获模式、恢复默认 = Alt+Space 一键还原）+
     /// 「开机自启」（功能态开关）+「语言」（v4.13 D38，ComboBox 三选）。
     /// 动作入口在 `app/keys.rs`（M6 批次 6.3；语言切换 apply_lang）。
     pub(super) fn draw_general_cards(&mut self, ui: &mut egui::Ui, p: &theme::Palette) {
@@ -202,7 +202,7 @@ impl PaletteApp {
                     // （buttons_total_w 预算里已含此 8）。
                     ui.add_space(8.0);
                     // 2026-09-29 B 方案后 Win 修饰可经 LL 钩子捕获（Win+X 组合
-                    // 可录）；本按钮仍保留——一键还原默认组合 Win+Alt+Space。
+                    // 可录）；本按钮仍保留——一键还原默认组合 Alt+Space。
                     if !capturing && fluent_button(ui, reset_text_btn, p) {
                         default_clicked = true;
                     }

@@ -191,7 +191,7 @@
 - 设置页：外观（材质 / 圆角）与扩展卡（信任行、启停开关）各走一遍
 - `Ctrl+F` 进文件搜索页 → 输入 → 返回根页
 
-> **⚠️ 自动化冒烟必须先读 `%APPDATA%\dd-run\config.json` 取真实热键**：代码默认是 Win+Alt+Space（`HOTKEY_MODS_DEFAULT`），但用户配置可改绑，本机实际为 **Ctrl+Space**（`hotkey_mods=2`）。按默认值发键会得出「热键失效」的错误结论。
+> **⚠️ 自动化冒烟必须先读 `%APPDATA%\dd-run\config.json` 取真实热键**：代码默认是 Win+Alt+Space（`HOTKEY_MODS_DEFAULT`），但用户配置可改绑，本机实际为 **Ctrl+Space**（`hotkey_mods=2`）。按默认值发键会得出「热键失效」的错误结论。**2026-11-23 时效注记**：代码默认值已改为 **Alt+Space**（`HOTKEY_MODS_DEFAULT = 0b0001`）；本行以上为 2026-10-21 时点快照，「先读 config 取真实热键」的纪律不变——详见 [hotkey-alt-space-default-2026-11-23.md](./hotkey-alt-space-default-2026-11-23.md)。
 
 ---
 

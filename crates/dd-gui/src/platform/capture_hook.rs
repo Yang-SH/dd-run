@@ -426,7 +426,7 @@ mod tests {
     use super::*;
 
     /// mods 编码锚定：位布局 = ALT=1 / CONTROL=2 / SHIFT=4 / WIN=8，
-    /// 与 `settings::HOTKEY_MODS_MASK` 一致（默认 Win+Alt = 0b1001）。
+    /// 与 `settings::HOTKEY_MODS_MASK` 一致（Win+Alt 编码锚 = 0b1001，非当前默认值）。
     #[test]
     fn mods_encoding_matches_mod_star_layout() {
         assert_eq!(mods_from_keys(false, true, false, true), 0b1001, "Win+Alt");

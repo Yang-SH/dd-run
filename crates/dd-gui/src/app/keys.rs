@@ -23,13 +23,13 @@ mod settings_actions;
 mod tests {
     use super::*;
 
-    /// R-21：系统常用/保留组合黑名单——方案四组合（Alt+Space / Ctrl+Esc /
-    /// Ctrl+Shift+Esc / Alt+F4）逐一命中；非名单组合（含默认热键 Ctrl+Space
-    /// 与 Win+D 类）不误报（回归：非黑名单组合捕获流程零新增警示）。
+    /// R-21：系统常用/保留组合黑名单——方案三组合（Ctrl+Esc / Ctrl+Shift+Esc /
+    /// Alt+F4）逐一命中；非名单组合（含默认热键 Alt+Space 与 Win+D 类）不误报
+    /// （回归：非黑名单组合捕获流程零新增警示）。Alt+Space 另由
+    /// `is_menu_takeover_combo` 给中性接管说明。
     #[test]
     fn r21_hotkey_blacklist_matches() {
-        // 正例：方案黑名单四组合（修饰键掩码：0x1=Alt 0x2=Ctrl 0x4=Shift 0x8=Win）。
-        assert!(PaletteApp::is_system_reserved_combo(0x1, 0x20), "Alt+Space");
+        // 正例：方案黑名单三组合（修饰键掩码：0x1=Alt 0x2=Ctrl 0x4=Shift 0x8=Win）。
         assert!(PaletteApp::is_system_reserved_combo(0x2, 0x1B), "Ctrl+Esc");
         assert!(
             PaletteApp::is_system_reserved_combo(0x6, 0x1B),
@@ -38,13 +38,13 @@ mod tests {
         assert!(PaletteApp::is_system_reserved_combo(0x1, 0x73), "Alt+F4");
         // 负例：Win+D（方案指名的非名单组合）。
         assert!(!PaletteApp::is_system_reserved_combo(0x8, 0x44), "Win+D");
-        // 负例：默认热键 Ctrl+Space（捕获默认路径不得出现警示）。
+        // 负例：默认热键 Alt+Space（捕获默认路径不得出现保留组合警示）。
         assert!(
             !PaletteApp::is_system_reserved_combo(
                 crate::settings::HOTKEY_MODS_DEFAULT,
                 crate::settings::HOTKEY_VK_DEFAULT
             ),
-            "Ctrl+Space 是默认热键，不应命中黑名单"
+            "Alt+Space 是默认热键，不应命中黑名单"
         );
         // 负例：修饰键子集不误报（Shift+Esc / Ctrl+Alt+P / Alt+）。
         assert!(
@@ -56,6 +56,23 @@ mod tests {
             "Ctrl+Alt+P"
         );
         assert!(!PaletteApp::is_system_reserved_combo(0x1, 0x45), "Alt+E");
+    }
+
+    /// 默认组合 Alt+Space 的接管说明判定：精确纯 Alt + Space 才命中；
+    /// Ctrl+Space / Alt+Shift+Space / Alt+F4 不误报，且已移出 R-21 黑名单。
+    #[test]
+    fn alt_space_menu_takeover_detection() {
+        assert!(PaletteApp::is_menu_takeover_combo(0x1, 0x20), "Alt+Space");
+        assert!(!PaletteApp::is_menu_takeover_combo(0x2, 0x20), "Ctrl+Space");
+        assert!(
+            !PaletteApp::is_menu_takeover_combo(0x5, 0x20),
+            "Alt+Shift+Space"
+        );
+        assert!(!PaletteApp::is_menu_takeover_combo(0x1, 0x73), "Alt+F4");
+        assert!(
+            !PaletteApp::is_system_reserved_combo(0x1, 0x20),
+            "Alt+Space 已移出黑名单"
+        );
     }
 
     /// N4：warm 保活容量的消费点——① 默认配置构造 → LRU 容量 = 8（= 原

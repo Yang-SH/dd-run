@@ -417,7 +417,7 @@ fn corner_and_border_unknown_values_fall_back() {
 
 #[test]
 fn hotkey_fields_default_sanitize_and_roundtrip() {
-    // M6 批次 6.3：默认 Win+Alt + Space；掩码剔除非法位；纯 Shift 无效回落
+    // M6 批次 6.3：默认 Alt + Space；掩码剔除非法位；纯 Shift 无效回落
     let s = Settings::parse_json(
         r#"{"hotkey_mods":10,"hotkey_vk":80}"#, // Ctrl(2)+Win(8) + 'P'
     );
@@ -1354,7 +1354,7 @@ fn n17_validate_command_hotkey_rules() {
             keyword: "gh".into(),
         })
         .is_ok());
-    // 与主热键重复（默认 Win+Alt+Space：mods 8|1=9? HOTKEY_MODS_DEFAULT = MOD_WIN|MOD_ALT）
+    // 与主热键重复（默认 Alt+Space：HOTKEY_MODS_DEFAULT = MOD_ALT = 1）
     let main = Settings::default();
     let _ = main;
     assert!(
