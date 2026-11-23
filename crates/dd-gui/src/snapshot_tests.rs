@@ -115,6 +115,19 @@ fn snapshot_app_with(
     app
 }
 
+/// 金图生成时的产品版本（金图正典 = 2026-10-31 R9 于 CI runner 重生成，
+/// 当时版本 0.2.1）。钉扎后**发版 bump 不再触发 settings_appearance 金图
+/// 漂移**（v0.3.0 发版实测：版本徽标换字导致 34 px 失配）。
+const SNAPSHOT_UI_VERSION: &str = "0.2.1";
+
+/// 测试态 UI 版本钉扎（OnceLock：同一测试进程内一次性生效）。
+static PINNED_UI_VERSION: std::sync::OnceLock<&'static str> = std::sync::OnceLock::new();
+
+/// 供设置页版本徽标读取的钉扎值（无钉扎时返回 `None`，生产路径不受影响）。
+pub(crate) fn pinned_ui_version() -> Option<&'static str> {
+    PINNED_UI_VERSION.get().copied()
+}
+
 /// 金图 harness：固定尺寸 + 固定主题 + 固定 pixels_per_point（1.0，屏蔽
 /// 环境 DPI 差异）+ wgpu 渲染（`egui_kittest` `wgpu` feature，CI 走软件
 /// 适配器：Windows = WARP / Linux = lavapipe）。
@@ -123,6 +136,7 @@ fn snapshot_harness(
     payload_items: Vec<PanelItem>,
     configure: impl FnOnce(&mut crate::app::PaletteApp),
 ) -> egui_kittest::Harness<'static, crate::app::PaletteApp> {
+    let _ = PINNED_UI_VERSION.set(SNAPSHOT_UI_VERSION);
     egui_kittest::Harness::builder()
         .with_size(SNAPSHOT_SIZE)
         .with_theme(theme)

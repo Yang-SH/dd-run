@@ -27,6 +27,17 @@ mod widgets;
 // （states.rs 取 accent_soft、panel.rs 取 draw_ext_chip）与单测取用
 pub(crate) use widgets::*;
 
+/// 设置页版本徽标的文字来源。**发版 bump 不应触发金图漂移**：金图职责 =
+/// 布局 / 排版回归，版本串属元数据——测试态由 `snapshot_tests` 钉扎为金图
+/// 生成时的版本（金图正典 2026-10-31 R9 重生成，当时产品版本 0.2.1）。
+fn ui_version() -> &'static str {
+    #[cfg(test)]
+    if let Some(v) = crate::snapshot_tests::pinned_ui_version() {
+        return v;
+    }
+    env!("CARGO_PKG_VERSION")
+}
+
 // 设置页自绘控件排印（D42：Fluent compact 档，文字 = ramp base200）。
 // K2：v4.9/D34「整体字号放大」把控件与正文一并提到 14，控件失去次级定位——
 // 此处仅回调控件档（正文/行名 14 semibold / 描述 12 不变），并配套把盒高
@@ -117,7 +128,7 @@ impl PaletteApp {
         );
 
         // 版本徽标：精确尺寸子区贴右缘垂直居中（draw_version_chip 恰好填满）
-        let ver_text = format!("v{}", env!("CARGO_PKG_VERSION"));
+        let ver_text = format!("v{}", ui_version());
         // 宽度估算必须与 draw_ext_chip 的渲染字体一致（monospace）——曾错用
         // proportional 导致 chip_rect 偏窄 ~6px，allocate 溢出 max_rect 向右多画，
         // 胶囊右缘越过内容边线、距窗口边框只剩 ~5px（真机 2026-09-04 反馈）。
@@ -131,7 +142,7 @@ impl PaletteApp {
                 .max_rect(chip_rect)
                 .layout(egui::Layout::left_to_right(egui::Align::Min)),
         );
-        draw_version_chip(&mut chip_ui, env!("CARGO_PKG_VERSION"), &p);
+        draw_version_chip(&mut chip_ui, ui_version(), &p);
 
         if back_clicked {
             self.go_back_focused(); // 返回 + 聚焦回落后页面的搜索框
