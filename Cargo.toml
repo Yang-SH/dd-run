@@ -6,7 +6,7 @@ members = ["crates/*"]
 # dd-run-cli）以 `version.workspace = true` 继承，发版 bump 只改这一处；
 # dd-protocol 保持独立 1.0.0 版本线（协议版本独立于产品版本，随契约演进）。
 [workspace.package]
-version = "0.2.1"
+version = "0.3.0"
 edition = "2021"
 rust-version = "1.95"
 license = "MIT"
