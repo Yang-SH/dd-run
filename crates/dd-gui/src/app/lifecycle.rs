@@ -250,7 +250,22 @@ impl PaletteApp {
                     // 模式下全键盘被吞、WM_HOTKEY 不会产生，本守卫对钩子模
                     // 式零行为变化。捕获结束后新热键照常切换。
                     if self.hotkeys.hotkey_capturing {
-                        log::debug!("[dd-gui] 捕获期忽略热键 Toggle（回落捕获下旧热键仍存活）");
+                        // 当前 slot 0 本就是 Alt+Space 时接管热键无法重复注册，
+                        // 该组合的 WM_HOTKEY 仍以 Toggle 形式到达——捕获期把它
+                        // 翻译成候选而非丢弃，使默认值也能在回落模式下被「录到」。
+                        // 其余组合的 Toggle 继续忽略（旧热键仍存活，防面板被隐藏）。
+                        if Self::is_menu_takeover_combo(
+                            self.draft.settings.hotkey_mods,
+                            self.draft.settings.hotkey_vk,
+                        ) {
+                            log::debug!("[dd-gui] 捕获期 Toggle = Alt+Space（当前热键），落候选");
+                            self.hotkeys.hotkey_pending = Some((
+                                crate::settings::HOTKEY_MODS_DEFAULT,
+                                crate::settings::HOTKEY_VK_DEFAULT,
+                            ));
+                        } else {
+                            log::debug!("[dd-gui] 捕获期忽略热键 Toggle（回落捕获下旧热键仍存活）");
+                        }
                         continue;
                     }
                     if self.window.visible {
@@ -301,6 +316,18 @@ impl PaletteApp {
                             crate::text::t(self.view.lang_effective, "toast.command_slots_partial")
                                 .to_string(),
                         );
+                    }
+                }
+                HotkeyEvent::CaptureCombo { mods, vk } => {
+                    // 捕获期接管热键命中（回落捕获下 Alt+Space 被系统吞掉，改由
+                    // RegisterHotKey 摘除投递链后回发的 WM_HOTKEY）——与钩子 Combo /
+                    // egui Key 同语义：只记候选，等对话框「保存」走确认流。
+                    // 非捕获期到达的陈旧事件一律忽略（面板热键仍由 Toggle 驱动）。
+                    if self.hotkeys.hotkey_capturing {
+                        log::debug!("[dd-gui] 捕获接管热键落候选：{mods}+{vk}");
+                        self.hotkeys.hotkey_pending = Some((mods, vk));
+                    } else {
+                        log::debug!("[dd-gui] 忽略非捕获期接管热键事件（{mods}+{vk}）");
                     }
                 }
                 HotkeyEvent::ReRegistered {
@@ -362,6 +389,9 @@ impl PaletteApp {
                         // 称旧键生效而实际为空（核查识别的死角 #2）。
                         self.hotkeys.hotkey_confirm = None;
                         self.hotkeys.hotkey_apply_failed = true;
+                        // 保存失败但对话框仍开（回滚到旧热键）→ 恢复接管键，
+                        // 让回落模式下 Alt+Space 可重新录入重试。
+                        self.refresh_capture_sink();
                         if !rolled_back {
                             self.hotkeys.hotkey_unregistered = true;
                         }
@@ -707,6 +737,61 @@ mod tests {
         tx.send(HotkeyEvent::Toggle).unwrap();
         app.poll_hotkey(&ctx());
         assert!(!app.window.visible, "非捕获态 Toggle 应照常隐藏面板");
+    }
+
+    /// 捕获接管热键事件（回落捕获下 Alt+Space 的录入路径）：捕获期落候选，
+    /// 非捕获期的陈旧事件忽略——面板热键永远由 Toggle 驱动，不被录进设置。
+    #[test]
+    fn capture_combo_event_sets_pending_only_while_capturing() {
+        let (tx, rx) = mpsc::channel();
+        let mut app = make_app_with(rx);
+
+        // 非捕获期：陈旧事件必须忽略。
+        tx.send(HotkeyEvent::CaptureCombo { mods: 1, vk: 0x20 })
+            .unwrap();
+        app.poll_hotkey(&ctx());
+        assert_eq!(app.hotkeys.hotkey_pending, None, "非捕获期不得落候选");
+
+        // 捕获期：与钩子 Combo / egui Key 同语义——只记候选，不写设置。
+        let old = (app.draft.settings.hotkey_mods, app.draft.settings.hotkey_vk);
+        app.hotkeys.hotkey_capturing = true;
+        tx.send(HotkeyEvent::CaptureCombo { mods: 1, vk: 0x20 })
+            .unwrap();
+        app.poll_hotkey(&ctx());
+        assert_eq!(
+            app.hotkeys.hotkey_pending,
+            Some((1, 0x20)),
+            "Alt+Space 应落候选"
+        );
+        assert_eq!(
+            (app.draft.settings.hotkey_mods, app.draft.settings.hotkey_vk),
+            old,
+            "候选阶段设置不得变动（等保存确认）"
+        );
+    }
+
+    /// 当前热键本就是 Alt+Space（默认值）时，接管热键无法重复注册——其
+    /// WM_HOTKEY 以 Toggle 形式到达，捕获期须翻译成候选而非丢弃；当前热键
+    /// 不是 Alt+Space 时 Toggle 仍照旧忽略（回落捕获下旧热键存活）。
+    #[test]
+    fn toggle_during_capture_records_alt_space_only_when_current() {
+        let (tx, rx) = mpsc::channel();
+        let mut app = make_app_with(rx);
+        app.hotkeys.hotkey_capturing = true;
+        // 夹具默认 = Alt+Space → Toggle 落候选。
+        tx.send(HotkeyEvent::Toggle).unwrap();
+        app.poll_hotkey(&ctx());
+        assert_eq!(app.hotkeys.hotkey_pending, Some((1, 0x20)));
+
+        // 当前热键改为 Ctrl+Space → 同一 Toggle 仅忽略，不改候选。
+        app.hotkeys.hotkey_pending = None;
+        app.draft.settings.hotkey_mods = 0b0010;
+        tx.send(HotkeyEvent::Toggle).unwrap();
+        app.poll_hotkey(&ctx());
+        assert_eq!(
+            app.hotkeys.hotkey_pending, None,
+            "非 Alt+Space 旧热键仍应忽略"
+        );
     }
 
     /// 捕获期守卫（2026-09-30 真机）：回落捕获下 Win/Alt+Space 拉起系统 UI

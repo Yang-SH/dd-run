@@ -1,6 +1,6 @@
 # 全局热键默认值切换为 Alt+Space 方案
 
-> **状态**：已落地（代码与文档回写完成；真机 6 条待用户会话） ｜ **版本**：v1.3 ｜ **最后更新**：2026-11-23
+> **状态**：已落地（代码与文档回写完成；真机 6 条待用户会话） ｜ **版本**：v1.5 ｜ **最后更新**：2026-11-23
 > **关联**：[implementation.md](./implementation.md) · [stability-usability-security-plan.md](./stability-usability-security-plan.md)（R-21） · [altrun-对照优化方案-2026-11-21.md](./altrun-对照优化方案-2026-11-21.md)
 
 ---
@@ -107,8 +107,8 @@
 | 命令热键槽（N17） | ✅ 已覆盖 | `settings.rs` 约 :1178 已有「与面板唤起热键重复」拒绝 |
 | 微软拼音 IME | ✅ 净收益 | Ctrl+Space 被 IME 吃键为历史记档问题；Alt+Space 不在其默认键位 |
 | UI 金图 6 张 | ✅ 预计零漂移 | 基准仅 `settings_appearance`（分类 = Appearance），热键卡在常规页；仍须实跑 snapshot 门禁确认 |
-| 本机改绑路径 | ⚠️ 有前提 | 本机 LL 钩子被安全软件拦截（历史记档）→ 捕获恒回落，回落态按 Alt+Space 会弹系统菜单；**须用「恢复默认」按钮**（`apply_hotkey_default` 不经捕获）完成切换 |
-| 新增 takeover 提示腿 | ⚠️ 本机不可达 | 同上回落态下 Alt+Space 无法录入，C6 的 takeover 中性说明在本机无法真机触发；只能靠单测锚定，真机须无拦截他机（同 R-21 黄线腿口径） |
+| 本机改绑路径 | ✅ 已解除前提（2026-11-23 v1.4） | 原限制：本机 LL 钩子被安全软件拦截 → 捕获恒回落，回落态按 Alt+Space 会弹系统菜单、须用「恢复默认」绕过捕获。现捕获期临时注册独立 `RegisterHotKey` 接管键（见 §8），Alt+Space 在回落态亦可录入；「恢复默认」仍保留 |
+| 新增 takeover 提示腿 | ✅ 本机可达（v1.4） | 同上接管键落地后，回落态按 Alt+Space 落候选 → 对话框显示 `set.hotkey.warn_takeover` 中性说明，「保存」走既有 seq 确认流；真机腿待用户会话 |
 | 注册失败（第三方占用，如 PowerToys Run / uTools / Listary） | ⚠️ 走既有降级 | 无热键 + `toast.hotkey_unregistered` + 红色「未注册」徽标（R-15 路径）；本文不改该路径 |
 | 全系统副作用 | ⚠️ 产品取舍 | 所有应用失去 Alt+Space 窗口菜单；由 C4 文案明示 |
 | 双实例 / 启动竞态 | ✅ 无新增行为 | 第二实例注册失败走同一降级路径 |
@@ -126,7 +126,7 @@
 
 **真机（本机可执行）**
 
-**前置**：本机 `config.json` 现值为 `hotkey_mods=2 / hotkey_vk=32`（Ctrl+Space），而 C1 只改默认值常量、§3.1 明确不迁移已有配置。执行下列步骤前须先点设置页「恢复默认」（或清空 config 的 hotkey 字段）切到 Alt+Space；该路径经 `apply_hotkey_default → apply_captured_hotkey → re_register` 走 seq 重注册、不经捕获，本机可执行（同 §4「本机改绑路径」）。
+**前置**：本机 `config.json` 现值为 `hotkey_mods=2 / hotkey_vk=32`（Ctrl+Space），而 C1 只改默认值常量、§3.1 明确不迁移已有配置。切换路径二选一（两条本机均可执行）：①设置页「更改」直接捕获 Alt+Space——§8 v1.4 捕获期接管键已解除「回落态录不进 Alt+Space」的前提；②「恢复默认」（或清空 config 的 hotkey 字段）经 `apply_hotkey_default → apply_captured_hotkey → re_register` 走 seq 重注册、不经捕获（同 §4「本机改绑路径」）。
 
 1. 干净启动：Windows 启动注册成功路径**无成功日志**（`hotkey.rs` 约 :350–368，仅失败时 `log::debug!`），故判据改为「无注册失败日志 + 热键卡无『未注册』徽标 + 实按生效」；若点「恢复默认」触发重注册，日志应为 `[dd-gui] 全局热键注册成功（seq=N）：Alt+Space`（`hotkey.rs` 约 :413–418；原稿所写「全局热键注册成功：Alt+Space」只是非 Windows 路径的约 :651 格式，本机不适用）。
 2. 记事本前台按 Alt+Space → 面板出现，**记事本无系统菜单**。
@@ -162,3 +162,33 @@
 | v1.1 | 2026-11-23 | 二次核对修正：Windows 启动成功无日志导致真机验收第 1 条不成立；C4 行号误记（:243 非 :592）且漏 `capturing_fallback`；「黄线」实为 `p.accent` 致两支同色；C1/C5/C7 注释漏项、C6 未指明文案键；回滚常量计数与范围修正；§2.1 实测/推论口径收窄、探针未留存注记、ALTRun 来源缺口、门禁命令口径与单测调用前缀 |
 | v1.2 | 2026-11-23 | 实施顺序约束回写：§3.2 明确 C1/C5/C7 原子同批与「三关」门禁统一执行时机；§5 真机段补前置（本机现值 Ctrl+Space，须先「恢复默认」）；§6 批次二补 `stability` 约 :279 与三份 active 清单的 R-21 表述同步 |
 | v1.3 | 2026-11-23 | 批次一 / 批次二落地回写：状态改「已落地」、未落地段改写、§2.2 标为变更前快照、§6 两批次状态与验收数字、版本演进补记；代码侧 C1–C9 全量落地（746/0/7、clippy/fmt/docscan 全绿、release 10,527,744 B） |
+| v1.4 | 2026-11-23 | **回落捕获下 Alt+Space 可录**（§8）：新增捕获期临时接管热键（独立 id `0xDD05` + `HotkeyEvent::CaptureCombo`），解除 §4 两条「本机不可达」前提；回归单测 +5，fmt / clippy / 测试三关全绿。真机腿待用户会话 |
+| v1.5 | 2026-11-23 | 进度口径整理：§5 前置改为「捕获 Alt+Space」与「恢复默认」二选一（v1.4 已解除前者前提）；同步 `user-session-walkthrough-checklist.md` 约 :47 的「接管提示腿本机不可达」表述与 `stability-usability-security-plan.md` V-8 场景（拆分 Ctrl+Esc 黄线 / Alt+Space 中性接管） |
+
+---
+
+## 8. 回落捕获下 Alt+Space 录入（v1.4，2026-11-23）
+
+### 8.1 问题
+
+§4 两条风险记档均指向同一前提：本机 `WH_KEYBOARD_LL` 被安全软件拦截 → 捕获恒回落 egui 应用层路径；此时按 Alt+Space 被 Windows 解释为「弹出窗口系统菜单」（winit 对 `WM_SYSKEYDOWN` 调 `DefWindowProc`），Space 不送达 egui → 候选永不成立。旧口径要求用「恢复默认」绕过捕获完成切换，且 C6 的 takeover 说明本机无法真机触发。
+
+### 8.2 机制
+
+复用 §2.1 已实测的机制：`RegisterHotKey(MOD_ALT | MOD_NOREPEAT, VK_SPACE)` 成功后 Windows 把整个组合从输入投递链摘除——系统菜单不弹，`WM_HOTKEY` 改投注册线程。与 §3.4「常驻钩子兜底」不做项不冲突：本方案**仅在捕获期（≤30s）**注册、结束即注销，不常驻。
+
+### 8.3 落地
+
+| 点 | 实现 |
+|---|---|
+| 独立热键 | `hotkey.rs`：`HOTKEY_CAPTURE_ID = 0xDD05`（沿项目既有 `0xDDxx` 号段取空位，不与 slot 0..3 = `0xDD02..0xDD04` 撞号）；`HOTKEY_CAPTURE_MSG`（WM_APP+4）携带 mods/vk，vk 0 = 注销 |
+| 事件 | `HotkeyEvent::CaptureCombo{mods,vk}`；`poll_hotkey` 捕获期落候选（与钩子 Combo / egui Key 同语义：只记候选，等「保存」走 seq 确认流），非捕获期忽略陈旧事件 |
+| 生命周期 | `begin_capture` → `refresh_capture_sink` 按需注册（当前 slot 0 已是 Alt+Space **且注册成功**时跳过，避免同组合重复注册；启动注册失败时仍注册接管键——此时没有 Toggle 可翻译）；`end_hotkey_capture` / 保存 / 捕获超时 / hide → 注销 |
+| 自锁防护 | 真实注册（slot 0 改绑 / 命令槽同步）**之前**先发注销命令——`PostThreadMessageW` 同线程 FIFO 保证顺序；否则 `RegisterHotKey` 对已注册组合返回 `ERROR_HOTKEY_ALREADY_REGISTERED`，保存 Alt+Space 会被自己的接管键挡住。失败回滚后重新注册接管键供重试 |
+| Toggle 兼容 | slot 0 本就是 Alt+Space 时其 `WM_HOTKEY` 仍是 `Toggle`；捕获期 `poll_hotkey` 把它翻译成候选（其余组合的 Toggle 继续忽略，防面板被隐藏） |
+| 文案 | `capture_fallback` / `capturing_fallback` 改为明示「Alt+Space 可录」，不再声称系统组合键一概不可录 |
+
+### 8.4 验收
+
+- 单测：`hotkey.rs` id 不撞号 + 桩线程 no-op；`lifecycle.rs` CaptureCombo 仅捕获期落候选、Toggle 翻译仅对当前 Alt+Space 生效；`app/keys.rs` 注册决策纯函数（已注册 Alt+Space 不重复注册 / 启动注册失败时仍注册 / 非捕获期不注册）。
+- 真机（待用户会话）：本机现值 Ctrl+Space → 设置页「更改」→ 按 Alt+Space（系统菜单**不弹**、对话框显示 Alt+Space keycap + takeover 中性说明）→「保存」→ 托盘 tooltip 与热键卡显示 Alt+Space；取消 / 超时后系统菜单行为恢复。

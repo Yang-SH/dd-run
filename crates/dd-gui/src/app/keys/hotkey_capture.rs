@@ -36,6 +36,46 @@ impl PaletteApp {
         m == 0x1 && vk == 0x20
     }
 
+    /// 接管热键注册决策（纯函数，单测锚定）：捕获期注册；唯一跳过情形 =
+    /// 当前 slot 0 就是 Alt+Space **且已真实注册**——同组合 Windows 拒绝
+    /// 重复注册，其 WM_HOTKEY 由 Toggle 分支翻译候选（见 lifecycle.rs）。
+    /// 当前组合虽是 Alt+Space 但启动注册失败（`hotkey_unregistered`）时
+    /// **必须注册**接管键：此时既无 Toggle 也无接管键，Alt+Space 永远录不进
+    /// （真机 2026-11-23：config 为 Alt+Space 且被占用，回落捕获下按
+    /// Alt+Space 只弹系统菜单）。
+    pub(crate) fn should_register_capture_sink(
+        capturing: bool,
+        mods: u32,
+        vk: u32,
+        unregistered: bool,
+    ) -> bool {
+        capturing && (unregistered || !Self::is_menu_takeover_combo(mods, vk))
+    }
+
+    /// 捕获期接管热键按当前状态对齐（2026-11-23）：捕获中且当前 slot 0 不是
+    /// **已注册的** Alt+Space 时注册接管键（回落模式下 Alt+Space 可被录入）；
+    /// 其余情形注销。捕获结束后必须注销以恢复系统菜单。
+    ///
+    /// ⚠️ 所有**真实热键注册**（slot 0 改绑 / 命令槽同步）之前必须先注销接管
+    /// 键：Windows 对「同一组合已注册」返回 `ERROR_HOTKEY_ALREADY_REGISTERED`
+    /// （RegisterHotKey 文档），否则保存 Alt+Space 会被自己的接管键挡住。
+    pub(crate) fn refresh_capture_sink(&mut self) {
+        let want = Self::should_register_capture_sink(
+            self.hotkeys.hotkey_capturing,
+            self.draft.settings.hotkey_mods,
+            self.draft.settings.hotkey_vk,
+            self.hotkeys.hotkey_unregistered,
+        );
+        if want {
+            self.hotkeys.hotkey.capture_sink(
+                crate::settings::HOTKEY_MODS_DEFAULT,
+                crate::settings::HOTKEY_VK_DEFAULT,
+            );
+        } else {
+            self.hotkeys.hotkey.capture_sink(0, 0);
+        }
+    }
+
     /// 热键捕获（M6 批次 6.3；2026-09-29 B 方案改造）：
     /// **Windows 走 LL 键盘钩子**（系统级捕获——egui 应用层收不到 Win 键，
     /// 按下即弹开始菜单 + 失焦隐藏，真机 bug 见 `platform::capture_hook`
@@ -127,6 +167,9 @@ impl PaletteApp {
     /// 回滚路径多余的 `re_register(old)` 产生「假成功」事件错位配对，导致
     /// 「冲突只拦截一次、第二次假成功」——真机 2026-09-30，seq 协议根治。
     pub(crate) fn apply_captured_hotkey(&mut self, mods: u32, vk: u32) {
+        // 先注销捕获接管键再发注册命令（PostThreadMessageW 同线程 FIFO）：
+        // 若候选正是 Alt+Space，留着接管键会让 slot 0 注册因「组合已注册」失败。
+        self.hotkeys.hotkey.capture_sink(0, 0);
         // 序号发号（0 保留给启动注册结果；u32 回绕不可能达，守卫仅为完备）。
         self.hotkeys.hotkey_seq = self.hotkeys.hotkey_seq.wrapping_add(1);
         if self.hotkeys.hotkey_seq == crate::hotkey::HOTKEY_SEQ_STARTUP {
@@ -163,10 +206,12 @@ impl PaletteApp {
             Err(e) => {
                 self.hotkeys.hotkey_apply_failed = false;
                 self.hotkeys.command_slot_err = Some(e);
+                self.refresh_capture_sink(); // 校验失败对话框仍开 → 恢复接管键
             }
             Ok(()) => {
                 self.draft.settings.command_hotkeys.push(hk);
                 self.save_settings_with_feedback();
+                self.hotkeys.hotkey.capture_sink(0, 0); // 槽位注册前释放，避免组合冲突
                 self.sync_command_hotkey_slots();
                 self.end_hotkey_capture();
                 self.hotkeys.command_slot_err = None;
@@ -210,6 +255,9 @@ impl PaletteApp {
     ///（热键已真实注册，设置必须记录），失败转 toast（对话框已关，行内不可见）。
     pub(crate) fn end_hotkey_capture(&mut self) {
         self.hotkeys.hotkey_capturing = false;
+        // 注销捕获接管热键（Alt+Space）：系统菜单行为恢复。命令在热键线程
+        // 排队消化（保存路径的 re_register 先发、本命令后发，不覆盖新热键）。
+        self.hotkeys.hotkey.capture_sink(0, 0);
         // Guard Drop = 卸载 LL 钩子（清发送端 + WM_QUIT + 泵循环自检退出）。
         self.hotkeys.capture_hook = None;
         self.hotkeys.capture_rx = None;
@@ -254,6 +302,12 @@ impl PaletteApp {
         self.hotkeys.capture_failed = false;
         self.hotkeys.hotkey_pending = None;
         self.hotkeys.hotkey_apply_failed = false;
+        // 回落捕获兜底（2026-11-23）：临时注册接管热键 Alt+Space，令 Windows
+        // 把该组合从输入投递链摘除——否则基础捕获下按 Alt+Space 只弹系统菜单、
+        // egui 收不到 Space，永远录不进（本机 LL 钩子被安全软件拦截）。
+        // 当前 slot 0 本就是 Alt+Space 时不注册（由 lifecycle.rs 的 Toggle 分支
+        // 翻译候选）；详见 Self::refresh_capture_sink。
+        self.refresh_capture_sink();
         // B 方案：Windows 主路径 = LL 键盘钩子（Win 键可录、开始菜单不弹）。
         #[cfg(windows)]
         {

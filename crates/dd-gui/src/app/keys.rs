@@ -75,6 +75,41 @@ mod tests {
         );
     }
 
+    /// 捕获接管热键注册决策：捕获期且当前热键不是「已注册的 Alt+Space」才
+    /// 注册——与自身重复注册会被 Windows 拒绝（ERROR_HOTKEY_ALREADY_REGISTERED），
+    /// 该场景由 Toggle 翻译候选；当前组合是 Alt+Space 但启动注册失败时仍须
+    /// 注册接管键（否则无 Toggle 可翻译）；非捕获期一律不注册。
+    #[test]
+    fn capture_sink_registration_policy() {
+        // 当前 Ctrl+Space（已注册）→ 需接管键才能录 Alt+Space。
+        assert!(PaletteApp::should_register_capture_sink(
+            true, 0b0010, 0x20, false
+        ));
+        // 当前已是 Alt+Space 且注册成功 → 不重复注册，Toggle 分支负责翻译。
+        assert!(!PaletteApp::should_register_capture_sink(
+            true, 0b0001, 0x20, false
+        ));
+        // 当前也就是 Alt+Space，但启动注册失败（被占用/线程死亡）→ 必须
+        // 注册接管键，此时没有 Toggle 可翻译（真机 2026-11-23 场景）。
+        assert!(PaletteApp::should_register_capture_sink(
+            true, 0b0001, 0x20, true
+        ));
+        // Alt+Shift+Space（非纯 Alt）不属 takeover，仍可注册接管键。
+        assert!(PaletteApp::should_register_capture_sink(
+            true, 0b0101, 0x20, false
+        ));
+        // 非捕获期一律不注册（命令发得再晚也会注销，不留全局副作用）。
+        assert!(!PaletteApp::should_register_capture_sink(
+            false, 0b0010, 0x20, false
+        ));
+        assert!(!PaletteApp::should_register_capture_sink(
+            false, 0b0001, 0x20, false
+        ));
+        assert!(!PaletteApp::should_register_capture_sink(
+            false, 0b0001, 0x20, true
+        ));
+    }
+
     /// N4：warm 保活容量的消费点——① 默认配置构造 → LRU 容量 = 8（= 原
     /// `LRU_WARM_CAPACITY` 常量，M1–M4 基线口径不变）；② `warm_capacity = 2`
     /// 的配置构造 → LRU 容量跟随 = 2。驱逐行为本体（缩容队尾优先 / 扩容不

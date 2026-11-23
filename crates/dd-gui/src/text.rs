@@ -238,11 +238,12 @@ const I18N: &[(&str, &str, &str)] = &[
         "New hotkey registration failed (may be taken by another app or the IME) — the previous hotkey was restored",
     ),
     // 热键捕获回落（LL 钩子安装失败）：Ctrl+Esc 等系统组合会弹系统 UI，
-    // Win 键不可录——必须让用户知道当前处于降级捕获。
+    // Win 键不可录——必须让用户知道当前处于降级捕获。Alt+Space 已由临时
+    // 接管热键（RegisterHotKey）兜底可录，文案据实区分。
     (
         "set.hotkey.capture_fallback",
-        "系统级捕获不可用（可能被安全软件拦截），已回落基础捕获——Win 键与系统组合键（如 Ctrl+Esc）无法录入",
-        "System-level capture unavailable (possibly blocked by security software); fell back to basic capture — Win and system combos like Ctrl+Esc cannot be captured",
+        "系统级捕获不可用（可能被安全软件拦截），已回落基础捕获——Win 键与 Ctrl+Esc 等系统组合键无法录入（Alt+Space 可录）",
+        "System-level capture unavailable (possibly blocked by security software); fell back to basic capture — Win and system combos like Ctrl+Esc cannot be captured (Alt+Space still works)",
     ),
     // ── Toast（invoke / page / health / refresh / keys）──
     (
@@ -580,7 +581,7 @@ const I18N: &[(&str, &str, &str)] = &[
     ("set.hotkey.desc", "自定义唤起/隐藏面板的组合键", "Customize the combo that shows/hides the panel"),
     ("set.hotkey.current", "当前组合", "Current combo"),
     ("set.hotkey.capturing", "请按下新的组合键（支持 Win，Esc 取消）…", "Press the new key combo (Win supported, Esc to cancel)…"),
-    ("set.hotkey.capturing_fallback", "请按下新的组合键（基础捕获：不支持 Win / Ctrl+Esc，Esc 取消）…", "Press the new key combo (basic capture: Win / Ctrl+Esc unsupported, Esc to cancel)…"),
+    ("set.hotkey.capturing_fallback", "请按下新的组合键（基础捕获：不支持 Win / Ctrl+Esc，Alt+Space 可录，Esc 取消）…", "Press the new key combo (basic capture: Win / Ctrl+Esc unsupported, Alt+Space supported, Esc to cancel)…"),
     ("set.hotkey.capturing_btn", "捕获中…", "Capturing…"),
     ("set.hotkey.change", "更改", "Change"),
     ("set.hotkey.reset", "恢复默认", "Reset to default"),

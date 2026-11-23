@@ -31,6 +31,20 @@ const HOTKEY_ID: i32 = 0xDD01;
 /// id 不变——现行为逐位回归）。
 #[cfg(windows)]
 const HOTKEY_SLOT_BASE: i32 = 0xDD02;
+/// 捕获期「系统组合键接管」专用热键 id（与 slot 0..3 分离，互不串扰）。
+///
+/// 回落捕获（LL 钩子被安全软件拦截）下按 Alt+Space，Windows 会把它解释成
+/// 「弹出窗口系统菜单」——egui/winit 收不到 Space 键，组合永远录不进（真机
+/// 2026-11-23）。临时注册该热键后，Windows 把整个组合从输入投递链摘除
+///（`docs/hotkey-alt-space-default-2026-11-23.md` §2.1 实测），`WM_HOTKEY`
+/// 改投本线程 → 回发 [`HotkeyEvent::CaptureCombo`] 供对话框录取。捕获结束即
+/// 注销，系统菜单行为恢复（副作用窗口 ≤ 捕获超时 30s）。
+// 沿用项目既有 0xDDxx 号段（HOTKEY_ID = 0xDD01、命令槽 = 0xDD02..0xDD04），
+// 取下一个空位 0xDD05；与既有 id 同段，单测锚定不撞号。
+// 注：RegisterHotKey 文档把 0xC000+ 划给共享 DLL（GlobalAddAtom），但本仓库
+// 既有 id 已在该段且实测工作——此处保持一致，不扩大改动面。
+#[cfg(windows)]
+const HOTKEY_CAPTURE_ID: i32 = 0xDD05;
 /// N17：命令槽批量重注册消息（wParam = 3×12 位打包[mods<<8|vk，vk 0 = 空槽]，
 /// lParam = generation 配对）。
 #[cfg(windows)]
@@ -38,6 +52,9 @@ const HOTKEY_SLOTS_MSG: u32 = 0x8003; // WM_APP + 3
 /// 热键线程自定义命令消息（PostThreadMessageW 携带 seq + mods/vk）。
 #[cfg(windows)]
 const HOTKEY_CMD_MSG: u32 = 0x8002; // WM_APP + 2
+/// 捕获接管热键的注册/注销命令（wParam = mods，lParam = vk；vk 0 = 注销）。
+#[cfg(windows)]
+const HOTKEY_CAPTURE_MSG: u32 = 0x8004; // WM_APP + 4
 
 /// N17：命令热键槽打包（Windows 线程消息载荷）——每槽 12 位（mods 4bit << 8 |
 /// vk 8bit），vk 0 = 空槽；3 槽 36 位装入 u64 低位。纯函数可单测（unpack 同径
@@ -117,6 +134,10 @@ pub enum HotkeyEvent {
     /// N17：命令热键槽批量注册结果（`generation` 配对；`ok_mask` 位 i =
     /// 槽 i+1 注册成功——失败槽位由 UI 落 danger 行 + toast）。
     CommandSlots { generation: u32, ok_mask: u8 },
+    /// 捕获期接管热键命中（`mods`/`vk` = 注册时的组合）。回落捕获下被系统
+    /// 吞掉的组合（Alt+Space → 系统菜单）经此路落候选，不经 egui 事件。
+    /// 非捕获期到达的同名事件由 UI 忽略（陈旧消息）。
+    CaptureCombo { mods: u32, vk: u32 },
 }
 
 /// 热键线程句柄 + 事件接收端 + 重注册入口。
@@ -217,6 +238,30 @@ impl HotkeyThread {
                 generation as isize,
             );
         }
+    }
+
+    /// 捕获期临时接管热键：`vk != 0` 注册（自动替换旧接管键），`vk == 0` 注销。
+    ///
+    /// 仅 Windows 有意义——回落捕获下 `Alt+Space` 被系统吞成「弹出系统菜单」，
+    /// 通过 `RegisterHotKey` 把该组合从投递链摘除后，按键改以 `WM_HOTKEY`
+    /// 到达热键线程并回发 [`HotkeyEvent::CaptureCombo`]（见
+    /// [`HOTKEY_CAPTURE_ID`]）。非 Windows 无此系统行为，恒 no-op。
+    /// 线程已死亡 / 桩线程（id=0）时 `PostThreadMessageW` 静默失败，不打断 UI。
+    pub fn capture_sink(&self, mods: u32, vk: u32) {
+        #[cfg(windows)]
+        {
+            use windows_sys::Win32::UI::WindowsAndMessaging::PostThreadMessageW;
+            unsafe {
+                let _ = PostThreadMessageW(
+                    self.thread_id,
+                    HOTKEY_CAPTURE_MSG,
+                    mods as usize,
+                    vk as isize,
+                );
+            }
+        }
+        #[cfg(not(windows))]
+        let _ = (mods, vk);
     }
 
     /// 非 Windows 平台：经 `global-hotkey` 注册热键并启动轮询线程（O6 批次三
@@ -338,6 +383,9 @@ fn message_loop(
 
     // 当前生效组合（重注册失败回滚用）；NOREPEAT 统一在注册处补
     let mut current = (mods, vk);
+    // 捕获期临时接管热键（slot 独立；None = 未注册）。命令 HOTKEY_CAPTURE_MSG
+    // 负责注册/注销；命中时经 CaptureCombo 回发 UI（不参与 slot 分派）。
+    let mut capture_sink: Option<(u32, u32)> = None;
     unsafe {
         let ok = RegisterHotKey(
             std::ptr::null_mut(), // 线程级热键（HWND = *mut c_void）
@@ -376,13 +424,22 @@ fn message_loop(
                 break;
             }
             if msg.message == WM_HOTKEY {
-                // N17：槽位分派——slot 0 = 面板 toggle（逐位不变）；1..3 = 命令
-                // 热键槽（宿主按绑定表分发执行自定义命令，面板隐藏态亦生效）。
-                let slot = (msg.wParam as i32 - HOTKEY_ID) as u32;
-                if slot == 0 {
-                    let _ = tx.send(HotkeyEvent::Toggle);
+                if msg.wParam as i32 == HOTKEY_CAPTURE_ID {
+                    // 捕获期接管热键命中：不参与 slot 分派，直接回发候选
+                    // （回落捕获下 Alt+Space 不再弹系统菜单，改走这条）。
+                    if let Some((mods, vk)) = capture_sink {
+                        log::info!("[dd-gui] 捕获接管热键命中：{mods}+{vk}");
+                        let _ = tx.send(HotkeyEvent::CaptureCombo { mods, vk });
+                    }
                 } else {
-                    let _ = tx.send(HotkeyEvent::Trigger { slot });
+                    // N17：槽位分派——slot 0 = 面板 toggle（逐位不变）；1..3 = 命令
+                    // 热键槽（宿主按绑定表分发执行自定义命令，面板隐藏态亦生效）。
+                    let slot = (msg.wParam as i32 - HOTKEY_ID) as u32;
+                    if slot == 0 {
+                        let _ = tx.send(HotkeyEvent::Toggle);
+                    } else {
+                        let _ = tx.send(HotkeyEvent::Trigger { slot });
+                    }
                 }
                 ctx.request_repaint();
             } else if msg.message == HOTKEY_CMD_MSG {
@@ -467,6 +524,29 @@ fn message_loop(
                     generation,
                     ok_mask,
                 });
+                ctx.request_repaint();
+            } else if msg.message == HOTKEY_CAPTURE_MSG {
+                // 捕获期接管热键注册/注销（vk 0 = 注销）：先注销旧键，再按需
+                // 注册新键。失败仅记日志——回落 egui 路径仍可录普通组合键，
+                // 不应因此打断捕获对话框；slot 0..3 全程不受影响。
+                if capture_sink.take().is_some() {
+                    let _ = UnregisterHotKey(std::ptr::null_mut(), HOTKEY_CAPTURE_ID);
+                }
+                let mods = (msg.wParam as u32) & crate::settings::HOTKEY_MODS_MASK;
+                let vk = msg.lParam as u32;
+                if vk != 0
+                    && RegisterHotKey(
+                        std::ptr::null_mut(),
+                        HOTKEY_CAPTURE_ID,
+                        mods | MOD_NOREPEAT,
+                        vk,
+                    ) != 0
+                {
+                    capture_sink = Some((mods, vk));
+                    log::info!("[dd-gui] 捕获接管热键已注册：{mods}+{vk}");
+                } else if vk != 0 {
+                    log::warn!("[dd-gui] 捕获接管热键注册失败（{mods}+{vk}）——该组合可能无法录入");
+                }
                 ctx.request_repaint();
             }
             let _ = TranslateMessage(&msg);
@@ -810,6 +890,35 @@ fn message_loop_unix(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 捕获接管热键的 id / 命令消息必须与 slot 0..3 及既有命令消息不撞号——
+    /// 撞号会把「录 Alt+Space」误判成面板 Toggle 或命令槽触发。
+    #[cfg(windows)]
+    #[test]
+    fn capture_sink_ids_are_distinct() {
+        assert_ne!(HOTKEY_CAPTURE_ID, HOTKEY_ID, "不得与面板热键撞号");
+        for slot in 1..=3 {
+            assert_ne!(
+                HOTKEY_CAPTURE_ID,
+                HOTKEY_SLOT_BASE + slot - 1,
+                "不得与命令槽 {slot} 撞号"
+            );
+        }
+        assert_ne!(HOTKEY_CAPTURE_MSG, HOTKEY_CMD_MSG);
+        assert_ne!(HOTKEY_CAPTURE_MSG, HOTKEY_SLOTS_MSG);
+    }
+
+    /// 捕获接管命令发送端在桩线程（id=0）/ 非 Windows 上恒不 panic——
+    /// UI 侧 begin/end 无条件调用，不能因热键线程缺席而中断捕获对话框。
+    #[test]
+    fn capture_sink_on_dummy_thread_is_noop() {
+        let thread = HotkeyThread::dummy();
+        thread.capture_sink(
+            crate::settings::HOTKEY_MODS_DEFAULT,
+            crate::settings::HOTKEY_VK_DEFAULT,
+        );
+        thread.capture_sink(0, 0);
+    }
 
     /// seq 协议命令打包 roundtrip（PostThreadMessageW 只有 2 个整型槽，
     /// mods<<32|vk 装包不可失真——含高位 vk 与全部 MOD 位组合）。

@@ -252,7 +252,8 @@ pub(crate) struct HotkeyState {
     /// 捕获开始时刻（`CAPTURE_TIMEOUT` 超时兜底）。
     pub(crate) capture_started: Option<std::time::Instant>,
     /// v3：钩子 Failed 后置位——设置页捕获提示切红色降级口径
-    /// （基础捕获不支持 Win / Alt+Space 等系统组合）。
+    /// （基础捕获不支持 Win / Ctrl+Esc 等系统组合；Alt+Space 由捕获期
+    /// 临时接管热键兜底，见 `HotkeyThread::capture_sink`）。
     pub(crate) capture_failed: bool,
     /// R-15：全局热键**未注册**（启动注册失败 / 热键线程死亡）——设置页
     /// 热键卡「未注册」徽标与错误 toast 的依据；重注册成功后复位。
