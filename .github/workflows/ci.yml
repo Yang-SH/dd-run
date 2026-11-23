@@ -129,11 +129,11 @@ jobs:
 
       # 加固⑤ 补挂（2026-11-22）：search sidecar 的 conformance 腿。search 是独立
       # sidecar（不在 builtin_specs，不能走 in-process），须先装配扩展目录：拷清单
-      # + 已构建的 dd-ext-search.exe（上一步 --all-targets 已产出）。**观察态**
-      # （continue-on-error）——runner 无 Everything 时页面条目为空、断言覆盖有限，
-      # 首跑行为需一个 PR 周期确认后按 snapshot/bench 先例转阻塞。
-      - name: Conformance smoke (search sidecar, assembled, observation)
-        continue-on-error: true
+      # + 已构建的 dd-ext-search.exe（上一步 --all-targets 已产出）。**阻塞模式**
+      # （2026-11-23 转正：run 45030804140 / 45186804371 连续两次全绿，日志确认
+      # 3) top_level 与 6) get_items 两项均实际执行；runner 无 Everything 时页面
+      # 条目为空属预期，断言只覆盖结构合规）。
+      - name: Conformance smoke (search sidecar, assembled)
         shell: pwsh
         run: |
           $dir = Join-Path $env:RUNNER_TEMP 'conf-search'

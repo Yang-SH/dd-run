@@ -93,6 +93,7 @@
 
 - **夜间 fuzz job 转阻塞**：`.github/workflows/fuzz.yml` 摘除 `continue-on-error`（job 名去 observation）——此后夜间 fuzz 失败会标红，不再静默。
 - **验收实证**：自 2026-10-31 绿灯首跑起算连续 **20+ 夜零 crash**（gh 实查 11-12 → 11-23 连续 12 夜 schedule 全 success）；单轮执行量 `Done 19,279,144 runs in 601 second(s)`（decoder，≈1.93×10⁷ ≥ 10⁷ 阈值，envelope 同轮同门）。
+- **search sidecar conformance 转阻塞**：`ci.yml` Windows `check` job 的 search 装配 conformance 步摘除 `continue-on-error`——首方文件搜索 sidecar 的结构合规自此为阻塞门禁（判据按连续两次 main 运行全绿折算，仓库零 PR run 的口径修正记档于清单 §3.5）。
 - 行为变更面：无用户可见变更（仅 CI 门禁加强）。扩展协议 v1.0 契约零改动、lock 零新增依赖包；测试 751/0/7 不变。
 
 ## [0.3.0] - 待发版（段日期随 §4.4 tag 回填）
