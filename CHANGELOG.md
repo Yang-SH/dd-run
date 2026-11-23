@@ -4,6 +4,12 @@
 
 ## [Unreleased]
 
+### 金图版本钉扎（2026-11-23）
+
+- **修复：发版 bump 触发 UI 金图漂移**——`v0.3.0` 版本号提升后 `settings_appearance` 金图因右上角版本徽标换字失配（34 px）；版本串属元数据、金图职责为布局/排版回归，故将设置页版本徽标改经 `ui_version()`，**测试态读取快照钉扎值**（`SNAPSHOT_UI_VERSION = 0.2.1` = 金图正典生成代），生产路径仍读 `CARGO_PKG_VERSION`，显示零变化。
+- 效果：后续发版 bump 不再需要重生成金图；金图文件零改动，CI snapshot job 全绿（run 45194163268）。
+- 测试 751/0/7 不变；扩展协议零改动、lock 零新增。
+
 ### ALTRun 对照优化波次一（2026-11-21）
 
 - **system 扩表（N7）**：新增「Windows 设置」入口（嵌套页 52 条设置页直达，页内搜索按标题/slug 过滤）、「清空回收站」（`SHEmptyRecycleBinW` 直调，二次确认门禁）与音量/媒体键 ×7（静音切换/音量加减/播放暂停/上下曲/停止，`SendInput` 虚拟键注入）；命令表去 `OnceLock` 缓存（顺带修复语言切换后标题冻结的隐患，unix 分支同步）；windows-sys 新增 `Win32_UI_Input_KeyboardAndMouse` 特性位（无新依赖包）。
