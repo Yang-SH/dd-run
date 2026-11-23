@@ -1,10 +1,10 @@
 # 用户会话真机走查清单（真实键鼠腿）
 
-> **状态**：已落地（本机腿 2026-10-07 用户批量确认收口——各腿已勾选，批量确认为总体结论、非逐腿判据记录，发现问题单项重开；**未收口残留**：R-21 黄线腿需无拦截他机、V-14 余腿需多屏硬件、O5-a tofu 全页走查——**2026-11-03 起另因白帧复发挂起（修复失效机制未知），见 §5 挂起注记**）｜ **版本**：v1.3 ｜ **最后更新**：2026-11-03
+> **状态**：已落地（本机腿 2026-10-07 用户批量确认收口——各腿已勾选，批量确认为总体结论、非逐腿判据记录，发现问题单项重开；**未收口残留**：R-21 黄线腿需无拦截他机、V-14 余腿需多屏硬件、O5-a tofu 全页走查——**2026-11-03 起另因白帧复发挂起（修复失效机制未知），见 §5 挂起注记**；**2026-11-23 新增 §7 v0.3.0 走查筹备（分场次顺序 + 前置命令）**）｜ **版本**：v1.4 ｜ **最后更新**：2026-11-23
 > **关联**：[implementation.md](./implementation.md) §7 · [future-features-plan.md](./future-features-plan.md) §4 · [security-audit-2026-09-23.md](./security-audit-2026-09-23.md) · [stability-usability-security-plan.md](./stability-usability-security-plan.md) · [INDEX.md](./INDEX.md)
 >
 > **为什么需要你**：本机安全软件在系统级过滤注入输入（V-7 通道清单穷尽：posted 消息不经 IME / SendInput 受理不达 / osk UIA 合成键同样被拦），物理键盘为唯一通路——以下腿无法自动化。
-> **通用纪律**：走查前备份 `%APPDATA%\dd-run\config.json`；交付件 = `dist/dd-run-0.2.0.exe`（8.3M，2026-10-07 v0.2.0 发版件，自动化腿 9 腿已过）；每项完成后还原配置；结果按「记录位置」回写对应文档并销勾。
+> **通用纪律**：走查前备份 `%APPDATA%\dd-run\config.json`；交付件 = **`dd-run-0.3.0-portable.zip`**（v0.3.0 Release 件，CI 构建 + SHA256SUMS/provenance 已验，见 §6.1；旧 `dist/` 仅开发期对照）；每项完成后还原配置；结果按「记录位置」回写对应文档并销勾。
 
 ---
 
@@ -69,6 +69,86 @@
 - [x] **开关关闭腿**（2026-10-07 批量确认）——：关回开关 → 游戏行即时消失（空查询与关键词两分支）
 - [x] **组合腿**（2026-10-07 批量确认）——：「搜索应用」关 + 「Steam 游戏」开 → 游戏仍不可见（AND 叠加）；再开「搜索应用」→ 普通应用出现、游戏按开关档位出现
 - [x] **持久化腿**（2026-10-07 批量确认）——：重启后开关档位与 config.json `search_steam_games` 一致；旧 config（无该字段）启动回落「关」
+
+---
+
+## 7. v0.3.0 真机走查筹备（2026-11-23）
+
+> 目的：把 [清单 v1.16](./未完善事项清单-2026-10-25.md) §5 的 **25 条腿**（平台 6 + ALTRun 12 + 热键 7）按「本机 → 他机 → 多屏 → 跨平台」排成四场，前置命令与判据一次备齐；每场独立，可按任意顺序开。
+> 腿号索引：平台 = 清单 §5.1–5.6 / §5.12；ALTRun = §5.13–5.24；热键 = §5.25。
+
+### 7.1 通用前置（每场开始前，约 3 分钟）
+
+```powershell
+# 1) 取件（或网页下载 Releases → v0.3.0）
+gh release download v0.3.0 --dir "$env:TEMP\ddrun-030" --clobber
+Get-FileHash "$env:TEMP\ddrun-030\dd-run-0.3.0-portable.zip" -Algorithm SHA256
+#   期望 eb4500f58df341b4c66c7cc4c2d28b265014a2d1488d2be5cbfc98b9a034ee7d
+Expand-Archive "$env:TEMP\ddrun-030\dd-run-0.3.0-portable.zip" "$env:TEMP\ddrun-030\app" -Force
+
+# 2) 断开常驻实例（托盘退出或结束进程）
+Get-Process dd-run* -ErrorAction SilentlyContinue | Stop-Process
+
+# 3) 备份用户数据
+$d = "$env:APPDATA\dd-run"
+Copy-Item "$d\config.json" "$d\config.json.walkthrough-bak" -ErrorAction SilentlyContinue
+Copy-Item "$d\usage.json"  "$d\usage.json.walkthrough-bak"  -ErrorAction SilentlyContinue
+Copy-Item "$d\history.json" "$d\history.json.walkthrough-bak" -ErrorAction SilentlyContinue
+```
+
+- **隔离跑（推荐）**：新开一个 PowerShell，`$env:APPDATA = "$env:TEMP\ddrun-walk-$(Get-Date -Format HHmmss)"` 后再启动 `$env:TEMP\ddrun-030\app\dd-run-0.3.0.exe`——走查不污染日常配置；该窗口内启动的实例日志落在隔离目录下 `dd-run\logs\`。
+- **采集**：截图 + `%APPDATA%\dd-run\logs\dd-run.log` 关键字（`热键` / `命令热键槽` / `N12 进入目录` / `保存`）+ 剪贴板断言（`Get-Clipboard`）；证据存 `$env:TEMP\walk-<日期>\`，不入库。
+- **收尾**：还原备份、结束走查实例、恢复常驻实例。
+
+### 7.2 场次 A：本机物理键鼠（约 20–30 分钟，25 条中最先做）
+
+| 序 | 腿 | 前置 / 操作 | 判据 |
+|---|---|---|---|
+| A1 | §5.25 热键 1/7 | 干净启动（隔离目录） | 无注册失败日志、热键卡无「未注册」徽标、实按生效 |
+| A2 | §5.25 2/7 | 记事本前台按 `Alt+Space` | 面板出现，**记事本无系统菜单** |
+| A3 | §5.25 3/7 | 面板可见时再按 | 隐藏（Toggle） |
+| A4 | §5.25 4/7 | 悬停托盘图标 | tooltip = `dd-run — Alt+Space` |
+| A5 | §5.25 7/7 | 设置 → 更改 → 捕获 `Alt+Space`（系统菜单不弹）→ 保存 | 对话框显示 keycap + 中性接管说明；保存后托盘/热键卡为 Alt+Space；取消/超时后菜单行为恢复 |
+| A6 | §5.25 5/7 | 先起一个占位进程注册 Alt+Space，再启动 dd-run | 错误 toast + 红色「未注册」徽标（R-15 路径） |
+| A7 | §5.25 6/7 | 改绑回 `Ctrl+Space` | 记事本 `Alt+Space` 系统菜单恢复 |
+| A8 | §5.6 tofu | 设置页切 zh / en，逐页扫（首屏 / 各卡 / 确认框 / Toast / 右键菜单 / 嵌套页） | 无 tofu；`→` / `↵` 键帽正常 |
+| A9 | §5.6 emoji | 自定义命令名或书签标题含 emoji | 呈 tofu（**已接受取舍**）、UI 文案零影响 |
+| A10 | §5.14 余腿 | 置顶组 Enter 打开 / 取消置顶 / 导入导出往返 | 组序与打开行为正确；往返含置顶 |
+| A11 | §5.15 余腿 | 关「搜索历史」→ 查询；再开 → 清空按钮 | 关闭即停记；清空后 `Ctrl+↑` 无回填 |
+| A12 | §5.16 余腿 | 速查页 `Esc` 返回；IME 组词期按 `?` | 返回根页；组词态不误触 |
+| A13 | §5.17 余腿 | 连续改命令 4 次 | `bak.3` 挤出最旧档、三档内容正确 |
+| A14 | §5.18 余腿 | 触发骤降 toast → 点「从上次备份恢复」 | 条目还原、日志时间线可 grep |
+| A15 | §5.19 余腿 | 容量调到 12 | 红字警告消失 |
+| A16 | §5.20 余腿 | 失效直达行按 Enter；恢复文件后重聚合 | 拒绝 toast；红字标记消失 |
+| A17 | §5.21 余腿 | 中文路径目录浏览 / 右键 reveal / Everything 常规查询 | 列表与打开正确、无回归 |
+| A18 | §5.22 余腿 | 绑定已被占用组合 / 改绑已有槽 / slot 0 回归 | 冲突提示；改绑走 ReRegistered；唤起键不受影响 |
+| A19 | §5.23 余腿 | 多窗口切换（含最小化恢复）/ 提权窗口 / 拼音标题 / 停用开关 / 面板自身 | 各态符合预期，提权被拒有 toast |
+| A20 | §5.24 余腿 | 设置页表单建片段 / 右键删除 / 导入导出往返 | 校验与即时消失正确 |
+| A21 | §5.13 更新下载校验 | **用 v0.2.1 旧包**开「检查更新」→ 应报 Available → 下载 → 校验 → Explorer 定位；再手工篡改 zip 重试 | 校验通过定位目录；篡改 → 失败 + 清理 + Error toast |
+
+### 7.3 场次 B：他机（无拦截 + Chrome / Everything，约 20 分钟）
+
+| 序 | 腿 | 前置 | 判据 |
+|---|---|---|---|
+| B1 | §5.3 R-21 黄线 | 该机 LL 钩子未被安全软件拦截 | 捕获 `Ctrl+Esc` / `Ctrl+Shift+Esc` / `Alt+F4` → danger 黄线警示且可录；`Alt+Space` → 中性接管说明（不劝阻） |
+| B2 | §5.1 A-33-08 | 另一套机器组合 + Everything | 跨环境矩阵复跑通过（**唯一红线**） |
+| B3 | §5.9 N3 Chrome（条件保留） | 该机有 Chrome 书签 | Chrome 书签入「书签」组且可打开 |
+| B4 | §5.13 备选 | 若 A21 不便，可在该机做 | 同 A21 |
+
+### 7.4 场次 C：多屏 / RDP（约 10 分钟）
+
+- **§5.4 V-14**：显示器热拔插 / DPI 变更 / RDP 断连重连期间反复唤起-隐藏 → 无崩溃、窗口落在可见屏、居中正确。
+
+### 7.5 场次 D：非 Windows（约 15 分钟）
+
+- **§5.2 O6 ④**：linux / macOS 包实按热键、Wayland 降级、双开提示。
+- **§5.12 D1**：Linux 面板中文可读截图留档。
+
+### 7.6 记录与回写
+
+- 每腿完成 → 勾选本清单对应行 / [清单 §5](./未完善事项清单-2026-10-25.md) 行尾注 `✅ <日期> 真机：<证据要点>`；证据路径写 `%TEMP%\walk-<日期>\`。
+- 发现缺陷 → 新开 implementation 台账行 + CHANGELOG 修复节，并按需回写方案文档；**不要**在走查中就改判据。
+- 四场全部完成后：更新清单 §5 计数、方案状态与 INDEX；残留条件腿（I3 / N3 Chrome）维持记档。
 
 ---
 
