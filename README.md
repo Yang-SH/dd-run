@@ -2,11 +2,11 @@
 
 [English](./README.md) | [简体中文](./README.zh-CN.md)
 
-> **状态**：生效中 ｜ **版本**：v0.3.0 ｜ **最后更新**：2026-10-31
+> **状态**：生效中 ｜ **版本**：v0.3.0 ｜ **最后更新**：2026-11-23
 
 **A command palette / launcher written in Rust, built on a platform-agnostic core.** **Windows** is the primary supported platform; macOS / Linux portable builds ship as CI-gated previews (same codebase, all three platforms under blocking CI gates; real-device acceptance in progress). Design inspired by the [PowerToys Command Palette (CmdPal)](https://github.com/microsoft/PowerToys/tree/main/src/modules/cmdpal) module.
 
-> **Status**: MVP milestones **M0–M9 are all closed** and verified on real hardware (M0–M6 core panel & settings; M7 release engineering; M8 extension ecosystem validation; M9 in-process built-ins). **v0.2.1** published 2026-10-11 (previous: v0.2.0, 2026-10-07) — see the [CHANGELOG](./CHANGELOG.md) `[0.2.1]` section for its highlights (publisher signing key ceremony + cross-platform packaging; no behaviour changes). **v0.3.0** is in release preparation — see the `[0.3.0]` section for the cumulative highlights since v0.2.1. See [`docs/implementation.md`](./docs/implementation.md) §5 for milestone progress and §6.1 for the follow-ups ledger.
+> **Status**: MVP milestones **M0–M9 are all closed** and verified on real hardware (M0–M6 core panel & settings; M7 release engineering; M8 extension ecosystem validation; M9 in-process built-ins). **v0.3.0** published **2026-11-23** (previous: v0.2.1, 2026-10-11) — see the `[0.3.0]` section for the cumulative highlights since v0.2.1 (quality gates, repository restructure, feature increments). See [`docs/implementation.md`](./docs/implementation.md) §5 for milestone progress and §6.1 for the follow-ups ledger.
 
 ---
 
@@ -59,7 +59,7 @@ Its architecture and extension contracts are **distilled from Microsoft PowerToy
 
 | Item | Detail |
 |---|---|
-| Entry artifact | `dist/dd-run-0.3.0.exe` (Windows, ~8.4 MB — byte size re-measured per release, v0.2.1 = 8,722,944; version tracks `crates/dd-gui/Cargo.toml`) |
+| Entry artifact | `dist/dd-run-0.3.0.exe` (Windows, **9,244,672 B** — CI-built, inside the portable zip; byte size re-measured per release, v0.2.1 = 8,722,944; version tracks `crates/dd-gui/Cargo.toml`) |
 | Non-Windows packages (O6) | `dist/dd-run-<ver>-linux-<arch>.tar.gz` / `dist/dd-run-<ver>-macos-<arch>.tar.gz`: single `dd-run` binary + `README-dist.txt` (runtime system-library list, data dir, notes). File-search sidecar is Windows-only and not bundled; no signing surface on these packages. System fonts are required (CJK font such as `fonts-noto-cjk` for Chinese text) |
 | Bundling (M9) | The seven built-in extensions are compiled in-process: the host drives `dd_ext::serve_line` directly, so no extension exes are embedded. `dd-gui/build.rs` embeds an empty table; `assets/embed/` is a leftover scratch dir and is gitignored |
 | Sidecar | The file-search extension (`dd-ext-search.exe` + `com.ddrun.filesearch.json`) ships in `dist/extensions.d/`; the host scans an `extensions.d/` next to the executable (batch 7.5), so the zip is unzip & run — precedence: user data dir > sidecar > built-ins |

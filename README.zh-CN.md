@@ -2,11 +2,11 @@
 
 [English](./README.md) | [简体中文](./README.zh-CN.md)
 
-> **状态**：生效中 ｜ **版本**：v0.3.0 ｜ **最后更新**：2026-10-31
+> **状态**：生效中 ｜ **版本**：v0.3.0 ｜ **最后更新**：2026-11-23
 
 **用 Rust 从零构建的命令面板 / 启动器，核心与平台无关。** **Windows** 为主力支持平台；macOS / Linux 提供免安装绿色包（三平台阻塞 CI 门禁同源构建的预览版，真机验收进行中）。设计参考自 [PowerToys Command Palette（CmdPal）](https://github.com/microsoft/PowerToys/tree/main/src/modules/cmdpal) 模块。
 
-> **当前状态**：MVP 里程碑 **M0–M9 已全部关闭**并通过真机验收（M0–M6 核心面板与设置；M7 发布工程；M8 扩展生态验证；M9 内置扩展进程内化）；**v0.2.1** 已于 2026-10-11 发布（上一版 v0.2.0，2026-10-07）——发行方签名密钥仪式与打包链平台化见 [`CHANGELOG.md`](./CHANGELOG.md) `[0.2.1]` 段（无行为变更）；**v0.3.0** 发版准备中——自 0.2.1 起的累计变更见 `[0.3.0]` 段。里程碑进度见 [`docs/implementation.md`](./docs/implementation.md) §5，遗留项台账见其 §6.1。
+> **当前状态**：MVP 里程碑 **M0–M9 已全部关闭**并通过真机验收（M0–M6 核心面板与设置；M7 发布工程；M8 扩展生态验证；M9 内置扩展进程内化）；**v0.3.0** 已于 **2026-11-23** 发布（上一版 v0.2.1，2026-10-11）——自 0.2.1 起的累计变更（质量门禁 / 结构重构 / 功能增量）见 `[0.3.0]` 段。里程碑进度见 [`docs/implementation.md`](./docs/implementation.md) §5，遗留项台账见其 §6.1。
 
 ---
 
@@ -59,7 +59,7 @@
 
 | 项 | 说明 |
 |---|---|
-| 入口产物 | `dist/dd-run-0.3.0.exe`（Windows，约 8.4 MB——字节数随发版产物实测回填，v0.2.1 = 8,722,944；版本随 `crates/dd-gui/Cargo.toml` 升） |
+| 入口产物 | `dist/dd-run-0.3.0.exe`（Windows，**9,244,672 B**——CI 构建，位于便携 zip 内；字节数随发版产物实测回填，v0.2.1 = 8,722,944；版本随 `crates/dd-gui/Cargo.toml` 升） |
 | 非 Windows 包（O6） | `dist/dd-run-<ver>-linux-<arch>.tar.gz` / `dist/dd-run-<ver>-macos-<arch>.tar.gz`：单二进制 `dd-run` + `README-dist.txt`（运行时系统库清单 / 数据目录 / 使用说明）。文件搜索 sidecar 为 Windows 专属不随包；这些包无签名面。运行需系统字体（中文需 CJK 字体，如 `fonts-noto-cjk`） |
 | 打包方式（M9） | 7 个内置扩展进程内化编译：宿主直接驱动 `dd_ext::serve_line`，不再内嵌任何扩展 exe；`dd-gui/build.rs` 内嵌空表，`assets/embed/` 为遗留临时目录，已 gitignore |
 | Sidecar | 文件搜索扩展（`dd-ext-search.exe` + `com.ddrun.filesearch.json`）随 `dist/extensions.d/` 携带；宿主扫描可执行文件同目录的 `extensions.d/`（批次 7.5），zip 解压即用——优先级：用户数据目录 > sidecar > 内置 |

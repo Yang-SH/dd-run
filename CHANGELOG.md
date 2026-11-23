@@ -365,6 +365,13 @@
 
 - `implementation.md`「产物与分发」与「§5 版本与发版」由 v0.2.0 校正为 **v0.2.1**（含三平台产物口径）；`INDEX.md` §5「macOS / Linux 实际构建与验收」由「仅设计层，无产物」更正为「已发布 `linux-x86_64` / `macos-aarch64` tar.gz，真机验收腿进行中」。
 
+### 发版验证（2026-11-23，tag v0.3.0）
+
+- `tag v0.3.0` → release run 45190414768 **全 success**（Windows portable zip / linux-x86_64 / macos-aarch64 三个构建 job + 「SHA256SUMS + build provenance」job）。
+- Release 附着件：`dd-run-0.3.0-portable.zip` 4,647,368 B（内含 `dd-run-0.3.0.exe` 9,244,672 B + `dd-ext-search.exe` 860,672 B + 清单 + 清单 `.sig`）、`dd-run-0.3.0-linux-x86_64.tar.gz` 5,195,449 B、`dd-run-0.3.0-macos-aarch64.tar.gz` 3,673,353 B、`SHA256SUMS.txt` 291 B。
+- 端到端验证：本机下载三件逐条比对 **SHA256SUMS 全中**；`gh attestation verify dd-run-0.3.0-portable.zip --repo Yang-SH/dd-run` **exit 0**（build provenance 可验证）——未完善事项清单 §3.3 销项。
+- 版本单点：根 `Cargo.toml` `0.3.0`（5 个产品 crate 经 `version.workspace` 继承；dd-protocol 保持独立 1.0.0 线）。
+
 ## [0.2.1] - 2026-10-11
 
 ### 发布摘要（自 0.2.0 起的变更）

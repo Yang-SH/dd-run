@@ -1,6 +1,6 @@
 # dd-run 实施方案
 
-> **状态**：生效中 ｜ **版本**：v0.1.31 ｜ **最后更新**：2026-11-23
+> **状态**：生效中 ｜ **版本**：v0.1.32 ｜ **最后更新**：2026-11-23
 > **关联**：[protocol.md](./protocol.md) · [manifest-schema.md](./manifest-schema.md) · [extensions.md](./extensions.md) · [../cmdpal-platform-agnostic-design.md](../cmdpal-platform-agnostic-design.md)
 
 ---
@@ -33,16 +33,15 @@
 | 文件搜索 `Ctrl+F` + Shell 真实图标（v3.6） | ✅ 已落地（两项未达标已处置：E1 / E2） | 2026-09-19（工作副本） | 宿主 `Ctrl+F` 任意页直达文件搜索（栈深恒 2、Root 查询带入）；文件结果图标改 **Shell 真实图标**（`Icon::Path` + `file-icons/` 落盘缓存，失败回落 glyph）；图标管线自 apps 上移共享；协议/清单零改动。未达标两项已处置（E1：首抽 703.8 ms → 同步 0.32 ms；E2：sidecar +104.5 KB → 增量 61,952 B ≤ 64 KB） | [§2](#文件搜索-ctrlf-直达--shell-真实图标v36-2026-09-19-落地) · [search-file §10](./search-file.md) |
 | 全局热键默认值 Alt+Space（2026-11-23） | ✅ 已落地 | 2026-11-23（工作副本） | 默认值 `Win+Alt+Space` → `Alt+Space`（对齐 ALTRun）；R-21 黑名单收为三组合、Alt+Space 改中性接管说明；已存在用户配置不迁移 | [hotkey-alt-space-default-2026-11-23.md](./hotkey-alt-space-default-2026-11-23.md) |
 
-## 产物与分发（2026-10-17 实测，v0.2.1 发版件）
+## 产物与分发（2026-11-23 实测，v0.3.0 发版件）
 
-- `dist/dd-run-0.2.1.exe` — **8,804,352 B**（单文件宿主；含 5 内置扩展 in-process；本机 rustc 1.96.0 构建；sha256 `48E0D1EC…C221A`）
-- `dist/extensions.d/dd-ext-search.exe` — 838,144 B（文件搜索 sidecar，随绿色包 `extensions.d/` 携带；本机构建）
-- `dist/extensions.d/com.ddrun.filesearch.json` — 421 B（sidecar 清单）
-- `dist/dd-run-0.2.1-portable.zip` — 4,416,523 B（3 成员：exe + sidecar + 清单；条目名正斜杠）——**2026-10-17 起由 `tools/package.sh` 本地直接产出**（单一来源 `tools/portable_zip.ps1`），本地可交付件与 Release 附件自此同口径
-- **GitHub Release v0.2.1 附着件**（CI `windows-latest` 构建，2026-10-11 发布并下载复验）：
-  - `dd-run-0.2.1-portable.zip`——内含 `dd-run-0.2.1.exe` **8,722,944 B**（sha256 `a817d606…000bf7`）+ `extensions.d/dd-ext-search.exe` **829,440 B** + 清单 421 B + **CI 自动签发的 `.sig`**，**成员正斜杠、解压布局与本地一致**
-  - `dd-run-0.2.1-linux-x86_64.tar.gz` / `dd-run-0.2.1-macos-aarch64.tar.gz`——目录内 `dd-run` + `README-dist.txt`（免安装单二进制；文件搜索 sidecar 为 Windows 专属不随包）
-- ⚠️ **CI 与本地工具链字节不一致**（runner 的 stable 与本地 rustc 1.96.0 不同），引用字节数时须注明来源。
+- **GitHub Release v0.3.0**（tag `v0.3.0` / release run 45190414768，CI `windows-latest` 构建，2026-11-23 发布）——四个附着件：
+  - `dd-run-0.3.0-portable.zip` — **4,647,368 B**（sha256 `eb4500f5…a034ee7d`）；内含 `dd-run-0.3.0.exe` **9,244,672 B**（sha256 `4D3CA38D…DD0C5AC2`）+ `extensions.d/dd-ext-search.exe` **860,672 B**（sha256 `9DDA1B62…E2075BF`）+ `com.ddrun.filesearch.json` 421 B + 该清单 `.sig` 298 B
+  - `dd-run-0.3.0-linux-x86_64.tar.gz` — **5,195,449 B**（sha256 `4bf76dfc…13d1d80d`）；目录内 `dd-run` + `README-dist.txt`（免安装单二进制；文件搜索 sidecar 为 Windows 专属不随包）
+  - `dd-run-0.3.0-macos-aarch64.tar.gz` — **3,673,353 B**（sha256 `3c912346…5fa750fc`）
+  - `SHA256SUMS.txt` — 291 B；**本机实测三件哈希逐条比对全中**，`gh attestation verify` 对 portable zip 通过（exit 0）——§3.3 端到端口径达成
+- ⚠️ **CI 与本地工具链字节不一致**（runner 的 stable 与本地 rustc 1.96.0 / 1.98.0 不同），引用字节数时须注明来源；上列均标 CI 口径。
+- `dist/` 本地产物（`package.sh` 重打 2026-11-22：宿主 9,264,128 B / sidecar 859,136 B / zip 4,624,419 B）为**本地工具链口径**，与 CI 发版件字节不同属已知差异。
 - `dist/dev/dd-run-cli.exe` — 1,296,896 B（开发 / 自检工具：`--conformance` / `--roundtrip` / `--sign-ext` / `--verify-ext-sig`）
 - `dist/dev/dd-ext-sample.exe` — 457,728 B（示例扩展）
 - ⚠️ **不存在 `dist/dd-run.exe`**：实际发版产物名为 `dist/dd-run-<ver>.exe`（crate 仍名 `dd-gui`，经 `[[bin]] name = "dd-run"` 产出 `dd-run-<ver>.exe`），`dist/dev/` 下两个为开发期产物。
@@ -934,6 +933,7 @@ K-T1~K-T4 任务清单与 V-1~V-7 校验标准见 [`settings-keys-typography-pla
 | 2026-11-23 | **746** | +1：**全局热键默认值切换 Alt+Space**（[方案](./hotkey-alt-space-default-2026-11-23.md)）——`keys.rs` 新增 `alt_space_menu_takeover_detection`（`is_menu_takeover_combo` 精确纯 Alt+Space 命中 / Ctrl+Space·Alt+Shift+Space·Alt+F4 不误报 / Alt+Space 已移出 R-21 黑名单）；`r21_hotkey_blacklist_matches` 正例由四组合收为三组合、默认组合负例随新常量自动跟随。默认值 `0b1001 → 0b0001`、R-21 黑名单收窄、两处 fallback 文案与新 i18n 键 `warn_takeover` 同步；已存在用户配置不迁移。实跑 `cargo test --workspace` **746 passed / 0 failed / 7 ignored**，fmt 零差异、clippy `--workspace --all-targets -D warnings` 零告警、docscan 全绿、`cargo build --release` **10,527,744 B**；真机腿待用户会话（前置须先「恢复默认」切换本机现值 Ctrl+Space） |
 | 2026-11-23 | **751**（无测试变化） | **协议 fuzz 七夜销项 + 夜间 job 转阻塞（清单 §2.2）**：`gh run list --workflow=fuzz.yml` 实测 2026-11-12 → 11-23 连续 12 夜 schedule 全 success（自 2026-10-31 绿灯首跑 run 41150767528 起算已 20+ 夜零 crash）；单轮执行量实证 = 最新 run（11-23）decoder target `Done 19,279,144 runs in 601 second(s)`（≈1.93×10⁷ ≥ 10⁷ 阈值，envelope 同轮同门）；`.github/workflows/fuzz.yml` 摘除 `continue-on-error`、job 名去 observation → 阻塞模式。**同批文档口径回写**（清单 v1.13）：§2.3 TODO ×4 补销项标记（`TODO 对应平台轮` grep = 0 复核）、§4.1 refactor 批次 B–E 改「已完成」（原「均未开始」为陈旧口径）、§1 计数（代码级 2 → 0、方案余批 3 → 1）与 §8 优先级同步 | ✅ 已 push（阻塞首跑由本轮 CI run 实证；无代码改动、lock 零新增） |
 | 2026-11-23 | **751** | +5：**回落捕获下 Alt+Space 可录（捕获期临时 RegisterHotKey 接管键）**（[方案](./hotkey-alt-space-default-2026-11-23.md) §8）——① `hotkey.rs`：`HOTKEY_CAPTURE_ID = 0xDD05`（与 slot 0..3 分号段）+ `HOTKEY_CAPTURE_MSG`（WM_APP+4，vk 0 = 注销），消息循环按需注册/注销并把命中的 `WM_HOTKEY` 改发 `HotkeyEvent::CaptureCombo{mods,vk}`（注册/命中均 info 日志供真机对账）；② `app/keys/hotkey_capture.rs`：`should_register_capture_sink`（仅捕获期；当前 slot 0 是**已注册**的 Alt+Space 时跳过避免同组合重复注册，`hotkey_unregistered` 时仍注册——否则无 Toggle 可翻译）+ `refresh_capture_sink` 接线 begin/end/保存/命令槽校验失败重试；真实注册前先注销接管键（`PostThreadMessageW` 同线程 FIFO）防 `ERROR_HOTKEY_ALREADY_REGISTERED` 自锁；③ `lifecycle.rs`：`CaptureCombo` 仅捕获期落候选（非捕获期陈旧事件忽略），当前热键本就是已注册 Alt+Space 时 Toggle 翻译候选；④ `text.rs` 两处回落提示明示「Alt+Space 可录」；净 +5（`capture_sink_ids_are_distinct` / `capture_sink_on_dummy_thread_is_noop` / `capture_combo_event_sets_pending_only_while_capturing` / `toggle_during_capture_records_alt_space_only_when_current` / `capture_sink_registration_policy`）。实跑 **751 passed / 0 failed / 7 ignored**，fmt 零差异、clippy `--workspace --all-targets -D warnings` 零告警、docscan 全绿、`cargo build --release` **10,528,768 B**（装机件同步替换并哈希一致）；真机腿待用户会话（本机现值 Ctrl+Space → 设置「更改」→ Alt+Space 系统菜单不弹 → 保存生效；取消/超时后菜单恢复） |
+| 2026-11-23 | **751**（无测试变化） | **v0.3.0 发版收口（清单 §3.3 端到端验证）**：根 `Cargo.toml` 0.2.1 → **0.3.0**（5 产品 crate 经 `version.workspace` 单点继承，Cargo.lock 跟随；dd-protocol 保持 1.0.0）+ CHANGELOG `[0.3.0]` 段日期回填；tag `v0.3.0` push → release run 45190414768 **三平台 job + SHA256SUMS/provenance job 全 success**；Release 四附着件（portable.zip 4,647,368 B / linux tar.gz 5,195,449 B / macos tar.gz 3,673,353 B / SHA256SUMS.txt 291 B）；本机下载三件**逐条 SHA256 全中** + `gh attestation verify` **exit 0**；宿主 `dd-run-0.3.0.exe` 9,244,672 B（CI 口径，README 中英/产物节回填） | ✅ 已发布（tag `v0.3.0`） |
 | 2026-11-23 | **751**（无测试变化） | **search sidecar conformance 转阻塞（清单 §3.5 销项）**：`ci.yml` Windows `check` job 的「Conformance smoke (search sidecar, assembled)」步摘除 `continue-on-error`、步名去 observation；**判据口径修正**——仓库零 PR run，「两个 PR 周期」按连续两次 main push 全绿折算（维护者确认，与 snapshot 转正同精神）。实证：run 45030804140（11-22）与 run 45186804371（11-23）连续全绿，后者日志确认 `--conformance --extensions-dir D:\a\_temp\conf-search --ext-id com.ddrun.filesearch` 实际执行（`com.ddrun.filesearch File Search v0.1.1`、top_level / get_items 执行） | ✅ 已 push（阻塞首跑 run 45187780567 **全绿**——windows check job「Conformance smoke (search sidecar, assembled)」步级 success；无代码改动、lock 零新增） |
 
 **两条使用注意**：① `crates/dd-host/tests/roundtrip*.rs` 在 `dd-ext-sample.exe` **未构建时会打印 SKIP 并 return**（计入 passed），故凡涉及协议/扩展行为，先 `cargo build -p dd-ext-sample` 再跑；② 「三关全绿」与 CI 四关**均为 debug profile**，`#[cfg(debug_assertions)]` 类 release-only 编译错误检不到 —— 交付/发布前必须实跑 `cargo build --release`（见 §7 构建环境记档与 `CHANGELOG` 的 release 阻塞条目）。
@@ -1003,7 +1003,7 @@ K-T1~K-T4 任务清单与 V-1~V-7 校验标准见 [`settings-keys-typography-pla
 - **v5.2 UI 优化 B1–B8**：✅ 已关闭（2026-09-13）。八批增量优化全落地，含进页回填/返回聚焦/搜索引擎配置失效三项真机修复。详情见 [`cmdpal-ui-optimization-v5.html`](./archive/cmdpal-ui-optimization-v5.html)。
 - **图标与字体优化 I1/I2/F1/F2**：✅ 已关闭（2026-09-12）。I3 未做。详情见 [`icons-typography-plan.md`](./icons-typography-plan.md)。
 - **遗留项**：见 §6.1 台账——L1/L2/L3/L4/L5/L6/L7/L8/L9/L10 全部 ✅ 销项，无开放项。
-- **版本与发版**：crates 版本 `dd-gui`/`dd-host`/`dd-ext`/`dd-ext-sample`/`dd-run-cli` = **0.2.1**，`dd-protocol` = **1.0.0**；已发布 tag `v0.1.0`、`v0.1.1`、`v0.2.0`、`v0.2.1`（`v0.2.1` 起三平台产物：Windows portable zip + linux/macos tar.gz），分支 `main`。
+- **版本与发版**：crates 版本 `dd-gui`/`dd-host`/`dd-ext`/`dd-ext-sample`/`dd-run-cli` = **0.3.0**，`dd-protocol` = **1.0.0**；已发布 tag `v0.1.0`、`v0.1.1`、`v0.2.0`、`v0.2.1`、**`v0.3.0`（2026-11-23，三平台产物 + SHA256SUMS + build provenance 端到端验证通过）**，分支 `main`。
 - **当前开放项（2026-10-17）**：仅剩**硬件/外部资源依赖**项——O6 ④ 非 Windows 真机腿（[optimization-plan](./optimization-plan.md) §2.6.1）、O7 A-33-08 跨环境矩阵（[验收报告](./search-file-p2-acceptance-2026-09-15.md) §5，当前唯一红线）、R-21 他机腿 / V-14 多屏余腿 / V-7 真实 IME / O5-a 全页 tofu 走查（[walkthrough checklist](./user-session-walkthrough-checklist.md)）。**代码级欠账为零**：S-01…S-12、R1–R26、F1–F11、严审 P1–P8 与 UI-1~UI-7、O1–O14（含 O13，2026-10-17 落地）全部闭环。
 
 ---
