@@ -1,6 +1,6 @@
 # 用户会话真机走查清单（真实键鼠腿）
 
-> **状态**：已落地（本机腿 2026-10-07 用户批量确认收口——各腿已勾选，批量确认为总体结论、非逐腿判据记录，发现问题单项重开；**未收口残留**：R-21 黄线腿需无拦截他机、V-14 余腿需多屏硬件、O5-a tofu 全页走查——**2026-11-03 起另因白帧复发挂起（修复失效机制未知），见 §5 挂起注记**；**2026-11-23 新增 §7 v0.3.0 走查筹备（分场次顺序 + 前置命令）**；**2026-11-24 场次 A：A1–A7 + A9/A10/A15/A16/A17/A18/A20/A21 过，A11/A12/A14 部分**）｜ **版本**：v1.9 ｜ **最后更新**：2026-11-24
+> **状态**：已落地（本机腿 2026-10-07 用户批量确认收口——各腿已勾选，批量确认为总体结论、非逐腿判据记录，发现问题单项重开；**未收口残留**：R-21 黄线腿需无拦截他机、V-14 余腿需多屏硬件；**2026-11-23 新增 §7 v0.3.0 走查筹备（分场次顺序 + 前置命令）**；**2026-11-24 场次 A：A1–A9 + A10/A15/A16/A17/A18/A20/A21 过，A11/A12/A14 部分**）｜ **版本**：v1.10 ｜ **最后更新**：2026-11-24
 > **关联**：[implementation.md](./implementation.md) §7 · [future-features-plan.md](./future-features-plan.md) §4 · [security-audit-2026-09-23.md](./security-audit-2026-09-23.md) · [stability-usability-security-plan.md](./stability-usability-security-plan.md) · [INDEX.md](./INDEX.md)
 >
 > **为什么需要你**：本机安全软件在系统级过滤注入输入（V-7 通道清单穷尽：posted 消息不经 IME / SendInput 受理不达 / osk UIA 合成键同样被拦），物理键盘为唯一通路——以下腿无法自动化。
@@ -111,7 +111,7 @@ Copy-Item "$d\history.json" "$d\history.json.walkthrough-bak" -ErrorAction Silen
 | ✅ A5 | §5.25 7/7 | 设置 → 更改 → 捕获 `Alt+Space`（系统菜单不弹）→ 保存 | 对话框显示 keycap + 中性接管说明；保存后托盘/热键卡为 Alt+Space；取消/超时后菜单行为恢复 |
 | ✅ A6 | §5.25 5/7 | 先起一个占位进程注册 Alt+Space，再启动 dd-run | 错误 toast + 红色「未注册」徽标（R-15 路径） |
 | ✅ A7 | §5.25 6/7 | 改绑回 `Ctrl+Space` | 记事本 `Alt+Space` 系统菜单恢复 |
-| A8 | §5.6 tofu | 设置页切 zh / en，逐页扫（首屏 / 各卡 / 确认框 / Toast / 右键菜单 / 嵌套页） | 无 tofu；`→` / `↵` 键帽正常 |
+| ✅ A8 | §5.6 tofu | 设置页切 zh / en，逐页扫（首屏 / 各卡 / 确认框 / Toast / 右键菜单）；Windows 快速命令/系统组按用户要求排除 | 无 tofu；`→` / `↵` 键帽正常 |
 | A9 | §5.6 emoji | 自定义命令名或书签标题含 emoji | 呈 tofu（**已接受取舍**）、UI 文案零影响 |
 | A10 | §5.14 余腿 | 置顶组 Enter 打开 / 取消置顶 / 导入导出往返 | 组序与打开行为正确；往返含置顶 |
 | A11 | §5.15 余腿 | 关「搜索历史」→ 查询；再开 → 清空按钮 | 关闭即停记；清空后 `Ctrl+↑` 无回填 |
@@ -128,13 +128,15 @@ Copy-Item "$d\history.json" "$d\history.json.walkthrough-bak" -ErrorAction Silen
 
 > **场次 A 执行记录（2026-11-24，本机 v0.3.0 隔离实例，自动化注入键鼠）**：**A1–A7 全部通过**——A1 干净启动无失败日志、热键卡无「未注册」徽标；A2 记事本前台 `Alt+Space` → 面板出现且系统菜单窗口类 `#32768` 不出现（自动化取证）；A3 Toggle 出现→隐藏→出现；A4 托盘 UIA 可访问名 = `dd-run — Alt+Space`；A5 回落态捕获 `Alt+Space` 显示 keycap + 蓝色中性接管说明 → 保存成功（日志 `全局热键注册成功（seq=2）：Alt+Space`、`config.json hotkey_mods=1`）；A6 占位进程先注册 → 启动日志 `全局热键注册失败（1+32），降级为无热键运行` + 红「未注册」徽标 + 热键实按无效；A7 设置改绑 `Ctrl+Space`（日志 seq=1）后 Toggle 生效、记事本 `Alt+Space` 系统菜单恢复且面板不弹，再改回 `Alt+Space`（seq=2）正常。证据：面板/设置/捕获对话框截图 + 隔离目录日志（`%TEMP%\ddrun-walk-a1\dd-run\logs\dd-run.log`）+ `config.json` 两值双向切换。
 > **续跑记录（2026-11-24，自动化）**：**A9 ✅**（关键词 `zzqqnote` 命中自定义命令「📝 zzqqnote」（「直达」组）；emoji 经系统字体回退渲染为**单色字形**而非 tofu——优于清单预期取舍，UI 文案零影响）；**A15 ✅**（`warm_capacity=1` → 「已装扩展 8 个 / 保活容量 1」+ 红字「已装扩展数已达保活容量…建议调大容量」；调大至 12/13 后警告消失）；**A16 ✅**（失效 path 行右列红字「路径不存在」；Enter → toast「路径不存在：C:\NoSuchDir\zzqq.exe」）；**A14 ◐**（启动日志 `启动骤降检测：custom_commands 1 条，备份环最新档 10 条` 命中；面板 toast 未在截图窗口捕获，恢复按钮腿未点）；**A12 ◐**（自动化注入 `?` 直接入框、未打开速查页——真机 2026-11-22 已验通过，判为注入路径差异非缺陷）；**A17 ◐**（截图未取到文件页，待重跑）。
-> **本场未执行**：A8（全页 tofu 双语言扫页）、A11（搜索历史余腿）、A13（bak.3）、A19（窗口切换余腿）。
+> **本场未执行**：A11（搜索历史余腿）、A13（bak.3）、A19（窗口切换余腿）。
 >
 > **续跑记录 2（2026-11-24，自动化）**：**A10 ✅（导入导出往返除外）**——预置 `pinned_keys`（`com.ddrun.host\u001fcustom:zzqqnote`）→ 空查询「置顶」组居首、Enter 打开 notepad；右键「取消置顶」→ 置顶组消失、行回落「直达」组、`config.pinned_keys` 清空；**A11 ◐**——`Ctrl+↑` 回填历史生效（回填 `?`）、`record_search_history=false` 后查询隐藏不写 `history.json`（前后逐字节相同）；清空按钮与开关联动（关闭即清空）未跑；**A17 ✅**——`Ctrl+F` → 粘贴 `C:\Windows` → 文件页列出子项（addins / appcompat…）、右列父路径、页脚 `com.ddrun.filesearch`；目录 Enter / 中文路径 / 右键 reveal / Everything 常规回归沿用 2026-11-22 已取证部分。
 >
 > **续跑记录 3（2026-11-24，自动化）**：**A20 ✅（导入导出往返除外）**——设置页「文本片段」表单录入（名称「邮件签名」/ 关键词 `sig` / 双行正文）→ 面板「片段」组命中 → Enter 后剪贴板与 `config.json` 文本**逐码位一致**（含 LF）；右键「删除此片段」→ 行即时消失、`snippets` 清空；**A18 ✅**——命令槽 1 预置 `Alt+Space`（与 slot 0 冲突）→ 启动日志 `命令热键槽 1 注册失败（Alt+Space）`，slot 0 Toggle 正常、命令不误触发（冲突处置 = 保 slot 0）；改绑 `Ctrl+Alt+F9` 后面板隐藏态触发：日志 `命令热键槽 1 触发：zzqqnote` + notepad 启动、面板不弹。
 >
 > **续跑记录 4（2026-11-24，自动化 + 临时验收钩子）**：**A21 ✅**——先下载官方 v0.2.1（portable zip SHA256 `9864c8bf44d4bfc0b238a1cf3922b71f56846a615e104fc11ad943a06e45bbe3`）并确认该 tag 无 `update_check.rs`，不能执行 O17；按实施计划 §4.1「构造低版本号」口径，先制作 v0.3.0 Release exe 的 2 字节版本串对照副本并留存改动范围证据；因桌面鼠标注入被拦截，最终全链改用同源码临时验收构建（版本常量改为 `0.2.1` + 自动触发钩子），走真实 `start_update_check` / `start_update_download`。正常链：`latest=v0.3.0` → Available → 下载 zip **4,647,368 B** + SUMS **291 B** → SHA256 `eb4500f58df341b4c66c7cc4c2d28b265014a2d1488d2be5cbfc98b9a034ee7d` → Success toast「已下载并校验通过：解压覆盖安装目录即完成更新」+ Explorer `updates` 定位；篡改链：应用目录 curl 适配器真实下载后将 zip 截短为 **1,024 B** → Error toast「校验失败：哈希不匹配…」+ `cache/updates` **0 文件**。证据：`%TEMP%\walk-2026-11-24-a21\`（`normal-success-toast-screen.png` / `normal-zip-hash.txt` / `normal-explorer-windows.txt` / `tamper-error-toast-screen.png` / `tamper-proof.txt` / `tamper-cleanup.txt` / `binary-patch-proof.txt` / `auto-binary-proof.txt`）。说明：桌面顶层拦截层使物理鼠标点击不可达，故用临时自动触发钩子；钩子与版本改动已全部还原，工作副本无代码差异。直接 GitHub 资产直链首轮曾 TLS/连接失败，curl 适配器仅加 6 次重试，仍访问真实 URL。回归：`update_check` **11 passed / 0 failed**，`cargo fmt --all -- --check` 与 `node tools/docscan.mjs` 全绿。
+>
+> **续跑记录 5（2026-11-24，Computer Use）**：**A8 ✅（Windows 快速命令/系统组不适用）**——v0.3.0 隔离实例 zh/en 双语扫查首屏、设置页外观/常规/搜索/扩展全部卡片、危险操作确认框、Toast、右键菜单，未发现 tofu，`→` / `↵` 键帽正常；English 扩展页仍显示内置扩展中文显示名，属既有翻译覆盖问题、非 tofu。系统嵌套页/Windows 快速命令按用户要求未测。证据：`%TEMP%\walk-2026-11-24-a8\evidence\`（`a8-zh-contact-sheet.png` / `a8-en-contact-sheet.png` / `A8-summary.txt`）。CI run 45370055751（`9bc2bf1`）最终 success。
 
 ### 7.3 场次 B：他机（无拦截 + Chrome / Everything，约 20 分钟）
 

@@ -1,6 +1,6 @@
 # dd-run 项目可优化方案（总览）
 
-> **状态**：规划中 ｜ **版本**：v1.10 ｜ **最后更新**：2026-10-11
+> **状态**：规划中 ｜ **版本**：v1.11 ｜ **最后更新**：2026-11-24
 > **进度**：**Phase 1 四项全部落地**（O2 09-14 / O1 09-15 / O3 09-15 / O8 09-15）；**Phase 2：O4 ✅（09-15）、O7 两轮真机验收完成**（09-15 首轮 + **09-17 补 `es.exe` 基线与回落分支**：A-33-05 / A-33-06 / A-33-07 / A-33-10 **通过**，A-33-08 ⚠️ 部分 —— 见 [验收报告](./search-file-p2-acceptance-2026-09-15.md) v1.3）。其余项状态见 §1 状态列。
 > **关联**：[implementation.md](./implementation.md) · [INDEX.md](./INDEX.md) · [optimization-plan-review-2026-09-14.md](./archive/optimization-plan-review-2026-09-14.md) · [doc-audit-2026-09-13.md](./archive/doc-audit-2026-09-13.md) · [doc-code-diff-2026-09-13.md](./archive/doc-code-diff-2026-09-13.md) · [memory-optimization-plan.md](./memory-optimization-plan.md)
 
@@ -50,7 +50,7 @@
   - **程序化穷举（2026-10-07，落地前置收口）**：`tools/glyph_coverage_check.mjs`（零依赖 Node 脚本，可复跑）——解析运行时字体栈五文件（`segoeui` / `msyh.ttc` / `seguisym` / `SegoeIcons` / `segmdl2`）的 cmap（TTC 子字体表偏移为**文件绝对偏移**，TTF 同式）取码位并集，对 `dd-gui` / `dd-ext` / `dd-host` 全部 `.rs` 源码**剥注释后**的字符串与 char 字面量（含 `\u{...}` 转义解码）逐码位判覆盖：**942 码位中仅 U+000A（字符串内换行，非渲染字形）无覆盖，判定 PASS**。此前「全页面人工走查」判据由该穷举 + 真机抽查共同覆盖。
   - **落地改动**：`crates/dd-gui/Cargo.toml` eframe features 收窄为 `["glow"]`（唯一改动面）；族序重排 `retain(font_data.contains_key)` 自动剔除不再注册的 `NotoEmoji-Regular` / `emoji-icon-font`，最终族 `[segoe, cjk, sym, icons]`。**接受的副作用**：运行期用户数据（书签 / 扩展结果标题）中的 emoji 不再有 NotoEmoji 兜底、呈 tofu——UI 文案穷举零缺字不受影响；真机走查腿复核。
   - **回归修复**：`dropdown_width_clamps_zh_and_en`（`settings_view.rs`）依赖 headless 默认字体测宽——空字体集下测宽恒 0、上界分支必失败。修复 = 测试装入系统 `segoeui.ttf`（测试仅在 Windows CI / 真机跑，文件必有），测宽前提复原。测试总数不变。
-  - **门禁**：fmt 零差异 / clippy 零告警 / `cargo test --workspace` 592/592 全绿；release 重编实测体积分毫吻合（见 implementation.md §7 同日行）。**剩余**：真机全页面 tofu 走查（两语言 × 设置页/对话框/Toast + emoji 用户数据确认）随用户会话——见 [walkthrough checklist](./user-session-walkthrough-checklist.md) §5。
+  - **门禁**：fmt 零差异 / clippy 零告警 / `cargo test --workspace` 592/592 全绿；release 重编实测体积分毫吻合（见 implementation.md §7 同日行）。**真机收口（2026-11-24 A8）**：zh/en 首屏、设置各卡、确认框、Toast、右键菜单零 tofu，`→` / `↵` 正常；emoji 用户数据已验为单色字形。Windows 快速命令/系统组按用户要求排除——见 [walkthrough checklist](./user-session-walkthrough-checklist.md) §7.2 续跑记录 5。
 - **O5-b（明确不做）**：**`panic = "abort"` 不可行**——`ext_inprocess.rs` 约 :262 与 `dd-run-cli/src/main.rs` 约 :472/约 :501 依赖 `catch_unwind` 实现 M9 内置扩展崩溃隔离；`panic=abort` 下 `catch_unwind` 失效，内置 panic 将拖垮宿主，直接破坏已验收的容错能力。明确记档排除。
 - **O5-c（边际）**：对非热路径 crate 单独设 `opt-level="z"/"s"`（egui 保持 3）进一步压体积，收益小、回报低，建议暂缓。
 

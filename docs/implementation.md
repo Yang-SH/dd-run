@@ -1,6 +1,6 @@
 # dd-run 实施方案
 
-> **状态**：生效中 ｜ **版本**：v0.1.32 ｜ **最后更新**：2026-11-23
+> **状态**：生效中 ｜ **版本**：v0.1.33 ｜ **最后更新**：2026-11-24
 > **关联**：[protocol.md](./protocol.md) · [manifest-schema.md](./manifest-schema.md) · [extensions.md](./extensions.md) · [../cmdpal-platform-agnostic-design.md](../cmdpal-platform-agnostic-design.md)
 
 ---
@@ -1005,7 +1005,7 @@ K-T1~K-T4 任务清单与 V-1~V-7 校验标准见 [`settings-keys-typography-pla
 - **图标与字体优化 I1/I2/F1/F2**：✅ 已关闭（2026-09-12）。I3 未做。详情见 [`icons-typography-plan.md`](./icons-typography-plan.md)。
 - **遗留项**：见 §6.1 台账——L1/L2/L3/L4/L5/L6/L7/L8/L9/L10 全部 ✅ 销项，无开放项。
 - **版本与发版**：crates 版本 `dd-gui`/`dd-host`/`dd-ext`/`dd-ext-sample`/`dd-run-cli` = **0.3.0**，`dd-protocol` = **1.0.0**；已发布 tag `v0.1.0`、`v0.1.1`、`v0.2.0`、`v0.2.1`、**`v0.3.0`（2026-11-23，三平台产物 + SHA256SUMS + build provenance 端到端验证通过）**，分支 `main`。
-- **当前开放项（2026-11-23 回写）**：代码级欠账 **0**、CI 收口余 **§3.2 bench 观察**（零 PR 数据）、方案余批余 **frecency 观测**；**真机/外部依赖腿 6 + 12 + 7**（平台腿：O6 ④ 非 Windows / A-33-08 跨环境矩阵**唯一红线** / R-21 他机 / V-14 多屏 / O5-a 全页 tofu / D1 Linux 截图；ALTRun 批次 §5.13–5.24；热键 Alt+Space §5.25）——统一以 [清单 v1.15](./未完善事项清单-2026-10-25.md) §5 与 [walkthrough checklist](./user-session-walkthrough-checklist.md) 为准。**已闭环**：S-01…S-12、R1–R26、F1–F11、严审 P1–P8 与 UI-1~UI-7、O1–O14、refactor 批次 A–E、fuzz 七夜、search conformance 转阻塞、v0.3.0 发版链验证。
+- **当前开放项（2026-11-24 回写）**：代码级欠账 **0**、CI 收口余 **§3.2 bench 观察**（零 PR 数据）、方案余批余 **frecency 观测**；**真机/外部依赖腿 5 + 12 + 7**（平台腿：O6 ④ 非 Windows / A-33-08 跨环境矩阵**唯一红线** / R-21 他机 / V-14 多屏 / O5-a 全页 tofu / D1 Linux 截图；ALTRun 批次 §5.13–5.24；热键 Alt+Space §5.25）——统一以 [清单 v1.22](./未完善事项清单-2026-10-25.md) §5 与 [walkthrough checklist](./user-session-walkthrough-checklist.md) 为准。**已闭环**：S-01…S-12、R1–R26、F1–F11、严审 P1–P8 与 UI-1~UI-7、O1–O14、refactor 批次 A–E、fuzz 七夜、search conformance 转阻塞、v0.3.0 发版链验证。
 
 ---
 
