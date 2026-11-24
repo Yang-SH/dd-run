@@ -1,6 +1,6 @@
 # 用户会话真机走查清单（真实键鼠腿）
 
-> **状态**：已落地（本机腿 2026-10-07 用户批量确认收口——各腿已勾选，批量确认为总体结论、非逐腿判据记录，发现问题单项重开；**未收口残留**：R-21 黄线腿需无拦截他机、V-14 余腿需多屏硬件、O5-a tofu 全页走查——**2026-11-03 起另因白帧复发挂起（修复失效机制未知），见 §5 挂起注记**；**2026-11-23 新增 §7 v0.3.0 走查筹备（分场次顺序 + 前置命令）**；**2026-11-24 场次 A：A1–A7 + A9/A10/A15/A16/A17 过，A11/A12/A14 部分**）｜ **版本**：v1.7 ｜ **最后更新**：2026-11-24
+> **状态**：已落地（本机腿 2026-10-07 用户批量确认收口——各腿已勾选，批量确认为总体结论、非逐腿判据记录，发现问题单项重开；**未收口残留**：R-21 黄线腿需无拦截他机、V-14 余腿需多屏硬件、O5-a tofu 全页走查——**2026-11-03 起另因白帧复发挂起（修复失效机制未知），见 §5 挂起注记**；**2026-11-23 新增 §7 v0.3.0 走查筹备（分场次顺序 + 前置命令）**；**2026-11-24 场次 A：A1–A7 + A9/A10/A15/A16/A17/A18/A20 过，A11/A12/A14 部分**）｜ **版本**：v1.8 ｜ **最后更新**：2026-11-24
 > **关联**：[implementation.md](./implementation.md) §7 · [future-features-plan.md](./future-features-plan.md) §4 · [security-audit-2026-09-23.md](./security-audit-2026-09-23.md) · [stability-usability-security-plan.md](./stability-usability-security-plan.md) · [INDEX.md](./INDEX.md)
 >
 > **为什么需要你**：本机安全软件在系统级过滤注入输入（V-7 通道清单穷尽：posted 消息不经 IME / SendInput 受理不达 / osk UIA 合成键同样被拦），物理键盘为唯一通路——以下腿无法自动化。
@@ -131,6 +131,8 @@ Copy-Item "$d\history.json" "$d\history.json.walkthrough-bak" -ErrorAction Silen
 > **本场未执行**：A8（全页 tofu 双语言扫页）、A10（置顶 / 最近文件余腿）、A11（搜索历史余腿）、A13（bak.3）、A18（命令热键冲突 / 改绑）、A19（窗口切换余腿）、A20（片段设置表单）、A21（更新下载链）。
 >
 > **续跑记录 2（2026-11-24，自动化）**：**A10 ✅（导入导出往返除外）**——预置 `pinned_keys`（`com.ddrun.host\u001fcustom:zzqqnote`）→ 空查询「置顶」组居首、Enter 打开 notepad；右键「取消置顶」→ 置顶组消失、行回落「直达」组、`config.pinned_keys` 清空；**A11 ◐**——`Ctrl+↑` 回填历史生效（回填 `?`）、`record_search_history=false` 后查询隐藏不写 `history.json`（前后逐字节相同）；清空按钮与开关联动（关闭即清空）未跑；**A17 ✅**——`Ctrl+F` → 粘贴 `C:\Windows` → 文件页列出子项（addins / appcompat…）、右列父路径、页脚 `com.ddrun.filesearch`；目录 Enter / 中文路径 / 右键 reveal / Everything 常规回归沿用 2026-11-22 已取证部分。
+>
+> **续跑记录 3（2026-11-24，自动化）**：**A20 ✅（导入导出往返除外）**——设置页「文本片段」表单录入（名称「邮件签名」/ 关键词 `sig` / 双行正文）→ 面板「片段」组命中 → Enter 后剪贴板与 `config.json` 文本**逐码位一致**（含 LF）；右键「删除此片段」→ 行即时消失、`snippets` 清空；**A18 ✅**——命令槽 1 预置 `Alt+Space`（与 slot 0 冲突）→ 启动日志 `命令热键槽 1 注册失败（Alt+Space）`，slot 0 Toggle 正常、命令不误触发（冲突处置 = 保 slot 0）；改绑 `Ctrl+Alt+F9` 后面板隐藏态触发：日志 `命令热键槽 1 触发：zzqqnote` + notepad 启动、面板不弹。
 
 ### 7.3 场次 B：他机（无拦截 + Chrome / Everything，约 20 分钟）
 
