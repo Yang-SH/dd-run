@@ -794,13 +794,14 @@ impl PaletteApp {
         ctx.request_repaint();
     }
 
-    /// 搜索引擎配置变更后的全量重聚合：重走 scan → 注入引擎环境 → collect
-    /// → 替换 Root 列表（复用首屏聚合的全部既有机制，含进程替换与 LRU）。
+    /// 全量重聚合：重走 scan → 注入当前配置 → collect → 替换 Root 列表
+    /// （复用首屏聚合的全部既有机制，含进程替换与 LRU）。
     pub(crate) fn restart_aggregation(&mut self) {
-        log::debug!("[dd-gui] 搜索引擎配置变更 → 重新聚合首屏");
-        // 进程将以新环境变量（搜索引擎/语言）重启：作废已缓存的兜底模板与
-        // 在途拉取，否则会残留旧引擎/旧语言的兜底项（如仅启用 Bing 仍显示
-        // 全部搜索引擎的「在 X 搜索 …」）。下一帧由新进程重新拉取正确模板。
+        log::debug!("[dd-gui] 重新聚合首屏");
+        self.pool.aggregation_started_at = Some(std::time::Instant::now());
+        // 进程按当前搜索引擎/语言/扩展配置重建：作废已缓存的兜底模板与
+        // 在途拉取，否则会残留旧配置的兜底项（如仅启用 Bing 仍显示全部
+        // 搜索引擎的「在 X 搜索 …」）。下一帧由新进程重新拉取正确模板。
         self.pool.fallback_store.clear();
         self.pool.inflight.clear();
         self.pool.fallback_rx = None; // 丢弃旧在途拉取（其进程属旧环境）

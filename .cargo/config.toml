@@ -7,9 +7,10 @@
 # - Linux/macOS 贡献者：`cargo test` 直接用宿主三元组（rust-toolchain.toml
 #   的 channel 1.95.0 按平台解析），零配置；
 # - Windows（本机口径）：仍用 gnu 宿主工具链——`RUSTUP_TOOLCHAIN=
-#   stable-x86_64-pc-windows-gnu`（与 CI Windows job 同款）或
-#   `cargo +stable-x86_64-pc-windows-gnu build`。原因见下「环境事实」①：
-#   默认按 channel 解析出的 1.95.0-msvc 无链接器。
+#   stable-x86_64-pc-windows-gnu` 或 `cargo +stable-x86_64-pc-windows-gnu build`；
+#   CI Windows check/release 则钉 1.98.0-x86_64-pc-windows-gnu，package.sh
+#   遵循 RUSTUP_TOOLCHAIN。原因见下「环境事实」①：默认按 channel 解析出的
+#   1.95.0-msvc 无链接器。
 # - **偏差记档**：分析文档建议的 `[alias] build-win` 未加——从 1.95.0-msvc
 #   工具链交叉 windows-gnu 缺 dlltool（B2 记档实测），alias 必挂；
 #   机制上等价且已验证的是工具链覆盖。

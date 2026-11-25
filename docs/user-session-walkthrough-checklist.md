@@ -1,6 +1,6 @@
 # 用户会话真机走查清单（真实键鼠腿）
 
-> **状态**：已落地（本机腿 2026-10-07 用户批量确认收口——各腿已勾选，批量确认为总体结论、非逐腿判据记录，发现问题单项重开；**未收口残留**：R-21 黄线腿需无拦截他机、V-14 余腿需多屏硬件；**2026-11-23 新增 §7 v0.3.0 走查筹备（分场次顺序 + 前置命令）**；**2026-11-24 场次 A：A1–A9 + A10/A15/A16/A17/A18/A20/A21 过，A11/A12/A14 部分**）｜ **版本**：v1.10 ｜ **最后更新**：2026-11-24
+> **状态**：已落地（本机腿 2026-10-07 用户批量确认收口；R-21 需无拦截他机、V-14 需多屏；**2026-11-24 场次 A：A1–A9/A15–A18/A21 过，A10/A12/A14/A20 部分，A13/A19 未执行；2026-11-25 A11 闭环、A12 Esc 通过、A10/A20 导出通过**）｜ **版本**：v1.14 ｜ **最后更新**：2026-11-25
 > **关联**：[implementation.md](./implementation.md) §7 · [future-features-plan.md](./future-features-plan.md) §4 · [security-audit-2026-09-23.md](./security-audit-2026-09-23.md) · [stability-usability-security-plan.md](./stability-usability-security-plan.md) · [INDEX.md](./INDEX.md)
 >
 > **为什么需要你**：本机安全软件在系统级过滤注入输入（V-7 通道清单穷尽：posted 消息不经 IME / SendInput 受理不达 / osk UIA 合成键同样被拦），物理键盘为唯一通路——以下腿无法自动化。
@@ -53,10 +53,10 @@
 
 > 程序化穷举（`tools/glyph_coverage_check.mjs`，942 码位 × 运行时字体栈）已 PASS、首屏真机抽查零 tofu；以下为穷举不可覆盖的真机确认腿。
 >
-> **挂起注记（2026-11-03）**：走查尝试（11-02/03，HEAD 构建 + CUA 驱动）因**白帧复发**受阻——MPO 禁用修复失效再确认（修复注册表值在位 + 应用日志零渲染错误而三栈复白 + A/B 跨二进制实证；**机制未知**——初判 hiberboot 经引导类型直接证据否证：Kernel-Boot Event 27 两日引导均 0x0 完整冷启动），波次④解锁前提撤回；待维护者完整重启复测——绿则立即测量 + 周期复测刻画会话内稳定性后再执行本节两腿（emoji 腿的种子注入 / config-usage 备份流程已在走查会话验证可行）。详见 implementation.md §7 v0.1.28。
+> **状态更新（2026-11-24）**：11-02/03 的白帧复发阻塞已由后续场次 A 的真机走查解除；A8 双语 tofu 扫查与 A9 emoji 用户数据均已通过。历史阻塞与机制未知记录保留在 implementation.md §7，不作为当前未执行项。
 
-- [ ] **全页面 tofu 走查**：zh / en 两语言 × 全部页面（首屏 / 设置页各卡 / 危险命令确认对话框 / Toast / 右键菜单 / 嵌套页）扫一遍——重点 `→` / `↵` 键帽与符号字形
-- [ ] **emoji 用户数据确认**：设一条含 emoji 的自定义命令名或书签标题——确认呈 tofu（缺 NotoEmoji 兜底，**接受的取舍**）；确认 UI 文案本身零影响
+- [x] **全页面 tofu 走查**：zh / en 两语言 × 全部页面（首屏 / 设置页各卡 / 危险命令确认对话框 / Toast / 右键菜单 / 嵌套页）扫一遍——重点 `→` / `↵` 键帽与符号字形
+- [x] **emoji 用户数据确认**：设一条含 emoji 的自定义命令名或书签标题——确认呈 tofu（缺 NotoEmoji 兜底，**接受的取舍**）；确认 UI 文案本身零影响
 
 ---
 
@@ -112,23 +112,23 @@ Copy-Item "$d\history.json" "$d\history.json.walkthrough-bak" -ErrorAction Silen
 | ✅ A6 | §5.25 5/7 | 先起一个占位进程注册 Alt+Space，再启动 dd-run | 错误 toast + 红色「未注册」徽标（R-15 路径） |
 | ✅ A7 | §5.25 6/7 | 改绑回 `Ctrl+Space` | 记事本 `Alt+Space` 系统菜单恢复 |
 | ✅ A8 | §5.6 tofu | 设置页切 zh / en，逐页扫（首屏 / 各卡 / 确认框 / Toast / 右键菜单）；Windows 快速命令/系统组按用户要求排除 | 无 tofu；`→` / `↵` 键帽正常 |
-| A9 | §5.6 emoji | 自定义命令名或书签标题含 emoji | 呈 tofu（**已接受取舍**）、UI 文案零影响 |
-| A10 | §5.14 余腿 | 置顶组 Enter 打开 / 取消置顶 / 导入导出往返 | 组序与打开行为正确；往返含置顶 |
-| A11 | §5.15 余腿 | 关「搜索历史」→ 查询；再开 → 清空按钮 | 关闭即停记；清空后 `Ctrl+↑` 无回填 |
-| A12 | §5.16 余腿 | 速查页 `Esc` 返回；IME 组词期按 `?` | 返回根页；组词态不误触 |
-| A13 | §5.17 余腿 | 连续改命令 4 次 | `bak.3` 挤出最旧档、三档内容正确 |
-| A14 | §5.18 余腿 | 触发骤降 toast → 点「从上次备份恢复」 | 条目还原、日志时间线可 grep |
-| A15 | §5.19 余腿 | 容量调到 12 | 红字警告消失 |
-| A16 | §5.20 余腿 | 失效直达行按 Enter；恢复文件后重聚合 | 拒绝 toast；红字标记消失 |
-| A17 | §5.21 余腿 | 中文路径目录浏览 / 右键 reveal / Everything 常规查询 | 列表与打开正确、无回归 |
-| A18 | §5.22 余腿 | 绑定已被占用组合 / 改绑已有槽 / slot 0 回归 | 冲突提示；改绑走 ReRegistered；唤起键不受影响 |
-| A19 | §5.23 余腿 | 多窗口切换（含最小化恢复）/ 提权窗口 / 拼音标题 / 停用开关 / 面板自身 | 各态符合预期，提权被拒有 toast |
-| A20 | §5.24 余腿 | 设置页表单建片段 / 右键删除 / 导入导出往返 | 校验与即时消失正确 |
+| ✅ A9 | §5.6 emoji | 自定义命令名或书签标题含 emoji | 实测为单色字形（非 tofu）、UI 文案零影响 |
+| 🟨 A10 | §5.14 余腿 | 置顶组 Enter 打开 / 取消置顶 / 导入导出往返 | 组序与打开行为正确；2026-11-25 导出及备份内容通过，导入确认待人工 |
+| ✅ A11 | §5.15 余腿 | 关「搜索历史」→ 查询；再开 → 清空按钮 | 关闭即停记并清空；开启保留既有历史；清空后 `Ctrl+↑` 无回填（2026-11-25 修复条件写反后通过） |
+| 🟨 A12 | §5.16 余腿 | 速查页 `Esc` 返回；IME 组词期按 `?` | Esc 返回根页已通过（2026-11-25）；代码级非空根页/嵌套页/IME 反例已由 4 条回归锁定；IME 组词态不误触仍待真实键盘 |
+| 🟨 A13 | §5.17 余腿 | 连续改命令 4 次 | `bak.3` 挤出最旧档、三档内容正确 |
+| 🟨 A14 | §5.18 余腿 | 触发骤降 toast → 点「从上次备份恢复」 | 条目还原、日志时间线可 grep |
+| ✅ A15 | §5.19 余腿 | 容量调到 12 | 红字警告消失 |
+| ✅ A16 | §5.20 余腿 | 失效直达行按 Enter；恢复文件后重聚合 | 拒绝 toast；红字标记消失 |
+| ✅ A17 | §5.21 余腿 | 中文路径目录浏览 / 右键 reveal / Everything 常规查询 | 列表与打开正确、无回归 |
+| ✅ A18 | §5.22 余腿 | 绑定已被占用组合 / 改绑已有槽 / slot 0 回归 | 冲突提示；改绑走 ReRegistered；唤起键不受影响 |
+| 🟨 A19 | §5.23 余腿 | 多窗口切换（含最小化恢复）/ 提权窗口 / 拼音标题 / 停用开关 / 面板自身 | 各态符合预期，提权被拒有 toast |
+| 🟨 A20 | §5.24 余腿 | 设置页表单建片段 / 右键删除 / 导入导出往返 | 校验与即时消失正确；2026-11-25 导出及备份内容通过，导入确认待人工 |
 | ✅ A21 | §5.13 更新下载校验 | **构造低版本验收副本**（v0.2.1 不含 O17，不能直接跑全链）→「检查更新」Available → 下载 → 校验 → Explorer 定位；再截短 zip 重试 | 正常：Success toast + zip/SUMS 留存 + Explorer 定位；篡改：Error toast + 目录清空 |
 
 > **场次 A 执行记录（2026-11-24，本机 v0.3.0 隔离实例，自动化注入键鼠）**：**A1–A7 全部通过**——A1 干净启动无失败日志、热键卡无「未注册」徽标；A2 记事本前台 `Alt+Space` → 面板出现且系统菜单窗口类 `#32768` 不出现（自动化取证）；A3 Toggle 出现→隐藏→出现；A4 托盘 UIA 可访问名 = `dd-run — Alt+Space`；A5 回落态捕获 `Alt+Space` 显示 keycap + 蓝色中性接管说明 → 保存成功（日志 `全局热键注册成功（seq=2）：Alt+Space`、`config.json hotkey_mods=1`）；A6 占位进程先注册 → 启动日志 `全局热键注册失败（1+32），降级为无热键运行` + 红「未注册」徽标 + 热键实按无效；A7 设置改绑 `Ctrl+Space`（日志 seq=1）后 Toggle 生效、记事本 `Alt+Space` 系统菜单恢复且面板不弹，再改回 `Alt+Space`（seq=2）正常。证据：面板/设置/捕获对话框截图 + 隔离目录日志（`%TEMP%\ddrun-walk-a1\dd-run\logs\dd-run.log`）+ `config.json` 两值双向切换。
 > **续跑记录（2026-11-24，自动化）**：**A9 ✅**（关键词 `zzqqnote` 命中自定义命令「📝 zzqqnote」（「直达」组）；emoji 经系统字体回退渲染为**单色字形**而非 tofu——优于清单预期取舍，UI 文案零影响）；**A15 ✅**（`warm_capacity=1` → 「已装扩展 8 个 / 保活容量 1」+ 红字「已装扩展数已达保活容量…建议调大容量」；调大至 12/13 后警告消失）；**A16 ✅**（失效 path 行右列红字「路径不存在」；Enter → toast「路径不存在：C:\NoSuchDir\zzqq.exe」）；**A14 ◐**（启动日志 `启动骤降检测：custom_commands 1 条，备份环最新档 10 条` 命中；面板 toast 未在截图窗口捕获，恢复按钮腿未点）；**A12 ◐**（自动化注入 `?` 直接入框、未打开速查页——真机 2026-11-22 已验通过，判为注入路径差异非缺陷）；**A17 ◐**（截图未取到文件页，待重跑）。
-> **本场未执行**：A11（搜索历史余腿）、A13（bak.3）、A19（窗口切换余腿）。
+> **当前未闭环**：A10/A20 导入确认（导出已于 2026-11-25 通过）、A12 IME 组词防误触（Esc 已过）、A13 `bak.3` 挤出、A14 备份恢复按钮、A19 窗口切换完整行为；其余 A1–A9/A11/A15–A18/A21 已通过。
 >
 > **续跑记录 2（2026-11-24，自动化）**：**A10 ✅（导入导出往返除外）**——预置 `pinned_keys`（`com.ddrun.host\u001fcustom:zzqqnote`）→ 空查询「置顶」组居首、Enter 打开 notepad；右键「取消置顶」→ 置顶组消失、行回落「直达」组、`config.pinned_keys` 清空；**A11 ◐**——`Ctrl+↑` 回填历史生效（回填 `?`）、`record_search_history=false` 后查询隐藏不写 `history.json`（前后逐字节相同）；清空按钮与开关联动（关闭即清空）未跑；**A17 ✅**——`Ctrl+F` → 粘贴 `C:\Windows` → 文件页列出子项（addins / appcompat…）、右列父路径、页脚 `com.ddrun.filesearch`；目录 Enter / 中文路径 / 右键 reveal / Everything 常规回归沿用 2026-11-22 已取证部分。
 >
@@ -137,6 +137,10 @@ Copy-Item "$d\history.json" "$d\history.json.walkthrough-bak" -ErrorAction Silen
 > **续跑记录 4（2026-11-24，自动化 + 临时验收钩子）**：**A21 ✅**——先下载官方 v0.2.1（portable zip SHA256 `9864c8bf44d4bfc0b238a1cf3922b71f56846a615e104fc11ad943a06e45bbe3`）并确认该 tag 无 `update_check.rs`，不能执行 O17；按实施计划 §4.1「构造低版本号」口径，先制作 v0.3.0 Release exe 的 2 字节版本串对照副本并留存改动范围证据；因桌面鼠标注入被拦截，最终全链改用同源码临时验收构建（版本常量改为 `0.2.1` + 自动触发钩子），走真实 `start_update_check` / `start_update_download`。正常链：`latest=v0.3.0` → Available → 下载 zip **4,647,368 B** + SUMS **291 B** → SHA256 `eb4500f58df341b4c66c7cc4c2d28b265014a2d1488d2be5cbfc98b9a034ee7d` → Success toast「已下载并校验通过：解压覆盖安装目录即完成更新」+ Explorer `updates` 定位；篡改链：应用目录 curl 适配器真实下载后将 zip 截短为 **1,024 B** → Error toast「校验失败：哈希不匹配…」+ `cache/updates` **0 文件**。证据：`%TEMP%\walk-2026-11-24-a21\`（`normal-success-toast-screen.png` / `normal-zip-hash.txt` / `normal-explorer-windows.txt` / `tamper-error-toast-screen.png` / `tamper-proof.txt` / `tamper-cleanup.txt` / `binary-patch-proof.txt` / `auto-binary-proof.txt`）。说明：桌面顶层拦截层使物理鼠标点击不可达，故用临时自动触发钩子；钩子与版本改动已全部还原，工作副本无代码差异。直接 GitHub 资产直链首轮曾 TLS/连接失败，curl 适配器仅加 6 次重试，仍访问真实 URL。回归：`update_check` **11 passed / 0 failed**，`cargo fmt --all -- --check` 与 `node tools/docscan.mjs` 全绿。
 >
 > **续跑记录 5（2026-11-24，Computer Use）**：**A8 ✅（Windows 快速命令/系统组不适用）**——v0.3.0 隔离实例 zh/en 双语扫查首屏、设置页外观/常规/搜索/扩展全部卡片、危险操作确认框、Toast、右键菜单，未发现 tofu，`→` / `↵` 键帽正常；English 扩展页仍显示内置扩展中文显示名，属既有翻译覆盖问题、非 tofu。系统嵌套页/Windows 快速命令按用户要求未测。证据：`%TEMP%\walk-2026-11-24-a8\evidence\`（`a8-zh-contact-sheet.png` / `a8-en-contact-sheet.png` / `A8-summary.txt`）。CI run 45370055751（`9bc2bf1`）最终 success。
+>
+> **续跑记录 6（2026-11-25，Computer Use + 隔离 APPDATA）**：**A10/A20 导出通过、导入确认未触发**——新打 portable 包在 `target/acceptance/a10-a20-20261125-01/appdata` 启动；预置 `custom_commands=[往返置顶]`、`pinned_keys=[com.ddrun.host\u001fcustom:roundtrip]`、多行片段「往返片段 / rt / 第一行\n第二行」，设置页「导出」成功，备份含三项业务数据与 `exported_from=0.3.0`，且不含 `autostart` / `panel_size` / `panel_last_pos`。随后结束隔离实例、清空三项业务字段并写入机器态哨兵（`panel_size=[701,601]`、`panel_last_pos=[222,111]`、`hotkey_mods=3`、`hotkey_vk=122`）；重启后「导入并覆盖」可武装为「确认导入」，但 Computer Use 多次单击/双击均未进入应用逻辑，日志无“设置备份已导入”，配置仍为空。证据：该目录下 `exported-backup.json`、`pre-import-config.json`、`backup-buttons.png`、`import-buttons.png` 与 `dd-run/logs/dd-run.log`。常驻实例已按原路径恢复，配置 SHA256 仍为 `69780066389D2585189635F53394B5E4D354D5CAE8B5A259ACB6B5A1861F80F8`；两条腿保持部分完成，待人工确认导入。
+>
+> **续跑记录 7（2026-11-25，Computer Use + TDD 修复）**：**A11 ✅**——预置 `history.json={version:1,queries:["alpha","beta"]}`；清空按钮点击后 toast「搜索历史已清空」、文件删除、根页 `Ctrl+↑` 不再回填。首次关闭开关真机抓出条件写反：配置已关但历史仍在；新增 `history_toggle_off_clears_and_on_preserves` 回归测试（Red：缺实现；Green：通过），将清空条件从开启时改为关闭时。三关 **759 passed / 0 failed / 7 ignored**，重打包 SHA256 `ecef3da9…9837` 后复验：开启保留 `alpha/beta`，关闭删除 `history.json`。**A12 ◐**——根页搜索框输入文本 `?` 打开「键位速查」页，`Esc` 返回根页通过；IME 组词期防误触仍待真实键盘。证据：`target/acceptance/a11-a12-20261125-01/`。
 
 ### 7.3 场次 B：他机（无拦截 + Chrome / Everything，约 20 分钟）
 

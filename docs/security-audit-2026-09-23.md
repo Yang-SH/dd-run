@@ -1,6 +1,6 @@
 # dd-run 安全审计与修复方案（2026-09-23）
 
-> **状态**：生效中 ｜ **版本**：v1.10 ｜ **最后更新**：2026-10-29
+> **状态**：生效中 ｜ **版本**：v1.12 ｜ **最后更新**：2026-11-24
 > **关联**：[protocol.md](./protocol.md) · [manifest-schema.md](./manifest-schema.md) · [implementation.md](./implementation.md) · [extensions.md](./extensions.md)
 
 ---
@@ -15,7 +15,7 @@
 | S-02 | NDJSON 解码器对「无换行输入」无界缓冲 → 内存耗尽 | ⚠️ 中 | ✅ **已修复**（2026-09-23，§4.1.1） | CWE-400 / CWE-770 | `dd-protocol/src/framing.rs` :52–77 | 已复现（PoC） |
 | S-03 | `host/open_url` 无 scheme 白名单 → 可被静默唤起任意协议处理器 | ⚠️ 中 | ✅ **已修复**（2026-09-23，§4.2.1；**方案按功能依赖收窄**） | CWE-749 / CWE-939 | `dd-gui/src/platform.rs` :613 前后、`app/host_actions.rs` :77–101 | 代码路径分析 |
 | S-04 | 图标 `path` 无界读盘 + 无尺寸限制 → 内存耗尽 / 解压炸弹 | ⚠️ 中 | ✅ **已修复**（2026-09-23，§4.3.1） | CWE-400 / CWE-409 | `dd-gui/src/ui/icons.rs` :111 | 代码路径分析 |
-| S-05 | 扩展清单无完整性校验与信任分级（任意 exe） | ⚠️ 中 | ✅ **已修复**（2026-09-24，T1′ + CNG 哈希 + 设置页审批，见 §4.4.1–§4.4.3） | CWE-494 / CWE-345 | `dd-host/src/trust.rs`（新增）、`dd-gui/src/aggregator.rs` | 已复现（PoC：单测 + 真机待走查） |
+| S-05 | 扩展清单无完整性校验与信任分级（任意 exe） | ⚠️ 中 | ✅ **已修复**（2026-09-24，T1′ + CNG 哈希 + 设置页审批，见 §4.4.1–§4.4.3） | CWE-494 / CWE-345 | `dd-host/src/trust.rs`（新增）、`dd-gui/src/aggregator.rs` | 已复现（PoC + 单测 + 真机审批流） |
 | S-06 | Shell 兜底「运行 {query}」= 无门槛任意命令执行 | ⚠️ 中（设计） | ✅ **已修复**（2026-09-23，§4.5.1：危险命令二次确认） | CWE-78 | `dd-ext/src/builtins/shell.rs` :137 | 代码路径分析 |
 | S-07 | `host/set_clipboard` 静默改写剪贴板（无上限、无提示） | 🟨 低 | ✅ **已修复**（2026-09-24，§5.2） | CWE-863 | `dd-gui/src/app/host_actions.rs` :56 | 代码路径分析 |
 | S-08 | `explorer /select` 原始命令行仅拦 `"` | 🟨 低 | ✅ **已修复**（2026-09-24，§5.3，按选项①） | CWE-88 | `dd-ext/src/bin/search.rs` :1388 | 代码路径分析 |
@@ -25,7 +25,7 @@
 
 **总体判断**：项目的安全基线**明显好于同类个人项目**——无网络监听、自研解析面为零、协议信封校验完备、依赖审计已在 CI 常态化（§6）。本次发现的实质问题集中在**「把不受信字符串交给宿主进程去 spawn / 打开 / 读盘」**这一类边界上。
 
-**修复进展（2026-09-24 更新）**：**11/11 全部修复**——高危 1/1（S-01 §3.1.1）、中危 5/5（S-02 §4.1.1、S-03 §4.2.1、S-04 §4.3.1、S-05 §4.4.1–§4.4.3、S-06 §4.5.1）、低危 5/5（S-07 §5.2、S-08 §5.3、S-09 §5.4、S-10 §5.1、S-11 §5.5）。剩余待办仅**真机走查**（各节验收判据中的真机项）与**重打包体积实测**。
+**修复进展（2026-11-24 更新）**：**11/11 全部修复**——高危 1/1、中危 5/5、低危 5/5。体积实测与真机回归均已闭环（§7.2 体积 9,105,408 B、§7 真机回归 2026-10-07 批量确认），无剩余审计待办。
 
 **修复批次（P0 + P1 主体已完成）**：
 
@@ -221,7 +221,7 @@ ShellExecuteW 对 `.lnk` 与协议 URL 的解析与 `cmd /C start` **语义等�
 | ② 非法输入拒绝（含 S-01 两种已复现注入形态）：空串 / 纯空白 / `\n` / `\r\n` / `\0` / `\t` / `https://…/"&calc&"` / `C:\a b\x"&cd.>…&"z` → `false` | ✅ `win_launch::tests::rejects_impossible_targets` |
 | ③ 回归护栏：读 `builtins/apps.rs` 源码断言**不含** `Command::new("cmd.exe")` 与 `"start"`，且**含** `win_launch::shell_open` | ✅ `win_launch::tests::launch_path_does_not_use_cmd` |
 | ④ 构建与全仓回归 | ✅ `cargo build -p dd-ext` 通过；`cargo test --workspace --no-fail-fast` ∈ 既有基线（无新增失败，见 §7.2） |
-| ⑤ 真机行为不变 | 待人工（本环境无法保活 GUI 进程，须用户真机启动验证 `.lnk` / `.url` 条目） |
+| ⑤ 真机行为不变 | ✅ 2026-10-07 用户批量确认（Apps 启动等真机回归，walkthrough §3） |
 
 > 判据 ③ 的护栏价值：S-01 属**一类**缺陷而非单点 bug——日后任何为「便捷启动」加回 `cmd /C start` 的改动都会把注入面带回来，故用源码断言把它钉死。
 
@@ -485,7 +485,7 @@ pub(crate) fn decode_icon_image(bytes: &[u8]) -> Option<egui::ColorImage> {
 
 `FIRST_PARTY_IDS` 的单一事实来源 = 既有 `aggregator.rs::owned_sidecar_name_key`（`aggregator.rs` :207）的键集（当前仅 `com.ddrun.filesearch`），不新造概念、不重复维护。
 
-**D2 的边界（已声明的缺口）**：非 Windows 平台**不做门禁**（保持旧行为 + 一次性 `log::warn`）。理由：P4 为 Windows 优先，非 Windows 下 `extensions.d` 生态尚不存在；若选 fail-closed 会让该平台任何扩展都无法使用。此为**主动取舍**，非疏漏。
+**D2 的边界（后续状态）**：当前信任哈希门禁已跨平台实现（`trust.rs` 全平台哈希与 fail-closed 判定）；Windows 优先策略与随包 sidecar 白名单仍保留。
 
 **台账文件（宿主私有，非清单契约，不改冻结 schema）**：`%APPDATA%\dd-run\trust.json`（`dd-host::manifest::trust_file()`，紧邻 `config_file()`）：
 
@@ -528,7 +528,7 @@ pub(crate) fn decode_icon_image(bytes: &[u8]) -> Option<egui::ColorImage> {
 | A11 | 哈希开销实测并记录（`dd-ext-search.exe` 实测 **836,608 B**，判据 <10 ms/启动） |
 | A12 | 全仓 `cargo test --workspace --no-fail-fast` 基线 488 只增不减；本项新增单测 ≥ 12 条 |
 
-**明确不做**：① 扩展签名 / 公钥验签（真正意义上的防篡改，另一个量级）；② 非 Windows 门禁（见 D2 缺口声明）；③ 任何协议 / 清单字段变更。**定性提醒**：本项实现的是「**用户同意 + 变更检测**」，不是防篡改——能写 `extensions.d` 的攻击者同样能写 `trust.json`。
+**原明确不做（后续状态）**：① 扩展签名 / 公钥验签已由 S-12 落地；② 非 Windows 门禁已实现；③ 任何协议 / 清单字段变更仍不做。**定性提醒**：本项实现的是「用户同意 + 变更检测」，不是防篡改——能写 `extensions.d` 的攻击者同样能写 `trust.json`。
 
 #### 4.4.3 实施记录与验收（2026-09-24）
 
@@ -557,12 +557,12 @@ pub(crate) fn decode_icon_image(bytes: &[u8]) -> Option<egui::ColorImage> {
 
 | # | 结果 | 证据 |
 |---|---|---|
-| A1 | ✅ 逻辑已证；真机待走查 | `user_dir_cannot_impersonate_first_party_by_id` + `spawn_gate_rejects_untrusted_extension`（错误信息含 id 与"未获信任"）；真机 `tasklist` 走查列入待办 |
+| A1 | ✅ 逻辑与真机审批流已收口（2026-10-07） | `user_dir_cannot_impersonate_first_party_by_id` + `spawn_gate_rejects_untrusted_extension`；真机第三方扩展信任审批流见 walkthrough §3 |
 | A2 | ✅ | `allow_entry_with_matching_hashes_is_auto_trusted`；`set_extension_trust` 写台账（两枚哈希 + `decision` + `decided_at` + 清单路径） |
 | A3 | ✅ | `changed_exe_hash_revokes_approval`（改 exe / 改清单**各测一次**，均回 `Pending`） |
 | A4 | ✅ | 台账 `Missing` → 空台账 → 用户目录扩展一律 `Pending`（fail-closed） |
 | A5 | ✅ | `corrupt_or_unsupported_ledger_falls_back_to_empty`（非法 JSON / 版本 99）+ 设置页 `set.ext.ledger_corrupt` 提示行（不静默） |
-| A6 | ✅ 单测已证；真机待走查 | `first_party_sidecar_is_auto_trusted`（来源 + 白名单双满足） |
+| A6 | ✅ 单测与解压态真机已收口 | `first_party_sidecar_is_auto_trusted`；v0.2.1/v0.3.0 随包 sidecar 真机可用 |
 | A7 | ✅ | `user_dir_cannot_impersonate_first_party_by_id`（`com.ddrun.evil` 与 `com.ddrun.filesearch` **均**不自动信任） |
 | A8 | ✅ | `user_dir_same_id_as_first_party_flags_shadow` + 设置页告警行（`set.ext.shadow_warn`） |
 | A9 | ✅ | `deny_entry_blocks_and_allow_revokes`（同 id 只留一条记录，可撤销） |
@@ -642,7 +642,7 @@ pub(crate) fn decode_icon_image(bytes: &[u8]) -> Option<egui::ColorImage> {
 | 未做 | 「可配置关闭」的设置开关**刻意未加**：与 S-06 的处理一致（属便利项而非安全项，牵动设置页/配置/i18n 三处；提示本身仅 2 s 且低频）；如需要可另轮补 |
 | 实测 | `cargo test -p dd-gui --lib clipboard_text` = **2 passed**：`clipboard_text_allows_normal_and_boundary_sizes`（空串/常规/恰好 1 MiB 放行）/ `clipboard_text_rejects_oversize`（1 MiB+1 拒绝；10 万汉字 ≈300 KB 放行、40 万汉字 ≈1.2 MB 拒绝——验证按字节计） |
 
-**验收标准**：单测（超长拒绝/边界放行/字节计）✅；真机：Calc 复制结果仍正常且出现提示——**待真机走查**。
+**验收标准**：单测（超长拒绝/边界放行/字节计）✅；真机 Calc 复制结果与提示已于 2026-10-07 批量确认收口。
 
 ### 5.3 S-08 修复实现与验收（2026-09-24）
 
@@ -655,7 +655,7 @@ pub(crate) fn decode_icon_image(bytes: &[u8]) -> Option<egui::ColorImage> {
 | 未做 | 选项②（`SHOpenFolderAndSelectItems` COM API，不经命令行）**列为后续可选项未实施**：低危项按最小改动原则先落选项①；若日后发现真实误伤案例再升级 COM 路线 |
 | 实测 | `cargo test -p dd-ext --bin dd-ext-search reveal` = **1 passed**（既有 `invoke_reveal_rejects_stale_pid_and_invalid_path_without_effects` 扩展断言：换行/制表/DEL/`%`/`^` 全拒；空格/中文/UNC 不误伤） |
 
-**验收标准**：单测路径校验表 ✅；真机「显示所在目录」仍定位正确——**待真机走查**。
+**验收标准**：单测路径校验表 ✅；真机「显示所在目录」已于 2026-10-07 批量确认定位正确。
 
 ### 5.4 S-09 修复实现与验收（2026-09-24）
 
@@ -821,3 +821,5 @@ verdict     = bounded — 上限生效
 | v1.8 | 2026-09-24 | **低危收尾：S-07/S-08/S-09/S-11 全部修复（§5.2–§5.5 新增），审计 11 项闭环**。S-07（§5.2）：剪贴板 1 MiB 上限**拒绝式**前置 + 成功改 `info!`（id+字节）+ 2 s 来源 toast，+2 单测；「可配置关闭」开关与 S-06 同口径刻意未做。S-08（§5.3）：`valid_reveal_path` 四条收紧（空串/`"`/控制字符/`%`/`^`），扩展既有用例断言；选项② COM 路线列为后续可选。S-09（§5.4）：缓存文件名加 **FNV-1a 32 位指纹**（零依赖），`load` 旧名兼容一个版本但**两路都校验快照 `ext_id` 归属**，invalidate/remove 双前缀清理，+2 单测（碰撞对互不覆盖 + 伪造拒绝）。S-11（§5.5）：`make_result_checked` 收 `Result` 替换 5 处 `.expect`，invoke 序列化失败回 `-32603` 并**跳过副作用**，信封 `expect` 改 match；**无需 test 钩子**（直接注入 `Err`），+1 单测。**门禁**：fmt 5 文件无差异、clippy 无新增告警；复跑 dd-host 65/65、dd-ext 105+1（机器绑定）、dd-gui 228+6（全为 `Os error 231` 环境批，失败名单无本批新测试）。本批 **+5 条单测**；余待办仅真机走查（重打包体积实测已闭环，见 §7.2：宿主 9,105,408 B / 低危批 +0.05%） |
 | v1.9 | 2026-10-11 | **S-12 入账（扩展签名，O14/F12）**：原 §4.4.2「明确不做①：扩展签名/公钥验签」正式立项并部分落地——立项选型见 [`extension-signing-plan.md`](./extension-signing-plan.md)（D1–D5 决策：ed25519-dalek / 旁挂 .sig / 清单+exe 双哈希捆绑锚 / 内置发行方公钥 / 三态降级）。**批次一已落地**（`dd-host/src/signing.rs` + trust 判定链三态整合 + `Assessment.sig_invalid` 告警位 + 12 单测先红后绿）：Valid 免同意（用户 Deny 优先）/ Invalid fail-closed / 无签名现行同意流零变化；**R-12 升级重钉静默窗口被签名锚闭合**。批次三（本行）：manifest-schema.md §9「分发签名」登记 + 设置页 `sig_invalid` 告警行（沿 R-12 告警行先例）+ i18n 1 键。协议面零改动（清单 schema v1.0 字节不动，`.sig` 为扫描层分发契约）。批次二待办：发行方真钥（CI secret 签发链）/ 公钥轮换 / 随包 .sig / 端到端腿 / 体积实测。占位钥姿态：当前任何 .sig 判 Invalid 属预期 fail-closed |
 | v1.10 | 2026-10-29 | **真机回归验收行回写（纯文档，零代码）**：§7 验收草案唯一未勾项「真机回归：Apps 启动 / WebSearch / 文件搜索打开（S-03）/ Shell 危险命令确认弹窗 / 图标显示 / Calc 剪贴板提示（S-07）/ 显示所在目录定位（S-08）」改勾并注记——S 系列真机走查已于 **2026-10-07 用户批量确认收口**（walkthrough checklist §3 五行全勾有档 + implementation.md §7 当日「用户真机走查批量收口」行），属验收行回写遗漏、无实质缺口（[未完善事项清单](./未完善事项清单-2026-10-25.md) §6.1 口径）。**顺带修正**：头部版本自 v1.9 起漏更（仍写 v1.8 / 2026-09-24，S-12 入账时未同步），本次一并改为 v1.10。至此全文档未勾选验收行归零（量化验收：`grep -c` 未勾选 checkbox 模式输出 0）。**核对轮补记（同日）**：① 七个子项中「图标显示」不在 walkthrough §3 行集，其归档 = 同日 F2/I1 密度与占位复验截图（implementation.md §7 10-07 行「真实图标/glyph 弱色占位层级清晰」），注记已补明；② 初稿曾沿清单 §6.1 原文引「INDEX §5.2 有档」，实测 INDEX §5.2 十行无批量确认专行（批量确认一手档案在 implementation.md §7 10-07 三行），引用已改 |
+| v1.11 | 2026-11-24 | 摘要状态校正：真机回归与体积实测已闭环，删除顶部“余真机/体积”的陈旧待办口径 |
+| v1.12 | 2026-11-24 | 详细段状态同步：真机待办逐项回写为已收口；D2 非 Windows 门禁与 S-12 签名的后续状态补齐 |

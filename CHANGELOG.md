@@ -4,6 +4,52 @@
 
 ## [Unreleased]
 
+### Windows Release 工具链钉扎修复（2026-11-25）
+
+- **修复：Release 的 1.98.0 钉扎被 `package.sh` 覆盖**——`release.yml` 设置 `RUSTUP_TOOLCHAIN=1.98.0-x86_64-pc-windows-gnu`，但打包脚本硬编码 `cargo +stable-x86_64-pc-windows-gnu`；现改为优先使用 `RUSTUP_TOOLCHAIN`，未设置时保持 stable-gnu。
+- self-contained 链接器目录按选中工具链名推导，避免 rustc 与链接器代际错配；`rust-toolchain.toml` 与 `.cargo/config.toml` 注释同步当前 CI 口径。
+- 新增 `tools/package-toolchain.test.mjs`，Node **2/2**、`bash -n tools/package.sh` 通过；CI Windows check 新增阻塞步骤，首次运行待推送后确认。
+
+### N15 跨平台门控与刷新窗口修复（2026-11-25）
+
+- **修复：N15 唤起测试未加 Windows 门控**——刷新判定抽为纯函数，平台/根页/Apps 启停/聚合态/30 秒边界由跨平台测试矩阵覆盖；Windows 行为测试补 `#[cfg(windows)]`。
+- **修复：宿主与 Apps 双重 30 秒时钟**——宿主 N15 窗口改用最近聚合完成时刻 `aggregation_completed_at`，与扩展 `enumerated_at` 对齐，避免首次到期唤起只重聚合、实际跳过枚举而需第二次唤起；`aggregation_started_at` 保留作耗时观测。
+- TDD 先补缺失判定函数与完成时刻字段的红态，修复后新增 3 条回归；Rust **766 passed / 0 failed / 7 ignored**，fmt 与 clippy `-D warnings` 通过；Linux/macOS `--all-targets` check 通过。
+
+### N14 ? 输入消费修复（2026-11-25）
+
+- **修复：`?` 在非空根页、嵌套页与 IME 组词期被吞**——仅在根页空查询且非 IME 时消费 Text 事件并打开速查页；其余场景保留给 TextEdit。
+- TDD 三类反例先红，修复后空根页正向 + 非空/嵌套/IME 反例共 4 条回归全绿；Rust **763 passed / 0 failed / 7 ignored**，fmt 与 clippy `-D warnings` 通过。协议/清单零改动。
+
+### N20 搜索历史开关修复与 A11/A12 验收（2026-11-25）
+
+- **修复：关闭搜索历史时未清空既有记录**——真机发现配置已关闭但 `history.json` 仍保留；新增回归测试并修正清空方向，开启时保留、关闭时清空。三关 **759 passed / 0 failed / 7 ignored**。
+- **A11 闭环**：清空按钮删除历史且 `Ctrl+↑` 不再回填；关闭开关清空、开启保留均通过。**A12 部分**：`?` 速查页 Esc 返回根页通过，IME 组词腿保留。ALTRun 部分验收 7 → **6 组**。
+- 修复后测试包 `dd-run-0.3.0-portable.zip` = **4,625,993 B**，SHA256 `ecef3da9d6a3bbf26880bd7f268b94a65b1fd92c00679703d83303f895379837`；未配置签名密钥，仍不含 `.sig`。
+
+### P0 文档收口与完整测试包重打（2026-11-25）
+
+- **验收账目校准**：ALTRun O17 真机验收改判通过，部分腿注明已过子项；路线图真机计数统一为平台 5 + ALTRun 7 组，O15 winget 运维与 O16 宿主 exe 签名拍板作为决策/运维尾部 2 项另列。CI bench 注释补入真实 PR 成功样本，删除已失效的“零 PR 数据”依据。
+- **完整测试包从零重打**：`cargo clean` 清理 81.6 GiB 缓存后，以 Rust 1.98.0 Windows GNU 构建 `dd-run-0.3.0-portable.zip`（4,626,001 B；宿主 9,268,736 B / sidecar 859,136 B；SHA256 `e504e104c3c64fa585c41a39e6665a7eb30ebf6e6e2e7ad7d86f99985260ba87`）。未配置签名密钥，包内不含 `.sig`；zip 三个成员逐项哈希一致，search conformance 与 sample roundtrip 均通过。
+- 本次仅文档、CI 注释与构建产物变化，未改产品功能代码。
+
+### A10/A20 隔离验收部分记录（2026-11-25）
+
+- **导出通过**：新打 portable 包在独立 APPDATA 预置自定义命令、置顶与多行片段，设置页导出成功；备份含业务数据和 `exported_from=0.3.0`，且不含 `autostart` / `panel_size` / `panel_last_pos`。
+- **导入确认待人工**：清空业务字段并写入机器态哨兵后，Computer Use 多次点击“确认导入”未触发应用逻辑，日志无导入记录；A10/A20 保持部分完成。常驻实例已恢复，配置 SHA256 与测试前一致。
+
+### 审计修复批：N15 唤起刷新、Ctrl+Backspace 门控与 O15 winget 产物（2026-11-24）
+
+- **N15 应用索引时效性**：面板在 Windows 根页唤起且 Apps 启用时，若距上次首屏聚合已满 30 秒则触发重聚合；窗口内不重复刷新。聚合完成阶段只补写缺失的发起时刻，不覆盖重聚合开始时间。
+- **Ctrl+Backspace 门控**：仅在文件搜索页消费该组合并回退路径；非文件页保留给 TextEdit，恢复删除前词的正常编辑行为。
+- **O15 winget 产物**：默认资产改为真实的 `dd-run-<ver>-portable.zip`；`NestedInstallerFiles.RelativeFilePath` 模板化为 `dd-run-<ver>.exe`，`PortableCommandAlias` 保持 `dd-run`；version manifest 补 `DefaultLocale: en-US`，真实 v0.3.0 SUMS 生成的三件套通过 `winget validate`。
+- 验证：新增 7 条 Rust 回归测试与 2 条 Node 生成器测试；`cargo test --workspace` **758 passed / 0 failed / 7 ignored**，fmt 通过，clippy `-D warnings` 退出 0，Node O15 测试 **2/2**。
+
+### 文档口径校正（2026-11-24）
+
+- README 中英默认热键同步为 `Alt+Space`，便携包体积更新为 9,244,672 B（约 8.82 MiB），入口命名与 search-file v3.14 对齐。
+- optimization-plan 的 O5-a/O5-b/O5-c、O6 与 O7 状态按当前实现回写；security-audit 摘要、设置排版 V-1~V-7 验收状态与 implementation 的 LRU 陈旧段同步修正。
+
 ### 金图版本钉扎（2026-11-23）
 
 - **修复：发版 bump 触发 UI 金图漂移**——`v0.3.0` 版本号提升后 `settings_appearance` 金图因右上角版本徽标换字失配（34 px）；版本串属元数据、金图职责为布局/排版回归，故将设置页版本徽标改经 `ui_version()`，**测试态读取快照钉扎值**（`SNAPSHOT_UI_VERSION = 0.2.1` = 金图正典生成代），生产路径仍读 `CARGO_PKG_VERSION`，显示零变化。
@@ -93,7 +139,7 @@
 
 - **根因**：本机低级键盘钩子（`WH_KEYBOARD_LL`）被安全软件拦截 → 捕获恒回落 egui 应用层路径；此时按 Alt+Space 被 Windows 解释为「弹出窗口系统菜单」，Space 键不送达 egui，候选永远不成立（此前提案记为「本机不可达，须用『恢复默认』绕过捕获」）。
 - **修复**：捕获期临时注册独立 `RegisterHotKey` 接管键（id `0xDD05`，Alt+Space），借 Windows 注册即摘除投递链路的机制把该组合改投热键线程 → 新增 `HotkeyEvent::CaptureCombo` 落候选，对话框正常显示 keycap + takeover 中性说明，「保存」照常走 seq 确认流。捕获结束即注销；slot 0 当前已是 Alt+Space **且注册成功**时不重复注册（由 Toggle 翻译候选），启动注册失败时仍注册接管键（此时没有 Toggle 可翻译）；真实注册前先注销接管键，避免 `ERROR_HOTKEY_ALREADY_REGISTERED` 自锁。回落提示文案同步改为「Alt+Space 可录」。
-- 行为变更面：仅捕获期间（≤30s）其他程序的 Alt+Space 窗口菜单会被临时接管；非捕获态零变化。扩展协议 v1.0 契约零改动、lock 零新增依赖包。新增 5 条单测（workspace 751/0/7），fmt / clippy / 测试三关全绿；真机腿待用户会话。
+- 行为变更面：仅捕获期间（≤30s）其他程序的 Alt+Space 窗口菜单会被临时接管；非捕获态零变化。扩展协议 v1.0 契约零改动、lock 零新增依赖包。新增 5 条单测（workspace 751/0/7），fmt / clippy / 测试三关全绿；真机腿已于 2026-11-24 全部通过（7/7）。
 
 ### 质量门禁：协议 fuzz 转阻塞（2026-11-23）
 

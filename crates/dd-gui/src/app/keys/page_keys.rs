@@ -290,18 +290,20 @@ impl PaletteApp {
         }
         // N14 子项（2026-11-22）：`?` 键位速查页——根页空框触发（消费 Text 事件
         // 防上屏；非空框 = 普通字符不触发；IME 组词期守卫；已在速查页不重推）。
-        let question_typed = ctx.input_mut(|i| {
-            let idx = i
-                .events
-                .iter()
-                .position(|e| matches!(e, egui::Event::Text(t) if t == "?"));
-            idx.map(|k| i.events.remove(k)).is_some()
-        });
-        if question_typed && !ime_composing {
+        if !ime_composing {
             let current = self.view.stack.current();
             let is_root = current.page_id.is_none() && !current.is_settings;
             if is_root && current.list.query().is_empty() {
-                self.open_help_page();
+                let question_typed = ctx.input_mut(|i| {
+                    let idx = i
+                        .events
+                        .iter()
+                        .position(|e| matches!(e, egui::Event::Text(t) if t == "?"));
+                    idx.map(|k| i.events.remove(k)).is_some()
+                });
+                if question_typed {
+                    self.open_help_page();
+                }
             }
         }
         // N12（2026-11-22）：文件搜索页目录浏览键（search-file.md v3.14）——
@@ -317,9 +319,10 @@ impl PaletteApp {
             cur.page_id.as_deref() == Some(crate::app::FILE_SEARCH_PAGE_ID)
                 && cur.ext_id == crate::app::FILE_SEARCH_EXT_ID
         };
-        let ctrl_backspace =
-            ctx.input_mut(|i| i.consume_key(egui::Modifiers::CTRL, egui::Key::Backspace));
-        if on_files_page && ctrl_backspace && !ime_composing {
+        if on_files_page
+            && !ime_composing
+            && ctx.input_mut(|i| i.consume_key(egui::Modifiers::CTRL, egui::Key::Backspace))
+        {
             let backed = path_back(self.view.stack.current().list.query());
             self.view.stack.current_mut().list.set_query(&backed);
             self.rearm_page_query_debounce();

@@ -127,6 +127,9 @@ jobs:
       - name: Docs consistency (docscan)
         run: node tools/docscan.mjs
 
+      - name: Package toolchain selection
+        run: node --test tools/package-toolchain.test.mjs
+
       # 加固⑤ 补挂（2026-11-22）：search sidecar 的 conformance 腿。search 是独立
       # sidecar（不在 builtin_specs，不能走 in-process），须先装配扩展目录：拷清单
       # + 已构建的 dd-ext-search.exe（上一步 --all-targets 已产出）。**阻塞模式**
@@ -324,11 +327,10 @@ jobs:
   # §4.5（dd-run-改进分析.md）：性能趋势回归——PR base 与 head 各跑一遍
   # criterion bench（fast 参数压时长），共享 CARGO_TARGET_DIR 后用
   # tools/bench_compare.mjs 比中位数，退化 >20% 才红（runner 裸机噪音大，
-  # 高阈值防误报）。**continue-on-error 观察模式维持**（2026-10-31 转阻塞
-  # 预检，实施计划 §4.3）：本 job 仅 PR 触发，而仓库 CI 历史全为 push
-  # （gh 实查零 PR run）——观察数据为零，按「观察数据不足不阻塞发版」
-  # 口径随下一 PR 周期转正（清单 §3.2 记因）；仅 PR 触发（push 全量
-  # 跑双份 bench 纯烧时间，main 上的性能回归由 PR 阶段拦下）。
+  # 高阈值防误报）。**continue-on-error 观察模式维持**：已有 PR 成功样本
+  # （run 41268706535，2026-11-01；perf job 全绿），原“零 PR 数据”依据失效；
+  # 继续观察仅因转阻塞待维护者复评。仅 PR 触发（push 全量跑双份 bench 纯烧时间，
+  # main 上的性能回归由 PR 阶段拦下）。
   bench:
     name: perf trend (linux, base vs head)
     runs-on: ubuntu-latest

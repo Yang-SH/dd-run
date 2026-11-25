@@ -5,6 +5,11 @@
 
 use super::*;
 
+fn history_toggle_state(was_enabled: bool, enabled: &mut bool) -> bool {
+    *enabled = !was_enabled;
+    was_enabled
+}
+
 impl PaletteApp {
     /// 搜索栏：「搜索行为」卡（原「搜索应用」卡，2026-09-12）——两行同卡：
     /// ① 搜索应用（名称 + 描述 + 贴右功能态开关，排版同「窗口材质」卡的
@@ -142,10 +147,10 @@ impl PaletteApp {
             });
         });
         if toggled {
-            self.draft.settings.record_search_history = !on;
+            let clear_history =
+                history_toggle_state(on, &mut self.draft.settings.record_search_history);
             self.save_settings_with_feedback();
-            if !on {
-                // 关闭 = 停止记录 + 清空既有（写设置即生效，方案 §4.15 口径）。
+            if clear_history {
                 self.clear_query_history();
             }
         }
@@ -618,5 +623,21 @@ impl PaletteApp {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::history_toggle_state;
+
+    #[test]
+    fn history_toggle_off_clears_and_on_preserves() {
+        let mut enabled = true;
+        assert!(history_toggle_state(true, &mut enabled));
+        assert!(!enabled, "关闭开关后记录状态应为 false");
+
+        enabled = false;
+        assert!(!history_toggle_state(false, &mut enabled));
+        assert!(enabled, "开启开关后记录状态应为 true");
     }
 }

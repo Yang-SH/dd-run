@@ -1,6 +1,6 @@
 # dd-run 后续功能规划（N1–N5）
 
-> **状态**：已落地（N1–N5 全部落地，真机走查 2026-10-07 批量确认通过；验收行 2026-10-28 回写补齐） ｜ **版本**：v1.10 ｜ **最后更新**：2026-10-28
+> **状态**：已落地（N1–N5 全部落地，真机走查 2026-10-07 批量确认通过；验收行 2026-10-28 回写补齐） ｜ **版本**：v1.11 ｜ **最后更新**：2026-11-24
 > **关联**：[implementation.md](./implementation.md) · [optimization-plan.md](./optimization-plan.md) · [settings-personalization-plan.md](./settings-personalization-plan.md) · [protocol.md](./protocol.md) · [manifest-schema.md](./manifest-schema.md) · [security-audit-2026-09-23.md](./security-audit-2026-09-23.md) · [INDEX.md](./INDEX.md)
 
 ---
@@ -64,7 +64,7 @@
 |---|---|---|
 | ① 环境变量配置通道 | 搜索引擎表经 `inject_websearch_env` 在加载期写入扩展 manifest 的 `entry.env` 内存副本，spawn 与 in-process spec 统一消费；扩展侧解析失败回落内置默认表 | `crates/dd-gui/src/aggregator/env.rs` 的 `inject_websearch_env`（批次 B 目录化后落点，2026-10-30） |
 | ② 设置文件向前兼容 | `Settings::parse_json` 对垃圾输入回落默认值、**容忍未知字段**（有单测锁定）——新增配置字段不破坏旧版本读新配置 | `crates/dd-gui/src/settings.rs` 约 :709 起、约 :1035 起 |
-| ③ 内置扩展注册表 | 5 个内置扩展以 `spec()` 注册（`com.ddrun.{apps,calc,system,websearch,shell}`），in-process 运行、不经 spawn、不涉信任台账；新增内置扩展 = 新模块 + 注册表加行 | `crates/dd-host/src/builtin.rs` 约 :64-100 |
+| ③ 内置扩展注册表 | 7 个内置扩展以 `spec()` 注册（`com.ddrun.{apps,calc,system,websearch,shell,bookmarks,windows}`），in-process 运行、不经 spawn、不涉信任台账；新增内置扩展 = 新模块 + 注册表加行 | `crates/dd-host/src/builtin.rs` 约 :63-130 |
 | ④ `host/open_url` 白名单 | S-03 后仅放行 `http` / `https` / `file`；`file://` 走 ShellExecute「双击等价」（含 UNC），文件搜索打开动作依赖它 | `crates/dd-gui/src/app/host_actions.rs` 约 :111-136 |
 | ⑤ 宿主级虚拟条目 | 宿主在聚合结果中直接提供「设置」等非扩展条目（`CommandRef::Invoke` 走宿主内部分发） | `crates/dd-gui/src/app/invoke.rs` :102（宿主内部分发）、`crates/dd-gui/src/navigation.rs` 约 :117-127 |
 
@@ -219,3 +219,4 @@
 | v1.0 | 2026-09-28 | 首版：筛选判据（可行 × 无冲突）+ 冲突面核查矩阵 + 现状底座五惯例取证 + N1–N5 五项提案（零冻结契约改动、零新增依赖）+ 不做与缓办边界 + 实施顺序建议 |
 | v1.1 | 2026-10-02 | 核对式体检修订：惯例 ⑤ 锚点自 `aggregator.rs` 约 :1066（已落入测试模块）改指 `app/invoke.rs` :102 + `navigation.rs` 约 :117-127；惯例 ② 与 `Settings::save` 行号实测刷新（:709 / :1035 / :960）；§4.3 / §5 / N5 补 R-12 首跑钉扎时效注记（「trust.json 永不导出」理由随之加强） |
 | v1.10 | 2026-10-28 | 核对轮回写：§4.1 / §4.3 / §4.4 / §4.5 六个真机验收行 `- [ ]` → `- [x]` 并注记「2026-10-07 批量确认，walkthrough §1.x」（头部状态行 v1.9 起即记「批量确认通过」，验收行为漏改）；§4.3 Chrome 腿改「按本机条件受限记档」口径（与 walkthrough §1.6 / 清单 §5.9 条件保留一致）。无设计变更 |
+| v1.11 | 2026-11-24 | 现状底座修订：内置扩展注册表由 5 个更新为 7 个（新增 bookmarks / windows） |

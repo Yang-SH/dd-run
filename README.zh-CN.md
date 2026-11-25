@@ -2,7 +2,7 @@
 
 [English](./README.md) | [简体中文](./README.zh-CN.md)
 
-> **状态**：生效中 ｜ **版本**：v0.3.0 ｜ **最后更新**：2026-11-23
+> **状态**：生效中 ｜ **版本**：v0.3.0 ｜ **最后更新**：2026-11-24
 
 **用 Rust 从零构建的命令面板 / 启动器，核心与平台无关。** **Windows** 为主力支持平台；macOS / Linux 提供免安装绿色包（三平台阻塞 CI 门禁同源构建的预览版，真机验收进行中）。设计参考自 [PowerToys Command Palette（CmdPal）](https://github.com/microsoft/PowerToys/tree/main/src/modules/cmdpal) 模块。
 
@@ -28,10 +28,10 @@
 - **键盘优先**：核心路径（唤起 → 搜索 → 选择 → 执行 → 返回 → 关闭）100% 可纯键盘完成。
 - **7 个内置扩展 + 文件搜索 sidecar**：应用、计算器、系统、网页搜索、书签、Shell、窗口切换（Windows）进程内化运行；文件搜索（基于 Everything，仅 Windows；面板内 `Ctrl+F` 直达）以独立 sidecar 进程提供。
 - **拼音匹配**：中文名按全拼与首字母模糊命中（如 `jsq` → 计算器）。
-- **设置页**（`Ctrl+,` 打开）：外观（亮暗主题、Mica/Acrylic 材质）、常规（开机自启、自定义全局热键——默认 `Win+Alt+Space`）、搜索引擎管理（预设 + 自定义 `{q}` 模板引擎）、扩展管理（按扩展启停）。
+- **设置页**（`Ctrl+,` 打开）：外观（亮暗主题、Mica/Acrylic 材质）、常规（开机自启、自定义全局热键——默认 `Alt+Space`）、搜索引擎管理（预设 + 自定义 `{q}` 模板引擎）、扩展管理（按扩展启停）。
 - **多语言**：面板 UI 跟随系统显示语言。
 - **快且隔离**：内置扩展常驻就绪（进程内化，无启动开销）；第三方与文件搜索 sidecar 经 frozen / stub / LRU 懒加载；文件搜索 sidecar 以独立进程运行，其崩溃不影响宿主。
-- **便携分发**：`dist/dd-run-0.3.0.exe`（约 8.4 MB；`strip = "symbols"`；字节数随发版产物实测回填——v0.2.1 实测 8,722,944 字节）是单文件，宿主与 7 个内置扩展进程内化打包（M9 起不再内嵌 exe）。文件搜索扩展以 sidecar 形态随 `dist/extensions.d/` 携带，宿主自动扫描可执行文件同目录。无安装器：解压发版 zip 即用。macOS / Linux 另有免安装 `tar.gz`（单二进制 + 运行时依赖 README；文件搜索按设计缺席）。
+- **便携分发**：`dist/dd-run-0.3.0.exe`（约 8.82 MiB；CI 构建 9,244,672 B；`strip = "symbols"`；v0.2.1 实测 8,722,944 字节）是单文件，宿主与 7 个内置扩展进程内化打包（M9 起不再内嵌 exe）。文件搜索扩展以 sidecar 形态随 `dist/extensions.d/` 携带，宿主自动扫描可执行文件同目录。无安装器：解压发版 zip 即用。macOS / Linux 另有免安装 `tar.gz`（单二进制 + 运行时依赖 README；文件搜索按设计缺席）。
 - **用户数据集中一处**：数据目录内存放 `config.json`（设置）、`usage.json`（使用频次，可在设置页重置）、`extensions.d/`、`cache/`、`logs/`（运行日志 + panic 取证）——Windows 为 `%APPDATA%\dd-run`，macOS 为 `~/Library/Application Support/dd-run`，Linux 为 `$XDG_CONFIG_HOME/dd-run`（缺省 `~/.config/dd-run`）。设置页可打开日志目录、导出诊断报告（单 JSON）。
 
 ## 目标与非目标
@@ -63,7 +63,7 @@
 | 非 Windows 包（O6） | `dist/dd-run-<ver>-linux-<arch>.tar.gz` / `dist/dd-run-<ver>-macos-<arch>.tar.gz`：单二进制 `dd-run` + `README-dist.txt`（运行时系统库清单 / 数据目录 / 使用说明）。文件搜索 sidecar 为 Windows 专属不随包；这些包无签名面。运行需系统字体（中文需 CJK 字体，如 `fonts-noto-cjk`） |
 | 打包方式（M9） | 7 个内置扩展进程内化编译：宿主直接驱动 `dd_ext::serve_line`，不再内嵌任何扩展 exe；`dd-gui/build.rs` 内嵌空表，`assets/embed/` 为遗留临时目录，已 gitignore |
 | Sidecar | 文件搜索扩展（`dd-ext-search.exe` + `com.ddrun.filesearch.json`）随 `dist/extensions.d/` 携带；宿主扫描可执行文件同目录的 `extensions.d/`（批次 7.5），zip 解压即用——优先级：用户数据目录 > sidecar > 内置 |
-| 入口命名 | `dd-run.exe` = GUI 宿主（crate 名仍 `dd-gui`）；M0 CLI 改名 `dd-run-cli.exe`（保留自检能力、让出产物名） |
+| 入口命名 | `dd-run-<ver>.exe` = 分发宿主（构建产物为 `dd-run.exe`，归集时复制为版本化文件名；crate 名仍 `dd-gui`）；M0 CLI 改名 `dd-run-cli.exe`（保留自检能力、让出产物名） |
 | 一键出包 | `bash tools/package.sh`——按平台分支：Windows 使用 `+stable-x86_64-pc-windows-gnu` 工具链（先 build `dd-ext` → build `dd-gui --bin dd-run` → 单文件产物与 sidecar 归集到 `dist/`；裸 `cargo` 在 MSVC 下会找不到 `std`）；Linux/macOS 以显式 `--target` 宿主三元组构建（§5.7 去 pin 后与宿主默认一致，保留为显式声明）并打 `tar.gz` |
 | 发版自动化 | tag 推送 → `.github/workflows/release.yml`（三平台 job + 手动 `workflow_dispatch` 构建验证）：校验 tag 与 crate 版本一致 → `package.sh` → zip/tar 产物 → 附着同一 GitHub Release |
 | 仓库纯净度 | 源码树不含任何二进制（`/dist/`、`/crates/dd-gui/assets/embed/*.exe` 均 gitignore） |
@@ -81,8 +81,8 @@
 | [`docs/protocol.md`](./docs/protocol.md) | **dd-run Extension Protocol v1.0**：NDJSON 成帧、JSON-RPC 信封、方法、错误码、生命周期状态机、超时与崩溃恢复 | 写宿主或写扩展 |
 | [`docs/manifest-schema.md`](./docs/manifest-schema.md) | **扩展清单 schema**：字段表、三平台配置目录、最小可拷贝示例 | 写扩展 |
 | [`docs/extensions.md`](./docs/extensions.md) | **写一个扩展**：10 分钟上手、三条铁律、三个 Windows 陷阱、`host/*` 反向请求、自检（`dd-run-cli --conformance`）、调试手册 | 写扩展 —— **从这里开始** |
-| [`docs/search-file.md`](./docs/search-file.md) | **文件搜索扩展方案**（v3.7）：双通道传输（IPC 主 + `es.exe` 回落）、`Ctrl+F` 一键直达、Shell 真实图标、真机验收与阈值记录（含两项未达标） | 写扩展 |
-| [`docs/search.md`](./docs/search.md) | **文件搜索用户指南**（v0.1.0+）：Everything 配置（`es.exe` 为可选回落）、语法速查、故障排查 | 最终用户 |
+| [`docs/search-file.md`](./docs/search-file.md) | **文件搜索扩展方案**（v3.14）：双通道传输（IPC 主 + `es.exe` 回落）、`Ctrl+F` 直达、目录导航、Shell 真实图标；E1/E2 已闭环，仅余 A-33-08 跨环境矩阵 | 写扩展 |
+| [`docs/search.md`](./docs/search.md) | **文件搜索用户指南**（v1.4）：Everything 配置（`es.exe` 为可选回落）、语法速查、故障排查 | 最终用户 |
 
 **阅读顺序建议**：设计文档 §1–§7（理解模型）→ [`docs/implementation.md`](./docs/implementation.md)（知道先做什么）→ [`docs/protocol.md`](./docs/protocol.md) + [`docs/manifest-schema.md`](./docs/manifest-schema.md)（照着实现）。
 

@@ -404,6 +404,12 @@ pub(crate) struct ExtPool {
     /// 聚合是否仍在进行（列表区显示加载态——C2 起仅**零项期**显示骨架，
     /// 部分结果到达即画列表）。
     pub(crate) aggregating: bool,
+    /// 最近一次首屏聚合发起时刻；首次聚合缺值时由完成阶段补写。
+    /// 用于聚合耗时观测，不参与 N15 刷新门控。
+    pub(crate) aggregation_started_at: Option<Instant>,
+    /// 最近一次首屏聚合完成时刻。N15 以此对齐 Apps 枚举完成时刻，
+    /// 避免宿主早于扩展 30 秒窗口触发重聚合、实际跳过枚举而需再次唤起。
+    pub(crate) aggregation_completed_at: Option<Instant>,
     /// C2：本轮流式聚合已到达的扩展结果（Meta 起清零、Done 后释放；
     /// 每次到达以其为源全量重跑 flatten 重建 Root 列表）。
     pub(crate) arrived: Vec<aggregator::ExtItems>,
@@ -665,6 +671,8 @@ impl PaletteApp {
                 recent_cache: None,
                 aggregate_rx: Some(aggregate_rx),
                 aggregating: true,
+                aggregation_started_at: None,
+                aggregation_completed_at: None,
                 arrived: Vec::new(),
                 sources: Vec::new(),
                 processes: Vec::new(),
@@ -1441,6 +1449,18 @@ mod size_tests {
         })
     }
 
+    fn press_text(ctx: &egui::Context, text: &str) {
+        ctx.input_mut(|i| i.events.push(egui::Event::Text(text.to_owned())));
+    }
+
+    fn text_still_in_queue(ctx: &egui::Context, text: &str) -> bool {
+        ctx.input(|i| {
+            i.events
+                .iter()
+                .any(|e| matches!(e, egui::Event::Text(t) if t == text))
+        })
+    }
+
     /// 默认关（`backspace_go_back=false`）：Backspace **不消费** → 留在事件队列
     /// 交给 FilterBox 的 TextEdit 删字；且不得返回。
     #[test]
@@ -1514,6 +1534,128 @@ mod size_tests {
         assert!(
             key_still_in_queue(&ctx, egui::Key::Backspace),
             "非空查询时 Backspace 必须留给输入框"
+        );
+    }
+
+    #[test]
+    fn ctrl_backspace_not_consumed_off_file_search_page() {
+        let mut app = crate::test_support::make_app();
+        let ctx = crate::test_support::ctx();
+        press_key(&ctx, egui::Key::Backspace, egui::Modifiers::CTRL);
+
+        app.handle_keys(&ctx);
+
+        assert!(
+            key_still_in_queue(&ctx, egui::Key::Backspace),
+            "非文件搜索页的 Ctrl+Backspace 必须留给 TextEdit"
+        );
+    }
+
+    #[test]
+    fn ctrl_backspace_on_file_search_page_consumed_and_backs_path() {
+        let mut app = crate::test_support::make_app();
+        app.view.stack.push(crate::navigation::PageState::nested(
+            super::FILE_SEARCH_PAGE_ID,
+            "文件搜索",
+            super::FILE_SEARCH_EXT_ID,
+            Vec::new(),
+        ));
+        app.view
+            .stack
+            .current_mut()
+            .list
+            .set_query(r"C:\Windows\System".to_string());
+        let ctx = crate::test_support::ctx();
+        press_key(&ctx, egui::Key::Backspace, egui::Modifiers::CTRL);
+
+        app.handle_keys(&ctx);
+
+        assert!(
+            !key_still_in_queue(&ctx, egui::Key::Backspace),
+            "文件搜索页应消费 Ctrl+Backspace"
+        );
+        assert_eq!(
+            app.view.stack.current().list.query(),
+            r"C:\Windows\",
+            "文件搜索页应回退最后一段路径"
+        );
+    }
+
+    #[test]
+    fn question_mark_empty_root_opens_help_and_consumes_text() {
+        let mut app = crate::test_support::make_app();
+        let ctx = crate::test_support::ctx();
+        press_text(&ctx, "?");
+
+        app.handle_keys(&ctx);
+
+        assert_eq!(
+            app.view.stack.current().page_id.as_deref(),
+            Some(super::help_page::HELP_PAGE_ID),
+            "空根页的 ? 应打开速查页"
+        );
+        assert!(!text_still_in_queue(&ctx, "?"), "打开速查页后 ? 不得再上屏");
+    }
+
+    #[test]
+    fn question_mark_nonempty_root_query_remains_text() {
+        let mut app = crate::test_support::make_app();
+        app.view
+            .stack
+            .current_mut()
+            .list
+            .set_query("report".to_string());
+        let ctx = crate::test_support::ctx();
+        press_text(&ctx, "?");
+
+        app.handle_keys(&ctx);
+
+        assert_eq!(app.view.stack.depth(), 1, "非空根页不得打开速查页");
+        assert!(
+            text_still_in_queue(&ctx, "?"),
+            "非空根页的 ? 必须留给 TextEdit"
+        );
+    }
+
+    #[test]
+    fn question_mark_nested_page_remains_text() {
+        let mut app = crate::test_support::make_app();
+        app.view.stack.push(crate::navigation::PageState::nested(
+            "nested.page",
+            "嵌套页",
+            "com.example.nested",
+            Vec::new(),
+        ));
+        let ctx = crate::test_support::ctx();
+        press_text(&ctx, "?");
+
+        app.handle_keys(&ctx);
+
+        assert_eq!(app.view.stack.depth(), 2, "嵌套页不得打开速查页");
+        assert!(
+            text_still_in_queue(&ctx, "?"),
+            "嵌套页的 ? 必须留给 TextEdit"
+        );
+    }
+
+    #[test]
+    fn question_mark_ime_composition_remains_text() {
+        let mut app = crate::test_support::make_app();
+        let ctx = crate::test_support::ctx();
+        ctx.input_mut(|i| {
+            i.events.push(egui::Event::Ime(egui::ImeEvent::Preedit {
+                text: "?组词".to_string(),
+                active_range_chars: None,
+            }));
+        });
+        press_text(&ctx, "?");
+
+        app.handle_keys(&ctx);
+
+        assert_eq!(app.view.stack.depth(), 1, "IME 组词期不得打开速查页");
+        assert!(
+            text_still_in_queue(&ctx, "?"),
+            "IME 组词期的 ? 必须留给 TextEdit"
         );
     }
 

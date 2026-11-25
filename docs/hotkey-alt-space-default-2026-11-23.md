@@ -1,6 +1,6 @@
 # 全局热键默认值切换为 Alt+Space 方案
 
-> **状态**：已落地（代码与文档回写完成；真机 6 条待用户会话） ｜ **版本**：v1.5 ｜ **最后更新**：2026-11-23
+> **状态**：已落地（代码与文档回写完成；真机 7/7 已通过，2026-11-24） ｜ **版本**：v1.6 ｜ **最后更新**：2026-11-24
 > **关联**：[implementation.md](./implementation.md) · [stability-usability-security-plan.md](./stability-usability-security-plan.md)（R-21） · [altrun-对照优化方案-2026-11-21.md](./altrun-对照优化方案-2026-11-21.md)
 
 ---
@@ -13,7 +13,7 @@
 
 **范围**：仅 `dd-gui` 的默认值常量、相关文案与 R-21 黑名单语义；不涉协议、清单、数据结构；**已存在用户配置不迁移**（尊重用户现值，需要时用设置页「恢复默认」一键切换）。
 
-**已落地**：截至本文 v1.3，批次一（C1–C9 代码 + 单测）与批次二（文档回写）均已完成；验收数字见 §6，真机 6 条待用户会话（前置见 §5）。
+**已落地**：截至本文 v1.3，批次一（C1–C9 代码 + 单测）与批次二（文档回写）均已完成；验收数字见 §6，真机 7 条已于 2026-11-24 全部通过（见 §5 与 walkthrough §7.2）。
 
 ---
 
@@ -108,7 +108,7 @@
 | 微软拼音 IME | ✅ 净收益 | Ctrl+Space 被 IME 吃键为历史记档问题；Alt+Space 不在其默认键位 |
 | UI 金图 6 张 | ✅ 预计零漂移 | 基准仅 `settings_appearance`（分类 = Appearance），热键卡在常规页；仍须实跑 snapshot 门禁确认 |
 | 本机改绑路径 | ✅ 已解除前提（2026-11-23 v1.4） | 原限制：本机 LL 钩子被安全软件拦截 → 捕获恒回落，回落态按 Alt+Space 会弹系统菜单、须用「恢复默认」绕过捕获。现捕获期临时注册独立 `RegisterHotKey` 接管键（见 §8），Alt+Space 在回落态亦可录入；「恢复默认」仍保留 |
-| 新增 takeover 提示腿 | ✅ 本机可达（v1.4） | 同上接管键落地后，回落态按 Alt+Space 落候选 → 对话框显示 `set.hotkey.warn_takeover` 中性说明，「保存」走既有 seq 确认流；真机腿待用户会话 |
+| 新增 takeover 提示腿 | ✅ 本机可达且已真机通过（v1.4 / 2026-11-24） | 同上接管键落地后，回落态按 Alt+Space 落候选 → 对话框显示 `set.hotkey.warn_takeover` 中性说明，「保存」走既有 seq 确认流；证据见 walkthrough §7.2 |
 | 注册失败（第三方占用，如 PowerToys Run / uTools / Listary） | ⚠️ 走既有降级 | 无热键 + `toast.hotkey_unregistered` + 红色「未注册」徽标（R-15 路径）；本文不改该路径 |
 | 全系统副作用 | ⚠️ 产品取舍 | 所有应用失去 Alt+Space 窗口菜单；由 C4 文案明示 |
 | 双实例 / 启动竞态 | ✅ 无新增行为 | 第二实例注册失败走同一降级路径 |
@@ -148,7 +148,7 @@
 | 一 | C1–C9 代码 + 单测；三关 | ✅ 已完成（2026-11-23） |
 | 二 | `implementation.md`（总表 / §2 / §3.1 测试基线）、`CHANGELOG.md` 新条目、`stability-usability-security-plan.md` 的 R-21 条目（约 :36 / :385）**及单测描述行（约 :279）**加指向本文的语义注记（黑名单由四组合收为三组合）；同步三份 active 清单中的「四组合含 Alt+Space」表述：`user-session-walkthrough-checklist.md` 约 :47、`未完善事项清单-2026-10-25.md` 约 :125、`实施计划-2026-10-28.md` 约 :221（均非 §3.4 的时点快照，不改会留「三/四组合」并存矛盾）；INDEX 行数回填（`node tools/docscan.mjs --write-index`）、本文状态改「已落地」 | ✅ 已完成（2026-11-23） |
 
-**批次状态**：批次一 ✅ 已落地（C1–C9 + 单测；746/0/7、clippy/fmt/docscan 全绿、release 10,527,744 B）；批次二 ✅ 已落地（上列文档全部回写、INDEX 回填、本文状态更新）。真机 6 条待用户会话。
+**批次状态**：批次一 ✅ 已落地（C1–C9 + 单测；746/0/7、clippy/fmt/docscan 全绿、release 10,527,744 B）；批次二 ✅ 已落地（上列文档全部回写、INDEX 回填、本文状态更新）。真机 7 条已于 2026-11-24 全部通过。
 
 **回滚**：还原 2 个常量（`settings.rs` 约 :172 / `tray.rs` 约 :76）+ 恢复 `hotkey.rs` 约 :26–32 被删的 2 个常量（共 4 个、跨 3 文件）；撤销 `warn_takeover` 新增与 `capture_fallback`/`capturing_fallback` 两处文案改动（2 条文案键）；恢复 `is_system_reserved_combo` 的黑名单一条、移除 `is_menu_takeover_combo` 及其单测；回退 C6 的 UI 双分支与颜色改动；注释类改动（C1/C2/C3/C5/C7/C8/C9）按需回退。用户配置不动，无数据迁移，无需重启以外的收尾。
 
@@ -164,6 +164,7 @@
 | v1.3 | 2026-11-23 | 批次一 / 批次二落地回写：状态改「已落地」、未落地段改写、§2.2 标为变更前快照、§6 两批次状态与验收数字、版本演进补记；代码侧 C1–C9 全量落地（746/0/7、clippy/fmt/docscan 全绿、release 10,527,744 B） |
 | v1.4 | 2026-11-23 | **回落捕获下 Alt+Space 可录**（§8）：新增捕获期临时接管热键（独立 id `0xDD05` + `HotkeyEvent::CaptureCombo`），解除 §4 两条「本机不可达」前提；回归单测 +5，fmt / clippy / 测试三关全绿。真机腿待用户会话 |
 | v1.5 | 2026-11-23 | 进度口径整理：§5 前置改为「捕获 Alt+Space」与「恢复默认」二选一（v1.4 已解除前者前提）；同步 `user-session-walkthrough-checklist.md` 约 :47 的「接管提示腿本机不可达」表述与 `stability-usability-security-plan.md` V-8 场景（拆分 Ctrl+Esc 黄线 / Alt+Space 中性接管） |
+| v1.6 | 2026-11-24 | 真机腿 7/7 收口：默认注册、系统菜单屏蔽、Toggle、托盘 tooltip、回落捕获接管、占用降级、改绑恢复；证据见 walkthrough §7.2 |
 
 ---
 
@@ -191,4 +192,4 @@
 ### 8.4 验收
 
 - 单测：`hotkey.rs` id 不撞号 + 桩线程 no-op；`lifecycle.rs` CaptureCombo 仅捕获期落候选、Toggle 翻译仅对当前 Alt+Space 生效；`app/keys.rs` 注册决策纯函数（已注册 Alt+Space 不重复注册 / 启动注册失败时仍注册 / 非捕获期不注册）。
-- 真机（待用户会话）：本机现值 Ctrl+Space → 设置页「更改」→ 按 Alt+Space（系统菜单**不弹**、对话框显示 Alt+Space keycap + takeover 中性说明）→「保存」→ 托盘 tooltip 与热键卡显示 Alt+Space；取消 / 超时后系统菜单行为恢复。
+- 真机（2026-11-24 已通过）：本机现值 Ctrl+Space → 设置页「更改」→ 按 Alt+Space（系统菜单**不弹**、对话框显示 Alt+Space keycap + takeover 中性说明）→「保存」→ 托盘 tooltip 与热键卡显示 Alt+Space；取消 / 超时后系统菜单行为恢复。

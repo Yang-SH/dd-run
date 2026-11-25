@@ -376,6 +376,10 @@ impl PaletteApp {
     fn finish_aggregation(&mut self, agg_ms: u64) {
         self.pool.aggregating = false;
         self.pool.aggregate_rx = None;
+        self.pool
+            .aggregation_started_at
+            .get_or_insert_with(Instant::now);
+        self.pool.aggregation_completed_at = Some(Instant::now());
         self.pool.arrived.clear(); // Root 列表已持有全量项，释放双份内存
                                    // M3：cold-start 保活进程计入 LRU（超出容量即驱逐，一般场景不会触发）
         let mut victims = Vec::new();
@@ -445,6 +449,10 @@ impl PaletteApp {
         self.pool.inproc_specs = payload.inproc_specs;
         self.pool.aggregating = false;
         self.pool.aggregate_rx = None;
+        self.pool
+            .aggregation_started_at
+            .get_or_insert_with(Instant::now);
+        self.pool.aggregation_completed_at = Some(Instant::now());
         let mut victims = Vec::new();
         for (id, _) in &self.pool.processes {
             if let Some(v) = self.pool.lru.access(id) {
@@ -503,6 +511,67 @@ mod tests {
             skipped: vec![],
             inproc_specs: HashMap::new(),
         }
+    }
+
+    #[test]
+    fn finish_aggregation_preserves_existing_started_at() {
+        let mut app = make_app();
+        let started = Instant::now() - std::time::Duration::from_secs(5);
+        app.pool.aggregation_started_at = Some(started);
+
+        app.finish_aggregation(1);
+
+        assert_eq!(
+            app.pool.aggregation_started_at,
+            Some(started),
+            "完成阶段不得把发起时刻改写为完成时刻"
+        );
+    }
+
+    #[test]
+    fn finish_aggregation_fills_missing_started_at() {
+        let mut app = make_app();
+        app.pool.aggregation_started_at = None;
+        let before = Instant::now();
+
+        app.finish_aggregation(1);
+
+        let started = app
+            .pool
+            .aggregation_started_at
+            .expect("首次聚合缺少发起时刻时应补写");
+        assert!(started >= before && started <= Instant::now());
+    }
+
+    #[test]
+    fn finish_aggregation_records_completion_time() {
+        let mut app = make_app();
+        let before = Instant::now();
+
+        app.finish_aggregation(1);
+
+        let completed = app
+            .pool
+            .aggregation_completed_at
+            .expect("聚合完成时应记录完成时刻");
+        assert!(completed >= before && completed <= Instant::now());
+    }
+
+    #[test]
+    fn apply_aggregate_full_records_completion_time() {
+        let mut app = make_app();
+        let before = Instant::now();
+        let AggregateEvent::Full(payload) = AggregateEvent::full_fixture(Vec::new()) else {
+            panic!("full_fixture 必须构造 Full 事件");
+        };
+
+        app.apply_aggregate_full(payload);
+
+        let completed = app
+            .pool
+            .aggregation_completed_at
+            .expect("整包聚合完成时应记录完成时刻");
+        assert!(completed >= before && completed <= Instant::now());
     }
 
     /// C2 验收口径（结构化）：快扩展到达即进列表——聚合未完成（aggregating

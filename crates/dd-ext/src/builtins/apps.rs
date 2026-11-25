@@ -94,6 +94,9 @@ pub fn spec() -> ExtensionSpec {
     }
 }
 
+/// N15 应用缓存重枚举窗口；宿主唤起门控与扩展侧共用。
+pub const REENUM_MIN_INTERVAL: std::time::Duration = std::time::Duration::from_secs(30);
+
 /// 平台枚举与启动（按 OS 分实现）。
 #[cfg(windows)]
 mod sys {
@@ -324,11 +327,6 @@ mod sys {
         ///（协议零改动，同文件搜索 `"files"` 标签先例）。
         steam: bool,
     }
-
-    /// N15：重枚举最小间隔——面板唤起 → 聚合 → `top_level_commands` 命中
-    /// 本表；稳态下每 30 s 至多一次全量枚举（AppsFolder COM + 开始菜单 .lnk
-    /// 两源**一次完成**，真机验收含计时腿）。
-    const REENUM_MIN_INTERVAL: std::time::Duration = std::time::Duration::from_secs(30);
 
     struct AppCacheInner {
         apps: std::sync::Arc<Vec<App>>,

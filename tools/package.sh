@@ -113,6 +113,7 @@ fi
 # 1) windows-gnu 工具链 self-contained bin（含 as.exe 等），**追加**到 PATH 末尾：
 #    优先使用 PATH 上已有的可用 mingw（如本机 /c/Strawberry/c/bin），self-contained
 #    仅作兜底。前置会遮蔽可用链接器、导致 ld 找不到 crt2.o/libkernel32.a。
+#    CI/release 通过 RUSTUP_TOOLCHAIN 钉扎工具链；本地未设置时保持 stable-gnu。
 #    路径经 $HOME/RUSTUP_HOME 推导（CI runner 同样适用），目录不存在则跳过。
 #
 #    ⚠️ 已知环境坑（2026-09-11）：rustup 自带的 self-contained `as.exe` **不在其目录内
@@ -123,11 +124,13 @@ fi
 #      (a) 把某个 mingw 运行时的 `bin/`（含那三个 DLL）加到 PATH；
 #      (b) 直接把这三个 DLL 拷进上面 `$SELF_CONTAINED` 目录（挨着 as.exe，一劳永逸）；
 #      (c) 装系统 mingw-w64（其 bin 通常已含这些 DLL）。
-SELF_CONTAINED="${RUSTUP_HOME:-$HOME/.rustup}/toolchains/stable-x86_64-pc-windows-gnu/lib/rustlib/x86_64-pc-windows-gnu/bin/self-contained"
+TOOLCHAIN_NAME="${RUSTUP_TOOLCHAIN:-stable-x86_64-pc-windows-gnu}"
+TOOLCHAIN_NAME="${TOOLCHAIN_NAME#+}"
+TOOLCHAIN="+${TOOLCHAIN_NAME}"
+SELF_CONTAINED="${RUSTUP_HOME:-$HOME/.rustup}/toolchains/${TOOLCHAIN_NAME}/lib/rustlib/x86_64-pc-windows-gnu/bin/self-contained"
 if [ -d "$SELF_CONTAINED" ]; then
   export PATH="$PATH:$SELF_CONTAINED"
 fi
-TOOLCHAIN="+stable-x86_64-pc-windows-gnu"
 
 # 2026-11-22（核对轮）：显式 `--target` 与 REL 对齐——`config.toml` 自 P2-5.7 起
 # 不再钉扎 `build.target`，不带 `--target` 时产物落 `target/release`，而 REL 指向

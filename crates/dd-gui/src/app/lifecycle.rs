@@ -8,6 +8,23 @@ use eframe::egui;
 use std::sync::atomic::Ordering;
 use std::time::Instant;
 
+fn should_refresh_apps_on_show(
+    is_windows: bool,
+    at_root: bool,
+    apps_enabled: bool,
+    aggregating: bool,
+    aggregation_completed_at: Option<Instant>,
+    now: Instant,
+) -> bool {
+    is_windows
+        && at_root
+        && apps_enabled
+        && !aggregating
+        && aggregation_completed_at.is_none_or(|completed| {
+            now.duration_since(completed) >= dd_ext::builtins::apps::REENUM_MIN_INTERVAL
+        })
+}
+
 impl PaletteApp {
     // ── 窗口可见性 ───────────────────────────────────────────
 
@@ -32,6 +49,22 @@ impl PaletteApp {
             // 面板停留在旧滚动位置（真机反馈 2026-10-16）。扩展 `Hide`（保留
             // 状态，`reset_on_show=false`）不进此分支，滚动保留语义不变。
             self.window.scroll_follow = true;
+        }
+        let apps_enabled = !self
+            .draft
+            .settings
+            .disabled_extensions
+            .iter()
+            .any(|id| id == "com.ddrun.apps");
+        if should_refresh_apps_on_show(
+            cfg!(windows),
+            self.view.stack.at_root(),
+            apps_enabled,
+            self.pool.aggregating,
+            self.pool.aggregation_completed_at,
+            Instant::now(),
+        ) {
+            self.restart_aggregation();
         }
         // 每次唤起都在**光标所在屏居中**（grill 决策 A1；PowerToys Run 行为）。
         // 不能复用 egui `center_on_screen`：它按窗口**当前所在 monitor** 居中，
@@ -511,6 +544,115 @@ mod tests {
     use crate::test_support::{ctx, make_app, make_app_with};
     use std::sync::mpsc;
     use std::time::Instant;
+
+    #[test]
+    fn n15_refresh_decision_matrix() {
+        let now = Instant::now();
+        let interval = dd_ext::builtins::apps::REENUM_MIN_INTERVAL;
+        let fresh = now - interval + std::time::Duration::from_secs(1);
+        let stale = now - interval;
+
+        assert!(should_refresh_apps_on_show(
+            true, true, true, false, None, now
+        ));
+        assert!(!should_refresh_apps_on_show(
+            true,
+            true,
+            true,
+            false,
+            Some(fresh),
+            now
+        ));
+        assert!(should_refresh_apps_on_show(
+            true,
+            true,
+            true,
+            false,
+            Some(stale),
+            now
+        ));
+        assert!(!should_refresh_apps_on_show(
+            false,
+            true,
+            true,
+            false,
+            Some(stale),
+            now
+        ));
+        assert!(!should_refresh_apps_on_show(
+            true,
+            false,
+            true,
+            false,
+            Some(stale),
+            now
+        ));
+        assert!(!should_refresh_apps_on_show(
+            true,
+            true,
+            false,
+            false,
+            Some(stale),
+            now
+        ));
+        assert!(!should_refresh_apps_on_show(
+            true,
+            true,
+            true,
+            true,
+            Some(stale),
+            now
+        ));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn show_restarts_aggregation_after_initial_collection() {
+        let mut app = make_app();
+        app.pool.aggregating = false;
+        app.pool.aggregate_rx = None;
+        app.window.visible = false;
+
+        app.show(&ctx());
+
+        assert!(
+            app.pool.aggregating,
+            "首次聚合完成后唤起应触发应用缓存刷新检查"
+        );
+        assert!(
+            app.pool.aggregate_rx.is_some(),
+            "刷新检查应建立新的聚合结果接收端"
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn show_keeps_fresh_app_cache_without_restarting_aggregation() {
+        let mut app = make_app();
+        app.pool.aggregating = false;
+        app.pool.aggregate_rx = None;
+        app.pool.aggregation_completed_at = Some(Instant::now());
+
+        app.show(&ctx());
+
+        assert!(!app.pool.aggregating, "30 s 窗口内不得重复全量聚合");
+        assert!(app.pool.aggregate_rx.is_none());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn show_restarts_aggregation_when_app_cache_window_elapsed() {
+        let mut app = make_app();
+        app.pool.aggregating = false;
+        app.pool.aggregate_rx = None;
+        app.pool.aggregation_completed_at =
+            Some(Instant::now() - dd_ext::builtins::apps::REENUM_MIN_INTERVAL);
+
+        app.show(&ctx());
+
+        assert!(app.pool.aggregating, "窗口期满后唤起应重新聚合应用列表");
+        assert!(app.pool.aggregate_rx.is_some());
+    }
 
     /// R-15 验收单测（plan §5 R-15；2026-09-30 seq 协议后重写）：
     /// ① 启动注册失败（`ReRegistered{seq:0, false}`）→ 置「未注册」位 + 错误 toast；
