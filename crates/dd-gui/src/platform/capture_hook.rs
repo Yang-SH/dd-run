@@ -27,12 +27,13 @@
 //!   30s 超时 / Failed 五条路径全部触发卸载，见 keys.rs）。
 
 #[cfg(windows)]
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::AtomicBool;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc;
 use std::sync::Mutex;
 
 /// 捕获超时：钩子是全局模态（吞全键盘），超时自动取消防用户键盘「失灵」。
-/// Esc 始终可取消，本值为双保险兜底。
+/// 裸 Esc 始终可取消，本值为双保险兜底。
 pub const CAPTURE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
 
 /// 自回声验证主键：VK_F15（0x7E）。不在捕获白名单（0x70..=0x7B）→ 即使
@@ -42,31 +43,33 @@ pub const CAPTURE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(
 const SELFTEST_VK: u32 = 0x7E;
 
 /// 钩子发送端（static 存放，供回调读取；同一时刻至多一个捕获钩子）。
-/// **被清空（None）= 已取消/已卸载**——泵循环每轮检测，据此自行退出。
-static CAPTURE_TX: Mutex<Option<mpsc::Sender<CaptureEvent>>> = Mutex::new(None);
+static CAPTURE_TX: Mutex<Option<(u64, mpsc::Sender<CaptureEvent>)>> = Mutex::new(None);
+
+/// 当前捕获会话；0 = 已取消。守卫与安装线程据此消除快速重入竞态。
+static ACTIVE_SESSION: AtomicU64 = AtomicU64::new(0);
+#[cfg(windows)]
+static NEXT_SESSION: AtomicU64 = AtomicU64::new(1);
+#[cfg(windows)]
+static SESSION_LOCK: Mutex<()> = Mutex::new(());
 
 /// 自回声命中旗标：hook_proc 看到 `SELFTEST_VK` keydown 即置位。
 #[cfg(windows)]
 static SELFTEST_HIT: AtomicBool = AtomicBool::new(false);
 
-/// 钩子线程 id（安装线程回发后由 [`CaptureHookGuard`].drop 用于投递 WM_QUIT）。
-/// 同一时刻至多一个捕获钩子，单槽 Mutex 足够。
-static THREAD_ID: Mutex<u32> = Mutex::new(0);
+/// 钩子线程 id 与所属会话；守卫只向自己的会话投递 WM_QUIT。
+#[cfg(windows)]
+static THREAD_ID: Mutex<Option<(u64, u32)>> = Mutex::new(None);
 
-// F10（2026-10-10）：钩子线程**自己的** HHOOK 句柄（裸指针以 `Cell` 存放，
-// null = 未安装）。LL 钩子回调恒在安装线程执行 → TLS 可靠——`hook_proc`
-// 入口的陈旧会话自检据此自卸（见 hook_proc 注释；句柄只在本线程内读写，
-// 无跨线程共享）。普通注释：thread_local! 宏不消费 doc comment（-D warnings）。
 thread_local! {
     static OWN_HOOK: std::cell::Cell<*mut core::ffi::c_void> =
         const { std::cell::Cell::new(std::ptr::null_mut()) };
+    static OWN_SESSION: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
 }
 
 /// 捕获钩子 → 宿主 UI 的捕获事件。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CaptureEvent {
     /// 钩子**安装并自回声验证通过**——此后 `Combo` / `Cancel` 才有意义。
-    /// 载荷 = 钩子线程 id（UI 已持 [`CaptureHookGuard`]，此 id 仅日志用）。
     Ready,
     /// 安装 / 自回声验证失败（已含重试）。UI 应回落 egui 基础捕获路径。
     Failed(&'static str),
@@ -77,30 +80,50 @@ pub enum CaptureEvent {
     Cancel,
 }
 
+#[cfg(any(windows, test))]
 /// 修饰键组合 → settings/MOD_* 编码（纯函数，单测锚定）。
 /// ALT=1 / CONTROL=2 / SHIFT=4 / WIN=8；与 `settings::HOTKEY_MODS_MASK`（0b1111）一致。
-#[cfg(any(windows, test))]
 pub(crate) fn mods_from_keys(ctrl: bool, alt: bool, shift: bool, win: bool) -> u32 {
     (ctrl as u32) << 1 | alt as u32 | (shift as u32) << 2 | (win as u32) << 3
 }
 
-/// 捕获主键白名单（原生虚拟键码）：字母 / 数字 / F1–F12 / Space。
+/// 捕获主键白名单（原生虚拟键码）：字母 / 数字 / F1–F12 / Space / Esc。
 /// 与 egui 路径的 `capture_vk` 映射集完全一致（两路径同一键集约束）。
-#[cfg(any(windows, test))]
 pub(crate) fn capture_vk_allowed(vk: u32) -> bool {
     (0x41..=0x5A).contains(&vk)        // A–Z
         || (0x30..=0x39).contains(&vk) // 0–9
         || (0x70..=0x7B).contains(&vk) // F1–F12
         || vk == 0x20 // Space
+        || vk == 0x1B // Esc：裸 Esc 取消，带修饰时作为组合主键
 }
 
 /// 键是否为修饰键本身（修饰键按下只更新修饰状态，不作为组合主键）。
-#[cfg(windows)]
 fn is_modifier_vk(vk: u32) -> bool {
     (0x10..=0x12).contains(&vk)      // VK_SHIFT / VK_CONTROL / VK_MENU
         || (0xA0..=0xA5).contains(&vk) // L/R Shift·Control·Menu
         || vk == 0x5B                  // VK_LWIN
         || vk == 0x5C // VK_RWIN
+}
+
+/// 一次按键按下在捕获模态中的分类；钩子与 egui 回落共用。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum CaptureKeyAction {
+    Cancel,
+    Combo { mods: u32, vk: u32 },
+    Ignore,
+}
+
+pub(crate) fn classify_capture_key(vk: u32, mods: u32) -> CaptureKeyAction {
+    if vk == 0x1B && mods == 0 {
+        return CaptureKeyAction::Cancel;
+    }
+    if is_modifier_vk(vk) {
+        return CaptureKeyAction::Ignore;
+    }
+    if mods & 0b1011 == 0 || !capture_vk_allowed(vk) {
+        return CaptureKeyAction::Ignore;
+    }
+    CaptureKeyAction::Combo { mods, vk }
 }
 
 // windows-sys 0.61.2 缺失 `UnhookWindowsHookExW`（SetWindowsHookExW 有、
@@ -111,25 +134,48 @@ fn is_modifier_vk(vk: u32) -> bool {
 
 /// 运行时解析并调用 `UnhookWindowsHookExW`（见上注释）。
 #[cfg(windows)]
-unsafe fn unhook_windows_hook(hook: *mut core::ffi::c_void) {
+unsafe fn unhook_windows_hook(hook: *mut core::ffi::c_void) -> bool {
     use windows_sys::Win32::System::LibraryLoader::{GetModuleHandleA, GetProcAddress};
 
     // SAFETY：模块名 / 过程名常量串；句柄来自本进程已加载的 user32。
     let user32 = unsafe { GetModuleHandleA(c"user32".as_ptr().cast()) };
     if user32.is_null() {
-        return;
+        return false;
     }
     let proc_addr = unsafe { GetProcAddress(user32, c"UnhookWindowsHookExW".as_ptr().cast()) };
     let Some(proc_addr) = proc_addr else {
-        // 理论不可达（user32.dll 自 XP 起导出该函数）：捕获钩子残留至进程
-        // 退出由系统回收，进程退出本身会卸载全部钩子，无长期泄漏。
         log::warn!("[dd-gui] GetProcAddress(UnhookWindowsHookExW) 失败——钩子延迟至进程退出回收");
-        return;
+        return false;
     };
     // SAFETY：签名与 user32 导出一致（单指针入参返回 BOOL）。
     let f: unsafe extern "system" fn(*mut core::ffi::c_void) -> i32 =
         unsafe { std::mem::transmute(proc_addr) };
-    unsafe { f(hook) };
+    let removed = unsafe { f(hook) } != 0;
+    if !removed {
+        log::warn!("[dd-gui] UnhookWindowsHookExW 返回失败，等待线程退出回收");
+    }
+    removed
+}
+
+#[cfg(windows)]
+fn should_unhook_own_hook(
+    current: *mut core::ffi::c_void,
+    expected: *mut core::ffi::c_void,
+) -> bool {
+    !current.is_null() && current == expected
+}
+
+#[cfg(windows)]
+fn unhook_own_hook(expected: *mut core::ffi::c_void) -> bool {
+    let current = OWN_HOOK.with(|cell| cell.get());
+    if !should_unhook_own_hook(current, expected) {
+        return false;
+    }
+    let removed = unsafe { unhook_windows_hook(expected) };
+    if removed {
+        OWN_HOOK.with(|cell| cell.set(std::ptr::null_mut()));
+    }
+    removed
 }
 
 /// `GetAsyncKeyState` 高位 = 物理按下（钩子回调内调用，µs 级）。
@@ -143,9 +189,8 @@ fn async_down(vk: u16) -> bool {
 /// LL 钩子回调（系统在安装线程泵消息期间同步调用——必须快）。
 #[cfg(windows)]
 unsafe extern "system" fn hook_proc(code: i32, wparam: usize, lparam: isize) -> isize {
-    use windows_sys::Win32::System::Threading::GetCurrentThreadId;
     use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
-        VK_CONTROL, VK_ESCAPE, VK_LWIN, VK_MENU, VK_RWIN, VK_SHIFT,
+        VK_CONTROL, VK_LWIN, VK_MENU, VK_RWIN, VK_SHIFT,
     };
     use windows_sys::Win32::UI::WindowsAndMessaging::{
         CallNextHookEx, KBDLLHOOKSTRUCT, WM_KEYDOWN, WM_SYSKEYDOWN,
@@ -155,23 +200,19 @@ unsafe extern "system" fn hook_proc(code: i32, wparam: usize, lparam: isize) -> 
     if code < 0 {
         return CallNextHookEx(std::ptr::null_mut(), code, wparam, lparam);
     }
-    // F10 陈旧会话自检：THREAD_ID 恒存「最新安装会话」的线程 id。本线程若已
+    // F10 陈旧会话自检：本线程会话不再是 ACTIVE_SESSION 时立即自卸。
     // 不是最新会话（start() 被快速重启、旧线程收尾慢于新会话安装），立即自卸
     // 钩子并放行事件——旧钩子既不再吞键，也不再向新会话通道投递，根除
     // 「短暂双钩子并存 + 旧事件灌入新会话」竞态。自卸必须走
     // `unhook_windows_hook` 辅助（windows-sys 缺 UnhookWindowsHookExW 符号，
     // 见上方 91-95 行注记）；句柄读写仅在本线程（TLS），无锁竞争。
     // 卸载后本线程随泵循环退出（发送端被 Drop 清空 / WM_QUIT），TLS 随线程消亡。
-    if *THREAD_ID.lock().unwrap_or_else(|e| e.into_inner()) != unsafe { GetCurrentThreadId() } {
-        OWN_HOOK.with(|c| {
-            let h = c.get();
-            if !h.is_null() {
-                // SAFETY：句柄来自本线程 SetWindowsHookExW 的成功返回，且 LL
-                // 钩子回调恒在安装线程执行（卸载线程 = 安装线程）。
-                unsafe { unhook_windows_hook(h) };
-                c.set(std::ptr::null_mut());
-            }
-        });
+    let session = OWN_SESSION.with(|cell| cell.get());
+    if session == 0 || ACTIVE_SESSION.load(Ordering::Acquire) != session {
+        let hook = OWN_HOOK.with(|cell| cell.get());
+        if !hook.is_null() {
+            unhook_own_hook(hook);
+        }
         return CallNextHookEx(std::ptr::null_mut(), code, wparam, lparam);
     }
     let down = wparam == WM_KEYDOWN as usize || wparam == WM_SYSKEYDOWN as usize;
@@ -197,59 +238,109 @@ unsafe extern "system" fn hook_proc(code: i32, wparam: usize, lparam: isize) -> 
     let shift = async_down(VK_SHIFT);
     let win = async_down(VK_LWIN) || async_down(VK_RWIN);
 
-    // Esc（无修饰）= 取消。
-    if vk == VK_ESCAPE as u32 && !(ctrl || alt || shift || win) {
-        if let Ok(g) = CAPTURE_TX.lock() {
-            if let Some(tx) = g.as_ref() {
-                let _ = tx.send(CaptureEvent::Cancel);
-            }
-        }
-        return 1;
-    }
-    // 修饰键自身按下：只更新状态（上方 GetAsyncKeyState 已覆盖），吞掉等待主键。
-    if is_modifier_vk(vk) {
-        return 1;
-    }
-    // 组合判定：需含 Ctrl/Alt/Win 至少一个（纯 Shift 不成组合，对齐 egui 路径）。
     let mods = mods_from_keys(ctrl, alt, shift, win);
-    if mods & 0b1011 == 0 {
-        return 1;
-    }
-    // 主键白名单与 egui 路径一致（字母/数字/F1–F12/Space）。
-    if !capture_vk_allowed(vk) {
-        return 1;
-    }
-    if let Ok(g) = CAPTURE_TX.lock() {
-        if let Some(tx) = g.as_ref() {
-            let _ = tx.send(CaptureEvent::Combo { mods, vk });
+    match classify_capture_key(vk, mods) {
+        CaptureKeyAction::Cancel => send_capture_event(session, CaptureEvent::Cancel),
+        CaptureKeyAction::Combo { mods, vk } => {
+            send_capture_event(session, CaptureEvent::Combo { mods, vk })
         }
+        CaptureKeyAction::Ignore => {}
     }
     1
 }
 
-/// 捕获钩子守卫：Drop = 卸载（清发送端 + WM_QUIT；泵循环检测到发送端已清
-/// 也会自行 unhook 退出——双保险）。`start()` 立即返回守卫（安装异步进行）。
-pub struct CaptureHookGuard;
+/// 捕获钩子守卫：Drop = 取消会话、清发送端并投递 WM_QUIT。
+pub struct CaptureHookGuard {
+    session: u64,
+}
 
 impl Drop for CaptureHookGuard {
     fn drop(&mut self) {
-        // 先清发送端再令线程退出：竞态窗口内的按键会穿透而非误吞（安全向）；
-        // 泵循环每轮检测「发送端已清」自行 unhook（不依赖 WM_QUIT 必达）。
-        if let Ok(mut tx) = CAPTURE_TX.lock() {
-            *tx = None;
-        }
-        let _thread_id = THREAD_ID.lock().map(|g| *g).unwrap_or(0);
         #[cfg(windows)]
-        if _thread_id != 0 {
-            // SAFETY：线程 id 由安装线程回发，WM_QUIT 结束其消息循环。
-            use windows_sys::Win32::UI::WindowsAndMessaging::{PostThreadMessageW, WM_QUIT};
-            unsafe {
-                PostThreadMessageW(_thread_id, WM_QUIT, 0, 0);
+        let _session_lock = SESSION_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        if ACTIVE_SESSION
+            .compare_exchange(self.session, 0, Ordering::AcqRel, Ordering::Acquire)
+            .is_err()
+        {
+            return;
+        }
+        if let Ok(mut tx) = CAPTURE_TX.lock() {
+            if tx.as_ref().map(|(session, _)| *session) == Some(self.session) {
+                *tx = None;
             }
         }
-        // 不 join：卸载路径在 UI 线程（Esc / hide / 超时），钩子线程 unhook
-        // 是纯系统调用级收尾，残留线程毫秒级消亡，无需阻塞 UI 等待。
+        #[cfg(windows)]
+        let thread_id = THREAD_ID
+            .lock()
+            .ok()
+            .and_then(|g| *g)
+            .filter(|(session, _)| *session == self.session)
+            .map(|(_, tid)| tid)
+            .unwrap_or(0);
+        #[cfg(windows)]
+        if thread_id != 0 {
+            use windows_sys::Win32::UI::WindowsAndMessaging::{PostThreadMessageW, WM_QUIT};
+            unsafe {
+                PostThreadMessageW(thread_id, WM_QUIT, 0, 0);
+            }
+        }
     }
+}
+
+#[cfg(windows)]
+fn register_capture_sender(session: u64, tid: u32, tx: mpsc::Sender<CaptureEvent>) -> bool {
+    let _session_lock = SESSION_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let mut slot = CAPTURE_TX.lock().unwrap_or_else(|e| e.into_inner());
+    if ACTIVE_SESSION.load(Ordering::Acquire) != session {
+        return false;
+    }
+    *THREAD_ID.lock().unwrap_or_else(|e| e.into_inner()) = Some((session, tid));
+    *slot = Some((session, tx));
+    true
+}
+
+#[cfg(windows)]
+fn capture_session_active(session: u64) -> bool {
+    ACTIVE_SESSION.load(Ordering::Acquire) == session
+        && CAPTURE_TX
+            .lock()
+            .ok()
+            .and_then(|g| g.as_ref().map(|(id, _)| *id))
+            == Some(session)
+}
+
+#[cfg(windows)]
+fn send_capture_event(session: u64, event: CaptureEvent) {
+    if ACTIVE_SESSION.load(Ordering::Acquire) != session {
+        return;
+    }
+    if let Ok(slot) = CAPTURE_TX.lock() {
+        if let Some((id, tx)) = slot.as_ref() {
+            if *id == session {
+                let _ = tx.send(event);
+            }
+        }
+    }
+}
+
+#[cfg(windows)]
+fn clear_capture_sender(session: u64) {
+    if let Ok(mut slot) = CAPTURE_TX.lock() {
+        if slot.as_ref().map(|(id, _)| *id) == Some(session) {
+            *slot = None;
+        }
+    }
+}
+
+#[cfg(windows)]
+fn finish_capture_session(session: u64) {
+    clear_capture_sender(session);
+    if let Ok(mut thread_id) = THREAD_ID.lock() {
+        if thread_id.map(|(id, _)| id) == Some(session) {
+            *thread_id = None;
+        }
+    }
+    let _ = ACTIVE_SESSION.compare_exchange(session, 0, Ordering::AcqRel, Ordering::Acquire);
 }
 
 /// 安装捕获钩子（**异步，立即返回**）：
@@ -266,20 +357,36 @@ pub fn start(tx: mpsc::Sender<CaptureEvent>) -> Result<CaptureHookGuard, String>
         PeekMessageW, SetWindowsHookExW, MSG, PM_REMOVE, WH_KEYBOARD_LL, WM_QUIT,
     };
 
+    unsafe fn pump_messages() -> bool {
+        loop {
+            let mut msg: MSG = unsafe { std::mem::zeroed() };
+            let has = unsafe { PeekMessageW(&mut msg, std::ptr::null_mut(), 0, 0, PM_REMOVE) };
+            if has == 0 {
+                return false;
+            }
+            if msg.message == WM_QUIT {
+                return true;
+            }
+        }
+    }
+
+    let session = {
+        let _session_lock = SESSION_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let session = NEXT_SESSION.fetch_add(1, Ordering::Relaxed);
+        ACTIVE_SESSION.store(session, Ordering::Release);
+        session
+    };
+    let guard = CaptureHookGuard { session };
     std::thread::Builder::new()
         .name("dd-capture-hook".into())
         .spawn(move || {
-            // ① 记录线程 id（CaptureHookGuard::drop 投递 WM_QUIT 用）。
             let tid = unsafe { GetCurrentThreadId() };
-            if let Ok(mut g) = THREAD_ID.lock() {
-                *g = tid;
+            if !register_capture_sender(session, tid, tx.clone())
+                || !capture_session_active(session)
+            {
+                return;
             }
-            // ② 先注册发送端再装钩子（回调随时可能被触发）。
-            if let Ok(mut g) = CAPTURE_TX.lock() {
-                *g = Some(tx);
-            }
-            // ③ 安装（失败重试一次：安全软件拦截常为瞬时）。
-            // SAFETY：hmod = 主模块句柄（LL 钩子仅要求可定位回调所在模块）。
+
             let mut hook = unsafe {
                 SetWindowsHookExW(
                     WH_KEYBOARD_LL,
@@ -290,7 +397,6 @@ pub fn start(tx: mpsc::Sender<CaptureEvent>) -> Result<CaptureHookGuard, String>
             };
             if hook.is_null() {
                 std::thread::sleep(std::time::Duration::from_millis(200));
-                // SAFETY：同上。
                 hook = unsafe {
                     SetWindowsHookExW(
                         WH_KEYBOARD_LL,
@@ -302,116 +408,66 @@ pub fn start(tx: mpsc::Sender<CaptureEvent>) -> Result<CaptureHookGuard, String>
             }
             if hook.is_null() {
                 let err = unsafe { windows_sys::Win32::Foundation::GetLastError() };
-                // 先发 Failed **再**清发送端（顺序反了会静默丢失）。
-                if let Ok(g) = CAPTURE_TX.lock() {
-                    if let Some(tx) = g.as_ref() {
-                        let _ = tx.send(CaptureEvent::Failed("SetWindowsHookExW 两连失败"));
-                    }
-                }
-                if let Ok(mut g) = CAPTURE_TX.lock() {
-                    *g = None;
-                }
+                send_capture_event(session, CaptureEvent::Failed("SetWindowsHookExW 两连失败"));
+                finish_capture_session(session);
                 log::error!("[dd-gui] 捕获钩子安装失败（GetLastError={err}）——回落 egui 捕获");
                 return;
             }
-            // F10：登记本线程钩子句柄（TLS）——hook_proc 陈旧自检的卸载依据。
-            OWN_HOOK.with(|c| c.set(hook));
-            // ④ **自回声验证**：注入一次 F15，验证钩子真的收到注入
-            //    （SetWindowsHookExW 成功 ≠ 钩子真的在收事件——安全软件可能
-            //    剥离）。F15 不在捕获白名单 → 对 UI 零副作用；**不带 Alt 等
-            //    修饰注入**——验证旗标只看 F15 keydown，修饰注入是纯风险
-            //    （这几毫秒内用户按任意键都会带上幽灵 Alt 修饰，可能触发
-            //    前台应用菜单模式）。
+            if !capture_session_active(session) {
+                unsafe { unhook_windows_hook(hook) };
+                finish_capture_session(session);
+                return;
+            }
+            OWN_HOOK.with(|cell| cell.set(hook));
+            OWN_SESSION.with(|cell| cell.set(session));
+
             SELFTEST_HIT.store(false, Ordering::Relaxed);
-            // SAFETY：注入合成按键（dwFlags 0=down / 2=KEYEVENTF_KEYUP）。
             unsafe {
-                keybd_event(SELFTEST_VK as u8, 0, 0, 0); // F15 down
-                keybd_event(SELFTEST_VK as u8, 0, 2, 0); // F15 up
+                keybd_event(SELFTEST_VK as u8, 0, 0, 0);
+                keybd_event(SELFTEST_VK as u8, 0, 2, 0);
             }
             let deadline = std::time::Instant::now() + std::time::Duration::from_millis(1200);
-            // ⚠️ 等待窗口**必须持续泵消息**：LL 钩子回调仅在安装线程泵消息
-            // 期间被系统调用——v3 初版在此窗口只 sleep 不泵 → hook_proc 永不
-            // 触发 → 自回声必败 → 必然回落（真机「Alt+Space 弹系统菜单 +
-            // Ctrl+Space 无反应」的直接根因，2026-09-30 探针对照实锤：
-            // 探针等待期在阻塞泵里所以能过）。
-            let mut hit = false;
             let mut quit = false;
-            loop {
-                // 单轮泵：排空队列；WM_QUIT（Drop/取消）→ 退出。
-                loop {
-                    let mut msg: MSG = unsafe { std::mem::zeroed() };
-                    // SAFETY：peek 移除本线程队列消息。
-                    let has =
-                        unsafe { PeekMessageW(&mut msg, std::ptr::null_mut(), 0, 0, PM_REMOVE) };
-                    if has == 0 {
-                        break;
-                    }
-                    if msg.message == WM_QUIT {
-                        quit = true;
-                        break;
-                    }
-                }
-                if quit {
+            let mut hit = false;
+            while std::time::Instant::now() < deadline {
+                quit = unsafe { pump_messages() };
+                if quit || !capture_session_active(session) {
                     break;
                 }
                 if SELFTEST_HIT.load(Ordering::Relaxed) {
                     hit = true;
                     break;
                 }
-                if std::time::Instant::now() >= deadline {
-                    break;
-                }
                 std::thread::sleep(std::time::Duration::from_millis(5));
             }
-            // 先发 Failed **再**清发送端（v3 初版先清后发 → Failed 静默丢失，
-            // UI 提示永远停留在安装中状态——连带 bug，同日修复）。
-            if !hit || quit {
-                if let Ok(g) = CAPTURE_TX.lock() {
-                    if let Some(tx) = g.as_ref() {
-                        let _ = tx.send(CaptureEvent::Failed("钩子自回声验证失败（事件未达）"));
-                    }
-                }
-                unsafe { unhook_windows_hook(hook) };
-                if let Ok(mut g) = CAPTURE_TX.lock() {
-                    *g = None;
-                }
+            if quit || !capture_session_active(session) {
+                unhook_own_hook(hook);
+                finish_capture_session(session);
+                return;
+            }
+            if !hit {
+                send_capture_event(
+                    session,
+                    CaptureEvent::Failed("钩子自回声验证失败（事件未达）"),
+                );
+                unhook_own_hook(hook);
+                finish_capture_session(session);
                 log::error!("[dd-gui] 捕获钩子自回声验证失败——回落 egui 捕获");
                 return;
             }
-            if let Ok(g) = CAPTURE_TX.lock() {
-                if let Some(tx) = g.as_ref() {
-                    let _ = tx.send(CaptureEvent::Ready);
-                }
-            }
+
+            send_capture_event(session, CaptureEvent::Ready);
             log::info!("[dd-gui] 热键捕获：LL 钩子已安装并自验证通过（系统级，Win 键可录）");
-            // ⑤ 常驻泵循环：PeekMessage 轮询式泵（5ms）——每轮检测发送端已清
-            //    （被取消）即自行 unhook 退出，与 Guard::drop 的 WM_QUIT 双保险。
             loop {
-                loop {
-                    let mut msg: MSG = unsafe { std::mem::zeroed() };
-                    // SAFETY：peek 移除本线程队列消息；WM_QUIT → 退出。
-                    let has =
-                        unsafe { PeekMessageW(&mut msg, std::ptr::null_mut(), 0, 0, PM_REMOVE) };
-                    if has == 0 {
-                        break;
-                    }
-                    if msg.message == WM_QUIT {
-                        unsafe { unhook_windows_hook(hook) };
-                        if let Ok(mut g) = CAPTURE_TX.lock() {
-                            *g = None;
-                        }
-                        return;
-                    }
-                }
-                let cancelled = CAPTURE_TX.lock().map(|g| g.is_none()).unwrap_or(false);
-                if cancelled {
-                    unsafe { unhook_windows_hook(hook) };
+                if unsafe { pump_messages() } || !capture_session_active(session) {
+                    unhook_own_hook(hook);
+                    finish_capture_session(session);
                     return;
                 }
                 std::thread::sleep(std::time::Duration::from_millis(5));
             }
         })
-        .map(|_| CaptureHookGuard)
+        .map(|_| guard)
         .map_err(|e| format!("捕获钩子线程创建失败：{e}"))
 }
 
@@ -427,6 +483,18 @@ mod tests {
 
     /// mods 编码锚定：位布局 = ALT=1 / CONTROL=2 / SHIFT=4 / WIN=8，
     /// 与 `settings::HOTKEY_MODS_MASK` 一致（Win+Alt 编码锚 = 0b1001，非当前默认值）。
+    #[cfg(windows)]
+    #[test]
+    fn p1_16_own_hook_guard_prevents_stale_double_unhook() {
+        let hook = 0x1234 as *mut core::ffi::c_void;
+        assert!(should_unhook_own_hook(hook, hook));
+        assert!(!should_unhook_own_hook(std::ptr::null_mut(), hook));
+        assert!(!should_unhook_own_hook(
+            0x5678 as *mut core::ffi::c_void,
+            hook
+        ));
+    }
+
     #[test]
     fn mods_encoding_matches_mod_star_layout() {
         assert_eq!(mods_from_keys(false, true, false, true), 0b1001, "Win+Alt");
@@ -437,10 +505,75 @@ mod tests {
         assert_eq!(mods_from_keys(false, false, true, false) & 0b1011, 0);
     }
 
+    #[test]
+    fn p1_16_capture_classification_modified_escape() {
+        use crate::platform::capture_hook::CaptureKeyAction;
+
+        assert_eq!(classify_capture_key(0x1B, 0), CaptureKeyAction::Cancel);
+        assert_eq!(
+            classify_capture_key(0x1B, 0b0010),
+            CaptureKeyAction::Combo {
+                mods: 0b0010,
+                vk: 0x1B
+            }
+        );
+        assert_eq!(
+            classify_capture_key(0x1B, 0b0110),
+            CaptureKeyAction::Combo {
+                mods: 0b0110,
+                vk: 0x1B
+            }
+        );
+        assert_eq!(classify_capture_key(0x1B, 0b0100), CaptureKeyAction::Ignore);
+        assert_eq!(classify_capture_key(0x41, 0), CaptureKeyAction::Ignore);
+        assert_eq!(
+            classify_capture_key(0x41, 0b0010),
+            CaptureKeyAction::Combo {
+                mods: 0b0010,
+                vk: 0x41
+            }
+        );
+        assert_eq!(classify_capture_key(0x7E, 0b0010), CaptureKeyAction::Ignore);
+        assert_eq!(classify_capture_key(0x11, 0b0010), CaptureKeyAction::Ignore);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn p1_16_cancel_before_register_and_stale_guard_are_safe() {
+        let session = 9_000_001;
+        ACTIVE_SESSION.store(0, Ordering::Relaxed);
+        CAPTURE_TX.lock().unwrap().take();
+        *THREAD_ID.lock().unwrap() = None;
+
+        let (tx, rx) = mpsc::channel();
+        assert!(!register_capture_sender(session, 0, tx.clone()));
+        assert!(rx.try_recv().is_err(), "取消后不得注册发送端");
+
+        ACTIVE_SESSION.store(session, Ordering::Relaxed);
+        assert!(register_capture_sender(session, 0, tx));
+        assert_eq!(*THREAD_ID.lock().unwrap(), Some((session, 0)));
+        drop(CaptureHookGuard { session });
+        assert_eq!(ACTIVE_SESSION.load(Ordering::Relaxed), 0);
+        assert!(CAPTURE_TX.lock().unwrap().is_none());
+
+        let active = session + 1;
+        let (new_tx, _new_rx) = mpsc::channel();
+        ACTIVE_SESSION.store(active, Ordering::Relaxed);
+        *CAPTURE_TX.lock().unwrap() = Some((active, new_tx));
+        *THREAD_ID.lock().unwrap() = Some((active, 0));
+        drop(CaptureHookGuard { session });
+        assert_eq!(ACTIVE_SESSION.load(Ordering::Relaxed), active);
+        assert_eq!(CAPTURE_TX.lock().unwrap().as_ref().unwrap().0, active);
+
+        ACTIVE_SESSION.store(0, Ordering::Relaxed);
+        CAPTURE_TX.lock().unwrap().take();
+        *THREAD_ID.lock().unwrap() = None;
+    }
+
     /// 主键白名单：与 egui 路径 `capture_vk` 的映射集一致。
     #[test]
     fn capture_vk_allowed_set_matches_egui_path() {
-        for vk in [0x20, 0x30, 0x39, 0x41, 0x5A, 0x70, 0x7B] {
+        for vk in [0x1B, 0x20, 0x30, 0x39, 0x41, 0x5A, 0x70, 0x7B] {
             assert!(capture_vk_allowed(vk), "白名单内被误拒：{vk:#x}");
         }
         // F15（自回声键）必须在白名单**外**——保证自回声注入对 UI 零副作用。

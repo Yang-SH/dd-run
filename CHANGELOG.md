@@ -4,11 +4,41 @@
 
 ## [Unreleased]
 
+### P2-7 速查页键表补齐（2026-11-26）
+
+- `?` 速查页补 `Ctrl+Backspace` / `Right` 中英双语说明，并纳入消费清单一致性回归；文件页按键行为不变。
+- 新增 `?` 页快照测试，本地临时图确认两键可见后删除；CI 正典金图仍待生成，P2-7 保持未销项。
+- 验证：Rust **791 passed / 0 failed / 8 ignored**，fmt / Clippy `-D warnings` 通过；Node 工具链测试父环境设置/不设置均 **4/4**。
+
+### 审计修复批：激活回滚、单实例 fail-closed 与钩子会话（2026-11-25）
+
+- **P1-14**：解附着失败不再只报错；先恢复原焦点/最小化态，再重试解附着并合并错误。
+- **P1-15**：Unix 清理锁或运行时目录不安全时停止启动，不再降级多实例；listener 持续排空探活连接，隔离名缩短，补跨进程/socket symlink/短路径回归。
+- **P1-16**：钩子只解挂 TLS 中仍属于自己的句柄，检查 unhook 返回值；会话注册/取消共用锁，终态清 sender/TID/active session。
+- **P0**：Node 测试补父进程 `BASH_ENV` 隔离；sidecar 用户 Allow 的空钉扎版本 + 变哈希改为 fail-closed，并补回归。
+- **文档**：修正签名降级/台账损坏验收口径、INDEX 测试基线与版本、实现可见性表述；披露签名与 Unix 删除 TOCTOU 残余风险。
+
+### P0/P1 收口批：工具链隔离、sidecar Deny 与四项代码前置（2026-11-25）
+
+- **P0-1**：打包工具链测试不再展开父进程 `process.env`，新增“调用方省略 `RUSTUP_TOOLCHAIN` 时不得继承”回归；父进程设置/不设置变量均 Node **4/4**，Windows CI 与 search conformance 待复跑。
+- **P0-2**：首方 sidecar 的合法签名不再覆盖用户 Deny；抽出可注入验签公钥核心，新增 54 组合矩阵。Deny 同哈希 `Blocked`、变哈希 `Pending`，合法签名免同意与篡改 fail-closed 不回归；台账读—改—写与钉扎共用进程内事务锁。
+- **P1-14～P1-17**：窗口激活复核前台 HWND，失败保持附着完成回滚并验证恢复；Unix socket 改 0700 私有运行目录 + bind 优先 + `O_NOFOLLOW` 限时 flock + 隔离后按 inode 复查；带修饰 Esc 双路径可录并消除钩子会话竞态；目标屏 DPI 换算、超小屏居中与物理位置存档落地。
+- **验证**：`cargo test --workspace` **790 passed / 0 failed / 7 ignored**（Windows 新增 24 条，另有 9 条 Unix 集成测试待 CI 运行）；fmt、Clippy `-D warnings`、Linux/macOS `--workspace --all-targets` check、release build、Node 3/3、`bash -n`、docscan 全通过。Cargo.lock 零变化；未提交、未打候选包。
+
+### 进度核对与剩余任务归并（2026-11-25）
+
+- **剩余任务唯一入口**：`未完善事项清单` 升 v1.35，新增 P0/P1/P2 总表（2/17/12）与 §1.2 安全执行约束，逐项标明重要性、前置、完成判据和回滚要求；路线图、实施计划、INDEX 与 implementation 当前开放项同步。
+- **新增 P0**：打包工具链 Node 测试在 CI 环境变量下 1/2（run `45570253472`，search conformance skipped）；首方 sidecar 合法签名路径早于用户 Deny 台账判定，与 D5 约束冲突。
+- **验收口径**：正式真机计数保持平台 5 + ALTRun 6 组；ALTRun 提案级补证与 search 特殊失败分支另计，避免重复记账。
+- **产出核对修正**：O14 改为已落地/P0-2 待修；A-33-08 限定为 A-33 唯一红线；开放腿统一使用 P1-2 同代候选包；N6 命中金图纳入 P2-4。本轮仅文档整理，未改产品代码。
+- **安全执行红线**：新增隔离 APPDATA/VM、剪贴板与系统副作用恢复、禁止改名真实 `es.exe`、draft 候选不公开、密钥不入库等强制约束；不可回滚的操作禁止执行。
+- **依赖顺序修正**：新增 P1-14~P1-17 代码前置与 P2-11 frecency 埋点，任务总数 31；代码前置先于 CI/候选，A16 恢复子腿单列，真机与观测再依赖同代包。
+
 ### Windows Release 工具链钉扎修复（2026-11-25）
 
 - **修复：Release 的 1.98.0 钉扎被 `package.sh` 覆盖**——`release.yml` 设置 `RUSTUP_TOOLCHAIN=1.98.0-x86_64-pc-windows-gnu`，但打包脚本硬编码 `cargo +stable-x86_64-pc-windows-gnu`；现改为优先使用 `RUSTUP_TOOLCHAIN`，未设置时保持 stable-gnu。
 - self-contained 链接器目录按选中工具链名推导，避免 rustc 与链接器代际错配；`rust-toolchain.toml` 与 `.cargo/config.toml` 注释同步当前 CI 口径。
-- 新增 `tools/package-toolchain.test.mjs`，Node **2/2**、`bash -n tools/package.sh` 通过；CI Windows check 新增阻塞步骤，首次运行待推送后确认。
+- 新增 `tools/package-toolchain.test.mjs`，本地 Node **2/2**、`bash -n tools/package.sh` 通过；CI Windows check 新增阻塞步骤，首跑在父进程 `RUSTUP_TOOLCHAIN` 已设置时暴露测试环境隔离缺陷（见上节 P0）。
 
 ### N15 跨平台门控与刷新窗口修复（2026-11-25）
 
@@ -29,7 +59,7 @@
 
 ### P0 文档收口与完整测试包重打（2026-11-25）
 
-- **验收账目校准**：ALTRun O17 真机验收改判通过，部分腿注明已过子项；路线图真机计数统一为平台 5 + ALTRun 7 组，O15 winget 运维与 O16 宿主 exe 签名拍板作为决策/运维尾部 2 项另列。CI bench 注释补入真实 PR 成功样本，删除已失效的“零 PR 数据”依据。
+- **验收账目校准**：ALTRun O17 真机验收改判通过，部分腿注明已过子项；路线图真机计数当时统一为平台 5 + ALTRun 7 组（**中间快照，随后 A11 闭环改为 6 组**），O15 winget 运维与 O16 宿主 exe 签名拍板作为决策/运维尾部 2 项另列。CI bench 注释补入真实 PR 成功样本，删除已失效的“零 PR 数据”依据。
 - **完整测试包从零重打**：`cargo clean` 清理 81.6 GiB 缓存后，以 Rust 1.98.0 Windows GNU 构建 `dd-run-0.3.0-portable.zip`（4,626,001 B；宿主 9,268,736 B / sidecar 859,136 B；SHA256 `e504e104c3c64fa585c41a39e6665a7eb30ebf6e6e2e7ad7d86f99985260ba87`）。未配置签名密钥，包内不含 `.sig`；zip 三个成员逐项哈希一致，search conformance 与 sample roundtrip 均通过。
 - 本次仅文档、CI 注释与构建产物变化，未改产品功能代码。
 

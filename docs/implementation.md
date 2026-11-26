@@ -1,6 +1,6 @@
 # dd-run 实施方案
 
-> **状态**：生效中 ｜ **版本**：v0.1.42 ｜ **最后更新**：2026-11-25
+> **状态**：生效中 ｜ **版本**：v0.1.50 ｜ **最后更新**：2026-11-26
 > **关联**：[protocol.md](./protocol.md) · [manifest-schema.md](./manifest-schema.md) · [extensions.md](./extensions.md) · [../cmdpal-platform-agnostic-design.md](../cmdpal-platform-agnostic-design.md)
 
 ---
@@ -28,14 +28,16 @@
 | O3 依赖治理 | ✅ 已落地 | 2026-09-15（已提交 `c26035e`） | CI 新增 `audit` job（`cargo audit` 漏洞 + `cargo machete` 死依赖）+ Dependabot 管更新；本地实跑均零发现 | [§2 O3](#o3--依赖治理2026-09-15-落地) |
 | O8 文档卫生 | ✅ 已落地 | 2026-09-15（已提交 `c26035e`） | CHANGELOG `[0.1.0]` 补日期、行尾确认合规；I3（真机依赖）与 LRU 容量（功能项）经取证不在本项范围，已逐条记档 | [§2 O8](#o8--文档卫生2026-09-15-落地) |
 | O4 可观测性/日志 | ✅ 已落地 | 2026-09-15（已提交 `c26035e`） | `log` facade + 自写 stderr 后端；131 处 `eprintln!` 分级（debug 85/warn 39/info 7）；`DDRUN_LOG` 开关实测生效，**默认 debug = 与改造前逐行等价** | [§2 O4](#o4--可观测性日志2026-09-15-落地) |
-| O7 文件搜索 P2 真机验收 | ✅ 已落地（两轮完成） | 2026-09-15 / **2026-09-17**（已提交 `c26035e` + `9936ead`；第二轮工作副本） | A-33-05 / A-33-06 / A-33-07 / A-33-10 **通过**（基线降幅 91.27%、回落分支 3/3 返回真实结果）；A-33-08 ⚠️ 部分（跨环境矩阵）＝唯一红线来源；**同批修 `es.exe` 失败静默为空结果的缺陷** | [验收报告](./search-file-p2-acceptance-2026-09-15.md) |
+| O7 文件搜索 P2 真机验收 | ✅ 已落地（两轮完成） | 2026-09-15 / **2026-09-17**（已提交 `c26035e` + `9936ead`；第二轮工作副本） | A-33-05 / A-33-06 / A-33-07 / A-33-10 **通过**（基线降幅 91.27%、回落分支 3/3 返回真实结果）；A-33-08 ⚠️ 部分（跨环境矩阵）＝A-33 唯一红线来源；P2-6 特殊失败分支另计；**同批修 `es.exe` 失败静默为空结果的缺陷** | [验收报告](./search-file-p2-acceptance-2026-09-15.md) |
 | 协议两项定稿（`-32002` / `PageInfo`） | ✅ 已定稿 | 2026-09-17（工作副本） | `-32002` 判为**扩展侧可用错误码**（宿主不产出）、`PageInfo` **维持不传递**；`protocol.md` §9.2/§8.5 注记改终态口径，INDEX §5 两项关闭 | [§2 协议两项定稿](#协议两项定稿-32002--pageinfo2026-09-17-定稿) |
 | 文件搜索 `Ctrl+F` + Shell 真实图标（v3.6） | ✅ 已落地（两项未达标已处置：E1 / E2） | 2026-09-19（工作副本） | 宿主 `Ctrl+F` 任意页直达文件搜索（栈深恒 2、Root 查询带入）；文件结果图标改 **Shell 真实图标**（`Icon::Path` + `file-icons/` 落盘缓存，失败回落 glyph）；图标管线自 apps 上移共享；协议/清单零改动。未达标两项已处置（E1：首抽 703.8 ms → 同步 0.32 ms；E2：sidecar +104.5 KB → 增量 61,952 B ≤ 64 KB） | [§2](#文件搜索-ctrlf-直达--shell-真实图标v36-2026-09-19-落地) · [search-file §10](./search-file.md) |
 | 全局热键默认值 Alt+Space（2026-11-23） | ✅ 已落地 | 2026-11-23（工作副本） | 默认值 `Win+Alt+Space` → `Alt+Space`（对齐 ALTRun）；R-21 黑名单收为三组合、Alt+Space 改中性接管说明；已存在用户配置不迁移 | [hotkey-alt-space-default-2026-11-23.md](./hotkey-alt-space-default-2026-11-23.md) |
-| 审计修复批（N15 / Ctrl+Backspace / O15） | ✅ 已落地 | 2026-11-24（工作副本） | 唤起刷新触发链、输入键门控、聚合计时语义与 winget 产物路径修复；758/0/7 + Node 2/2 | §2 / §3.1 |
-| N14 `?` 输入消费修复 | ✅ 已落地 | 2026-11-25（工作副本） | `Text("?")` 仅在根页空查询且非 IME 时消费；空根页正向 + 非空/嵌套/IME 反例共 4 条回归；763/0/7 | §3.1 / §7 |
-| N15 跨平台门控与刷新窗口修复 | ✅ 已落地 | 2026-11-25（工作副本） | 刷新判定纯函数化并平台化测试；宿主按最近聚合完成时刻对齐 Apps 枚举窗口；新增 3 条回归；766/0/7 | §3.1 / §7 |
-| Windows Release 工具链钉扎修复 | ✅ 已落地 | 2026-11-25（工作副本） | `package.sh` 遵循 `RUSTUP_TOOLCHAIN`，未设置时回落 stable-gnu；self-contained 路径随工具链；Node 2/2，CI 首跑待推送 | §2 / §7 |
+| 审计修复批（N15 / Ctrl+Backspace / O15） | ✅ 已提交 | 2026-11-24 `b8ecb2b` | 唤起刷新触发链、输入键门控、聚合计时语义与 winget 产物路径修复；758/0/7 + Node 2/2 | §2 / §3.1 |
+| N14 `?` 输入消费修复 | ✅ 已提交 | 2026-11-25 `b8ecb2b` | `Text("?")` 仅在根页空查询且非 IME 时消费；空根页正向 + 非空/嵌套/IME 反例共 4 条回归；763/0/7 | §3.1 / §7 |
+| N15 跨平台门控与刷新窗口修复 | ✅ 已提交 | 2026-11-25 `b8ecb2b` | 刷新判定纯函数化并平台化测试；宿主按最近聚合完成时刻对齐 Apps 枚举窗口；新增 3 条回归；766/0/7 | §3.1 / §7 |
+| Windows Release 工具链钉扎修复 | ✅ 代码已提交；P0-1 本地修复 | 2026-11-25 `b8ecb2b` + 工作副本 | `package.sh` 遵循 `RUSTUP_TOOLCHAIN`；Node 测试隔离父进程环境后本地两种环境均 3/3，CI 待复跑 | §2 / §7 |
+| P0/P1 收口批 | 🟨 代码已落地 | 2026-11-25（工作副本） | P0-2 sidecar Deny 优先已销项；P1-14～P1-17 焦点回滚、Unix socket、带修饰 Esc、目标屏 DPI 代码与回归完成；CI/真机仍待对应环境 | §2 / §3.1 |
+| P2-7 速查页键表补齐 | 🟨 代码与本地回归已落地 | 2026-11-26（工作副本） | `Ctrl+Backspace` / `Right` 中英双语行、消费清单一致性与 `?` 页快照测试完成；CI 正典金图待生成 | §2 / §3.1 |
 
 ## 产物与分发（2026-11-23 实测，v0.3.0 发版件）
 
@@ -45,7 +47,7 @@
   - `dd-run-0.3.0-macos-aarch64.tar.gz` — **3,673,353 B**（sha256 `3c912346…5fa750fc`）
   - `SHA256SUMS.txt` — 291 B；**本机实测三件哈希逐条比对全中**，`gh attestation verify` 对 portable zip 通过（exit 0）——§3.3 端到端口径达成
 - ⚠️ **CI、本地默认工具链与打包工具链须分开标注**：本机默认实测为 `rustc 1.95.0`（MSVC 宿主，不用于 Windows GNU 出包）；`tools/package.sh` 使用 `stable-x86_64-pc-windows-gnu`，2026-11-25 实测为 **rustc 1.98.0**。引用字节数时须注明来源与工具链；上列发布资产均标 CI 口径。
-- `dist/` 本地产物（含 2026-11-25 N20 开关修复，`package.sh` 重打，Rust 1.98.0 Windows GNU）：宿主 **9,268,736 B** / sidecar **859,136 B** / portable zip **4,625,993 B**。zip SHA256 = `ecef3da9d6a3bbf26880bd7f268b94a65b1fd92c00679703d83303f895379837`；宿主 SHA256 = `8f74e0ee2a75013f634cea899093c08b3279c21b303b97276f29de1f7622c8b0`。未配置 `DDRUN_SIGN_KEY`，因此本包**不含 `.sig`**，随包扩展走信任同意流；本机 `dist/` 仅作开发/真机测试对照，不替代 CI 发版件。
+- `dist/` 本地产物（含 2026-11-25 N20 开关修复，`package.sh` 重打，Rust 1.98.0 Windows GNU）：宿主 **9,268,736 B** / sidecar **859,136 B** / portable zip **4,625,993 B**。zip SHA256 = `ecef3da9d6a3bbf26880bd7f268b94a65b1fd92c00679703d83303f895379837`；宿主 SHA256 = `8f74e0ee2a75013f634cea899093c08b3279c21b303b97276f29de1f7622c8b0`。未配置 `DDRUN_SIGN_KEY`，因此本包**不含 `.sig`**；该包不含后续 N14/N15 与 P0 修复，仅作历史开发对照，开放腿统一使用 P1-2 同代候选包。
 - `dist/dev/dd-run-cli.exe` — 1,415,168 B（开发 / 自检工具：`--conformance` / `--roundtrip` / `--sign-ext` / `--verify-ext-sig`）
 - `dist/dev/dd-ext-sample.exe` — 452,608 B（示例扩展）
 - ⚠️ **不存在 `dist/dd-run.exe`**：实际发版产物名为 `dist/dd-run-<ver>.exe`（crate 仍名 `dd-gui`，经 `[[bin]] name = "dd-run"` 产出 `dd-run-<ver>.exe`），`dist/dev/` 下两个为开发期产物。
@@ -530,7 +532,7 @@
 
 **红线复述**：A-33-06 / A-33-08 未**全**通过前，用户文档不得承诺「无需 `es.exe`」。
 
-**未闭环 3 项**（待环境 / 待真机 GUI）：A-33-08 剩余矩阵单元（Win10 / Everything 1.5 / 提升 / 命名实例，**当前唯一红线来源**）、GUI 端到端「输入到首屏 ≤200 ms」、A-33-03 的 `%`/`#` 打开验证 —— 见 [验收报告](./search-file-p2-acceptance-2026-09-15.md) §5。**2026-10-07 收口更新**：其中 GUI 端到端「输入到首屏」已采样通过（**p95 102 ms ≤ 200 PASS**，报告 v1.5 → §10.7）与 A-33-03（用户真机批量走查）两项闭环 → **余 1 项** A-33-08 跨环境矩阵（唯一红线）。
+**未闭环 3 项**（待环境 / 待真机 GUI）：A-33-08 剩余矩阵单元（Win10 / Everything 1.5 / 提升 / 命名实例，**A-33 唯一红线来源**）、GUI 端到端「输入到首屏 ≤200 ms」、A-33-03 的 `%`/`#` 打开验证 —— 见 [验收报告](./search-file-p2-acceptance-2026-09-15.md) §5。**2026-10-07 收口更新**：其中 GUI 端到端「输入到首屏」已采样通过（**p95 102 ms ≤ 200 PASS**，报告 v1.5 → §10.7）与 A-33-03（用户真机批量走查）两项闭环 → **余 1 项** A-33-08 跨环境矩阵（A-33 唯一红线）；P2-6 特殊失败分支另计。
 
 **2026-09-17 第二轮（补 `es.exe`，报告 v1.3）**：安装 ES 1.1.0.37（`%LOCALAPPDATA%\Microsoft\WindowsApps\es.exe`，在用户 PATH 上）后补齐两项此前「无法验证」的半项，并把测量口径修硬：
 
@@ -621,7 +623,7 @@
 | 权威口径与登记 | ✅ | `search-file.md`（v3.8：§1 承诺口径定稿 + §8 新增 v3.8 行）、`INDEX.md`（v1.15：§5 行改「已解除」+ `search.md`/`search-file.md` 行数与版本重算）、`README.md` / `README.zh-CN.md` 文档表 |
 | 历史文档注记（保留原结论） | ✅ | 验收报告 §1、`doc-audit-2026-09-13.md`（§5 第 4 项与其后续动作）、`doc-code-diff-2026-09-13.md` §7 红线段 —— 均**就地追加「2026-09-19 已解除」**，不重写历史判定 |
 
-**红线边界（未越界承诺）**：A-33-08 仍为唯一红线（Win10 / Everything 1.5 / 提升权限 / 命名实例未覆盖）；文档以「直连不可用时回落」承接这些环境，**未承诺「任何环境都无需 `es.exe`」**。
+**红线边界（未越界承诺）**：A-33-08 仍为 A-33 唯一红线（Win10 / Everything 1.5 / 提升权限 / 命名实例未覆盖）；P2-6 特殊失败分支另计；文档以「直连不可用时回落」承接这些环境，**未承诺「任何环境都无需 `es.exe`」**。
 
 **验证**：零代码改动 → 三关无需复跑（`cargo test` 基线仍 **447 passed**）；`tools/docscan.py` 失效链接 (none)；10 份改动文档 bare LF = 0；`git diff --numstat` 增删对称（**无整文件重写**）。
 
@@ -862,7 +864,25 @@ K-T1~K-T4 任务清单与 V-1~V-7 校验标准见 [`settings-keys-typography-pla
 
 - **根因**：`release.yml` 设置 `RUSTUP_TOOLCHAIN=1.98.0-x86_64-pc-windows-gnu`，但 `package.sh` 硬编码 `cargo +stable-x86_64-pc-windows-gnu`，显式 `+` 覆盖环境钉扎；v0.3.0 发布日志可见 stable 被自动安装。
 - **修复**：`package.sh` 以 `RUSTUP_TOOLCHAIN` 为首选工具链，未设置时保持 `stable-x86_64-pc-windows-gnu`；self-contained 目录按同一工具链名推导，避免链接器与 rustc 代际错配。
-- **回归与 CI**：新增 `tools/package-toolchain.test.mjs`，覆盖钉扎优先、默认回落与 self-contained 路径；Node **2/2**、`bash -n tools/package.sh` 通过。CI Windows check 新增阻塞步骤，首次运行待推送后确认。
+- **回归与 CI**：新增 `tools/package-toolchain.test.mjs`，覆盖钉扎优先、默认回落与 self-contained 路径；初次本地 Node **2/2**。P0-1 随后修复测试环境隔离并新增父进程继承反例与 `BASH_ENV` 隔离，父进程设置/不设置变量均 **4/4**；`bash -n tools/package.sh` 通过。CI Windows check 仍待推送后复跑。
+
+### P0/P1 收口批——工具链隔离、sidecar Deny 与四项代码前置（2026-11-25，工作副本）
+
+- **P0-1**：`selectedToolchain()` 只构造 `HOME` / `RUSTUP_HOME` 与调用方环境，不再展开父进程；新增“调用方省略 `RUSTUP_TOOLCHAIN` 时不得继承”与父进程 `BASH_ENV` 不得重新注入工具链回归。父进程设置与不设置变量均 Node **4/4**；Windows CI 与 search conformance 待复跑。
+- **P0-2**：`assess_sidecar_with_publisher` 注入验签公钥；Valid 分支先查台账，Deny 同哈希 `Blocked`、变哈希 `Pending`。新增 54 组合矩阵与生产形态空 `pinned_host_version` 回归；空钉扎版本 + 变哈希不再走升级静默重钉，而是 `Pending`+告警。台账读—改—写与 sidecar 钉扎共用进程内事务锁。
+- **P1-14**：窗口激活抽 Win32 动作夹具，先记录原焦点/最小化态，`SetForegroundWindow` 后复核 `GetForegroundWindow`；失败保持线程附着完成回滚并复核焦点/最小化态。解附着失败也回滚原窗口状态并重试解附着，错误显式合并上报，新增 8 条回归。
+- **P1-15**：Unix 单实例改 bind 优先；运行时目录限当前用户 0700，锁文件 `O_NOFOLLOW` + 属主/权限校验 + 2 秒限时 `flock`，锁或目录不安全时停止启动而非降级多实例。listener 异步排空探活连接，避免 backlog 满导致 connect 阻塞。候选使用短隔离名，经 `renameat2`/`renamex_np` 不可覆盖 rename 与恢复，再按同一 dev+inode 复查类型/euid/`ConnectionRefused`，确认后才 unlink。新增 3 条分类单测与 9 条 Unix 集成测试（跨进程、socket 路径 symlink、短隔离名、不可覆盖重命名等），Linux/macOS 测试目标编译通过，真实运行待 CI。
+- **P1-16**：Esc 纳入捕获白名单，钩子与 egui 回落共用 `classify_capture_key`；裸 Esc 取消、Ctrl/Ctrl+Shift Esc 记候选、纯 Shift Esc 忽略。守卫注册/取消共用会话锁；钩子只解挂 TLS 中仍属于自己的句柄，检查 unhook 返回值并在终态清 sender/TID/active session，避免陈旧句柄误卸新钩子，新增 6 条回归。
+- **P1-17**：目标屏 `GetDpiForMonitor` 与当前窗口 ppp 分离换算；记忆位置超小屏明确回落居中；新增 `panel_last_pos_physical` 机器态字段，隐藏时同存逻辑/物理坐标，唤起优先用物理坐标选屏，避免重启后跨 DPI 误选。新增混合 DPI、负坐标副屏、超小屏、默认基线、跨 DPI 重启与主屏 API 测试 5 条。`windows-sys` 仅开 `Win32_UI_HiDpi` 特性位，Cargo.lock 零变化。
+- **验证**：fmt / Clippy `-D warnings` / `cargo test --workspace` **790 passed / 0 failed / 7 ignored**；Linux/macOS `--workspace --all-targets` check、release build、Node 4/4、`bash -n`、docscan 全通过。未提交、未打候选包。
+- **残余风险**：① 签名校验后按路径重新打开 exe 的 TOCTOU；② Unix socket 删除前复查与 `remove_file` 之间仍存在同 UID 替换窗口。二者均需后续单列安全任务；③ 正式发布缺签名钥即失败属 P1-2，当前 `package.sh`/`release.yml` 仍允许跳签，不能表述为已实现。
+
+### P2-7 速查页键表补齐（2026-11-26，工作副本）
+
+- **改动**：`help_page.rs` 的 `CONSUMED_KEYS` 与 `HELP_ROWS` 补 `Ctrl+Backspace` / `Right`，说明按文件页真实语义写为中英双语；新增回归同时校验两键在消费清单、中英条目与非空双语说明中存在。`snapshot_tests.rs` 新增 `?` 页快照，自动定位 `Right` 选中态，使两键同屏可见。
+- **TDD**：先补回归并运行，因 `Ctrl+Backspace` 未登记消费自然失败；最小实现后两条 help 测试转绿。
+- **金图纪律**：本地 `UPDATE_SNAPSHOTS=1` 临时图确认排版可见后删除，不以本地 WARP 结果冒充 CI 正典；`help_page.png` 仍须由 CI snapshot runner 生成并比对，P2-7 保持未销项。
+- **验证**：fmt / Clippy `-D warnings` / `cargo test --workspace` **791 passed / 0 failed / 8 ignored**；Node 工具链父环境设置/不设置均 **4/4**，`bash -n tools/package.sh` 通过。文件页按键实现未改。
 
 ## 3. 验收映射总表
 
@@ -958,6 +978,8 @@ K-T1~K-T4 任务清单与 V-1~V-7 校验标准见 [`settings-keys-typography-pla
 | 2026-11-25 | **759** | +1：**N20 搜索历史开关修复**——真机抓出关闭开关时清空条件写反（配置已关但 `history.json` 仍在）；新增 `history_toggle_off_clears_and_on_preserves`，Red 缺实现失败 → Green 通过；`history_toggle_state` 将清空动作绑定到“关闭”方向。三关 **759 passed / 0 failed / 7 ignored**，重打包后真机复验开启保留、关闭清空通过 | ✅ 工作副本 |
 | 2026-11-25 | **763** | +4：**N14 `?` 输入消费修复**——原 `Text("?")` 在门控前无条件移除，非空根页/嵌套页/IME 组词期均被吞；改为条件全部满足后才消费。三类反例 Red 失败 → Green 通过，并补空根页正向回归。`cargo test --workspace` **763 passed / 0 failed / 7 ignored**，fmt 零差异、clippy `-D warnings` 零诊断 | ✅ 工作副本 |
 | 2026-11-25 | **766** | +3：**N15 跨平台门控与刷新窗口修复**——唤起判定抽为纯函数，Windows/非 Windows、根页/嵌套页、Apps 启停、聚合忙与 30 秒边界由矩阵覆盖；Windows 行为测试补 `#[cfg(windows)]`。新增 `aggregation_completed_at`，宿主按最近聚合完成时刻对齐 Apps `enumerated_at`，避免首次到期唤起跳过枚举。`cargo test --workspace` **766 passed / 0 failed / 7 ignored**，fmt 零差异、clippy `-D warnings` 零诊断；Linux/macOS `--all-targets` check 通过 | ✅ 工作副本 |
+| 2026-11-25 | **790** | +24（Windows 实跑）：P0-2 sidecar 矩阵与空钉扎版本回归 +2、P1-14 焦点回滚 +8、P1-15 socket 分类 +3、P1-16 Esc/会话守卫 +6、P1-17 DPI/placement +5；另有 9 条 Unix socket 集成测试仅在 Linux/macOS 编译，运行待 CI。Node 工具链测试 2 → **4/4**。全仓 **790 passed / 0 failed / 7 ignored**，fmt / clippy `-D warnings` / Linux+macOS all-targets check / release build 全通过 | 🟨 工作副本（CI/真机待复跑） |
+| 2026-11-26 | **791** | +1 passed / +1 ignored：P2-7 速查页补 `Ctrl+Backspace` / `Right` 中英双语行与消费清单一致性回归；新增 `?` 页快照测试（本地临时图验证可见后删除，CI 正典金图待生成）。全仓 **791 passed / 0 failed / 8 ignored**，fmt / clippy `-D warnings` 全通过；Node 工具链父环境设置/不设置均 **4/4** | 🟨 工作副本（CI 金图待生成） |
 
 **两条使用注意**：① `crates/dd-host/tests/roundtrip*.rs` 在 `dd-ext-sample.exe` **未构建时会打印 SKIP 并 return**（计入 passed），故凡涉及协议/扩展行为，先 `cargo build -p dd-ext-sample` 再跑；② 「三关全绿」与 CI 四关**均为 debug profile**，`#[cfg(debug_assertions)]` 类 release-only 编译错误检不到 —— 交付/发布前必须实跑 `cargo build --release`（见 §7 构建环境记档与 `CHANGELOG` 的 release 阻塞条目）。
 
@@ -1027,7 +1049,7 @@ K-T1~K-T4 任务清单与 V-1~V-7 校验标准见 [`settings-keys-typography-pla
 - **图标与字体优化 I1/I2/F1/F2**：✅ 已关闭（2026-09-12）。I3 未做。详情见 [`icons-typography-plan.md`](./icons-typography-plan.md)。
 - **遗留项**：见 §6.1 台账——L1/L2/L3/L4/L5/L6/L7/L8/L9/L10 全部 ✅ 销项，无开放项。
 - **版本与发版**：crates 版本 `dd-gui`/`dd-host`/`dd-ext`/`dd-ext-sample`/`dd-run-cli` = **0.3.0**，`dd-protocol` = **1.0.0**；已发布 tag `v0.1.0`、`v0.1.1`、`v0.2.0`、`v0.2.1`、**`v0.3.0`（2026-11-23，三平台产物 + SHA256SUMS + build provenance 端到端验证通过）**，分支 `main`。
-- **当前开放项（2026-11-25 回写）**：代码级欠账 **0**、CI 收口余 **§3.2 bench 转阻塞复评**（已有 PR 成功样本，"零 PR 数据"依据失效）、方案余批余 **frecency 观测**；**真机/外部依赖腿 5 + 6 + 0**（平台 5 条：O6 ④ 非 Windows / A-33-08 跨环境矩阵**唯一红线** / R-21 他机 / V-14 多屏 / D1 Linux 截图；ALTRun 部分 6 组：§5.14 / §5.16–5.18 / §5.23 / §5.24；热键 Alt+Space 7/7 已闭环）；**决策/运维尾部 2 项**（O15 winget-pkgs 提交与安装验证 / O16 宿主 exe 签名拍板，均非代码欠账）。统一以 [清单 v1.26](./未完善事项清单-2026-10-25.md) §3.6/§5 与 [walkthrough checklist](./user-session-walkthrough-checklist.md) 为准。**已闭环**：S-01…S-12、R1–R26、F1–F11、严审 P1–P8 与 UI-1~UI-7、O1–O14、refactor 批次 A–E、fuzz 七夜、search conformance 转阻塞、v0.3.0 发版链验证、N15/Ctrl+Backspace/O15 审计修复。
+- **当前开放项（2026-11-25 回写）**：以 [未完善事项清单 v1.37](./未完善事项清单-2026-10-25.md) §1.1 为唯一执行入口，共 **P0 1 / P1 17 / P2 12**。P0 = 打包工具链 Node 测试 CI 复跑（本地 3/3）；P1 = Windows CI 复跑、发布链加固/候选、P1-14～P1-17 已落地代码的真机复核、平台 5 条与 ALTRun 部分 6 组；P2 = bench/frecency、frecency 埋点、方案级补证、A16 恢复子腿、search 特殊分支、键表/发布说明同步、O15/O16。正式真机计数仍为 **5 + 6 + 0**；条件保留 2 项与远期搁置 2 类不计入任务。最新已知 CI run `45570253472` 因 Node **1/2** 失败，search conformance skipped；本轮本地修复后为 Node **4/4**，待推送复跑。**已闭环**：S-01…S-12、R1–R26 代码与可做真机腿、F1–F11、严审 P1–P8 与 UI-1~UI-7、O1–O14 代码项、refactor 批次 A–E、fuzz 七夜、v0.3.0 发版链验证、N15/Ctrl+Backspace/O15 审计修复。
 
 ---
 

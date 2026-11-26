@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
@@ -22,7 +23,6 @@ function selectedToolchain(env) {
     {
       encoding: "utf8",
       env: {
-        ...process.env,
         HOME: "/home/ddrun-test",
         RUSTUP_HOME: "/rustup",
         ...env,
@@ -45,12 +45,59 @@ test("honors RUSTUP_TOOLCHAIN and derives the self-contained path", () => {
 });
 
 test("defaults to stable windows-gnu when RUSTUP_TOOLCHAIN is unset", () => {
-  const env = { ...process.env };
-  delete env.RUSTUP_TOOLCHAIN;
-  const [toolchain, selfContained] = selectedToolchain(env);
+  const [toolchain, selfContained] = selectedToolchain({});
   assert.equal(toolchain, "+stable-x86_64-pc-windows-gnu");
   assert.equal(
     selfContained,
     "/rustup/toolchains/stable-x86_64-pc-windows-gnu/lib/rustlib/x86_64-pc-windows-gnu/bin/self-contained",
   );
+});
+
+test("does not inherit RUSTUP_TOOLCHAIN when the caller omits it", () => {
+  const previous = process.env.RUSTUP_TOOLCHAIN;
+  process.env.RUSTUP_TOOLCHAIN = "1.98.0-x86_64-pc-windows-gnu";
+  try {
+    const [toolchain, selfContained] = selectedToolchain({});
+    assert.equal(toolchain, "+stable-x86_64-pc-windows-gnu");
+    assert.equal(
+      selfContained,
+      "/rustup/toolchains/stable-x86_64-pc-windows-gnu/lib/rustlib/x86_64-pc-windows-gnu/bin/self-contained",
+    );
+  } finally {
+    if (previous === undefined) {
+      delete process.env.RUSTUP_TOOLCHAIN;
+    } else {
+      process.env.RUSTUP_TOOLCHAIN = previous;
+    }
+  }
+});
+
+test("default case stays isolated from a parent BASH_ENV", () => {
+  const dir = mkdtempSync(join(tmpdir(), "ddrun-toolchain-env-"));
+  const bashEnv = join(dir, "bash-env");
+  writeFileSync(bashEnv, "export RUSTUP_TOOLCHAIN=1.98.0-x86_64-pc-windows-gnu\n");
+  try {
+    const env = {
+      ...process.env,
+      BASH_ENV: bashEnv.replaceAll("\\", "/"),
+      RUSTUP_TOOLCHAIN: "1.98.0-x86_64-pc-windows-gnu",
+    };
+    delete env.NODE_TEST_CONTEXT;
+    const result = spawnSync(
+      process.execPath,
+      [
+        "--test",
+        "--test-name-pattern=defaults to stable windows-gnu when RUSTUP_TOOLCHAIN is unset",
+        fileURLToPath(import.meta.url),
+      ],
+      {
+        encoding: "utf8",
+        env,
+      },
+    );
+    assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+    assert.match(result.stdout, /defaults to stable windows-gnu/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });

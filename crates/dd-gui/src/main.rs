@@ -256,61 +256,442 @@ fn enforce_single_instance() {
     // 首实例：持句柄至进程退出（不 CloseHandle，见函数文档），互斥体保持占用。
 }
 
-/// 非 Windows 单实例互斥（O6 批次三，2026-10-11；与 Windows `CreateMutexW`
-/// 同语义，std-only 零新依赖）：Unix domain socket `bind` 占位——进程存活
-/// 期间独占路径，进程退出内核关 fd 即释放（崩溃自动解锁，无 lock 文件残留
-/// 问题）。
+#[cfg(any(unix, test))]
+fn same_file_identity(left: Option<(u64, u64)>, right: Option<(u64, u64)>) -> bool {
+    matches!((left, right), (Some(a), Some(b)) if a == b)
+}
+
+#[cfg(any(unix, test))]
+fn runtime_dir_is_private(metadata: Option<(bool, u32, u32)>, euid: u32) -> bool {
+    matches!(metadata, Some((true, uid, 0o700)) if uid == euid)
+}
+
+#[cfg(any(unix, test))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SocketCleanup {
+    Active,
+    Stale,
+    Foreign,
+    NotSocket,
+    Inconclusive,
+    Missing,
+}
+
+#[cfg(any(unix, test))]
+fn classify_socket_candidate(
+    metadata: Option<(bool, u32)>,
+    connect: Result<(), std::io::ErrorKind>,
+    euid: u32,
+) -> SocketCleanup {
+    match connect {
+        Ok(()) => SocketCleanup::Active,
+        Err(std::io::ErrorKind::NotFound) => SocketCleanup::Missing,
+        Err(error) => match metadata {
+            Some((false, _)) => SocketCleanup::NotSocket,
+            Some((true, uid)) if uid != euid => SocketCleanup::Foreign,
+            Some((true, _)) if error == std::io::ErrorKind::ConnectionRefused => {
+                SocketCleanup::Stale
+            }
+            _ => SocketCleanup::Inconclusive,
+        },
+    }
+}
+
+/// 非 Windows 单实例互斥（O6 批次三，2026-10-11；P1-15 加固）。
 ///
-/// **路径**：`$XDG_RUNTIME_DIR/dd-run.sock`（Linux 桌面会话 per-user 运行时
-/// 目录，与 per-user 数据目录口径一致）；无 `XDG_RUNTIME_DIR`（macOS 惯常
-/// 如此）回落 `$TMPDIR/dd-run-{$USER}.sock`（macOS 的 `$TMPDIR` 本身
-/// per-user；`$USER` 缺失用 `shared` 占位——互斥是防误排障护栏，非安全边界）。
+/// **路径**：优先当前用户 0700 的 `$XDG_RUNTIME_DIR/dd-run.sock`，否则
+/// `$TMPDIR/dd-run-{euid}/dd-run.sock`。先 `bind`，只有 `AddrInUse` 才在跨进程
+/// 限时 `flock` 保护下复查；候选先原子 rename 到私有隔离路径，再按同一 inode
+/// 复查类型、属主与 `ConnectionRefused`，确认后才 unlink。普通文件、symlink、
+/// 他人 socket 或证据不足的路径不被删除。
 ///
-/// **第二实例判定**：bind 不清理残留 socket 文件，故先 `UnixStream::connect`
-/// 探活——能连 = 有活实例（stderr 双语提示后退出）；连不上 = 死链或无实例，
-/// `remove_file` 后 bind；bind 报 `AddrInUse` = 并发窗口第二实例，按已在
-/// 运行处理。提示形态说明：此阶段 GUI 未创建，非 Windows 用 stderr（Windows
-/// 用 `MessageBoxW`）；真机腿归 O6 ④ 评估是否需升级为图形提示。
-///
-/// **listener 生命周期**：取得后**有意 `mem::forget` 泄漏**——fd 存活 =
-/// 实例存活（与 Windows 侧不 CloseHandle 同口径），提前 drop 会让后续双开
-/// 误判「无实例运行」。创建失败（路径不可写等极少情形）降级为不互斥照常
-/// 启动——互斥不应成为启动失败的新单点。
+/// listener 有意泄漏至进程退出；清理锁文件保留，`flock` 随进程退出自动释放。
+#[cfg(unix)]
+#[derive(Debug)]
+enum UnixAcquireError {
+    AlreadyRunning,
+    UnsafePath(String),
+    Io(std::io::Error),
+}
+
+#[cfg(unix)]
+unsafe extern "C" {
+    fn geteuid() -> u32;
+    fn flock(fd: i32, operation: i32) -> i32;
+}
+
+#[cfg(unix)]
+fn lock_socket_cleanup(path: &std::path::Path) -> std::io::Result<std::fs::File> {
+    use std::os::fd::AsRawFd;
+    use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
+
+    #[cfg(target_os = "linux")]
+    const O_NOFOLLOW: i32 = 0o400000;
+    #[cfg(target_os = "macos")]
+    const O_NOFOLLOW: i32 = 0o400;
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    const O_NOFOLLOW: i32 = 0;
+
+    let mut lock_name = path.as_os_str().to_os_string();
+    lock_name.push(".lock");
+    let lock_path = std::path::PathBuf::from(lock_name);
+    let euid = unsafe { geteuid() };
+    if let Ok(metadata) = std::fs::symlink_metadata(&lock_path) {
+        if !metadata.file_type().is_file() || metadata.uid() != euid || metadata.mode() & 0o077 != 0
+        {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::PermissionDenied,
+                "清理锁文件不是当前用户的私有普通文件",
+            ));
+        }
+    }
+    let file = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .mode(0o600)
+        .custom_flags(O_NOFOLLOW)
+        .open(lock_path)?;
+    let metadata = file.metadata()?;
+    if !metadata.is_file() || metadata.uid() != euid || metadata.mode() & 0o077 != 0 {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::PermissionDenied,
+            "清理锁文件属主或权限不安全",
+        ));
+    }
+
+    const LOCK_EX: i32 = 2;
+    const LOCK_NB: i32 = 4;
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+    loop {
+        if unsafe { flock(file.as_raw_fd(), LOCK_EX | LOCK_NB) } == 0 {
+            return Ok(file);
+        }
+        let error = std::io::Error::last_os_error();
+        if error.kind() != std::io::ErrorKind::WouldBlock || std::time::Instant::now() >= deadline {
+            return Err(error);
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+}
+
+#[cfg(unix)]
+fn unix_runtime_dir() -> std::io::Result<std::path::PathBuf> {
+    use std::os::unix::fs::{DirBuilderExt, MetadataExt};
+
+    let euid = unsafe { geteuid() };
+    if let Ok(dir) = std::env::var("XDG_RUNTIME_DIR") {
+        if !dir.is_empty() {
+            let path = std::path::PathBuf::from(dir);
+            let metadata = std::fs::symlink_metadata(&path)
+                .ok()
+                .map(|m| (m.file_type().is_dir(), m.uid(), m.mode() & 0o777));
+            if runtime_dir_is_private(metadata, euid) {
+                return Ok(path);
+            }
+        }
+    }
+
+    let path = std::env::temp_dir().join(format!("dd-run-{euid}"));
+    match std::fs::DirBuilder::new().mode(0o700).create(&path) {
+        Ok(_) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
+        Err(e) => return Err(e),
+    }
+    let metadata = std::fs::symlink_metadata(&path)?;
+    if !runtime_dir_is_private(
+        Some((
+            metadata.file_type().is_dir(),
+            metadata.uid(),
+            metadata.mode() & 0o777,
+        )),
+        euid,
+    ) {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::PermissionDenied,
+            "运行时目录不是当前用户的 0700 目录",
+        ));
+    }
+    Ok(path)
+}
+
+#[cfg(unix)]
+fn bind_and_keep_alive(path: &std::path::Path) -> Result<(), UnixAcquireError> {
+    let listener = std::os::unix::net::UnixListener::bind(path).map_err(|e| {
+        if e.kind() == std::io::ErrorKind::AddrInUse {
+            UnixAcquireError::AlreadyRunning
+        } else {
+            UnixAcquireError::Io(e)
+        }
+    })?;
+    listener
+        .set_nonblocking(true)
+        .map_err(UnixAcquireError::Io)?;
+    std::thread::Builder::new()
+        .name("dd-run-single-instance".into())
+        .spawn(move || loop {
+            match listener.accept() {
+                Ok((stream, _)) => drop(stream),
+                Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                    std::thread::sleep(std::time::Duration::from_millis(5));
+                }
+                Err(_) => return,
+            }
+        })
+        .map_err(|e| UnixAcquireError::Io(e))?;
+    Ok(())
+}
+
+#[cfg(unix)]
+fn rename_socket_noreplace(old: &std::path::Path, new: &std::path::Path) -> std::io::Result<()> {
+    use std::ffi::CString;
+    use std::os::unix::ffi::OsStrExt;
+
+    let old = CString::new(old.as_os_str().as_bytes())
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidInput, e))?;
+    let new = CString::new(new.as_os_str().as_bytes())
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidInput, e))?;
+    #[cfg(target_os = "linux")]
+    unsafe extern "C" {
+        fn renameat2(oldfd: i32, old: *const i8, new: *const i8, flags: u32) -> i32;
+    }
+    #[cfg(target_os = "macos")]
+    unsafe extern "C" {
+        fn renamex_np(old: *const i8, new: *const i8, flags: u32) -> i32;
+    }
+
+    #[cfg(target_os = "linux")]
+    let result = unsafe {
+        renameat2(
+            -100,
+            old.as_ptr(),
+            new.as_ptr(),
+            1, // RENAME_NOREPLACE
+        )
+    };
+    #[cfg(target_os = "macos")]
+    let result = unsafe {
+        renamex_np(old.as_ptr(), new.as_ptr(), 4) // RENAME_EXCL
+    };
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    {
+        let _ = (old, new);
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::Unsupported,
+            "当前 Unix 平台不支持不可覆盖重命名",
+        ));
+    }
+    if result == 0 {
+        Ok(())
+    } else {
+        Err(std::io::Error::last_os_error())
+    }
+}
+
+#[cfg(unix)]
+fn path_file_identity(path: &std::path::Path) -> Option<(u64, u64)> {
+    use std::os::unix::fs::MetadataExt;
+    std::fs::symlink_metadata(path)
+        .ok()
+        .map(|m| (m.dev(), m.ino()))
+}
+
+#[cfg(unix)]
+fn socket_candidate_metadata(path: &std::path::Path) -> Option<(bool, u32, u64, u64)> {
+    use std::os::unix::fs::{FileTypeExt, MetadataExt};
+    std::fs::symlink_metadata(path)
+        .ok()
+        .map(|m| (m.file_type().is_socket(), m.uid(), m.dev(), m.ino()))
+}
+
+#[cfg(unix)]
+fn quarantine_socket_path(path: &std::path::Path) -> std::path::PathBuf {
+    use std::sync::atomic::{AtomicU32, Ordering};
+    static NEXT: AtomicU32 = AtomicU32::new(0);
+    let id = NEXT.fetch_add(1, Ordering::Relaxed);
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos();
+    path.parent()
+        .unwrap_or_else(|| std::path::Path::new("."))
+        .join(format!(
+            ".ds-{:x}-{:08x}-{id}",
+            std::process::id(),
+            nanos as u32
+        ))
+}
+
+#[cfg(unix)]
+fn restore_quarantined_socket(
+    quarantine: &std::path::Path,
+    path: &std::path::Path,
+) -> Result<(), UnixAcquireError> {
+    match std::fs::symlink_metadata(path) {
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            rename_socket_noreplace(quarantine, path).map_err(|e| {
+                if e.kind() == std::io::ErrorKind::AlreadyExists {
+                    UnixAcquireError::UnsafePath(format!(
+                        "清理期间原路径被占用，隔离文件保留在 {}",
+                        quarantine.display()
+                    ))
+                } else {
+                    UnixAcquireError::Io(e)
+                }
+            })
+        }
+        Ok(_) => Err(UnixAcquireError::UnsafePath(format!(
+            "清理期间原路径被占用，隔离文件保留在 {}",
+            quarantine.display()
+        ))),
+        Err(e) => Err(UnixAcquireError::Io(e)),
+    }
+}
+
+#[cfg(unix)]
+fn reclaim_stale_socket(path: &std::path::Path) -> Result<(), UnixAcquireError> {
+    use std::os::unix::net::UnixStream;
+
+    let Some(original_identity) = path_file_identity(path) else {
+        return Err(UnixAcquireError::UnsafePath(
+            "隔离前无法读取原路径 inode".to_string(),
+        ));
+    };
+    let mut quarantine = None;
+    for _ in 0..16 {
+        let candidate = quarantine_socket_path(path);
+        match rename_socket_noreplace(path, &candidate) {
+            Ok(()) => {
+                quarantine = Some(candidate);
+                break;
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return bind_and_keep_alive(path),
+            Err(e) => return Err(UnixAcquireError::Io(e)),
+        }
+    }
+    let quarantine = quarantine.ok_or_else(|| {
+        UnixAcquireError::UnsafePath("无法分配不可覆盖的 socket 隔离路径".to_string())
+    })?;
+    if !same_file_identity(Some(original_identity), path_file_identity(&quarantine)) {
+        restore_quarantined_socket(&quarantine, path)?;
+        return Err(UnixAcquireError::UnsafePath(
+            "隔离前后 dev+inode 不一致".to_string(),
+        ));
+    }
+
+    let euid = unsafe { geteuid() };
+    let connect = UnixStream::connect(&quarantine)
+        .map(|_| ())
+        .map_err(|e| e.kind());
+    let metadata = socket_candidate_metadata(&quarantine);
+    let decision = classify_socket_candidate(
+        metadata.map(|(is_socket, uid, _, _)| (is_socket, uid)),
+        connect,
+        euid,
+    );
+    match decision {
+        SocketCleanup::Active | SocketCleanup::Foreign => {
+            restore_quarantined_socket(&quarantine, path)?;
+            Err(UnixAcquireError::AlreadyRunning)
+        }
+        SocketCleanup::Stale => {
+            let identity = path_file_identity(&quarantine);
+            let connect = UnixStream::connect(&quarantine)
+                .map(|_| ())
+                .map_err(|e| e.kind());
+            let metadata = socket_candidate_metadata(&quarantine);
+            let rechecked = classify_socket_candidate(
+                metadata.map(|(is_socket, uid, _, _)| (is_socket, uid)),
+                connect,
+                euid,
+            );
+            if !same_file_identity(Some(original_identity), identity)
+                || rechecked != SocketCleanup::Stale
+            {
+                restore_quarantined_socket(&quarantine, path)?;
+                return Err(UnixAcquireError::UnsafePath(
+                    "删除前 inode 或存活状态复查失败".to_string(),
+                ));
+            }
+            match std::fs::remove_file(&quarantine) {
+                Ok(()) => bind_and_keep_alive(path),
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => bind_and_keep_alive(path),
+                Err(e) => Err(UnixAcquireError::Io(e)),
+            }
+        }
+        _ => {
+            restore_quarantined_socket(&quarantine, path)?;
+            Err(UnixAcquireError::UnsafePath(
+                "隔离后复查确认不是可清理的当前用户死 socket".to_string(),
+            ))
+        }
+    }
+}
+
+#[cfg(unix)]
+fn reclaim_and_bind(path: &std::path::Path) -> Result<(), UnixAcquireError> {
+    use std::os::unix::fs::{FileTypeExt, MetadataExt};
+    use std::os::unix::net::UnixStream;
+
+    let _cleanup_lock = lock_socket_cleanup(path).map_err(|e| {
+        UnixAcquireError::UnsafePath(format!("清理锁不可用，拒绝降级为多实例：{e}"))
+    })?;
+    let connect = UnixStream::connect(path).map(|_| ()).map_err(|e| e.kind());
+    let metadata = std::fs::symlink_metadata(path)
+        .ok()
+        .map(|m| (m.file_type().is_socket(), m.uid()));
+    let euid = unsafe { geteuid() };
+    match classify_socket_candidate(metadata, connect, euid) {
+        SocketCleanup::Active | SocketCleanup::Foreign => Err(UnixAcquireError::AlreadyRunning),
+        SocketCleanup::Stale => reclaim_stale_socket(path),
+        SocketCleanup::Missing => bind_and_keep_alive(path),
+        SocketCleanup::NotSocket => Err(UnixAcquireError::UnsafePath(
+            "单实例路径已存在但不是 socket，拒绝删除".to_string(),
+        )),
+        SocketCleanup::Inconclusive => Err(UnixAcquireError::UnsafePath(
+            "无法确认单实例路径所有权与存活状态，拒绝删除".to_string(),
+        )),
+    }
+}
+
+#[cfg(unix)]
+fn acquire_unix_socket(path: &std::path::Path) -> Result<(), UnixAcquireError> {
+    match bind_and_keep_alive(path) {
+        Ok(()) => Ok(()),
+        Err(UnixAcquireError::AlreadyRunning) => reclaim_and_bind(path),
+        Err(e) => Err(e),
+    }
+}
+
 #[cfg(unix)]
 fn enforce_single_instance() {
-    use std::io::ErrorKind;
-    use std::os::unix::net::{UnixListener, UnixStream};
-
     const ALREADY_RUNNING: &str = "dd-run 已在运行（请用托盘图标或热键唤起面板），无需重复启动。\n\
          dd-run is already running (use the tray icon or the hotkey) — no need to start it again.";
 
-    let path = match std::env::var("XDG_RUNTIME_DIR") {
-        Ok(dir) if !dir.is_empty() => std::path::PathBuf::from(dir).join("dd-run.sock"),
-        _ => std::env::temp_dir().join(format!(
-            "dd-run-{}.sock",
-            std::env::var("USER").unwrap_or_else(|_| "shared".into())
-        )),
+    let path = match unix_runtime_dir() {
+        Ok(dir) => dir.join("dd-run.sock"),
+        Err(e) => {
+            log::warn!("[dd-gui] 单实例运行时目录不安全（{e}），停止启动");
+            eprintln!("dd-run 单实例运行时目录不安全：{e}；已停止启动。");
+            std::process::exit(1);
+        }
     };
 
-    // 活实例探活：能 connect = 已有实例在运行（崩溃残留的死链连不上）
-    if UnixStream::connect(&path).is_ok() {
-        log::warn!("[dd-gui] 已有 dd-run 实例在运行（socket 探活命中），提示后退出");
-        eprintln!("{ALREADY_RUNNING}");
-        std::process::exit(0);
-    }
-
-    // 死链清理（活实例已被 connect 排除；文件不存在时静默通过）后 bind 占位
-    let _ = std::fs::remove_file(&path);
-    match UnixListener::bind(&path) {
-        Ok(listener) => std::mem::forget(listener), // 有意泄漏：fd 存活 = 实例存活
-        Err(e) if e.kind() == ErrorKind::AddrInUse => {
-            // 并发窗口：探活之后、bind 之前对方已占位——按已在运行处理
-            log::warn!("[dd-gui] socket bind AddrInUse（并发窗口命中），按已在运行处理");
+    match acquire_unix_socket(&path) {
+        Ok(()) => {}
+        Err(UnixAcquireError::AlreadyRunning) => {
+            log::warn!("[dd-gui] 已有 dd-run 实例在运行，提示后退出");
             eprintln!("{ALREADY_RUNNING}");
             std::process::exit(0);
         }
-        Err(e) => {
-            log::warn!("[dd-gui] 单实例 socket bind 失败（{e}），降级为不互斥启动（照常运行）");
+        Err(UnixAcquireError::UnsafePath(reason)) => {
+            log::warn!("[dd-gui] 单实例路径不安全：{reason}，停止启动");
+            eprintln!("dd-run 单实例路径不安全：{reason}；已停止启动。");
+            std::process::exit(1);
+        }
+        Err(UnixAcquireError::Io(e)) => {
+            log::warn!("[dd-gui] 单实例 socket 失败（{e}），降级为不互斥启动（照常运行）");
         }
     }
 }
@@ -318,3 +699,269 @@ fn enforce_single_instance() {
 /// 非 Windows 且非 Unix 的其余目标占位（与 hotkey/tray 的跨平台占位同口径）。
 #[cfg(not(any(windows, unix)))]
 fn enforce_single_instance() {}
+
+#[cfg(test)]
+mod tests {
+    #[cfg(unix)]
+    use super::{
+        acquire_unix_socket, quarantine_socket_path, rename_socket_noreplace, UnixAcquireError,
+    };
+    use super::{
+        classify_socket_candidate, runtime_dir_is_private, same_file_identity, SocketCleanup,
+    };
+    #[cfg(unix)]
+    use std::path::PathBuf;
+    #[cfg(unix)]
+    use std::sync::atomic::{AtomicU32, Ordering};
+    #[cfg(unix)]
+    use std::sync::{mpsc, Arc, Barrier};
+
+    #[test]
+    fn p1_15_file_identity_requires_same_device_and_inode() {
+        assert!(same_file_identity(Some((1, 2)), Some((1, 2))));
+        assert!(!same_file_identity(Some((1, 2)), Some((1, 3))));
+        assert!(!same_file_identity(Some((1, 2)), Some((2, 2))));
+        assert!(!same_file_identity(None, Some((1, 2))));
+    }
+
+    #[test]
+    fn p1_15_runtime_directory_must_be_private_and_owned() {
+        assert!(runtime_dir_is_private(Some((true, 7, 0o700)), 7));
+        assert!(!runtime_dir_is_private(Some((true, 7, 0o755)), 7));
+        assert!(!runtime_dir_is_private(Some((true, 8, 0o700)), 7));
+        assert!(!runtime_dir_is_private(Some((false, 7, 0o700)), 7));
+        assert!(!runtime_dir_is_private(None, 7));
+    }
+
+    #[test]
+    fn p1_15_socket_cleanup_classifier_never_reclaims_unsafe_paths() {
+        use std::io::ErrorKind;
+
+        assert_eq!(
+            classify_socket_candidate(Some((true, 7)), Ok(()), 7),
+            SocketCleanup::Active
+        );
+        assert_eq!(
+            classify_socket_candidate(Some((true, 7)), Err(ErrorKind::ConnectionRefused), 7),
+            SocketCleanup::Stale
+        );
+        assert_eq!(
+            classify_socket_candidate(Some((true, 8)), Err(ErrorKind::ConnectionRefused), 7),
+            SocketCleanup::Foreign
+        );
+        assert_eq!(
+            classify_socket_candidate(Some((false, 7)), Err(ErrorKind::ConnectionRefused), 7),
+            SocketCleanup::NotSocket
+        );
+        assert_eq!(
+            classify_socket_candidate(None, Err(ErrorKind::PermissionDenied), 7),
+            SocketCleanup::Inconclusive
+        );
+        assert_eq!(
+            classify_socket_candidate(None, Err(ErrorKind::NotFound), 7),
+            SocketCleanup::Missing
+        );
+    }
+
+    #[cfg(all(test, unix))]
+    fn temp_socket_path(tag: &str) -> PathBuf {
+        static NEXT: AtomicU32 = AtomicU32::new(0);
+        let id = NEXT.fetch_add(1, Ordering::Relaxed);
+        let dir =
+            std::env::temp_dir().join(format!("dd-run-single-{tag}-{}-{id}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("创建 socket 测试目录");
+        dir.join("dd-run.sock")
+    }
+
+    #[cfg(all(test, unix))]
+    #[test]
+    fn p1_15_live_socket_is_not_removed() {
+        use std::os::unix::net::{UnixListener, UnixStream};
+
+        let path = temp_socket_path("live");
+        let listener = UnixListener::bind(&path).expect("绑定活 socket");
+        assert!(matches!(
+            acquire_unix_socket(&path),
+            Err(UnixAcquireError::AlreadyRunning)
+        ));
+        assert!(UnixStream::connect(&path).is_ok(), "活 socket 必须保留");
+        drop(listener);
+        let _ = std::fs::remove_dir_all(path.parent().unwrap());
+    }
+
+    #[cfg(all(test, unix))]
+    #[test]
+    fn p1_15_stale_socket_is_reclaimed() {
+        use std::os::unix::net::{UnixListener, UnixStream};
+
+        let path = temp_socket_path("stale");
+        let listener = UnixListener::bind(&path).expect("绑定 socket");
+        drop(listener);
+        assert!(path.exists(), "listener drop 后路径应残留");
+        acquire_unix_socket(&path).expect("崩溃残留应自愈");
+        assert!(UnixStream::connect(&path).is_ok(), "新 listener 应可连接");
+        let _ = std::fs::remove_dir_all(path.parent().unwrap());
+    }
+
+    #[cfg(all(test, unix))]
+    #[test]
+    fn p1_15_quarantine_name_stays_short() {
+        let path = temp_socket_path("short-quarantine");
+        let quarantine = quarantine_socket_path(&path);
+        assert_eq!(quarantine.parent(), path.parent());
+        assert!(quarantine.file_name().unwrap().len() <= 32);
+        let _ = std::fs::remove_dir_all(path.parent().unwrap());
+    }
+
+    #[cfg(all(test, unix))]
+    #[test]
+    fn p1_15_socket_path_symlink_is_not_followed_or_removed() {
+        use std::os::unix::fs::symlink;
+
+        let path = temp_socket_path("socket-symlink");
+        let target = path.parent().unwrap().join("keep.txt");
+        std::fs::write(&target, b"keep me").expect("写普通文件");
+        symlink(&target, &path).expect("建 socket 路径 symlink");
+        assert!(matches!(
+            acquire_unix_socket(&path),
+            Err(UnixAcquireError::UnsafePath(_))
+        ));
+        assert_eq!(std::fs::read(&target).unwrap(), b"keep me");
+        assert!(std::fs::symlink_metadata(&path)
+            .unwrap()
+            .file_type()
+            .is_symlink());
+        let _ = std::fs::remove_dir_all(path.parent().unwrap());
+    }
+
+    #[cfg(all(test, unix))]
+    #[test]
+    fn p1_15_quarantine_rename_never_overwrites_existing_path() {
+        let socket_path = temp_socket_path("rename-noreplace");
+        let dir = socket_path.parent().unwrap();
+        let source = dir.join("source");
+        let target = dir.join("target");
+        std::fs::write(&source, b"source").expect("写源文件");
+        std::fs::write(&target, b"target").expect("写目标文件");
+        assert!(matches!(
+            rename_socket_noreplace(&source, &target),
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists
+        ));
+        assert_eq!(std::fs::read(&source).unwrap(), b"source");
+        assert_eq!(std::fs::read(&target).unwrap(), b"target");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[cfg(all(test, unix))]
+    #[test]
+    fn p1_15_symlink_lock_file_is_rejected() {
+        use std::os::unix::fs::symlink;
+
+        let path = temp_socket_path("lock-symlink");
+        let target = path.parent().unwrap().join("keep.txt");
+        std::fs::write(&target, b"keep me").expect("写锁目标");
+        let mut lock_name = path.as_os_str().to_os_string();
+        lock_name.push(".lock");
+        symlink(&target, std::path::PathBuf::from(lock_name)).expect("建锁 symlink");
+        let listener = std::os::unix::net::UnixListener::bind(&path).expect("绑定残留 socket");
+        drop(listener);
+        assert!(matches!(
+            acquire_unix_socket(&path),
+            Err(UnixAcquireError::UnsafePath(_))
+        ));
+        assert_eq!(std::fs::read(&target).expect("锁目标仍在"), b"keep me");
+        assert!(path.exists(), "socket 不得被不安全的锁路径清理");
+        let _ = std::fs::remove_dir_all(path.parent().unwrap());
+    }
+
+    #[cfg(all(test, unix))]
+    #[test]
+    fn p1_15_regular_file_is_never_deleted() {
+        let path = temp_socket_path("regular");
+        std::fs::write(&path, b"keep me").expect("写普通文件");
+        assert!(matches!(
+            acquire_unix_socket(&path),
+            Err(UnixAcquireError::UnsafePath(_))
+        ));
+        assert_eq!(std::fs::read(&path).expect("文件仍在"), b"keep me");
+        let _ = std::fs::remove_dir_all(path.parent().unwrap());
+    }
+
+    #[cfg(all(test, unix))]
+    #[test]
+    fn p1_15_cross_process_acquirers_allow_exactly_one() {
+        const N: usize = 4;
+        let path = temp_socket_path("cross-process");
+        let mut children = Vec::new();
+        for _ in 0..N {
+            children.push(
+                std::process::Command::new(std::env::current_exe().unwrap())
+                    .args(["--exact", "tests::p1_15_child_acquire", "--ignored"])
+                    .env("DDRUN_TEST_SOCKET", &path)
+                    .spawn()
+                    .expect("启动子进程"),
+            );
+        }
+        let mut acquired = 0;
+        let mut already_running = 0;
+        for child in children {
+            let status = child.wait_with_output().expect("等待子进程");
+            match status.status.code() {
+                Some(0) => acquired += 1,
+                Some(2) => already_running += 1,
+                code => panic!("子进程异常退出：{code:?}"),
+            }
+        }
+        assert_eq!(acquired, 1);
+        assert_eq!(already_running, N - 1);
+        let _ = std::fs::remove_dir_all(path.parent().unwrap());
+    }
+
+    #[cfg(all(test, unix))]
+    #[ignore]
+    #[test]
+    fn p1_15_child_acquire() {
+        let path = std::env::var_os("DDRUN_TEST_SOCKET").expect("测试 socket 路径");
+        match acquire_unix_socket(std::path::Path::new(&path)) {
+            Ok(()) => {
+                std::thread::sleep(std::time::Duration::from_secs(10));
+                std::process::exit(0);
+            }
+            Err(UnixAcquireError::AlreadyRunning) => std::process::exit(2),
+            Err(_) => std::process::exit(3),
+        }
+    }
+
+    #[cfg(all(test, unix))]
+    #[test]
+    fn p1_15_concurrent_acquirers_allow_exactly_one() {
+        const N: usize = 8;
+        let path = Arc::new(temp_socket_path("concurrent"));
+        let barrier = Arc::new(Barrier::new(N));
+        let (tx, rx) = mpsc::channel();
+        std::thread::scope(|scope| {
+            for _ in 0..N {
+                let tx = tx.clone();
+                let path = Arc::clone(&path);
+                let barrier = Arc::clone(&barrier);
+                scope.spawn(move || {
+                    barrier.wait();
+                    tx.send(acquire_unix_socket(&path)).expect("发送结果");
+                });
+            }
+        });
+        drop(tx);
+
+        let mut acquired = 0;
+        let mut already_running = 0;
+        for _ in 0..N {
+            match rx.recv().expect("收到并发结果") {
+                Ok(()) => acquired += 1,
+                Err(UnixAcquireError::AlreadyRunning) => already_running += 1,
+                other => panic!("不应出现不安全路径或 IO 降级：{other:?}"),
+            }
+        }
+        assert_eq!(acquired, 1, "并发只放行一个实例");
+        assert_eq!(already_running, N - 1);
+    }
+}

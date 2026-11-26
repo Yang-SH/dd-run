@@ -313,16 +313,30 @@ jobs:
       - name: Cache cargo
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
 
-      # 金图正典 = CI runner（2026-10-31 迁移记档）：GH Windows 镜像 10-25
-      # 轮换后 WARP 文字光栅化漂移，与 10-25 金图 ~700-9900 像素/图失配
-      # （本机对旧金图 6/6 全绿 = 漂移在 runner 侧；windows-2022/latest 同款
-      # = 钉扎不成立；kittest max_failed_pixels 文档红线弃用）。现行金图 =
-      # R9（run 41157013020）于本 job 重生成后入库；新金图重生成流程 =
-      # 临时换 UPDATE_SNAPSHOTS=1 + base64 落日志回传（28ce0b6 先例）→
-      # 解码入库 → 还原本步。本机 opt-in 比对失配属已知环境差异（测试模块
-      # 头注记记档），护栏职责由本 job 独担。
-      - name: Snapshot tests (golden comparison)
-        run: cargo test -p dd-gui --lib snapshot -- --ignored
+      # 一次性金图重生成（2026-11-26，回写提交即还原为比对模式）：新增
+      # P2-7 `?` 页快照，沿用 28ce0b6 的 CI runner 正典流程；同时输出全部
+      # 金图 SHA256，确认既有六图没有随镜像漂移。
+      - name: Snapshot tests (golden regeneration, one-shot)
+        shell: pwsh
+        run: |
+          $env:UPDATE_SNAPSHOTS = "1"
+          cargo test -p dd-gui --lib snapshot -- --ignored
+          if ($LASTEXITCODE -ne 0) { throw "snapshot regeneration run failed (exit $LASTEXITCODE)" }
+          Get-ChildItem "crates/dd-gui/tests/snapshots/*.png" |
+            Where-Object { $_.Name -notmatch '\.(diff|new|old)\.png$' } |
+            ForEach-Object {
+              $hash = (Get-FileHash -Algorithm SHA256 $_.FullName).Hash
+              Write-Host "== GOLDEN-SHA $($_.Name) size=$($_.Length) sha256=$hash =="
+            }
+          $golden = "crates/dd-gui/tests/snapshots/help_page.png"
+          if (-not (Test-Path $golden)) { throw "help_page.png was not generated" }
+          $b64 = [Convert]::ToBase64String([IO.File]::ReadAllBytes($golden))
+          Write-Host "== GOLDEN-BEGIN help_page.png =="
+          for ($i = 0; $i -lt $b64.Length; $i += 4000) {
+            $j = [Math]::Min(4000, $b64.Length - $i)
+            Write-Host $b64.Substring($i, $j)
+          }
+          Write-Host "== GOLDEN-END help_page.png =="
 
   # §4.5（dd-run-改进分析.md）：性能趋势回归——PR base 与 head 各跑一遍
   # criterion bench（fast 参数压时长），共享 CARGO_TARGET_DIR 后用

@@ -105,6 +105,9 @@ pub struct Settings {
     /// 唤起按目标屏工作区 clamp 恢复）。**机器态**——N5 导出剥离（同
     /// `panel_size` 分辨率相关口径）。
     pub panel_last_pos: Option<(i32, i32)>,
+    /// P1-17：同一面板位置的物理像素存档；隐藏时用窗口实际 ppp 换算，
+    /// 唤起时直接用于选屏，避免重启后跨 DPI 误选。机器态，导出剥离。
+    pub panel_last_pos_physical: Option<(i32, i32)>,
     /// 界面语言偏好（v4.13 D38：默认 FollowSystem；只存用户偏好——
     /// 运行时解析后的生效语言存 `PaletteApp.lang_effective`）。
     pub lang: Lang,
@@ -333,6 +336,7 @@ impl Default for Settings {
             panel_size: None,
             panel_pos_mode: PanelPosMode::default(),
             panel_last_pos: None,
+            panel_last_pos_physical: None,
             lang: Lang::default(),
             density: ListDensity::default(),
             search_apps: true,
@@ -431,6 +435,7 @@ impl Settings {
             // config.json 本身要消费，归已知键）
             "panel_pos_mode",
             "panel_last_pos",
+            "panel_last_pos_physical",
             "lang",
             "density",
             "search_apps",
@@ -678,6 +683,15 @@ impl Settings {
             let y = a[1].as_i64()?;
             Some((x as i32, y as i32))
         });
+        s.panel_last_pos_physical = v.get("panel_last_pos_physical").and_then(|x| {
+            let a = x.as_array()?;
+            if a.len() != 2 {
+                return None;
+            }
+            let x = i32::try_from(a[0].as_i64()?).ok()?;
+            let y = i32::try_from(a[1].as_i64()?).ok()?;
+            Some((x, y))
+        });
         // 自定义直达命令（N1，2026-10-04）：字段缺失（旧版本配置）→ 默认空；
         // 逐条经 `CustomCommand::new` 校验规范化，非法条目跳过（与搜索引擎
         // 同口径）。
@@ -818,6 +832,10 @@ impl Settings {
             },
             "panel_pos_mode": self.panel_pos_mode.as_str(),
             "panel_last_pos": match self.panel_last_pos {
+                Some((x, y)) => serde_json::json!([x, y]),
+                None => serde_json::Value::Null,
+            },
+            "panel_last_pos_physical": match self.panel_last_pos_physical {
                 Some((x, y)) => serde_json::json!([x, y]),
                 None => serde_json::Value::Null,
             },
@@ -1009,6 +1027,7 @@ impl Settings {
         obj.remove("panel_size");
         // N21：panel_last_pos 亦属机器/分辨率相关态——剥离同 panel_size 口径
         obj.remove("panel_last_pos");
+        obj.remove("panel_last_pos_physical");
         obj.insert(
             BACKUP_VERSION_KEY.to_string(),
             serde_json::json!(crate::aggregator::HOST_VERSION),
@@ -1054,6 +1073,7 @@ impl Settings {
         s.panel_size = current.panel_size;
         // N21：panel_last_pos 属机器态——同 panel_size 保留本机现值
         s.panel_last_pos = current.panel_last_pos;
+        s.panel_last_pos_physical = current.panel_last_pos_physical;
         s.hotkey_mods = current.hotkey_mods;
         s.hotkey_vk = current.hotkey_vk;
         // N17：命令热键绑定属机器态（组合键占用属机器环境，与 hotkey_mods/vk

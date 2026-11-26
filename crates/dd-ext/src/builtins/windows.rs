@@ -119,11 +119,110 @@ fn handle_invoke(params: &InvokeParams) -> (CommandResult, Vec<Effect>) {
     }
 }
 
+#[cfg(any(windows, test))]
+const SW_RESTORE_CMD: i32 = 1;
+#[cfg(any(windows, test))]
+const SW_SHOWMINNOACTIVE_CMD: i32 = 7;
+
+#[cfg(any(windows, test))]
+trait WindowActivationOps {
+    fn is_iconic(&mut self, hwnd: isize) -> bool;
+    fn is_window_visible(&mut self, hwnd: isize) -> bool;
+    fn show_window(&mut self, hwnd: isize, command: i32) -> Result<(), String>;
+    fn foreground_window(&mut self) -> isize;
+    fn window_thread_id(&self, hwnd: isize) -> u32;
+    fn attach_thread_input(&mut self, from: u32, to: u32) -> bool;
+    fn detach_thread_input(&mut self, from: u32, to: u32) -> bool;
+    fn set_foreground_window(&mut self, hwnd: isize) -> Result<(), String>;
+}
+
+#[cfg(any(windows, test))]
+fn activate_window_with(hwnd: isize, ops: &mut impl WindowActivationOps) -> Result<(), String> {
+    let original_foreground = ops.foreground_window();
+    let was_iconic = ops.is_iconic(hwnd);
+    if was_iconic {
+        ops.show_window(hwnd, SW_RESTORE_CMD)
+            .map_err(|e| format!("窗口恢复失败：{e}"))?;
+    }
+    if ops.is_iconic(hwnd) || !ops.is_window_visible(hwnd) {
+        return Err("窗口恢复后不可见或仍处于最小化态".to_string());
+    }
+
+    let original_tid = ops.window_thread_id(original_foreground);
+    let target_tid = ops.window_thread_id(hwnd);
+    let attached = original_tid != 0
+        && target_tid != 0
+        && original_tid != target_tid
+        && ops.attach_thread_input(original_tid, target_tid);
+    let result = ops.set_foreground_window(hwnd);
+    let failure = match result {
+        Err(e) => Some(e),
+        Ok(()) if ops.foreground_window() != hwnd => {
+            Some("SetForegroundWindow 返回成功但前台 HWND 未切换".to_string())
+        }
+        Ok(()) => None,
+    };
+    if let Some(mut failure) = failure {
+        if let Err(rollback_error) = rollback_activation(ops, original_foreground, hwnd, was_iconic)
+        {
+            failure.push_str(&format!("；回滚失败：{rollback_error}"));
+        }
+        let detach_failed = attached && !ops.detach_thread_input(original_tid, target_tid);
+        if detach_failed {
+            failure.push_str("；解附着失败");
+        }
+        return Err(failure);
+    }
+    if attached && !ops.detach_thread_input(original_tid, target_tid) {
+        let mut failure = "解附着失败".to_string();
+        if let Err(rollback_error) = rollback_activation(ops, original_foreground, hwnd, was_iconic)
+        {
+            failure.push_str(&format!("；回滚失败：{rollback_error}"));
+        }
+        if !ops.detach_thread_input(original_tid, target_tid) {
+            failure.push_str("；重试解附着失败");
+        }
+        return Err(failure);
+    }
+    Ok(())
+}
+
+#[cfg(any(windows, test))]
+fn rollback_activation(
+    ops: &mut impl WindowActivationOps,
+    original_foreground: isize,
+    hwnd: isize,
+    was_iconic: bool,
+) -> Result<(), String> {
+    let mut errors = Vec::new();
+    if was_iconic {
+        if let Err(e) = ops.show_window(hwnd, SW_SHOWMINNOACTIVE_CMD) {
+            errors.push(format!("最小化恢复失败：{e}"));
+        }
+    }
+    if original_foreground != 0 {
+        if let Err(e) = ops.set_foreground_window(original_foreground) {
+            errors.push(format!("焦点恢复失败：{e}"));
+        }
+    }
+    if original_foreground != 0 && ops.foreground_window() != original_foreground {
+        errors.push("焦点恢复后 HWND 不一致".to_string());
+    }
+    if ops.is_iconic(hwnd) != was_iconic {
+        errors.push("最小化态恢复后不一致".to_string());
+    }
+    if errors.is_empty() {
+        Ok(())
+    } else {
+        Err(errors.join("；"))
+    }
+}
+
 // ── Windows 实实现 ─────────────────────────────────────────────────────────────
 
 #[cfg(windows)]
 mod imp {
-    use super::WindowEntry;
+    use super::{activate_window_with, WindowActivationOps, WindowEntry};
     use windows_sys::Win32::Foundation::{CloseHandle, HWND, LPARAM};
     use windows_sys::Win32::Graphics::Dwm::{DwmGetWindowAttribute, DWMWA_CLOAKED};
     use windows_sys::Win32::System::Threading::{
@@ -133,7 +232,7 @@ mod imp {
     use windows_sys::Win32::UI::WindowsAndMessaging::{
         EnumWindows, GetForegroundWindow, GetWindowLongW, GetWindowTextLengthW, GetWindowTextW,
         GetWindowThreadProcessId, IsIconic, IsWindowVisible, SetForegroundWindow, ShowWindow,
-        GWL_EXSTYLE, SW_RESTORE, WS_EX_TOOLWINDOW,
+        GWL_EXSTYLE, WS_EX_TOOLWINDOW,
     };
 
     /// 枚举原始候选（过滤前置字段——`keep` 纯谓词消费，可注入单测）。
@@ -236,32 +335,50 @@ mod imp {
             .collect()
     }
 
-    /// 激活（经典前台锁规避）：最小化先 `SW_RESTORE`；`AttachThreadInput`
-    /// （当前前台线程 ↔ 目标线程）后 `SetForegroundWindow` 再分离；失败 =
-    /// UIPI 拒绝（提权窗口）→ 调用方 toast 降级（方案边界）。
-    pub(crate) fn activate_window(hwnd: isize) -> Result<(), String> {
-        let h = hwnd as HWND;
-        unsafe {
-            if IsIconic(h) != 0 {
-                ShowWindow(h, SW_RESTORE);
-            }
-            let fg = GetForegroundWindow();
-            let fg_tid = GetWindowThreadProcessId(fg, std::ptr::null_mut());
-            let target_tid = GetWindowThreadProcessId(h, std::ptr::null_mut());
-            let attached = fg_tid != 0
-                && target_tid != 0
-                && fg_tid != target_tid
-                && AttachThreadInput(fg_tid, target_tid, 1) != 0;
-            let ok = SetForegroundWindow(h) != 0;
-            if attached {
-                AttachThreadInput(fg_tid, target_tid, 0);
-            }
-            if ok {
-                Ok(())
-            } else {
+    struct Win32WindowOps;
+
+    impl WindowActivationOps for Win32WindowOps {
+        fn is_iconic(&mut self, hwnd: isize) -> bool {
+            unsafe { IsIconic(hwnd as HWND) != 0 }
+        }
+
+        fn is_window_visible(&mut self, hwnd: isize) -> bool {
+            unsafe { IsWindowVisible(hwnd as HWND) != 0 }
+        }
+
+        fn show_window(&mut self, hwnd: isize, command: i32) -> Result<(), String> {
+            unsafe { ShowWindow(hwnd as HWND, command) };
+            Ok(())
+        }
+
+        fn foreground_window(&mut self) -> isize {
+            unsafe { GetForegroundWindow() as isize }
+        }
+
+        fn window_thread_id(&self, hwnd: isize) -> u32 {
+            unsafe { GetWindowThreadProcessId(hwnd as HWND, std::ptr::null_mut()) }
+        }
+
+        fn attach_thread_input(&mut self, from: u32, to: u32) -> bool {
+            unsafe { AttachThreadInput(from, to, 1) != 0 }
+        }
+
+        fn detach_thread_input(&mut self, from: u32, to: u32) -> bool {
+            unsafe { AttachThreadInput(from, to, 0) != 0 }
+        }
+
+        fn set_foreground_window(&mut self, hwnd: isize) -> Result<(), String> {
+            if unsafe { SetForegroundWindow(hwnd as HWND) } == 0 {
                 Err("SetForegroundWindow 失败（可能为提权窗口，UIPI 边界）".to_string())
+            } else {
+                Ok(())
             }
         }
+    }
+
+    /// 激活后复核前台 HWND；失败恢复原焦点与最小化态。
+    pub(crate) fn activate_window(hwnd: isize) -> Result<(), String> {
+        activate_window_with(hwnd, &mut Win32WindowOps)
     }
 }
 
@@ -340,5 +457,214 @@ mod tests {
             .map(|w| window_item(&w))
             .collect();
         assert_eq!(items.len(), 50, "cap 50");
+    }
+
+    struct FakeWindowOps {
+        foreground: isize,
+        foreground_after_set: Option<isize>,
+        minimized: bool,
+        visible: bool,
+        restore_error: bool,
+        restore_noop: bool,
+        set_error: bool,
+        rollback_focus_error: bool,
+        rollback_minimize_error: bool,
+        attach_ok: bool,
+        detach_ok: bool,
+        actions: Vec<(&'static str, isize, i32)>,
+    }
+
+    impl FakeWindowOps {
+        fn new() -> Self {
+            Self {
+                foreground: 1,
+                foreground_after_set: None,
+                minimized: false,
+                visible: true,
+                restore_error: false,
+                restore_noop: false,
+                set_error: false,
+                rollback_focus_error: false,
+                rollback_minimize_error: false,
+                attach_ok: true,
+                detach_ok: true,
+                actions: Vec::new(),
+            }
+        }
+    }
+
+    impl WindowActivationOps for FakeWindowOps {
+        fn is_window_visible(&mut self, _hwnd: isize) -> bool {
+            self.visible
+        }
+
+        fn is_iconic(&mut self, hwnd: isize) -> bool {
+            self.actions.push(("iconic", hwnd, 0));
+            self.minimized
+        }
+
+        fn show_window(&mut self, hwnd: isize, command: i32) -> Result<(), String> {
+            self.actions.push(("show", hwnd, command));
+            if command == SW_RESTORE_CMD {
+                if self.restore_error {
+                    return Err("restore failed".to_string());
+                }
+                if !self.restore_noop {
+                    self.minimized = false;
+                    self.visible = true;
+                }
+            } else if command == SW_SHOWMINNOACTIVE_CMD {
+                if self.rollback_minimize_error {
+                    return Err("minimize rollback failed".to_string());
+                }
+                self.minimized = true;
+            }
+            Ok(())
+        }
+
+        fn foreground_window(&mut self) -> isize {
+            self.actions.push(("foreground", 0, 0));
+            self.foreground
+        }
+
+        fn window_thread_id(&self, hwnd: isize) -> u32 {
+            match hwnd {
+                1 => 10,
+                10 => 20,
+                _ => 0,
+            }
+        }
+
+        fn attach_thread_input(&mut self, _from: u32, _to: u32) -> bool {
+            self.actions.push(("attach", 0, 0));
+            self.attach_ok
+        }
+
+        fn detach_thread_input(&mut self, _from: u32, _to: u32) -> bool {
+            self.actions.push(("detach", 0, 0));
+            self.detach_ok
+        }
+
+        fn set_foreground_window(&mut self, hwnd: isize) -> Result<(), String> {
+            self.actions.push(("set", hwnd, 0));
+            if hwnd == 10 && self.set_error {
+                return Err("SetForegroundWindow denied".to_string());
+            }
+            if hwnd == 1 && self.rollback_focus_error {
+                return Err("focus rollback failed".to_string());
+            }
+            self.foreground = if hwnd == 10 {
+                self.foreground_after_set.unwrap_or(hwnd)
+            } else {
+                hwnd
+            };
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn p1_14_activation_verifies_foreground_and_restores_minimized_target() {
+        let mut ops = FakeWindowOps::new();
+        ops.minimized = true;
+        ops.foreground_after_set = Some(99);
+        let err = activate_window_with(10, &mut ops).expect_err("焦点未落到目标必须失败");
+        assert!(err.contains("前台"), "{err}");
+        assert_eq!(ops.foreground, 1, "失败后恢复原焦点");
+        assert!(ops.minimized, "失败后恢复原最小化态");
+        assert_eq!(ops.actions[0], ("foreground", 0, 0));
+        assert_eq!(ops.actions[1], ("iconic", 10, 0));
+        assert!(ops.actions.contains(&("set", 1, 0)));
+        assert!(ops.actions.contains(&("show", 10, SW_SHOWMINNOACTIVE_CMD)));
+    }
+
+    #[test]
+    fn p1_14_activation_success_keeps_target_restored() {
+        let mut ops = FakeWindowOps::new();
+        ops.minimized = true;
+        activate_window_with(10, &mut ops).expect("目标成为前台即成功");
+        assert_eq!(ops.foreground, 10);
+        assert!(!ops.minimized);
+        assert!(!ops.actions.contains(&("set", 1, 0)));
+        assert!(!ops.actions.contains(&("show", 10, SW_SHOWMINNOACTIVE_CMD)));
+        assert!(ops.actions.contains(&("detach", 0, 0)));
+    }
+
+    #[test]
+    fn p1_14_activation_failure_restores_focus_without_minimizing_normal_target() {
+        let mut ops = FakeWindowOps::new();
+        ops.set_error = true;
+        let err = activate_window_with(10, &mut ops).expect_err("提权拒绝必须失败");
+        assert!(err.contains("SetForegroundWindow"), "{err}");
+        assert_eq!(ops.foreground, 1);
+        assert!(!ops.minimized);
+        assert!(!ops.actions.contains(&("show", 10, SW_SHOWMINNOACTIVE_CMD)));
+        assert!(ops.actions.contains(&("set", 1, 0)));
+    }
+
+    #[test]
+    fn p1_14_restore_must_leave_target_visible() {
+        let mut ops = FakeWindowOps::new();
+        ops.visible = false;
+        ops.restore_noop = true;
+        assert!(activate_window_with(10, &mut ops).is_err());
+        assert!(!ops.actions.iter().any(|action| action.0 == "set"));
+    }
+
+    #[test]
+    fn p1_14_detach_failure_rolls_back_and_retries() {
+        let mut ops = FakeWindowOps::new();
+        ops.minimized = true;
+        ops.detach_ok = false;
+        let err = activate_window_with(10, &mut ops).expect_err("解附着失败必须上报");
+        assert!(err.contains("解附着失败"), "{err}");
+        assert_eq!(ops.foreground, 1, "解附着失败也必须恢复原焦点");
+        assert!(ops.minimized, "解附着失败也必须恢复原最小化态");
+        let first_detach = ops.actions.iter().position(|a| a.0 == "detach").unwrap();
+        let restore_focus = ops
+            .actions
+            .iter()
+            .position(|a| a.0 == "set" && a.1 == 1)
+            .unwrap();
+        let second_detach = ops
+            .actions
+            .iter()
+            .skip(first_detach + 1)
+            .position(|a| a.0 == "detach");
+        assert!(restore_focus > first_detach, "首次解附着失败后才回滚");
+        assert!(second_detach.is_some(), "回滚后应重试解附着");
+    }
+
+    #[test]
+    fn p1_14_rollback_failure_is_reported_after_detach() {
+        let mut ops = FakeWindowOps::new();
+        ops.minimized = true;
+        ops.set_error = true;
+        ops.rollback_focus_error = true;
+        let err = activate_window_with(10, &mut ops).expect_err("回滚失败必须显式上报");
+        assert!(err.contains("回滚失败"), "{err}");
+        let detach = ops.actions.iter().position(|a| a.0 == "detach").unwrap();
+        let restore_focus = ops
+            .actions
+            .iter()
+            .position(|a| a.0 == "set" && a.1 == 1)
+            .unwrap();
+        assert!(detach > restore_focus, "附着必须保持到回滚完成之后");
+    }
+
+    #[test]
+    fn p1_14_activation_tolerates_attach_failure_when_target_gets_focus() {
+        let mut ops = FakeWindowOps::new();
+        ops.attach_ok = false;
+        activate_window_with(10, &mut ops).expect("attach 失败不否决实际焦点结果");
+        assert!(!ops.actions.contains(&("detach", 0, 0)));
+    }
+
+    #[test]
+    fn p1_14_restore_failure_stops_before_activation() {
+        let mut ops = FakeWindowOps::new();
+        ops.minimized = true;
+        ops.restore_error = true;
+        assert!(activate_window_with(10, &mut ops).is_err());
+        assert!(!ops.actions.iter().any(|action| action.0 == "set"));
     }
 }

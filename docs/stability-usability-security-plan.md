@@ -1,6 +1,6 @@
 # dd-run 稳定性 · 可用性 · 安全性加固方案（R 系列）
 
-> **状态**：已落地（R1–R26 代码与可做真机腿已收口；余 R-21 他机腿 / V-14 多屏腿待特定硬件——V-7 已随 2026-10-07 批量确认收口）｜ **版本**：v1.26 ｜ **最后更新**：2026-10-28
+> **状态**：已落地（R1–R26 代码与可做真机腿已收口；P1-15 Unix socket 与 P1-17 目标屏 DPI 加固已落地，余 R-21 他机腿 / V-14 多屏腿待特定硬件——V-7 已随 2026-10-07 批量确认收口）｜ **版本**：v1.28 ｜ **最后更新**：2026-11-25
 > **关联**：[security-audit-2026-09-23.md](./security-audit-2026-09-23.md)（S-01–S-11 已闭环，本文不重复）· [future-features-plan.md](./future-features-plan.md)（N1–N5 功能向，本文不重叠）· [optimization-plan.md](./optimization-plan.md) · [search-file.md](./search-file.md) · [search.md](./search.md) · [implementation.md](./implementation.md) · [protocol.md](./protocol.md) · [manifest-schema.md](./manifest-schema.md) · [INDEX.md](./INDEX.md)
 
 ---
@@ -161,9 +161,10 @@ S-01–S-11 修复逐项复核与审计记录一致；manifest/exe 双哈希**�
 - **证据**：全仓 grep 无 `CreateMutexW` / 单实例检测（2026-09-29 复核）。双开的实际后果与本方案三项直接冲突：① 第二实例热键注册失败 → R-15 toast「可能被其他程序占用」，**误导排障方向**（真凶是自己）；② 托盘双图标；③ config.json 并发写——R-02 原子写只保证文件不损坏，**不解决 last-writer-wins 丢设置**。
 - **方案**：启动早期（O4 init 之后、eframe 创建之前）`CreateMutexW`（命名 `Local\dd-run-single-instance`）；`ERROR_ALREADY_EXISTS` → `MessageBoxW`（user32 已链接，零新依赖）提示「dd-run 已在运行」后退出。属启动行为变更，按改造型纪律放批四。
 - **验收**（三口径，见 §6.5）：
-  - 单测不可达（进程级互斥）→ **代码评审口径**：互斥体命名、句柄随进程退出释放的语义注释声明；
+  - Windows 进程级互斥仍为代码评审口径；Unix 新增清理分类单测与活 socket/崩溃残留/普通文件/并发四类集成测试，Linux/macOS 编译通过、真实运行待 CI；
   - 真机 V-15（双开→第二实例弹「已在运行」退出、原实例热键 / 托盘 / 设置三面无损；附带开机自启复启一次）；
   - 回归：单实例启动与自启路径行为不变。
+- **2026-11-25 P1-15 加固**：Unix 改 bind 优先，`AddrInUse` 后在 `flock` 清理锁内复查；仅当前 euid 的 socket 且 connect 明确 `ConnectionRefused` 才删除，普通文件、symlink、他人 socket 与证据不足路径拒绝删除。
 
 ---
 
@@ -344,7 +345,7 @@ S-01–S-11 修复逐项复核与审计记录一致；manifest/exe 双哈希**�
 | V-11 | 构造指向死 UNC 的 `.lnk` 后首屏聚合 | R-04 | 超时阈值 T（初值 5 s）内返回 `Timeout`；首屏可降级落地，apps 呈 Failed + Retry，无永久「加载中」 |
 | V-12 | 运行剪贴板占用器后执行 `host/set_clipboard` | R-07 | 面板无卡顿，复制结果 toast 正常 |
 | V-13 | 挂机 24 h（面板常驻）+ 唤起-隐藏 500 次循环后记录 RSS | 稳定运行全局 | 首轮建立**内存基线**并回写 implementation.md §3.1 台账；此后每次走查对比，RSS 增量超基线 +50 MB（或 +30%，取大者）须排查后方可放行（同时为 §7 icon_cache 缓办项提供转正/继续缓办的数据依据） |
-| V-14 | 多显示器热拔插 / DPI 变更 / RDP 断连重连期间反复唤起-隐藏 | R-01（同类触发族） | 无崩溃，`screen_rect` 解析降级正常，窗口落在可见屏 |
+| V-14 | 多显示器热拔插 / DPI 变更 / RDP 断连重连期间反复唤起-隐藏 | R-01（同类触发族） | 无崩溃，`screen_rect` 解析降级正常，窗口落在可见屏；P1-17 目标屏 DPI 与超小屏居中代码已落地，纯函数/主屏 API 测试通过，真实多屏/RDP 仍待硬件 |
 | V-15 | 面板运行中再次启动 dd-run.exe（双开） | R-26 | 第二实例弹「已在运行」提示后退出；原实例热键 / 托盘 / 设置读写不受影响 |
 | V-16 | 注入一次 panic（debug 构建或临时探针） | R-25 | `%APPDATA%\dd-run\logs\panic.log` 追加一条含时间戳 / message / location 的记录；hook 自身失败不产生二次 panic |
 
@@ -480,4 +481,6 @@ S-01–S-11 修复逐项复核与审计记录一致；manifest/exe 双哈希**�
 | v1.23 | 2026-10-07 | **R-08 sidecar 链路冒烟完成（三口径收口，批一至此全勾）**：停用户会话 Everything（服务实例不承载 IPC 窗口，实测 rc=8）→ `DDRUN_ES_PATH` 桩 es.exe 驱动真实 sidecar 全链路（initialize → get_items）——形态 A（exit 0 + 300 GBK「中」非 JSON stdout）落 `files.error` 且 subtitle **恰 200 字符截断零 panic**；形态 B（exit 8 + 超长 GBK stderr）落「es.exe 退出码 8：…」**不再静默为空结果**；走查后 Everything 已恢复（探活 rc=0）。剩余走查腿均需真实输入/硬件/他机（R-21 / R-22 / R-23 / V-14 多屏腿） |
 | v1.24 | 2026-10-07 | **热键捕获回落模式真机实证 + §7 新增缓办占位**：用户真机截图（回落 toast「系统级捕获不可用（可能被安全软件拦截）」上屏）实证本机捕获恒为基础模式——当前已注册组合（Ctrl+Space）被自家 `RegisterHotKey` 截走，键盘事件不达捕获对话框 → 「无法重录当前热键」；候选 == 当前组合时保存禁用（未改动语义）为设计行为。§7 记档**「捕获期解注册当前组合」缓办占位**（改法 = 进对话框 `UnregisterHotKey` 退出恢复，约 30–50 行，行为变更走方案先行；无拦截机器钩子模式可录，等真实需求立项）。seq 冲突协议真机腿改口径：用可录入组合（如 Ctrl+Alt+P）+ PowerToys 占用验证失败 toast + 未注册徽标 + 自动回滚 |
 | v1.25 | 2026-10-07 | **用户真机批量走查收口**：用户确认「真机走查基本无问题」——本机可做腿按批量确认口径收口：R-22（V-7 IME 回车守卫）、R-23（超长粘贴冒烟）、seq 冲突协议替代腿（含 S-05 审批流同批）、R-15/R-16/R-19 系列 toast 腿与 K 批走查随批量确认通过。**记档口径注**：批量确认为用户总体结论，非逐腿判据 + 截图记录；后续任一腿发现问题即单项重开。**仍待办**：R-21 黄线腿（需无拦截他机）、V-14 多屏腿（需真实多屏/RDP 硬件） |
+| v1.27 | 2026-11-25 | P1-15/P1-17 代码加固：Unix socket bind 优先 + flock + 属主/死链判定；目标屏 DPI 换算与超小屏居中。Rust 788/0/7、Clippy 与 Linux/macOS all-targets check 通过；真实 Unix/多屏腿仍待环境 |
+| v1.28 | 2026-11-25 | 审计修复：Unix 锁/目录不安全 fail-closed、listener 排空探活、短隔离名与跨进程/symlink 回归；P1-14 解附着失败回滚、P1-16 防陈旧句柄误卸。Rust 790/0/7、Node 4/4 |
 | v1.26 | 2026-10-28 | 核对轮头部同步：状态行「余 V-7 真实 IME」表述清零——V-7 已于 v1.25 收口，状态行漏改（无实质变更；[未完善事项清单](./未完善事项清单-2026-10-25.md) v1.1 与 [路线图](./后续开发路线图-2026-10-27.md) v1.3 计数连带修正） |

@@ -13,7 +13,7 @@
 //! 3. **数据**：预发一条**完整** `AggregatePayload`（聚合已完成语义），
 //!    避免 Loading 转圈等逐帧变化；列表内容为固定夹具项。
 //!
-//! 出图 / 更新金图（**必须带 `-- --ignored`**：六测试已标 `#[ignore]`，
+//! 出图 / 更新金图（**必须带 `-- --ignored`**：七测试已标 `#[ignore]`，
 //! 不加则不会执行）：
 //! `UPDATE_SNAPSHOTS=1 cargo test -p dd-gui --lib snapshot -- --ignored`；
 //! 快照文件在 `crates/dd-gui/tests/snapshots/`（kittest 默认位置）。
@@ -286,4 +286,33 @@ fn snapshot_ctx_menu() {
     });
     harness.run();
     harness.snapshot("ctx_menu");
+}
+
+/// 金图 7：`?` 速查页（定位到文件搜索导航键，覆盖 Ctrl+Backspace / Right
+/// 双语说明与选中态）——回归帮助页分组、键位列与说明列排版。
+#[test]
+#[ignore = "需 GPU/wgpu 适配器，由 CI snapshot job 显式运行（-- --ignored）"]
+fn snapshot_help_page() {
+    let mut harness = snapshot_harness(egui::Theme::Dark, fixture_items(), |app| {
+        app.open_help_page();
+    });
+    harness.run();
+    let selected = harness
+        .state()
+        .view
+        .stack
+        .current()
+        .list
+        .filtered()
+        .position(|(_, item)| item.title == "Right")
+        .expect("速查页应包含 Right 键位");
+    harness
+        .state_mut()
+        .view
+        .stack
+        .current_mut()
+        .list
+        .set_selected(selected);
+    harness.run();
+    harness.snapshot("help_page");
 }

@@ -34,7 +34,7 @@ cargo test --workspace
 ## 仓库纪律
 
 - **`Cargo.lock` 零新增**：不加新依赖；确需引入时在 PR 说明理由与体积影响。
-- **行尾 CRLF**：仓库无 `.gitattributes`，新文件请保持 CRLF（`git diff` 出现整文件重写说明行尾被刷，须还原）。
+- **行尾按文件现状保留**：仓库无 `.gitattributes`，不要批量转换行尾；修改现有文件时保持原样，新增文件先参照同类文件。`git diff` 出现整文件重写时先用 `git ls-files --eol` 判断是否为行尾翻转。
 - **文档同步**：`docs/INDEX.md` 是全部文档的唯一导航；行为变更须同步对应契约文档（`docs/protocol.md` / `docs/manifest-schema.md`）与 `CHANGELOG.md`（只加新条目，历史条目不改）。
 - **扩展开发**：见 `docs/extensions.md` 与 `examples/python-minimal/`；清单 schema 见 `docs/manifest-schema.md`，协议见 `docs/protocol.md`。
 

@@ -301,18 +301,9 @@ impl PaletteApp {
             self.show_toast(self.tr("toast.ext_missing").to_string(), Some(3_000));
             return;
         };
-        let mut ledger = TrustLedger::load();
-        if let Err(e) = ledger.record(&ext, decision) {
+        if let Err(e) = TrustLedger::record_decision(&ext, decision) {
             log::warn!("[dd-gui] 信任台账记录失败（{id}）：{e}");
             let msg = self.tr("toast.ext_trust_fail").replace("{e}", &e);
-            self.show_toast(msg, Some(4_000));
-            return;
-        }
-        if let Err(e) = ledger.save() {
-            log::warn!("[dd-gui] 信任台账写盘失败（{id}）：{e}");
-            let msg = self
-                .tr("toast.ext_trust_fail")
-                .replace("{e}", &e.to_string());
             self.show_toast(msg, Some(4_000));
             return;
         }

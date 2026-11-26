@@ -29,6 +29,8 @@ const CONSUMED_KEYS: &[&str] = &[
     "Home / End",
     "PgUp / PgDn",
     "Backspace",
+    "Ctrl+Backspace",
+    "Right",
     "Ctrl+,",
     "Ctrl+F",
     "Shift+F10",
@@ -101,6 +103,18 @@ const HELP_ROWS: &[HelpRow] = &[
         keys: "Backspace",
         zh: "输入框删字 · 退格返回（可配置）",
         en: "Delete char · go back (configurable)",
+        group_key: "help.group.search",
+    },
+    HelpRow {
+        keys: "Ctrl+Backspace",
+        zh: "文件搜索：删除最后一段路径（根目录则清空）",
+        en: "File search: remove last path segment (clear at root)",
+        group_key: "help.group.search",
+    },
+    HelpRow {
+        keys: "Right",
+        zh: "文件搜索：把选中行名补入路径（目录自动加 \\）",
+        en: "File search: append selected row to path (folders get \\)",
         group_key: "help.group.search",
     },
     HelpRow {
@@ -180,6 +194,29 @@ impl crate::app::PaletteApp {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn n14_help_rows_include_file_navigation_keys_in_both_languages() {
+        let zh = help_items(Lang::ZhCn);
+        let en = help_items(Lang::EnUs);
+        for key in ["Ctrl+Backspace", "Right"] {
+            assert!(CONSUMED_KEYS.contains(&key), "速查页键位 {key} 未登记消费");
+            let zh_item = zh
+                .iter()
+                .find(|item| item.title == key)
+                .unwrap_or_else(|| panic!("中文速查页缺少键位 {key}"));
+            let en_item = en
+                .iter()
+                .find(|item| item.title == key)
+                .unwrap_or_else(|| panic!("英文速查页缺少键位 {key}"));
+            assert!(!zh_item.subtitle.is_empty());
+            assert!(!en_item.subtitle.is_empty());
+            assert_ne!(
+                zh_item.subtitle, en_item.subtitle,
+                "键位 {key} 缺少双语说明"
+            );
+        }
+    }
 
     #[test]
     fn n14_help_rows_shape_and_consumed_keys_consistency() {

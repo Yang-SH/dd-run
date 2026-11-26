@@ -80,7 +80,7 @@ impl PaletteApp {
     /// **Windows 走 LL 键盘钩子**（系统级捕获——egui 应用层收不到 Win 键，
     /// 按下即弹开始菜单 + 失焦隐藏，真机 bug 见 `platform::capture_hook`
     /// 模块注释）；钩子安装失败回落 egui 应用层事件路径（Win 不可录）。
-    /// Esc 取消；含 Ctrl/Alt/Win 的候选键生效（纯 Shift/无修饰忽略）。
+    /// 裸 Esc 取消；带 Ctrl/Alt/Win 的 Esc 作为候选键，纯 Shift/无修饰忽略。
     ///
     /// egui 回落路径保留逐事件检查（v4.7 真机反馈修订）：组合键的按下/释放
     /// 常在同一事件批次内完成，`i.modifiers` 快照已是释放后的状态——读
@@ -141,22 +141,24 @@ impl PaletteApp {
             else {
                 continue;
             };
-            if *key == egui::Key::Escape {
-                self.end_hotkey_capture();
-                return;
-            }
             let Some(vk) = Self::capture_vk(*key) else {
                 continue;
             };
             let mods = ((modifiers.ctrl as u32) << 1)
                 | (modifiers.alt as u32)
                 | ((modifiers.shift as u32) << 2);
-            if mods & 0b0011 == 0 {
-                continue; // 需含 Ctrl/Alt：忽略本次按键，继续等待
+            use crate::platform::capture_hook::{classify_capture_key, CaptureKeyAction};
+            match classify_capture_key(vk, mods) {
+                CaptureKeyAction::Cancel => {
+                    self.end_hotkey_capture();
+                    return;
+                }
+                CaptureKeyAction::Combo { mods, vk } => {
+                    self.hotkeys.hotkey_pending = Some((mods, vk));
+                    return;
+                }
+                CaptureKeyAction::Ignore => {}
             }
-            // 回落路径与钩子路径同语义：只记候选，等「保存」确认（见钩子分支）。
-            self.hotkeys.hotkey_pending = Some((mods, vk));
-            return;
         }
     }
 

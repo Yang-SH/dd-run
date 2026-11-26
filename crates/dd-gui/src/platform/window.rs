@@ -3,122 +3,188 @@
 use crate::app::PaletteApp;
 use eframe::egui;
 
+#[cfg(any(windows, test))]
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum WindowPlacement {
+    Clamped(f32, f32),
+    OversizedCentered(f32, f32),
+}
+
+#[cfg(any(windows, test))]
+#[derive(Debug, Clone, Copy)]
+struct TargetWorkArea {
+    work: (f32, f32, f32, f32),
+    ppp: f32,
+}
+
+#[cfg(any(windows, test))]
+fn logical_work_size(work: (f32, f32, f32, f32), ppp: f32) -> (f32, f32) {
+    let ppp = ppp.max(0.5);
+    ((work.2 - work.0) / ppp, (work.3 - work.1) / ppp)
+}
+
+#[cfg(any(windows, test))]
+fn physical_window_size(target: (f32, f32), ppp: f32) -> (f32, f32) {
+    let ppp = ppp.max(0.5);
+    (target.0 * ppp, target.1 * ppp)
+}
+
+#[cfg(any(windows, test))]
+fn centered_position(work: (f32, f32, f32, f32), win_w: f32, win_h: f32) -> (f32, f32) {
+    let work_w = (work.2 - work.0).max(0.0);
+    let work_h = (work.3 - work.1).max(0.0);
+    (
+        work.0 + (work_w - win_w) * 0.5,
+        work.1 + (work_h - win_h) * 0.5,
+    )
+}
+
+#[cfg(any(windows, test))]
+fn viewport_position(physical: (f32, f32), window_ppp: f32) -> (f32, f32) {
+    let window_ppp = window_ppp.max(0.5);
+    (physical.0 / window_ppp, physical.1 / window_ppp)
+}
+
+#[cfg(any(windows, test))]
+fn place_window(
+    x: f32,
+    y: f32,
+    work: (f32, f32, f32, f32),
+    win_w: f32,
+    win_h: f32,
+) -> WindowPlacement {
+    let work_w = (work.2 - work.0).max(0.0);
+    let work_h = (work.3 - work.1).max(0.0);
+    if win_w > work_w || win_h > work_h {
+        let (x, y) = centered_position(work, win_w, win_h);
+        WindowPlacement::OversizedCentered(x, y)
+    } else {
+        let (x, y) = clamp_to_work(x, y, work, win_w, win_h);
+        WindowPlacement::Clamped(x, y)
+    }
+}
+
+#[cfg(any(windows, test))]
+fn restore_physical_position(
+    saved: (f32, f32),
+    area: TargetWorkArea,
+    target: (f32, f32),
+    window_ppp: f32,
+) -> (f32, f32) {
+    let (win_w, win_h) = physical_window_size(target, area.ppp);
+    let placement = place_window(saved.0, saved.1, area.work, win_w, win_h);
+    let (physical_x, physical_y) = match placement {
+        WindowPlacement::Clamped(x, y) | WindowPlacement::OversizedCentered(x, y) => (x, y),
+    };
+    viewport_position((physical_x, physical_y), window_ppp)
+}
+
+#[cfg(windows)]
+fn target_work_area_at(point: (i32, i32), fallback_ppp: f32) -> Option<TargetWorkArea> {
+    use windows_sys::Win32::Foundation::POINT;
+    use windows_sys::Win32::Graphics::Gdi::{
+        GetMonitorInfoW, MonitorFromPoint, MONITORINFO, MONITOR_DEFAULTTONEAREST,
+    };
+    use windows_sys::Win32::UI::HiDpi::{GetDpiForMonitor, MDT_EFFECTIVE_DPI};
+
+    let monitor = unsafe {
+        MonitorFromPoint(
+            POINT {
+                x: point.0,
+                y: point.1,
+            },
+            MONITOR_DEFAULTTONEAREST,
+        )
+    };
+    if monitor.is_null() {
+        log::debug!("[dd-gui] 窗口定位：MonitorFromPoint 无结果，保持原位显示");
+        return None;
+    }
+    let mut info: MONITORINFO = unsafe { std::mem::zeroed() };
+    info.cbSize = std::mem::size_of::<MONITORINFO>() as u32;
+    if unsafe { GetMonitorInfoW(monitor, &mut info) } == 0 {
+        log::warn!("[dd-gui] 窗口定位：GetMonitorInfoW 失败，保持原位显示");
+        return None;
+    }
+    let mut dpi_x = 0u32;
+    let mut dpi_y = 0u32;
+    let hr = unsafe { GetDpiForMonitor(monitor, MDT_EFFECTIVE_DPI, &mut dpi_x, &mut dpi_y) };
+    let ppp = if hr >= 0 && dpi_x > 0 && dpi_y > 0 {
+        ((dpi_x + dpi_y) as f32 / 2.0) / 96.0
+    } else {
+        log::debug!("[dd-gui] 窗口定位：GetDpiForMonitor 失败，回落当前窗口 ppp");
+        fallback_ppp.max(0.5)
+    };
+    Some(TargetWorkArea {
+        work: (
+            info.rcWork.left as f32,
+            info.rcWork.top as f32,
+            info.rcWork.right as f32,
+            info.rcWork.bottom as f32,
+        ),
+        ppp,
+    })
+}
+
+#[cfg(windows)]
+fn cursor_target_work_area(fallback_ppp: f32) -> Option<TargetWorkArea> {
+    use windows_sys::Win32::Foundation::POINT;
+    use windows_sys::Win32::UI::WindowsAndMessaging::GetCursorPos;
+
+    let mut point = POINT { x: 0, y: 0 };
+    if unsafe { GetCursorPos(&mut point) } == 0 {
+        log::warn!("[dd-gui] 窗口定位：GetCursorPos 失败，保持原位显示");
+        return None;
+    }
+    target_work_area_at((point.x, point.y), fallback_ppp)
+}
+
 impl PaletteApp {
-    /// 取"光标所在显示器工作区"的**逻辑尺寸**（物理像素 ÷ `pixels_per_point`），
-    /// 供 v4.12 D37 唤起尺寸自适应（`root_panel_size`/`settings_panel_size`）clamp
-    /// 使用；返回 `None` = 取不到（指针/显示器信息失败），调用方按无 clamp 路径回落。
-    ///
-    /// 与 [`center_on_cursor`] 拆分的原因：原 `send_center_on_cursor` 在发
-    /// `InnerSize` **之前**读取 `inner_rect` 作为居中窗口尺寸——但该尺寸是上一次
-    /// 可见态的遗留值（例如设置页 650×640），而本次 `show()` 实际要显示的是
-    /// 复位后的根页 650×440。用陈旧尺寸居中 + 实际小尺寸渲染 → 面板相对屏心
-    /// 偏移 `(大-小)/2`，表现为"切换设置项后关闭重开面板位置变化"。拆分后
-    /// 先取工作区算目标尺寸，再用目标尺寸精确居中，消除该跳动。
+    /// 光标所在显示器工作区的逻辑尺寸；换算使用目标屏 DPI。
     #[cfg(windows)]
     pub(crate) fn cursor_work_area(&self, ctx: &egui::Context) -> Option<(f32, f32)> {
-        use windows_sys::Win32::Foundation::POINT;
-        use windows_sys::Win32::Graphics::Gdi::{
-            GetMonitorInfoW, MonitorFromPoint, MONITORINFO, MONITOR_DEFAULTTONEAREST,
-        };
-        use windows_sys::Win32::UI::WindowsAndMessaging::GetCursorPos;
-
-        let mut pt = POINT { x: 0, y: 0 };
-        if unsafe { GetCursorPos(&mut pt) } == 0 {
-            log::warn!("[dd-gui] 居中：GetCursorPos 失败，保持原位显示");
-            return None;
-        }
-        let monitor = unsafe { MonitorFromPoint(pt, MONITOR_DEFAULTTONEAREST) };
-        if monitor.is_null() {
-            log::debug!("[dd-gui] 居中：MonitorFromPoint 无结果，保持原位显示");
-            return None;
-        }
-        let mut info: MONITORINFO = unsafe { std::mem::zeroed() };
-        info.cbSize = std::mem::size_of::<MONITORINFO>() as u32;
-        if unsafe { GetMonitorInfoW(monitor, &mut info) } == 0 {
-            log::warn!("[dd-gui] 居中：GetMonitorInfoW 失败，保持原位显示");
-            return None;
-        }
-        let work = info.rcWork; // 工作区（物理像素，不含任务栏）
-        let ppp = ctx.pixels_per_point().max(0.5);
-        Some((
-            (work.right - work.left) as f32 / ppp,
-            (work.bottom - work.top) as f32 / ppp,
-        ))
+        let target = cursor_target_work_area(ctx.pixels_per_point())?;
+        Some(logical_work_size(target.work, target.ppp))
     }
 
-    /// 把 `target`（逻辑点，即本次 `show()` 将要显示的窗口尺寸）居中到
-    /// 光标所在显示器工作区，发送 `OuterPosition`。
-    ///
-    /// 坐标换算：显示器（`rcWork`）与 winit 窗口位置都是**物理像素**，而
-    /// egui `OuterPosition` 期望**逻辑点**（egui-winit 内部按窗口 scale factor
-    /// 再换算回物理）。这里用 `ctx.pixels_per_point()` 作换算率（即当前窗口缩放）。
-    /// 多 DPI 混合屏上目标屏缩放与窗口当前缩放不同时会有几像素偏差——验收标准
-    /// （grills A1："每次唤起居中、无位置跳动"）不要求像素级精确，单屏/同 DPI
-    /// 场景完全居中。
-    ///
-    /// 任一步失败直接返回（指针/显示器信息取不到）：窗口仍正常显示在上一次
-    /// 位置，仅不居中——不让定位失败阻断唤起。
-    #[cfg(windows)]
-    pub(crate) fn center_on_cursor(&self, ctx: &egui::Context, target: (f32, f32)) {
-        use windows_sys::Win32::Foundation::POINT;
-        use windows_sys::Win32::Graphics::Gdi::{
-            GetMonitorInfoW, MonitorFromPoint, MONITORINFO, MONITOR_DEFAULTTONEAREST,
-        };
-        use windows_sys::Win32::UI::WindowsAndMessaging::GetCursorPos;
-
-        let mut pt = POINT { x: 0, y: 0 };
-        if unsafe { GetCursorPos(&mut pt) } == 0 {
-            log::warn!("[dd-gui] 居中：GetCursorPos 失败，保持原位显示");
-            return;
-        }
-        let monitor = unsafe { MonitorFromPoint(pt, MONITOR_DEFAULTTONEAREST) };
-        if monitor.is_null() {
-            log::debug!("[dd-gui] 居中：MonitorFromPoint 无结果，保持原位显示");
-            return;
-        }
-        let mut info: MONITORINFO = unsafe { std::mem::zeroed() };
-        info.cbSize = std::mem::size_of::<MONITORINFO>() as u32;
-        if unsafe { GetMonitorInfoW(monitor, &mut info) } == 0 {
-            log::warn!("[dd-gui] 居中：GetMonitorInfoW 失败，保持原位显示");
-            return;
-        }
-        let work = info.rcWork;
-        let ppp = ctx.pixels_per_point().max(0.5);
-        // 用**目标尺寸**而非 `inner_rect` 的遗留尺寸（见 `cursor_work_area` 注释）。
-        let win_w = target.0 * ppp;
-        let win_h = target.1 * ppp;
-        let cx = work.left as f32 + ((work.right - work.left) as f32 - win_w) * 0.5;
-        let cy = work.top as f32 + ((work.bottom - work.top) as f32 - win_h) * 0.5;
-        log::debug!(
-            "[dd-gui] 唤起居中：光标屏工作区=({},{} {}x{}) 目标={}x{} → ({}, {})",
-            work.left,
-            work.top,
-            work.right - work.left,
-            work.bottom - work.top,
-            target.0,
-            target.1,
-            cx,
-            cy
-        );
-        ctx.send_viewport_cmd(egui::ViewportCommand::OuterPosition(egui::pos2(
-            cx / ppp,
-            cy / ppp,
-        )));
-    }
-
-    /// 非 Windows 占位：取不到工作区，返回 `None`（唤起尺寸不做 clamp）。
+    /// 非 Windows 占位：取不到工作区，返回 `None`。
     #[cfg(not(windows))]
     pub(crate) fn cursor_work_area(&self, _ctx: &egui::Context) -> Option<(f32, f32)> {
         None
     }
 
-    /// N21：把记忆位置（**逻辑点**）clamp 进其所在显示器工作区并发送
-    /// `OuterPosition`。目标窗口尺寸 = 本次 `show()` 的逻辑尺寸（与
-    /// [`Self::center_on_cursor`] 同口径：物理 = 逻辑 × 当前 ppp——多 DPI
-    /// 混屏下有少量偏差，验收标准（记忆位置恢复 + 不出屏）不要求像素级精确）。
-    /// 任一步失败 → `false`（调用方回落居中路径，不阻断唤起）。
-    ///
-    /// clamp 纯函数见 [`clamp_to_work`]（单测锚定）。
+    /// 以目标屏 DPI 换算窗口物理尺寸，再用当前窗口 ppp 转换 egui 逻辑位置。
+    #[cfg(windows)]
+    pub(crate) fn center_on_cursor(&self, ctx: &egui::Context, target: (f32, f32)) {
+        let window_ppp = ctx.pixels_per_point().max(0.5);
+        let Some(area) = cursor_target_work_area(window_ppp) else {
+            return;
+        };
+        let (win_w, win_h) = physical_window_size(target, area.ppp);
+        let (cx, cy) = centered_position(area.work, win_w, win_h);
+        let (x, y) = viewport_position((cx, cy), window_ppp);
+        log::debug!(
+            "[dd-gui] 唤起居中：目标屏 ppp={:.2} 窗口 ppp={:.2} 工作区={:?} 目标={}x{} → ({}, {})",
+            area.ppp,
+            window_ppp,
+            area.work,
+            target.0,
+            target.1,
+            x,
+            y
+        );
+        ctx.send_viewport_cmd(egui::ViewportCommand::OuterPosition(egui::pos2(x, y)));
+    }
+
+    /// 非 Windows 占位：退化为 egui 自带当前屏居中。
+    #[cfg(not(windows))]
+    pub(crate) fn center_on_cursor(&self, ctx: &egui::Context, _target: (f32, f32)) {
+        if let Some(cmd) = egui::ViewportCommand::center_on_screen(ctx) {
+            ctx.send_viewport_cmd(cmd);
+        }
+    }
+
+    /// 恢复记忆位置；目标屏 DPI 用于换算，超小屏明确回落居中。
     #[cfg(windows)]
     pub(crate) fn restore_remembered_position(
         &self,
@@ -126,52 +192,68 @@ impl PaletteApp {
         saved: egui::Pos2,
         target: (f32, f32),
     ) -> bool {
-        use windows_sys::Win32::Foundation::POINT;
-        use windows_sys::Win32::Graphics::Gdi::{
-            GetMonitorInfoW, MonitorFromPoint, MONITORINFO, MONITOR_DEFAULTTONEAREST,
-        };
-
-        let ppp = ctx.pixels_per_point().max(0.5);
-        let pt = POINT {
-            x: (saved.x * ppp) as i32,
-            y: (saved.y * ppp) as i32,
-        };
-        let monitor = unsafe { MonitorFromPoint(pt, MONITOR_DEFAULTTONEAREST) };
-        if monitor.is_null() {
+        let window_ppp = ctx.pixels_per_point().max(0.5);
+        let bootstrap = ((saved.x * window_ppp) as i32, (saved.y * window_ppp) as i32);
+        let Some(area) = target_work_area_at(bootstrap, window_ppp) else {
             return false;
+        };
+        let saved_physical = (saved.x * area.ppp, saved.y * area.ppp);
+        let (win_w, win_h) = physical_window_size(target, area.ppp);
+        let placement = place_window(saved_physical.0, saved_physical.1, area.work, win_w, win_h);
+        if matches!(placement, WindowPlacement::OversizedCentered(_, _)) {
+            log::debug!("[dd-gui] N21 窗口大于目标屏工作区，回落居中");
         }
-        let mut info: MONITORINFO = unsafe { std::mem::zeroed() };
-        info.cbSize = std::mem::size_of::<MONITORINFO>() as u32;
-        if unsafe { GetMonitorInfoW(monitor, &mut info) } == 0 {
-            return false;
-        }
-        let work = info.rcWork;
-        let win_w = target.0 * ppp;
-        let win_h = target.1 * ppp;
-        let (x, y) = clamp_to_work(
-            saved.x * ppp,
-            saved.y * ppp,
-            (
-                work.left as f32,
-                work.top as f32,
-                work.right as f32,
-                work.bottom as f32,
-            ),
-            win_w,
-            win_h,
-        );
+        let (physical_x, physical_y) = match placement {
+            WindowPlacement::Clamped(x, y) | WindowPlacement::OversizedCentered(x, y) => (x, y),
+        };
+        let (x, y) = viewport_position((physical_x, physical_y), window_ppp);
         log::debug!(
-            "[dd-gui] N21 位置恢复：saved=({:.0},{:.0}) → 屏 clamp 后 =({:.0},{:.0})",
+            "[dd-gui] N21 位置恢复：目标屏 ppp={:.2} saved=({:.0},{:.0}) → ({:.0},{:.0})",
+            area.ppp,
             saved.x,
             saved.y,
-            x / ppp,
-            y / ppp
+            x,
+            y
         );
-        ctx.send_viewport_cmd(egui::ViewportCommand::OuterPosition(egui::pos2(
-            x / ppp,
-            y / ppp,
-        )));
+        ctx.send_viewport_cmd(egui::ViewportCommand::OuterPosition(egui::pos2(x, y)));
         true
+    }
+
+    /// 恢复物理像素位置；选屏不再依赖当前窗口 ppp。
+    #[cfg(windows)]
+    pub(crate) fn restore_remembered_physical_position(
+        &self,
+        ctx: &egui::Context,
+        saved: (i32, i32),
+        target: (f32, f32),
+    ) -> bool {
+        let window_ppp = ctx.pixels_per_point().max(0.5);
+        let Some(area) = target_work_area_at(saved, window_ppp) else {
+            return false;
+        };
+        let (x, y) =
+            restore_physical_position((saved.0 as f32, saved.1 as f32), area, target, window_ppp);
+        log::debug!(
+            "[dd-gui] N21 物理位置恢复：目标屏 ppp={:.2} saved=({}, {}) → ({:.0},{:.0})",
+            area.ppp,
+            saved.0,
+            saved.1,
+            x,
+            y
+        );
+        ctx.send_viewport_cmd(egui::ViewportCommand::OuterPosition(egui::pos2(x, y)));
+        true
+    }
+
+    /// 非 Windows 占位：不恢复（回落居中）。
+    #[cfg(not(windows))]
+    pub(crate) fn restore_remembered_physical_position(
+        &self,
+        _ctx: &egui::Context,
+        _saved: (i32, i32),
+        _target: (f32, f32),
+    ) -> bool {
+        false
     }
 
     /// 非 Windows 占位：不恢复（回落居中）。
@@ -183,15 +265,6 @@ impl PaletteApp {
         _target: (f32, f32),
     ) -> bool {
         false
-    }
-
-    /// 非 Windows 占位：退化为 egui 自带"按窗口当前所在屏居中"（dd-run 当前
-    /// Windows 宿主不走此分支；多屏语义在此平台未定义）。
-    #[cfg(not(windows))]
-    pub(crate) fn center_on_cursor(&self, ctx: &egui::Context, _target: (f32, f32)) {
-        if let Some(cmd) = egui::ViewportCommand::center_on_screen(ctx) {
-            ctx.send_viewport_cmd(cmd);
-        }
     }
 }
 
@@ -211,6 +284,59 @@ fn clamp_to_work(x: f32, y: f32, work: (f32, f32, f32, f32), win_w: f32, win_h: 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn p1_17_mixed_dpi_geometry_uses_target_and_window_scales_separately() {
+        let work = (-1920.0, 0.0, 0.0, 1080.0);
+        assert_eq!(logical_work_size(work, 2.0), (960.0, 540.0));
+        assert_eq!(physical_window_size((650.0, 440.0), 2.0), (1300.0, 880.0));
+        let centered = centered_position(work, 1300.0, 880.0);
+        assert_eq!(centered, (-1610.0, 100.0));
+        assert_eq!(viewport_position(centered, 1.0), (-1610.0, 100.0));
+        assert_eq!(viewport_position(centered, 1.25), (-1288.0, 80.0));
+    }
+
+    #[test]
+    fn p1_17_oversized_window_falls_back_to_centered() {
+        assert_eq!(
+            place_window(300.0, 300.0, (100.0, 100.0, 900.0, 700.0), 900.0, 700.0),
+            WindowPlacement::OversizedCentered(50.0, 50.0)
+        );
+        assert_eq!(
+            place_window(-1500.0, 0.0, (-1920.0, 0.0, 0.0, 1080.0), 650.0, 532.0),
+            WindowPlacement::Clamped(-1500.0, 0.0)
+        );
+    }
+
+    #[test]
+    fn p1_17_restart_uses_saved_physical_position_not_current_window_dpi() {
+        let area = TargetWorkArea {
+            work: (1920.0, 0.0, 3840.0, 1080.0),
+            ppp: 2.0,
+        };
+        assert_eq!(
+            restore_physical_position((2000.0, 100.0), area, (650.0, 440.0), 1.0),
+            (2000.0, 100.0)
+        );
+    }
+
+    #[test]
+    fn p1_17_default_center_baseline_is_unchanged() {
+        let work = (0.0, 0.0, 2880.0, 1800.0);
+        let (win_w, win_h) = physical_window_size((650.0, 440.0), 1.5);
+        let centered = centered_position(work, win_w, win_h);
+        assert_eq!(centered, (952.5, 570.0));
+        assert_eq!(viewport_position(centered, 1.5), (635.0, 380.0));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn p1_17_primary_monitor_dpi_query_returns_usable_work_area() {
+        let target = target_work_area_at((0, 0), 1.0).expect("主屏工作区可查询");
+        assert!(target.ppp >= 1.0);
+        assert!(logical_work_size(target.work, target.ppp).0 > 0.0);
+        assert!(logical_work_size(target.work, target.ppp).1 > 0.0);
+    }
 
     /// N21：clamp——界内不动；越界拉回；窗口大于工作区钉左/上缘。
     #[test]

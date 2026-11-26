@@ -1,10 +1,10 @@
 # 用户会话真机走查清单（真实键鼠腿）
 
-> **状态**：已落地（本机腿 2026-10-07 用户批量确认收口；R-21 需无拦截他机、V-14 需多屏；**2026-11-24 场次 A：A1–A9/A15–A18/A21 过，A10/A12/A14/A20 部分，A13/A19 未执行；2026-11-25 A11 闭环、A12 Esc 通过、A10/A20 导出通过**）｜ **版本**：v1.14 ｜ **最后更新**：2026-11-25
+> **状态**：已落地（本机腿 2026-10-07 用户批量确认收口；R-21 需无拦截他机、V-14 需多屏；**2026-11-24 场次 A：A1–A9/A15/A17/A18/A21 过，A10/A12/A14/A16/A20 部分，A13/A19 未执行；2026-11-25 A11 闭环、A12 Esc 通过、A10/A20 导出通过**）｜ **版本**：v1.19 ｜ **最后更新**：2026-11-25
 > **关联**：[implementation.md](./implementation.md) §7 · [future-features-plan.md](./future-features-plan.md) §4 · [security-audit-2026-09-23.md](./security-audit-2026-09-23.md) · [stability-usability-security-plan.md](./stability-usability-security-plan.md) · [INDEX.md](./INDEX.md)
 >
 > **为什么需要你**：本机安全软件在系统级过滤注入输入（V-7 通道清单穷尽：posted 消息不经 IME / SendInput 受理不达 / osk UIA 合成键同样被拦），物理键盘为唯一通路——以下腿无法自动化。
-> **通用纪律**：走查前备份 `%APPDATA%\dd-run\config.json`；交付件 = **`dd-run-0.3.0-portable.zip`**（v0.3.0 Release 件，CI 构建 + SHA256SUMS/provenance 已验，见 §6.1；旧 `dist/` 仅开发期对照）；每项完成后还原配置；结果按「记录位置」回写对应文档并销勾。
+> **通用纪律**：开放腿交付件 = **清单 P1-2 确认的同代候选包**（v0.3.0 与旧 `dist/` 仅作历史证据）；走查只使用隔离 APPDATA，测后清理隔离目录，不动真实用户配置与常驻实例；结果按「记录位置」回写对应文档并销勾。
 
 ---
 
@@ -74,31 +74,46 @@
 
 ## 7. v0.3.0 真机走查筹备（2026-11-23）
 
-> 目的：把 [清单 v1.16](./未完善事项清单-2026-10-25.md) §5 的 **25 条腿**（平台 6 + ALTRun 12 + 热键 7）按「本机 → 他机 → 多屏 → 跨平台」排成四场，前置命令与判据一次备齐；每场独立，可按任意顺序开。
+> **当前执行说明**：腿号与场次结构保留历史规划；§7.1 命令已改为隔离 APPDATA、指定测试 PID 的同代候选包流程。当前开放腿必须传清单 P1-2 候选包，不得终止通配进程或触碰真实用户目录。
+
+> 历史目的：把 [清单 v1.16](./未完善事项清单-2026-10-25.md) §5 的 **25 条腿**（平台 6 + ALTRun 12 + 热键 7）按「本机 → 他机 → 多屏 → 跨平台」排成四场；当前未闭环项以清单 v1.37 §1.1 为准；P1-14～P1-17 代码已落地，真实腿仍待对应环境。
 > 腿号索引：平台 = 清单 §5.1–5.6 / §5.12；ALTRun = §5.13–5.24；热键 = §5.25。
 
 ### 7.1 通用前置（每场开始前，约 3 分钟）
 
 ```powershell
-# 1) 取件（或网页下载 Releases → v0.3.0）
-gh release download v0.3.0 --dir "$env:TEMP\ddrun-030" --clobber
-Get-FileHash "$env:TEMP\ddrun-030\dd-run-0.3.0-portable.zip" -Algorithm SHA256
-#   期望 eb4500f58df341b4c66c7cc4c2d28b265014a2d1488d2be5cbfc98b9a034ee7d
-Expand-Archive "$env:TEMP\ddrun-030\dd-run-0.3.0-portable.zip" "$env:TEMP\ddrun-030\app" -Force
+[CmdletBinding()]
+param([Parameter(Mandatory = $true)][string]$CandidateZip)
 
-# 2) 断开常驻实例（托盘退出或结束进程）
-Get-Process dd-run* -ErrorAction SilentlyContinue | Stop-Process
+# 1) 全部路径与用户数据隔离；CandidateZip 必须是清单 P1-2 的同代候选包
+$root = Join-Path $env:TEMP ("ddrun-walk-" + Get-Date -Format "yyyyMMdd-HHmmss")
+New-Item -ItemType Directory -Path $root -Force | Out-Null
+$env:APPDATA = $root
+Get-FileHash $CandidateZip -Algorithm SHA256
+Expand-Archive $CandidateZip (Join-Path $root "app") -Force
 
-# 3) 备份用户数据
-$d = "$env:APPDATA\dd-run"
-Copy-Item "$d\config.json" "$d\config.json.walkthrough-bak" -ErrorAction SilentlyContinue
-Copy-Item "$d\usage.json"  "$d\usage.json.walkthrough-bak"  -ErrorAction SilentlyContinue
-Copy-Item "$d\history.json" "$d\history.json.walkthrough-bak" -ErrorAction SilentlyContinue
+# 2) 只记录本次测试进程 PID；禁止 Get-Process dd-run* | Stop-Process
+$exe = Get-ChildItem (Join-Path $root "app") -Filter "dd-run-*.exe" | Select-Object -First 1
+if (-not $exe) { throw "候选包中未找到 dd-run-*.exe" }
+$proc = Start-Process $exe.FullName -PassThru
+"TEST_PID=$($proc.Id)" | Set-Content (Join-Path $root "test-pid.txt")
+
+# 3) 如确需保存隔离配置快照，只复制 $env:APPDATA\dd-run，不触碰真实用户目录
+$d = Join-Path $env:APPDATA "dd-run"
+Get-ChildItem $d -File -ErrorAction SilentlyContinue |
+  Get-FileHash -Algorithm SHA256 |
+  Export-Csv (Join-Path $root "before-hashes.csv") -NoTypeInformation
+
+# 收尾：只结束本次 PID，复核哈希后删除整个 $root 临时目录
+Stop-Process -Id $proc.Id -ErrorAction SilentlyContinue
+Get-ChildItem $d -File -ErrorAction SilentlyContinue |
+  Get-FileHash -Algorithm SHA256 |
+  Export-Csv (Join-Path $root "after-hashes.csv") -NoTypeInformation
 ```
 
-- **隔离跑（推荐）**：新开一个 PowerShell，`$env:APPDATA = "$env:TEMP\ddrun-walk-$(Get-Date -Format HHmmss)"` 后再启动 `$env:TEMP\ddrun-030\app\dd-run-0.3.0.exe`——走查不污染日常配置；该窗口内启动的实例日志落在隔离目录下 `dd-run\logs\`。
-- **采集**：截图 + `%APPDATA%\dd-run\logs\dd-run.log` 关键字（`热键` / `命令热键槽` / `N12 进入目录` / `保存`）+ 剪贴板断言（`Get-Clipboard`）；证据存 `$env:TEMP\walk-<日期>\`，不入库。
-- **收尾**：还原备份、结束走查实例、恢复常驻实例。
+- **隔离跑（强制）：`$CandidateZip` 传清单 P1-2 的同代候选包；APPDATA、日志、配置快照均在 `$root`。禁止终止通配进程或备份真实 `%APPDATA%`。历史 v0.3.0 下载命令仅用于复现旧证据，不作为当前开放腿交付口径。
+- **采集**：截图 + `$root\dd-run\logs\dd-run.log` 关键字（`热键` / `命令热键槽` / `N12 进入目录` / `保存`）+ 剪贴板断言（`Get-Clipboard`）；证据存 `$root`，不入库。
+- **收尾**：只结束本次测试 PID，复核隔离目录前后哈希，删除 `$root`；不得终止常驻实例或恢复真实用户目录。
 
 ### 7.2 场次 A：本机物理键鼠（约 20–30 分钟，25 条中最先做）
 
@@ -119,16 +134,16 @@ Copy-Item "$d\history.json" "$d\history.json.walkthrough-bak" -ErrorAction Silen
 | 🟨 A13 | §5.17 余腿 | 连续改命令 4 次 | `bak.3` 挤出最旧档、三档内容正确 |
 | 🟨 A14 | §5.18 余腿 | 触发骤降 toast → 点「从上次备份恢复」 | 条目还原、日志时间线可 grep |
 | ✅ A15 | §5.19 余腿 | 容量调到 12 | 红字警告消失 |
-| ✅ A16 | §5.20 余腿 | 失效直达行按 Enter；恢复文件后重聚合 | 拒绝 toast；红字标记消失 |
+| 🟨 A16 | §5.20 余腿 | 失效直达行按 Enter；恢复文件后重聚合 | 拒绝 toast 已过；恢复文件后重聚合/红字消失未取证 |
 | ✅ A17 | §5.21 余腿 | 中文路径目录浏览 / 右键 reveal / Everything 常规查询 | 列表与打开正确、无回归 |
 | ✅ A18 | §5.22 余腿 | 绑定已被占用组合 / 改绑已有槽 / slot 0 回归 | 冲突提示；改绑走 ReRegistered；唤起键不受影响 |
-| 🟨 A19 | §5.23 余腿 | 多窗口切换（含最小化恢复）/ 提权窗口 / 拼音标题 / 停用开关 / 面板自身 | 各态符合预期，提权被拒有 toast |
+| 🟨 A19 | §5.23 余腿 | 多窗口切换（含最小化恢复）/ 提权窗口 / 拼音标题 / 空查询 / 停用开关 / 面板自身 | 各态符合预期，提权被拒有 toast |
 | 🟨 A20 | §5.24 余腿 | 设置页表单建片段 / 右键删除 / 导入导出往返 | 校验与即时消失正确；2026-11-25 导出及备份内容通过，导入确认待人工 |
 | ✅ A21 | §5.13 更新下载校验 | **构造低版本验收副本**（v0.2.1 不含 O17，不能直接跑全链）→「检查更新」Available → 下载 → 校验 → Explorer 定位；再截短 zip 重试 | 正常：Success toast + zip/SUMS 留存 + Explorer 定位；篡改：Error toast + 目录清空 |
 
 > **场次 A 执行记录（2026-11-24，本机 v0.3.0 隔离实例，自动化注入键鼠）**：**A1–A7 全部通过**——A1 干净启动无失败日志、热键卡无「未注册」徽标；A2 记事本前台 `Alt+Space` → 面板出现且系统菜单窗口类 `#32768` 不出现（自动化取证）；A3 Toggle 出现→隐藏→出现；A4 托盘 UIA 可访问名 = `dd-run — Alt+Space`；A5 回落态捕获 `Alt+Space` 显示 keycap + 蓝色中性接管说明 → 保存成功（日志 `全局热键注册成功（seq=2）：Alt+Space`、`config.json hotkey_mods=1`）；A6 占位进程先注册 → 启动日志 `全局热键注册失败（1+32），降级为无热键运行` + 红「未注册」徽标 + 热键实按无效；A7 设置改绑 `Ctrl+Space`（日志 seq=1）后 Toggle 生效、记事本 `Alt+Space` 系统菜单恢复且面板不弹，再改回 `Alt+Space`（seq=2）正常。证据：面板/设置/捕获对话框截图 + 隔离目录日志（`%TEMP%\ddrun-walk-a1\dd-run\logs\dd-run.log`）+ `config.json` 两值双向切换。
-> **续跑记录（2026-11-24，自动化）**：**A9 ✅**（关键词 `zzqqnote` 命中自定义命令「📝 zzqqnote」（「直达」组）；emoji 经系统字体回退渲染为**单色字形**而非 tofu——优于清单预期取舍，UI 文案零影响）；**A15 ✅**（`warm_capacity=1` → 「已装扩展 8 个 / 保活容量 1」+ 红字「已装扩展数已达保活容量…建议调大容量」；调大至 12/13 后警告消失）；**A16 ✅**（失效 path 行右列红字「路径不存在」；Enter → toast「路径不存在：C:\NoSuchDir\zzqq.exe」）；**A14 ◐**（启动日志 `启动骤降检测：custom_commands 1 条，备份环最新档 10 条` 命中；面板 toast 未在截图窗口捕获，恢复按钮腿未点）；**A12 ◐**（自动化注入 `?` 直接入框、未打开速查页——真机 2026-11-22 已验通过，判为注入路径差异非缺陷）；**A17 ◐**（截图未取到文件页，待重跑）。
-> **当前未闭环**：A10/A20 导入确认（导出已于 2026-11-25 通过）、A12 IME 组词防误触（Esc 已过）、A13 `bak.3` 挤出、A14 备份恢复按钮、A19 窗口切换完整行为；其余 A1–A9/A11/A15–A18/A21 已通过。
+> **续跑记录（2026-11-24，自动化）**：**A9 ✅**（关键词 `zzqqnote` 命中自定义命令「📝 zzqqnote」（「直达」组）；emoji 经系统字体回退渲染为**单色字形**而非 tofu——优于清单预期取舍，UI 文案零影响）；**A15 ✅**（`warm_capacity=1` → 「已装扩展 8 个 / 保活容量 1」+ 红字「已装扩展数已达保活容量…建议调大容量」；调大至 12/13 后警告消失）；**A16 ◐**（失效 path 行右列红字「路径不存在」；Enter → toast「路径不存在：C:\NoSuchDir\zzqq.exe」；恢复文件后重聚合/标记消失未取证）；**A14 ◐**（启动日志 `启动骤降检测：custom_commands 1 条，备份环最新档 10 条` 命中；面板 toast 未在截图窗口捕获，恢复按钮腿未点）；**A12 ◐**（自动化注入 `?` 直接入框、未打开速查页——真机 2026-11-22 已验通过，判为注入路径差异非缺陷）；**A17 ◐**（截图未取到文件页，待重跑）。
+> **当前未闭环**：A10/A20 导入确认（导出已于 2026-11-25 通过）、A12 IME 组词防误触（Esc 已过）、A13 `bak.3` 挤出、A14 备份恢复按钮、A16 恢复文件后重聚合/标记消失、A19 窗口切换完整行为；其余 A1–A9/A11/A15/A17/A18/A21 已通过。
 >
 > **续跑记录 2（2026-11-24，自动化）**：**A10 ✅（导入导出往返除外）**——预置 `pinned_keys`（`com.ddrun.host\u001fcustom:zzqqnote`）→ 空查询「置顶」组居首、Enter 打开 notepad；右键「取消置顶」→ 置顶组消失、行回落「直达」组、`config.pinned_keys` 清空；**A11 ◐**——`Ctrl+↑` 回填历史生效（回填 `?`）、`record_search_history=false` 后查询隐藏不写 `history.json`（前后逐字节相同）；清空按钮与开关联动（关闭即清空）未跑；**A17 ✅**——`Ctrl+F` → 粘贴 `C:\Windows` → 文件页列出子项（addins / appcompat…）、右列父路径、页脚 `com.ddrun.filesearch`；目录 Enter / 中文路径 / 右键 reveal / Everything 常规回归沿用 2026-11-22 已取证部分。
 >
@@ -147,7 +162,7 @@ Copy-Item "$d\history.json" "$d\history.json.walkthrough-bak" -ErrorAction Silen
 | 序 | 腿 | 前置 | 判据 |
 |---|---|---|---|
 | B1 | §5.3 R-21 黄线 | 该机 LL 钩子未被安全软件拦截 | 捕获 `Ctrl+Esc` / `Ctrl+Shift+Esc` / `Alt+F4` → danger 黄线警示且可录；`Alt+Space` → 中性接管说明（不劝阻） |
-| B2 | §5.1 A-33-08 | 另一套机器组合 + Everything | 跨环境矩阵复跑通过（**唯一红线**） |
+| B2 | §5.1 A-33-08 | 另一套机器组合 + Everything | 跨环境矩阵复跑通过（**A-33 唯一红线**；P2-6 另计） |
 | B3 | §5.9 N3 Chrome（条件保留） | 该机有 Chrome 书签 | Chrome 书签入「书签」组且可打开 |
 | B4 | §5.13 备选 | 若 A21 不便，可在该机做 | 同 A21 |
 

@@ -1,6 +1,6 @@
 # dd-run 对照 ALTRun 优化分析（独立复核版）
 
-> **性质**：第三方独立分析文档（基于两仓当前 HEAD 的代码级核对产出，已修正初稿 3 处错漏；第二轮独立复核另修正 2 处引用错漏并精化口径，见 §4）｜ **版本**：v1.1（复核修正）｜ **日期**：2026-11-22
+> **性质**：第三方独立分析文档（基于两仓当前 HEAD 的代码级核对产出，已修正初稿 3 处错漏；第二轮独立复核另修正 2 处引用错漏并精化口径，见 §4）｜ **版本**：v1.3（现状更正）｜ **日期**：2026-11-25
 > **分析基线**：dd-run `de8225d`（2026-11-22，ALTRun 对照波次一/二批）；ALTRun 最新 main
 > **与项目既有文档的关系**：本文所有建议均与 `altrun-对照优化方案 v1.3`、`后续开发路线图 v1.4`、`memory-optimization-plan`、`future-features-plan` 的既有决策逐一核对，零冲突；不新增编号、不改变任何"不做/缓办"边界，落地时应走项目既有渠道（future-features-plan §2 立项判据复核）。
 
@@ -13,10 +13,10 @@
 | 定位 | Windows 启动器（仿 Alfred），面向终端用户开箱即用 | 命令面板/启动器（CmdPal 设计启发），平台无关核心 + Windows 主平台 |
 | 技术栈 | AutoHotkey v2，134 个 .ahk，约 5.1 万行（wc 口径，含 Tests 约 1.8 万） | Rust，workspace **6 个 crate**（5 产品：dd-gui/dd-host/dd-ext/dd-ext-sample/dd-run-cli + 协议独立版本线 dd-protocol 1.0.0），约 5.7 万行 |
 | 许可证 | **GPL-3.0** | **MIT**（因此 dd-run 只能做设计级对照，不能直接移植代码——既有对照方案的处理方式正确） |
-| 扩展机制 | 进程内脚本（AHK 原生）、Scripts 文件夹 | 子进程 + NDJSON JSON-RPC（ADR-1/4）；内置扩展走进程内直调但同协议（M9）；manifest 扫描（ADR-3）、签名计划（O16）、fuzz 夜跑 |
+| 扩展机制 | 进程内脚本（AHK 原生）、Scripts 文件夹 | 子进程 + NDJSON JSON-RPC（ADR-1/4）；内置扩展走进程内直调但同协议（M9）；manifest 扫描（ADR-3）、扩展签名（O14，P0-2 已销项）、fuzz 夜跑 |
 | GUI | AHK 原生 GUI，**22 主题 × 3 密度，4 界面语言** | egui，亮暗 + Mica/Acrylic + 着色 + 背景图 + 3 密度，**2 界面语言**（ZhCn/EnUs，`Lang` 枚举），键表实查 198 条 |
 | 网页搜索 | 多引擎 | **5 引擎预设（Google/Bing/Baidu/DuckDuckGo/GitHub），默认仅启用 1 个**（`default_search_engines()` 返回 `presets[0]`），设置页可增删 |
-| 分发/签名 | winget + Scoop，SignPath 代码签名（README Code signing policy 节） | winget manifest 生成器已入库（O15 落地 `tools/gen-winget-manifest.mjs`）；签名评估未做（O16 待） |
+| 分发/签名 | winget + Scoop，SignPath 代码签名（README Code signing policy 节） | winget manifest 生成器已入库（O15 落地 `tools/gen-winget-manifest.mjs`）；宿主 exe 签名评估已落盘（O16），待维护者拍板 |
 | 工程纪律 | 8000+ 自动化测试（README:44）、CI、开发指南 wiki | 真机走查 708 单测 / 0 失败 / 7 忽略（HEAD commit 记录）、UI 金图回归、协议 fuzz、bench 趋势、docscan 机检、三平台阻塞 CI、30+ 份文档（ADR/审计/走查/判据化） |
 | 体量 | 发行 exe 约 2.3 MB | 发行 exe 约 8.5 MB（v0.1.1 发行版；HEAD 构建实测 10.3 MB）；数据集中 `%APPDATA%`，零遥测 |
 

@@ -42,6 +42,8 @@ windows-sys = { version = "0.61", features = [
     "Win32_Foundation",
     "Win32_UI_Input_KeyboardAndMouse",
     "Win32_UI_WindowsAndMessaging",
+    # P1-17：GetDpiForMonitor / MDT_EFFECTIVE_DPI（目标屏 DPI 换算）
+    "Win32_UI_HiDpi",
     # 唤起居中（grills A1）：MonitorFromPoint / GetMonitorInfoW / MONITORINFO
     "Win32_Graphics_Gdi",
     # v4.7 窗口材质（D31）：DwmSetWindowAttribute / DWMWA_SYSTEMBACKDROP_TYPE

@@ -229,4 +229,62 @@ mod tests {
             })
         })
     }
+
+    fn press_escape(ctx: &egui::Context, modifiers: egui::Modifiers) {
+        ctx.input_mut(|i| {
+            i.events.push(egui::Event::Key {
+                key: egui::Key::Escape,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers,
+            })
+        });
+    }
+
+    #[test]
+    fn p1_16_fallback_capture_accepts_modified_escape() {
+        for modifiers in [
+            egui::Modifiers::CTRL,
+            egui::Modifiers::CTRL | egui::Modifiers::SHIFT,
+        ] {
+            let mut app = crate::test_support::make_app();
+            app.hotkeys.hotkey_capturing = true;
+            app.hotkeys.capture_rx = None;
+            let ctx = crate::test_support::ctx();
+            press_escape(&ctx, modifiers);
+            app.handle_hotkey_capture(&ctx);
+            let expected_mods = ((modifiers.ctrl as u32) << 1)
+                | (modifiers.alt as u32)
+                | ((modifiers.shift as u32) << 2);
+            assert_eq!(app.hotkeys.hotkey_pending, Some((expected_mods, 0x1B)));
+            assert!(app.hotkeys.hotkey_capturing, "带修饰 Esc 不是取消");
+        }
+    }
+
+    #[test]
+    fn p1_16_fallback_bare_escape_still_cancels() {
+        let mut app = crate::test_support::make_app();
+        app.hotkeys.hotkey_capturing = true;
+        app.hotkeys.capture_started = Some(Instant::now());
+        app.hotkeys.capture_rx = None;
+        let ctx = crate::test_support::ctx();
+        press_escape(&ctx, egui::Modifiers::NONE);
+        app.handle_hotkey_capture(&ctx);
+        assert!(!app.hotkeys.hotkey_capturing);
+        assert!(app.hotkeys.capture_started.is_none());
+        assert!(app.hotkeys.hotkey_pending.is_none());
+    }
+
+    #[test]
+    fn p1_16_fallback_shift_escape_is_ignored() {
+        let mut app = crate::test_support::make_app();
+        app.hotkeys.hotkey_capturing = true;
+        app.hotkeys.capture_rx = None;
+        let ctx = crate::test_support::ctx();
+        press_escape(&ctx, egui::Modifiers::SHIFT);
+        app.handle_hotkey_capture(&ctx);
+        assert!(app.hotkeys.hotkey_capturing);
+        assert!(app.hotkeys.hotkey_pending.is_none());
+    }
 }

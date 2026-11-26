@@ -840,20 +840,27 @@ fn n21_panel_pos_defaults_parse_and_roundtrip() {
         crate::settings::PanelPosMode::Cursor
     );
     assert_eq!(Settings::default().panel_last_pos, None);
+    assert_eq!(Settings::default().panel_last_pos_physical, None);
     // 旧版本配置缺失 → 默认
     let old = Settings::parse_json(r#"{"theme":"dark"}"#);
     assert_eq!(old.panel_pos_mode, crate::settings::PanelPosMode::Cursor);
     assert_eq!(old.panel_last_pos, None);
+    assert_eq!(old.panel_last_pos_physical, None);
     // 损坏形态 / 未知模式值回落
     let bad = Settings::parse_json(r#"{"panel_last_pos":[1],"panel_pos_mode":"weird"}"#);
     assert_eq!(bad.panel_last_pos, None);
     assert_eq!(bad.panel_pos_mode, crate::settings::PanelPosMode::Cursor);
     // 合法值读入 + 往返（副屏负坐标保真）
-    let s = Settings::parse_json(r#"{"panel_pos_mode":"remember","panel_last_pos":[-1500,200]}"#);
+    let s = Settings::parse_json(
+        r#"{"panel_pos_mode":"remember","panel_last_pos":[-1500,200],"panel_last_pos_physical":[2000,100]}"#,
+    );
     assert_eq!(s.panel_pos_mode, crate::settings::PanelPosMode::Remember);
     assert_eq!(s.panel_last_pos, Some((-1500, 200)));
+    assert_eq!(s.panel_last_pos_physical, Some((2000, 100)));
     let back = Settings::parse_json(&s.to_json_string());
     assert_eq!(back, s);
+    let bad_physical = Settings::parse_json(r#"{"panel_last_pos_physical":[1]}"#);
+    assert_eq!(bad_physical.panel_last_pos_physical, None);
 }
 
 /// N2：`ext_settings` 通道——字段缺失（旧版本配置）默认空；逐条校验
@@ -900,6 +907,7 @@ fn n5_backup_export_strips_and_import_tolerates() {
         ],
         // N21：位置存档属机器/分辨率相关态——随导出剥离
         panel_last_pos: Some((-1500, 200)),
+        panel_last_pos_physical: Some((2000, 100)),
         ..Settings::default()
     };
     let backup = s.export_backup();
@@ -909,6 +917,10 @@ fn n5_backup_export_strips_and_import_tolerates() {
     assert!(
         v.get("panel_last_pos").is_none(),
         "机器态剔除：panel_last_pos（N21）"
+    );
+    assert!(
+        v.get("panel_last_pos_physical").is_none(),
+        "机器态剥离：panel_last_pos_physical（P1-17）"
     );
     assert_eq!(
         v.get(BACKUP_VERSION_KEY).and_then(|x| x.as_str()),
@@ -929,6 +941,7 @@ fn n5_backup_export_strips_and_import_tolerates() {
         panel_size: Some((800, 600)),
         panel_pos_mode: crate::settings::PanelPosMode::Remember,
         panel_last_pos: Some((640, 480)),
+        panel_last_pos_physical: Some((1280, 960)),
         hotkey_mods: 0b0110,
         hotkey_vk: 0x50,
         ..Settings::default()
@@ -955,6 +968,7 @@ fn n5_backup_export_strips_and_import_tolerates() {
         "定位模式属用户偏好，随备份导入"
     );
     assert_eq!(imported.panel_last_pos, Some((640, 480)));
+    assert_eq!(imported.panel_last_pos_physical, Some((1280, 960)));
     assert_eq!(
         imported.hotkey_mods, 0b0110,
         "热键不随导入（改绑须走捕获流程）"
@@ -977,6 +991,7 @@ fn n5_backup_export_strips_and_import_tolerates() {
         expect.panel_size = current.panel_size;
         // N21：panel_last_pos 机器态保留 current；panel_pos_mode 用户偏好随 other
         expect.panel_last_pos = current.panel_last_pos;
+        expect.panel_last_pos_physical = current.panel_last_pos_physical;
         expect.hotkey_mods = current.hotkey_mods;
         expect.hotkey_vk = current.hotkey_vk;
         expect

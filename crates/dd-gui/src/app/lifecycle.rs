@@ -103,12 +103,20 @@ impl PaletteApp {
         // 记忆位置（按其所在屏工作区 clamp）；恢复失败或 Cursor 档（默认）→
         // 既有居中路径逐位不变。
         let restored = match self.draft.settings.panel_pos_mode {
-            crate::settings::PanelPosMode::Remember => match self.draft.settings.panel_last_pos {
-                Some((x, y)) => {
-                    self.restore_remembered_position(ctx, egui::pos2(x as f32, y as f32), (w, h))
+            crate::settings::PanelPosMode::Remember => {
+                if let Some((x, y)) = self.draft.settings.panel_last_pos_physical {
+                    self.restore_remembered_physical_position(ctx, (x, y), (w, h))
+                } else {
+                    match self.draft.settings.panel_last_pos {
+                        Some((x, y)) => self.restore_remembered_position(
+                            ctx,
+                            egui::pos2(x as f32, y as f32),
+                            (w, h),
+                        ),
+                        None => false,
+                    }
                 }
-                None => false,
-            },
+            }
             crate::settings::PanelPosMode::Cursor => false,
         };
         if !restored {
@@ -239,10 +247,21 @@ impl PaletteApp {
             return; // inner_rect 不可得（无头/早期帧）：跳过
         };
         let p = (pos.x.round() as i32, pos.y.round() as i32);
-        if Some(p) != self.draft.settings.panel_last_pos {
+        let ppp = ctx.pixels_per_point().max(0.5);
+        let physical = ((pos.x * ppp).round() as i32, (pos.y * ppp).round() as i32);
+        if Some(p) != self.draft.settings.panel_last_pos
+            || Some(physical) != self.draft.settings.panel_last_pos_physical
+        {
             self.draft.settings.panel_last_pos = Some(p);
+            self.draft.settings.panel_last_pos_physical = Some(physical);
             self.save_settings_with_feedback();
-            log::debug!("[dd-gui] 面板位置落盘：({}, {})", p.0, p.1);
+            log::debug!(
+                "[dd-gui] 面板位置落盘：logical=({}, {}) physical=({}, {})",
+                p.0,
+                p.1,
+                physical.0,
+                physical.1
+            );
         }
     }
 

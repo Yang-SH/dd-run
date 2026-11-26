@@ -48,6 +48,9 @@ use std::path::Path;
 /// 台账格式版本；`load` 遇到不识别版本一律视作损坏（fail-closed → 空台账）。
 pub const LEDGER_VERSION: u32 = 1;
 
+/// 单进程内台账读—改—写事务锁；单实例保证下不会跨进程并发。
+static LEDGER_TRANSACTION: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 /// 随包首方扩展 id 白名单（D1）。
 ///
 /// **必须与 `dd-gui::aggregator::owned_sidecar_name_key` 的键集保持一致**——
@@ -275,6 +278,14 @@ impl TrustLedger {
         Ok(())
     }
 
+    /// 记录用户决策并原子保存；与 sidecar 钉扎事务共用进程内锁。
+    pub fn record_decision(ext: &LoadedExtension, decision: Decision) -> Result<(), String> {
+        let _transaction = LEDGER_TRANSACTION.lock().unwrap_or_else(|e| e.into_inner());
+        let mut ledger = Self::load();
+        ledger.record(ext, decision)?;
+        ledger.save().map_err(|e| e.to_string())
+    }
+
     /// 删除某 id 记录（回到"待批准"）。返回是否确有删除。
     pub fn forget(&mut self, id: &str) -> bool {
         let before = self.entries.len();
@@ -373,6 +384,7 @@ pub fn assess_with_publisher(
 /// 永不导出**（N5 已定），格式扩展零兼容负担。落盘失败仅记日志（判定继续，
 /// 下次启动重试钉扎）。
 pub fn assess_sidecar(ext: &LoadedExtension, host_version: &str) -> Assessment {
+    let _transaction = LEDGER_TRANSACTION.lock().unwrap_or_else(|e| e.into_inner());
     let mut ledger = TrustLedger::load();
     let (assessment, changed) = assess_sidecar_with_ledger(ext, host_version, &mut ledger);
     if changed {
@@ -388,6 +400,22 @@ pub fn assess_sidecar_with_ledger(
     host_version: &str,
     ledger: &mut TrustLedger,
 ) -> (Assessment, bool) {
+    assess_sidecar_with_publisher(
+        ext,
+        host_version,
+        ledger,
+        &signing::built_in_verifying_key(),
+    )
+}
+
+/// [`assess_sidecar_with_ledger`] 的可注入验签公钥核心。
+#[doc(hidden)]
+pub fn assess_sidecar_with_publisher(
+    ext: &LoadedExtension,
+    host_version: &str,
+    ledger: &mut TrustLedger,
+    publisher: &Option<ed25519_dalek::VerifyingKey>,
+) -> (Assessment, bool) {
     let id = ext.manifest.id.clone();
     let mut assessment = Assessment {
         id,
@@ -397,11 +425,19 @@ pub fn assess_sidecar_with_ledger(
         sig_invalid: false,
     };
     // O14/F12 批次一：发行方签名三态先于钉扎链（选型稿 §4-D5）。Valid = 发行方
-    // 背书即信任（首跑免钉扎待批准，钉扎链保留作 `Absent` 时的纵深）；Invalid =
-    // fail-closed 告警（比现状严：升级重钉窗口被签名锚闭合）；Absent = 原三态。
-    match signing::built_in_verifying_key() {
-        Some(vk) => match signing::check_signature(ext, &vk) {
-            signing::SigCheck::Valid => return (assessment, false),
+    // 背书免同意，但用户 Deny 优先；Invalid = fail-closed 告警；Absent = 原钉扎链。
+    match publisher {
+        Some(vk) => match signing::check_signature(ext, vk) {
+            signing::SigCheck::Valid => {
+                assessment.trust = match ledger.entry(&assessment.id) {
+                    Some(entry) if entry.decision == Decision::Deny && hashes_match(ext, entry) => {
+                        Trust::Blocked
+                    }
+                    Some(entry) if entry.decision == Decision::Deny => Trust::Pending,
+                    _ => Trust::AutoTrusted,
+                };
+                return (assessment, false);
+            }
             signing::SigCheck::Invalid(reason) => {
                 log::warn!(
                     "[dd-host] 首方 sidecar {} 发行方签名校验失败（fail-closed）：{reason}",
@@ -413,7 +449,7 @@ pub fn assess_sidecar_with_ledger(
             }
             signing::SigCheck::Absent => {}
         },
-        // 内置公钥常量损坏（防御式）：视作无签名能力，落回钉扎链
+        // 注入公钥缺失（防御式）：视作无签名能力，落回钉扎链
         None => log::warn!("[dd-host] 内置发行方公钥解析失败——签名检查本轮停用"),
     }
     match ledger.entry(&ext.manifest.id).cloned() {
@@ -447,10 +483,12 @@ pub fn assess_sidecar_with_ledger(
                     replace_entry(ledger, updated);
                     (assessment, true)
                 }
-            } else if entry.pinned_host_version == host_version {
-                // ③ 同版篡改：拦下 + 告警，不自动重钉
+            } else if entry.pinned_host_version.is_empty()
+                || entry.pinned_host_version == host_version
+            {
+                // ③ 同版篡改或用户决策尚无钉扎版本：拦下 + 告警，不自动重钉
                 log::warn!(
-                    "[dd-host] 首方 sidecar {} 与钉扎哈希不符且宿主版本未变——疑似被替换",
+                    "[dd-host] 首方 sidecar {} 与钉扎哈希不符且版本未变或未钉扎——疑似被替换",
                     ext.manifest.id
                 );
                 assessment.trust = Trust::Pending;
@@ -1119,6 +1157,134 @@ mod tests {
         let a = assess_with_publisher(&ext, ExtOrigin::UserDir, &ledger, &Some(vk));
         assert_eq!(a.trust, Trust::Blocked, "用户拒绝不应被签名覆盖");
         let _ = std::fs::remove_dir_all(&d);
+    }
+
+    /// P0-2：签名三态 × 台账三态 × 同哈希/变哈希/升级矩阵。
+    #[test]
+    fn o14_sidecar_signature_ledger_hash_matrix() {
+        #[derive(Clone, Copy)]
+        enum SigState {
+            Valid,
+            Invalid,
+            Absent,
+        }
+
+        let sig_states = [SigState::Valid, SigState::Invalid, SigState::Absent];
+        let decisions = [None, Some(Decision::Allow), Some(Decision::Deny)];
+        for (sig_index, sig_state) in sig_states.into_iter().enumerate() {
+            for (decision_index, decision) in decisions.into_iter().enumerate() {
+                for variant in 0..3 {
+                    for (host_index, host_version) in ["0.2.0", "0.3.0"].into_iter().enumerate() {
+                        let d = tmp_dir(&format!(
+                            "o14-matrix-{sig_index}-{decision_index}-{variant}-{host_index}"
+                        ));
+                        let original = disk_ext(&d, "com.ddrun.filesearch", b"{\"a\":1}", b"BIN");
+                        let mut ledger = TrustLedger::default();
+                        if let Some(decision) = decision {
+                            ledger.record(&original, decision).expect("造台账记录");
+                            ledger.entries.last_mut().unwrap().pinned_host_version =
+                                "0.2.0".to_string();
+                        }
+                        let changed_hash = variant != 0;
+                        let current = match variant {
+                            0 => disk_ext(&d, "com.ddrun.filesearch", b"{\"a\":1}", b"BIN"),
+                            1 => disk_ext(&d, "com.ddrun.filesearch", b"{\"a\":1}", b"BIN-v2"),
+                            _ => disk_ext(&d, "com.ddrun.filesearch", b"{\"a\":2}", b"BIN"),
+                        };
+                        let sk = ed25519_dalek::SigningKey::from_bytes(&[7u8; 32]);
+                        let vk = sk.verifying_key();
+                        match sig_state {
+                            SigState::Valid => {
+                                let text = signing::sign_ext(&current.path, &current.command, &sk)
+                                    .expect("签发当前内容");
+                                write(&signing::sig_path_for(&current.path), text.as_bytes());
+                            }
+                            SigState::Invalid => {
+                                write(&signing::sig_path_for(&current.path), b"garbage");
+                            }
+                            SigState::Absent => {
+                                let _ = std::fs::remove_file(signing::sig_path_for(&current.path));
+                            }
+                        }
+
+                        let (assessment, ledger_changed) = assess_sidecar_with_publisher(
+                            &current,
+                            host_version,
+                            &mut ledger,
+                            &Some(vk),
+                        );
+                        let expected = match sig_state {
+                            SigState::Valid => match decision {
+                                Some(Decision::Deny) if !changed_hash => {
+                                    (Trust::Blocked, false, false)
+                                }
+                                Some(Decision::Deny) => (Trust::Pending, false, false),
+                                _ => (Trust::AutoTrusted, false, false),
+                            },
+                            SigState::Invalid => (Trust::Pending, false, false),
+                            SigState::Absent => match decision {
+                                None => (Trust::AutoTrusted, true, false),
+                                Some(Decision::Deny) if changed_hash => {
+                                    (Trust::Pending, false, false)
+                                }
+                                Some(Decision::Deny) => (Trust::Blocked, false, false),
+                                Some(Decision::Allow)
+                                    if changed_hash && host_version == "0.2.0" =>
+                                {
+                                    (Trust::Pending, false, true)
+                                }
+                                Some(Decision::Allow) if changed_hash => {
+                                    (Trust::AutoTrusted, true, false)
+                                }
+                                Some(Decision::Allow) => {
+                                    (Trust::AutoTrusted, host_version != "0.2.0", false)
+                                }
+                            },
+                        };
+                        assert_eq!(
+                            (assessment.trust, ledger_changed, assessment.sidecar_tampered),
+                            expected,
+                            "sig={sig_index} decision={decision_index} variant={variant} host={host_version}"
+                        );
+                        assert_eq!(
+                            assessment.sig_invalid,
+                            matches!(sig_state, SigState::Invalid)
+                        );
+                        let _ = std::fs::remove_dir_all(&d);
+                    }
+                }
+            }
+        }
+    }
+    #[test]
+    fn o14_sidecar_user_allow_without_pin_fails_closed_on_change() {
+        for host_version in ["0.2.0", "0.3.0"] {
+            let d = tmp_dir("o14-user-allow-empty-pin");
+            let original = disk_ext(&d, "com.ddrun.filesearch", b"{\"a\":1}", b"BIN");
+            let mut ledger = TrustLedger::default();
+            ledger.record(&original, Decision::Allow).expect("记录允许");
+            assert!(ledger
+                .entry("com.ddrun.filesearch")
+                .unwrap()
+                .pinned_host_version
+                .is_empty());
+            let changed = disk_ext(&d, "com.ddrun.filesearch", b"{\"a\":1}", b"BIN-v2");
+            let sk = ed25519_dalek::SigningKey::from_bytes(&[7u8; 32]);
+            let (assessment, ledger_changed) = assess_sidecar_with_publisher(
+                &changed,
+                host_version,
+                &mut ledger,
+                &Some(sk.verifying_key()),
+            );
+            assert_eq!(
+                assessment.trust,
+                Trust::Pending,
+                "空钉扎版本不得按升级静默重钉"
+            );
+            assert!(assessment.sidecar_tampered);
+            assert!(!ledger_changed);
+            let _ = std::fs::remove_dir_all(&d);
+        }
     }
 
     /// 首方 sidecar 腿：坏 `.sig` → Pending + 告警位（钉扎链被签名分支短路前拦截）。

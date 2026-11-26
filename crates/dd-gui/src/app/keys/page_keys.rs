@@ -376,7 +376,7 @@ impl PaletteApp {
     }
 
     /// 热键捕获候选键 → 虚拟键码（M6 批次 6.3：字母/数字 = ASCII，
-    /// F1–F12 = 0x70–0x7B，Space = 0x20；其余键不作为热键主键）。
+    /// F1–F12 = 0x70–0x7B，Space = 0x20，Esc = 0x1B；其余键不作为热键主键）。
     pub(super) fn capture_vk(key: egui::Key) -> Option<u32> {
         use egui::Key;
         Some(match key {
@@ -429,6 +429,7 @@ impl PaletteApp {
             Key::F11 => 0x7A,
             Key::F12 => 0x7B,
             Key::Space => 0x20,
+            Key::Escape => 0x1B,
             _ => return None,
         })
     }
