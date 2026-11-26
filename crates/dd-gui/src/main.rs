@@ -443,13 +443,16 @@ fn bind_and_keep_alive(path: &std::path::Path) -> Result<(), UnixAcquireError> {
 }
 
 #[cfg(unix)]
-fn rename_socket_noreplace(old: &std::path::Path, new: &std::path::Path) -> std::io::Result<()> {
+fn rename_socket_noreplace(
+    old_path: &std::path::Path,
+    new_path: &std::path::Path,
+) -> std::io::Result<()> {
     use std::ffi::CString;
     use std::os::unix::ffi::OsStrExt;
 
-    let old = CString::new(old.as_os_str().as_bytes())
+    let old = CString::new(old_path.as_os_str().as_bytes())
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidInput, e))?;
-    let new = CString::new(new.as_os_str().as_bytes())
+    let new = CString::new(new_path.as_os_str().as_bytes())
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidInput, e))?;
     #[cfg(target_os = "linux")]
     unsafe extern "C" {
@@ -484,7 +487,21 @@ fn rename_socket_noreplace(old: &std::path::Path, new: &std::path::Path) -> std:
     if result == 0 {
         Ok(())
     } else {
-        Err(std::io::Error::last_os_error())
+        let error = std::io::Error::last_os_error();
+        if matches!(
+            error.kind(),
+            std::io::ErrorKind::InvalidInput | std::io::ErrorKind::Unsupported
+        ) {
+            // 某些 runner 文件系统不支持 RENAME_NOREPLACE；硬链保留 create-new 语义。
+            std::fs::hard_link(old_path, new_path)?;
+            if let Err(error) = std::fs::remove_file(old_path) {
+                let _ = std::fs::remove_file(new_path);
+                return Err(error);
+            }
+            Ok(())
+        } else {
+            Err(error)
+        }
     }
 }
 
