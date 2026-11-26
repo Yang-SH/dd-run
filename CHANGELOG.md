@@ -4,10 +4,16 @@
 
 ## [Unreleased]
 
+### CI 收口：P0-1 / P1-1 / P1-15 / P2-7（2026-11-26）
+
+- run `45738965580` 所有适用 job success：Windows build/test/clippy/fmt/docscan/Node/search conformance、Linux/macOS、snapshot 与 audit 全绿；bench 按 PR-only 规则 skipped。
+- P0-1 工具链测试环境隔离、P1-1 Windows 全门禁、P1-15 Unix socket 回归与 P2-7 `?` 页正典金图比对闭环。
+- Unix runner 文件系统不支持 `RENAME_NOREPLACE` 时回退 `hard_link + remove_file`，保持不可覆盖语义；Linux/macOS socket 回归通过。
+
 ### P2-7 速查页键表补齐（2026-11-26）
 
 - `?` 速查页补 `Ctrl+Backspace` / `Right` 中英双语说明，并纳入消费清单一致性回归；文件页按键行为不变。
-- 新增 `?` 页快照测试，本地临时图确认两键可见后删除；CI 正典金图仍待生成，P2-7 保持未销项。
+- 新增 `?` 页快照测试；CI run `45736967383` 生成正典 `help_page.png`（22,584 B，SHA256 `C82A14F4F60C538F37B058E3A23AB6C90140702854A1173453344689E0CE5ED3`），既有六图哈希逐一一致，run `45738965580` 的 7/7 阻塞比对通过。
 - 验证：Rust **791 passed / 0 failed / 8 ignored**，fmt / Clippy `-D warnings` 通过；Node 工具链测试父环境设置/不设置均 **4/4**。
 
 ### 审计修复批：激活回滚、单实例 fail-closed 与钩子会话（2026-11-25）
