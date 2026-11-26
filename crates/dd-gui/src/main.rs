@@ -438,7 +438,7 @@ fn bind_and_keep_alive(path: &std::path::Path) -> Result<(), UnixAcquireError> {
                 Err(_) => return,
             }
         })
-        .map_err(|e| UnixAcquireError::Io(e))?;
+        .map_err(UnixAcquireError::Io)?;
     Ok(())
 }
 
