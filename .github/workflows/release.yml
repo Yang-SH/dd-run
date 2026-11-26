@@ -146,7 +146,7 @@ jobs:
         run: pwsh -NoProfile -File tools/portable_zip.ps1
 
       - name: Attest Windows candidate artifact
-        uses: actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a # v3
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
           subject-path: dist/dd-run-*-portable.zip
 
@@ -206,7 +206,7 @@ jobs:
         run: bash tools/package.sh
 
       - name: Attest Linux candidate artifact
-        uses: actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a # v3
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
           subject-path: dist/dd-run-*-linux-*.tar.gz
 
@@ -254,7 +254,7 @@ jobs:
         run: bash tools/package.sh
 
       - name: Attest macOS candidate artifact
-        uses: actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a # v3
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
           subject-path: dist/dd-run-*-macos-*.tar.gz
 
@@ -303,7 +303,7 @@ jobs:
           cat SHA256SUMS.txt
 
       - name: Attest candidate SHA256SUMS.txt
-        uses: actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a # v3
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
           subject-path: dist/SHA256SUMS.txt
 
@@ -366,7 +366,7 @@ jobs:
           cat SHA256SUMS.txt
 
       - name: Attest SHA256SUMS.txt
-        uses: actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a # v3
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
           subject-path: dist/SHA256SUMS.txt
 
