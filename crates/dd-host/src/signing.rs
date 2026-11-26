@@ -195,8 +195,13 @@ pub fn check_signature(ext: &LoadedExtension, vk: &VerifyingKey) -> SigCheck {
 /// 完整 LoadedExtension）。
 pub fn check_signature_parts(manifest_path: &Path, exe_path: &Path, vk: &VerifyingKey) -> SigCheck {
     let sig_path = sig_path_for(manifest_path);
-    if !sig_path.is_file() {
-        return SigCheck::Absent;
+    let metadata = match std::fs::symlink_metadata(&sig_path) {
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return SigCheck::Absent,
+        Ok(metadata) => metadata,
+        Err(_) => return SigCheck::Invalid("sig 元数据读取失败"),
+    };
+    if !metadata.file_type().is_file() {
+        return SigCheck::Invalid("sig 不是普通文件");
     }
     let text = match std::fs::read_to_string(&sig_path) {
         Ok(t) => t,
@@ -287,7 +292,7 @@ mod tests {
 
     #[test]
     fn built_in_key_parses() {
-        // 占位公钥常量必须可解析（批次二轮换时防手误）
+        // 内置发行方公钥必须可解析（轮换时防手误）
         assert!(built_in_verifying_key().is_some(), "内置公钥常量应可解析");
     }
 
@@ -299,6 +304,40 @@ mod tests {
         let _ = manifest;
         let vk = test_signing_key().verifying_key();
         assert_eq!(check_signature(&ext, &vk), SigCheck::Absent);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn sig_directory_is_invalid_not_absent() {
+        let dir = std::env::temp_dir().join(format!("dd-sig-dir-{}", std::process::id()));
+        let (_, _, _, _) = write_fixtures(&dir);
+        let ext = make_ext(&dir);
+        std::fs::create_dir(sig_path_for(&ext.path)).expect("创建 .sig 目录");
+        let vk = test_signing_key().verifying_key();
+        assert!(
+            matches!(check_signature(&ext, &vk), SigCheck::Invalid(_)),
+            ".sig 为目录必须判 Invalid，不得回落 Absent"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn sig_symlink_is_invalid_not_absent() {
+        use std::os::unix::fs::symlink;
+
+        let dir = std::env::temp_dir().join(format!("dd-sig-link-{}", std::process::id()));
+        let (_, _, _, _) = write_fixtures(&dir);
+        let ext = make_ext(&dir);
+        let target = dir.join("keep.sig");
+        std::fs::write(&target, b"keep").expect("写签名目标");
+        symlink(&target, sig_path_for(&ext.path)).expect("创建 .sig symlink");
+        let vk = test_signing_key().verifying_key();
+        assert!(
+            matches!(check_signature(&ext, &vk), SigCheck::Invalid(_)),
+            ".sig symlink 必须判 Invalid，不得跟随"
+        );
+        assert_eq!(std::fs::read(&target).unwrap(), b"keep");
         let _ = std::fs::remove_dir_all(&dir);
     }
 

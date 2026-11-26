@@ -4,6 +4,14 @@
 
 ## [Unreleased]
 
+### P1-2 发布链加固与候选构建（2026-11-26）
+
+- 三平台构建 job 只构建、attest、上传候选；最终 `publish` job 逐产物核验 build attestation，生成并校验统一 SHA256SUMS，先 draft 上传全部资产，再统一 `--draft=false`，避免缺钥或单平台失败造成部分公开发布。
+- `DDRUN_SIGN_KEY` 仅注入 Windows 密钥准备步骤与 publish 缺钥检查步骤，Linux/macOS/candidate-sums 不继承；构建/汇总 job 降为 `contents: read`，Windows 临时密钥文件 `always()` 清理。
+- `package.sh` 仅 Windows 准备密钥，CI 模式缺 PowerShell 直接失败；`portable_zip.ps1` 使用成员白名单、拒绝额外文件，存在 `.sig` 时先用内置公钥验签；`.sig` 目录/symlink 归 `Invalid`。
+- Node **19/19**、Rust **792 passed / 0 failed / 8 ignored**、fmt/Clippy、Linux/macOS all-targets check、YAML/脚本检查通过。无签名 Windows 候选成员、4 条哈希、search conformance、5 秒 GUI 冒烟、额外成员拒绝与有效 `.sig` 直打包均通过。
+- 本地环境密钥与内置公钥不匹配，错误签名在 zip 前被阻断且未生成 zip/SUMS，失败产物随后隔离；三平台 CI 候选（Windows 含 `.sig`）与 provenance 仍待推送后验证，P1-2 保持未销项。
+
 ### CI 收口：P0-1 / P1-1 / P1-15 / P2-7（2026-11-26）
 
 - run `45738965580` 所有适用 job success：Windows build/test/clippy/fmt/docscan/Node/search conformance、Linux/macOS、snapshot 与 audit 全绿；bench 按 PR-only 规则 skipped。

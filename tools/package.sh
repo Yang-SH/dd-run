@@ -33,6 +33,55 @@ fi
 
 cd "$(dirname "$0")/.."   # 仓库根
 
+SIGN_KEY_FILE=""
+SIGN_KEY_TEMP=""
+
+cleanup_signing_key() {
+  if [ -n "${SIGN_KEY_TEMP:-}" ] && [ -f "$SIGN_KEY_TEMP" ]; then
+    rm -f -- "$SIGN_KEY_TEMP"
+  fi
+}
+trap cleanup_signing_key EXIT
+
+clean_package_output() {
+  if [ -e dist ]; then
+    rm -rf -- dist
+  fi
+  mkdir -p dist
+}
+
+prepare_signing_key() {
+  local raw="${DDRUN_SIGN_KEY:-}"
+  if [ -z "$raw" ]; then
+    if [ "${DDRUN_PACKAGE_REQUIRE_SIGNATURE:-0}" = "1" ]; then
+      echo "错误：正式发布缺少签名密钥（DDRUN_SIGN_KEY）" >&2
+      return 1
+    fi
+    SIGN_KEY_FILE=""
+    return 0
+  fi
+  if [ -f "$raw" ]; then
+    SIGN_KEY_FILE="$raw"
+    return 0
+  fi
+  case "$raw" in
+    *[!0-9a-fA-F]*)
+      echo "错误：DDRUN_SIGN_KEY 必须是种子文件路径或 64 字符 hex" >&2
+      return 1
+      ;;
+  esac
+  if [ "${#raw}" -ne 64 ]; then
+    echo "错误：DDRUN_SIGN_KEY hex 内容必须为 64 字符" >&2
+    return 1
+  fi
+  SIGN_KEY_TEMP="$(mktemp)"
+  printf '%s' "$raw" > "$SIGN_KEY_TEMP"
+  chmod 600 "$SIGN_KEY_TEMP" 2>/dev/null || true
+  SIGN_KEY_FILE="$SIGN_KEY_TEMP"
+}
+
+clean_package_output
+
 # ============================================================
 # O6 批次四（2026-10-11）：非 Windows 分支——Linux/macOS 免安装单二进制包。
 # 形态与运行时依赖清单见 docs/optimization-plan.md §2.6.3。要点：
@@ -106,9 +155,16 @@ EOF
 
   echo "==> [3/3] 打包 dist/dd-run-${VER}-${TAG}.tar.gz"
   ( cd dist && tar -czf "dd-run-${VER}-${TAG}.tar.gz" "dd-run-${VER}-${TAG}" )
+  if command -v sha256sum >/dev/null 2>&1; then
+    ( cd dist && sha256sum "dd-run-${VER}-${TAG}.tar.gz" > SHA256SUMS.txt )
+  else
+    ( cd dist && shasum -a 256 "dd-run-${VER}-${TAG}.tar.gz" > SHA256SUMS.txt )
+  fi
   echo "✅ 产物：dist/dd-run-${VER}-${TAG}.tar.gz（$(du -h "dist/dd-run-${VER}-${TAG}.tar.gz" | cut -f1)）"
   exit 0
 fi
+
+prepare_signing_key
 
 # 1) windows-gnu 工具链 self-contained bin（含 as.exe 等），**追加**到 PATH 末尾：
 #    优先使用 PATH 上已有的可用 mingw（如本机 /c/Strawberry/c/bin），self-contained
@@ -169,16 +225,19 @@ mkdir -p dist/extensions.d
 cp "${REL}/dd-ext-search.exe" dist/extensions.d/
 cp examples/extensions.d/com.ddrun.filesearch.json dist/extensions.d/
 
-# 6.5) O14/F12 批次二（可选）：发行方签名——DDRUN_SIGN_KEY 指向 64 字符 hex
-# 种子文件时，对随包清单签发 .sig（与 dd-host::signing 验签互逆）；未设置则
-# 跳过，产物不含 .sig，宿主对随包扩展回落信任同意流（R-12 钉扎仍生效）。
-if [ -n "${DDRUN_SIGN_KEY:-}" ] && [ -f "${DDRUN_SIGN_KEY}" ]; then
-  echo "==> 签发随包扩展 .sig（发行方钥，O14/F12 批次二）"
+# 6.5) O14/F12 批次二（可选）：DDRUN_SIGN_KEY 可以是 64 字符 hex 种子内容或
+# 种子文件路径；有钥时签发 .sig 并用内置发行方公钥验签，失败即中止打包。未设置
+# 则跳过，产物不含 .sig，宿主对随包扩展回落信任同意流（R-12 钉扎仍生效）。
+if [ -n "$SIGN_KEY_FILE" ]; then
+  echo "==> 签发并验签随包扩展 .sig（发行方钥，O14/F12 批次二）"
   cargo ${TOOLCHAIN} build --release --target "$TARGET" -p dd-run-cli
   "${REL}/dd-run-cli.exe" --sign-ext \
     --manifest dist/extensions.d/com.ddrun.filesearch.json \
     --exe dist/extensions.d/dd-ext-search.exe \
-    --key "${DDRUN_SIGN_KEY}"
+    --key "$SIGN_KEY_FILE"
+  "${REL}/dd-run-cli.exe" --verify-ext-sig \
+    --manifest dist/extensions.d/com.ddrun.filesearch.json \
+    --exe dist/extensions.d/dd-ext-search.exe
 else
   echo "==> DDRUN_SIGN_KEY 未设置，跳过 .sig 签发（随包扩展回落信任同意流）"
 fi
@@ -207,5 +266,18 @@ if [ -n "$PS_BIN" ]; then
   echo "==> 生成便携包 dist/dd-run-${VER}-portable.zip（$PS_BIN）"
   "$PS_BIN" -NoProfile -File "$ZIP_PS"
 else
+  if [ "${DDRUN_REQUIRE_ZIP:-0}" = "1" ]; then
+    echo "错误：CI/正式打包要求生成 portable zip，但未找到 pwsh/powershell" >&2
+    exit 1
+  fi
   echo "⚠️ 未找到 pwsh/powershell，跳过便携包生成（可手动跑见 tools/portable_zip.ps1 头注）" >&2
+fi
+
+if [ -f "dist/dd-run-${VER}-portable.zip" ]; then
+  if command -v sha256sum >/dev/null 2>&1; then
+    ( cd dist && sha256sum "dd-run-${VER}.exe" "dd-run-${VER}-portable.zip" extensions.d/* > SHA256SUMS.txt )
+  else
+    ( cd dist && shasum -a 256 "dd-run-${VER}.exe" "dd-run-${VER}-portable.zip" extensions.d/* > SHA256SUMS.txt )
+  fi
+  echo "==> 已生成 dist/SHA256SUMS.txt"
 fi

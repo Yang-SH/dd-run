@@ -69,7 +69,7 @@ enum Command {
     GenSignKey,
     /// O14/F12 批次二：对清单+exe 签发 `.sig`。
     SignExt,
-    /// O14/F12 批次二：离线校验 `.sig`（指定公钥 hex，内置钥轮换前可预演）。
+    /// O14/F12 批次二：离线校验 `.sig`（缺省内置公钥，轮换前可显式预演）。
     VerifyExtSig,
     /// §5.4（dd-run-改进分析.md）：扩展开发脚手架——生成清单 + 最小实现 +
     /// 双平台启动器 + conformance CI 模板（flag 式子命令，与既有解析风格一致）。
@@ -294,15 +294,17 @@ fn sign_ext_cmd(args: &SigArgs) -> ExitCode {
     }
 }
 
-/// `--verify-ext-sig <清单> --exe <exe> --pubkey <hex>`：离线三态校验
-/// （密钥仪式预演：轮换内置公钥前先用本命令确认签发物可过验）。
+/// `--verify-ext-sig <清单> --exe <exe> [--pubkey <hex>]`：离线三态校验
+/// （缺省使用内置发行方公钥；密钥仪式轮换时可显式覆盖）。
 fn verify_ext_sig_cmd(args: &SigArgs) -> ExitCode {
-    let (Some(manifest), Some(exe), Some(pubkey_hex)) =
-        (&args.manifest, &args.exe, &args.pubkey_hex)
-    else {
-        log::warn!("错误：`--verify-ext-sig` 需要 `--manifest <清单> --exe <exe> --pubkey <hex>`");
+    let (Some(manifest), Some(exe)) = (&args.manifest, &args.exe) else {
+        log::warn!("错误：`--verify-ext-sig` 需要 `--manifest <清单> --exe <exe>`");
         return ExitCode::FAILURE;
     };
+    let pubkey_hex = args
+        .pubkey_hex
+        .as_deref()
+        .unwrap_or(dd_host::signing::PUBLISHER_PUBLIC_KEY_HEX);
     let Some(vk) = dd_host::signing::verifying_key_from_hex(pubkey_hex) else {
         log::warn!("错误：--pubkey 不是合法的 64 字符 Ed25519 公钥 hex");
         return ExitCode::FAILURE;
@@ -377,8 +379,8 @@ fn print_usage() {
          \x20 --gen-sign-key      生成发行方 Ed25519 密钥对（O14/F12）：--key <种子文件>\n\
          \x20                     （种子即私钥，离线保管；公钥 hex 打印 stdout 供轮换常量）\n\
          \x20 --sign-ext          签发 .sig（O14/F12）：--manifest <清单> --exe <exe> --key <种子文件>\n\
-         \x20 --verify-ext-sig    离线校验 .sig（O14/F12 密钥仪式预演）：--manifest <清单>\n\
-         \x20                     --exe <exe> --pubkey <hex>"
+         \x20 --verify-ext-sig    离线校验 .sig（O14/F12）：--manifest <清单> --exe <exe>\n\
+         \x20                     [--pubkey <hex>]（缺省用内置发行方公钥）"
     );
 }
 

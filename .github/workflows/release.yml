@@ -1,31 +1,34 @@
 name: Release
 
-# 批次 7.5：tag → 构建 → 免安装绿色包 zip → GitHub Release 附着。
+# 批次 7.5：tag → 三平台构建/attest → 最终 draft/publish GitHub Release。
 # 分发形态（2026-09-08 定案，M9 起更新）：仅免安装单文件——dist/dd-run-<ver>.exe
 # （5 内置扩展 in-process 内置于宿主进程，不再内嵌 exe）+ dist/extensions.d/（file-search
 # sidecar），整体 zip，无安装器。
 on:
   push:
     tags: ['v*']
-  # O6 批次四：无 tag 手动触发（三平台构建验证；attach 步骤按事件类型跳过，
-  # 不会创建/修改 Release）。
+  # O6 批次四：无 tag 手动触发（三平台候选构建 + artifact/attestation；
+  # publish job 仅 tag 运行，不会创建/修改 Release）。
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
 
 env:
   CARGO_INCREMENTAL: "0"
-  # O14/F12 批次二：发行方签名种子（仓库 secret：64 字符 hex 文件内容）。未配置
-  # 时 package.sh 自动跳过 .sig 签发（构建照常，随包扩展回落信任同意流）。
-  DDRUN_SIGN_KEY: ${{ secrets.DDRUN_SIGN_KEY }}
 
 jobs:
   release:
-    name: build + portable zip + GitHub Release
+    name: build + portable zip + candidate artifact
     runs-on: windows-latest
     timeout-minutes: 45
+    permissions:
+      contents: read
+      actions: read
+      id-token: write
+      attestations: write
     env:
+      DDRUN_REQUIRE_ZIP: "1"
       # A1：覆盖仓库 rust-toolchain.toml（优先级高于 rustup default），锁 gnu
       # 宿主工具链（自带 self-contained 链接器），与 ci.yml Windows job 同语义。
       # 钉 1.98.0 理由见 ci.yml check job env 注记（1.95.0/1.99.1 的
@@ -35,8 +38,7 @@ jobs:
       # 10-25 起预装 mingw 丢 sysroot，显式启用自带 self-contained CRT。
       RUSTFLAGS: -C link-self-contained=yes
     steps:
-      # B4：fetch-depth 0 = 全历史 + tag——git-cliff 提交明细需要「自上个 tag
-      # 以来」的完整提交区间（默认浅克隆只有 1 个 commit，明细必空）。
+      # 保留完整历史供发布排查；git-cliff 明细由最终 publish job 生成。
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           fetch-depth: 0
@@ -97,18 +99,33 @@ jobs:
       - name: Cache cargo
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
 
+      - name: Require signing key for tagged release
+        if: github.event_name == 'push'
+        env:
+          DDRUN_SIGN_KEY: ${{ secrets.DDRUN_SIGN_KEY }}
+        shell: bash
+        run: |
+          if [ -z "${DDRUN_SIGN_KEY:-}" ]; then
+            echo "::error::正式发布缺少签名密钥 DDRUN_SIGN_KEY，拒绝构建"
+            exit 1
+          fi
+          echo "DDRUN_PACKAGE_REQUIRE_SIGNATURE=1" >> "$GITHUB_ENV"
+
       # O14 密钥仪式配套（核对产出修正）：secret DDRUN_SIGN_KEY 存的是 64 字符
       # hex 种子**内容**，而 package.sh §6.5 签名钩子按**文件路径**消费（-f 判定
       # + --key 传参）——故先把 secret 落为 RUNNER_TEMP 下的临时文件（随 runner
       # 自动清理，不入产物、不打日志），再把 DDRUN_SIGN_KEY 重指为该路径。
-      # secret 未配置时此步为空操作（package.sh 自动跳过签名，构建照常）。
+      # secret 未配置时此步为空操作（手动候选可跳签；tag 发布已在前面失败）。
       - name: Materialize signing key (secret content → temp file)
-        if: env.DDRUN_SIGN_KEY != ''
+        env:
+          DDRUN_SIGN_KEY: ${{ secrets.DDRUN_SIGN_KEY }}
         shell: bash
         run: |
-          KEY_FILE="${RUNNER_TEMP}/ddrun-sign-key.hex"
-          printf '%s' "${DDRUN_SIGN_KEY}" > "${KEY_FILE}"
-          echo "DDRUN_SIGN_KEY=${KEY_FILE}" >> "$GITHUB_ENV"
+          if [ -n "${DDRUN_SIGN_KEY:-}" ]; then
+            KEY_FILE="${RUNNER_TEMP}/ddrun-sign-key.hex"
+            printf '%s' "${DDRUN_SIGN_KEY}" > "${KEY_FILE}"
+            echo "DDRUN_SIGN_KEY=${KEY_FILE}" >> "$GITHUB_ENV"
+          fi
 
       # §5.7：config.toml 不再钉扎 target——构建 target = RUSTUP_TOOLCHAIN 宿主
       # 三元组（windows-gnu）；gnu 工具链自带 self-contained 链接器（package.sh
@@ -128,55 +145,37 @@ jobs:
         shell: pwsh
         run: pwsh -NoProfile -File tools/portable_zip.ps1
 
-      # B4（dd-run-改进分析.md）：Release body = 人手写的 Release Highlights
-      # （下方 heredoc，**每次发版人工更新本次亮点小节**）+ git-cliff 自动生成的
-      # 「提交明细」（自上个 tag 以来，cliff.toml 分组）。git-cliff 失败不阻塞
-      # 发版（body 文件恒存在，仅缺明细段）。仓库内 CHANGELOG.md 是人工详账，
-      # **不**被生成物覆盖（分析文档 B4 范围记档）。
-      - name: Install git-cliff (prebuilt)
-        if: github.event_name == 'push'
-        uses: taiki-e/install-action@ab6895351a88b908e96a4697860d4ffea5e57dbe # v2
+      - name: Attest Windows candidate artifact
+        uses: actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a # v3
         with:
-          tool: git-cliff
+          subject-path: dist/dd-run-*-portable.zip
 
-      - name: Generate release body (highlights + git-cliff detail)
-        if: github.event_name == 'push'
+      - name: Upload Windows candidate artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: dd-run-candidate-windows-${{ github.sha }}
+          path: dist/dd-run-*-portable.zip
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Remove signing key temp file
+        if: always()
         shell: bash
-        run: |
-          cat > release_body.md <<'BODY'
-          dd-run ${{ github.ref_name }} — 免安装绿色版（portable）
-
-          **本次亮点（发版时人工更新）**
-
-          - 解压后直接运行 `dd-run-<版本>.exe`（单文件，5 个内置扩展以 in-process 方式内置于宿主进程，无安装器）
-          - `extensions.d/` 为文件搜索扩展 sidecar：与 exe 保持相对位置即可被自动发现（需本机装有 [Everything](https://www.voidtools.com/)）
-          - 数据目录：`%APPDATA%\dd-run\`（设置 / 扩展清单 / 缓存 / 日志）；开机自启在应用内设置页开启
-          - 完整变更台账见仓库 [CHANGELOG.md](https://github.com/Yang-SH/dd-run/blob/main/CHANGELOG.md)
-          BODY
-          {
-            echo ""
-            echo "---"
-            echo ""
-            echo "**提交明细（自上个 tag 起，自动生成）**"
-            echo ""
-            git-cliff --unreleased --strip all >> release_body.md || echo "（git-cliff 生成失败，明细缺失）"
-          } >> release_body.md
-
-      - name: Attach to GitHub Release
-        if: github.event_name == 'push'
-        uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3
-        with:
-          files: dist/dd-run-*-portable.zip
-          body_path: release_body.md
+        run: rm -f "${RUNNER_TEMP}/ddrun-sign-key.hex"
 
   # O6 批次四（2026-10-11）：Linux/macOS 发布产物——免安装单二进制 tar.gz
   # （optimization-plan §2.6.3）。filesearch sidecar 为 Windows 专属不随包
-  # → 无签名面（package.sh 签名钩子仅 Windows 分支）。attach 按事件类型
-  # 跳过（workflow_dispatch 仅验证构建，不创建/修改 Release）。
+  # → 无签名面（package.sh 签名钩子仅 Windows 分支）。手动触发上传候选
+  # artifact；公开 Release 统一由最终 publish job 处理。
   release-linux:
-    name: build + tar.gz (linux) + GitHub Release
+    name: build + tar.gz (linux) + candidate artifact
     runs-on: ubuntu-latest
     timeout-minutes: 45
+    permissions:
+      contents: read
+      actions: read
+      id-token: write
+      attestations: write
     env:
       # A1：覆盖仓库 rust-toolchain.toml，维持工具链选择零变化。
       RUSTUP_TOOLCHAIN: stable
@@ -206,16 +205,28 @@ jobs:
       - name: Build & package (linux tar.gz)
         run: bash tools/package.sh
 
-      - name: Attach to GitHub Release
-        if: github.event_name == 'push'
-        uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3
+      - name: Attest Linux candidate artifact
+        uses: actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a # v3
         with:
-          files: dist/dd-run-*-linux-*.tar.gz
+          subject-path: dist/dd-run-*-linux-*.tar.gz
+
+      - name: Upload Linux candidate artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: dd-run-candidate-linux-${{ github.sha }}
+          path: dist/dd-run-*-linux-*.tar.gz
+          if-no-files-found: error
+          retention-days: 14
 
   release-macos:
-    name: build + tar.gz (macOS) + GitHub Release
+    name: build + tar.gz (macOS) + candidate artifact
     runs-on: macos-latest
     timeout-minutes: 45
+    permissions:
+      contents: read
+      actions: read
+      id-token: write
+      attestations: write
     env:
       # A1：同 release-linux——覆盖仓库 rust-toolchain.toml。
       RUSTUP_TOOLCHAIN: stable
@@ -242,53 +253,162 @@ jobs:
       - name: Build & package (macOS tar.gz)
         run: bash tools/package.sh
 
-      - name: Attach to GitHub Release
-        if: github.event_name == 'push'
-        uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3
+      - name: Attest macOS candidate artifact
+        uses: actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a # v3
         with:
-          files: dist/dd-run-*-macos-*.tar.gz
+          subject-path: dist/dd-run-*-macos-*.tar.gz
 
-  # A2（dd-run-改进分析.md）：发布产物可验证性——三平台产物全部附着后，
-  # 生成统一 SHA256SUMS.txt（覆盖全部资产，sha256sum -c 可验）并为本 run
-  # 构建的产物生成 build provenance 出处证明（GitHub 原生 attestation，
-  # 免费、无需证书；`gh attestation verify` 可验来源工作流与 commit）。
-  release-sums:
-    name: SHA256SUMS + build provenance
+      - name: Upload macOS candidate artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: dd-run-candidate-macos-${{ github.sha }}
+          path: dist/dd-run-*-macos-*.tar.gz
+          if-no-files-found: error
+          retention-days: 14
+
+  candidate-sums:
+    name: Candidate SHA256SUMS + provenance
     needs: [release, release-linux, release-macos]
-    if: github.event_name == 'push'
+    if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
-      contents: write
+      contents: read
+      actions: read
       id-token: write
       attestations: write
     steps:
-      - name: Download release assets
+      - name: Download candidate artifacts
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          pattern: dd-run-candidate-*
+          path: dist
+          merge-multiple: true
+
+      - name: Verify candidate build attestations
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          mkdir -p dist
-          gh release download "${GITHUB_REF_NAME}" --repo "${GITHUB_REPOSITORY}" \
-            --pattern 'dd-run-*-portable.zip' \
-            --pattern 'dd-run-*-linux-*.tar.gz' \
-            --pattern 'dd-run-*-macos-*.tar.gz' --dir dist
-          ls -l dist
+          for artifact in dist/dd-run-*-portable.zip dist/dd-run-*-linux-*.tar.gz dist/dd-run-*-macos-*.tar.gz; do
+            gh attestation verify "$artifact" --repo "${GITHUB_REPOSITORY}" \
+              --signer-workflow "${GITHUB_WORKFLOW_REF}" --source-digest "${GITHUB_SHA}" \
+              --deny-self-hosted-runners
+          done
 
-      - name: Generate SHA256SUMS.txt
+      - name: Generate and verify candidate SHA256SUMS.txt
         working-directory: dist
         run: |
-          sha256sum dd-run-* > SHA256SUMS.txt
+          sha256sum dd-run-*-portable.zip dd-run-*-linux-*.tar.gz dd-run-*-macos-*.tar.gz > SHA256SUMS.txt
+          sha256sum -c SHA256SUMS.txt
           cat SHA256SUMS.txt
 
-      - name: Generate build provenance (attestation)
+      - name: Attest candidate SHA256SUMS.txt
         uses: actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a # v3
         with:
-          subject-path: |
+          subject-path: dist/SHA256SUMS.txt
+
+      - name: Upload candidate SHA256SUMS.txt
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: dd-run-candidate-sums-${{ github.sha }}
+          path: dist/SHA256SUMS.txt
+          if-no-files-found: error
+          retention-days: 14
+
+  publish:
+    name: verify + draft + publish GitHub Release
+    needs: [release, release-linux, release-macos]
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: write
+      actions: read
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: 0
+
+      - name: Require signing key for tagged release
+        env:
+          DDRUN_SIGN_KEY: ${{ secrets.DDRUN_SIGN_KEY }}
+        shell: bash
+        run: |
+          if [ -z "${DDRUN_SIGN_KEY:-}" ]; then
+            echo "::error::正式发布缺少签名密钥 DDRUN_SIGN_KEY，拒绝发布"
+            exit 1
+          fi
+
+      - name: Download candidate artifacts
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          pattern: dd-run-candidate-*
+          path: dist
+          merge-multiple: true
+
+      - name: Verify candidate build attestations
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          for artifact in dist/dd-run-*-portable.zip dist/dd-run-*-linux-*.tar.gz dist/dd-run-*-macos-*.tar.gz; do
+            gh attestation verify "$artifact" --repo "${GITHUB_REPOSITORY}" \
+              --signer-workflow "${GITHUB_WORKFLOW_REF}" --source-digest "${GITHUB_SHA}" \
+              --deny-self-hosted-runners
+          done
+
+      - name: Generate and verify SHA256SUMS.txt
+        working-directory: dist
+        run: |
+          sha256sum dd-run-*-portable.zip dd-run-*-linux-*.tar.gz dd-run-*-macos-*.tar.gz > SHA256SUMS.txt
+          sha256sum -c SHA256SUMS.txt
+          cat SHA256SUMS.txt
+
+      - name: Attest SHA256SUMS.txt
+        uses: actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a # v3
+        with:
+          subject-path: dist/SHA256SUMS.txt
+
+      - name: Install git-cliff (prebuilt)
+        uses: taiki-e/install-action@ab6895351a88b908e96a4697860d4ffea5e57dbe # v2
+        with:
+          tool: git-cliff
+
+      - name: Generate release body (highlights + git-cliff detail)
+        shell: bash
+        run: |
+          cat > release_body.md <<'BODY'
+          dd-run ${{ github.ref_name }} — 免安装绿色版（portable）
+
+          **本次亮点（发版时人工更新）**
+
+          - 解压后直接运行 `dd-run-<版本>.exe`（单文件，5 个内置扩展以 in-process 方式内置于宿主进程，无安装器）
+          - `extensions.d/` 为文件搜索扩展 sidecar：与 exe 保持相对位置即可被自动发现（需本机装有 [Everything](https://www.voidtools.com/)）
+          - 数据目录：`%APPDATA%\dd-run\`（设置 / 扩展清单 / 缓存 / 日志）；开机自启在应用内设置页开启
+          - 完整变更台账见仓库 [CHANGELOG.md](https://github.com/Yang-SH/dd-run/blob/main/CHANGELOG.md)
+          BODY
+          {
+            echo ""
+            echo "---"
+            echo ""
+            echo "**提交明细（自上个 tag 起，自动生成）**"
+            echo ""
+            git-cliff --unreleased --strip all >> release_body.md || echo "（git-cliff 生成失败，明细缺失）"
+          } >> release_body.md
+
+      - name: Create draft release with verified assets
+        uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3
+        with:
+          draft: true
+          body_path: release_body.md
+          files: |
             dist/dd-run-*-portable.zip
             dist/dd-run-*-linux-*.tar.gz
             dist/dd-run-*-macos-*.tar.gz
+            dist/SHA256SUMS.txt
 
-      - name: Attach SHA256SUMS.txt to GitHub Release
-        uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3
-        with:
-          files: dist/SHA256SUMS.txt
+      - name: Publish verified release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release edit "${GITHUB_REF_NAME}" --repo "${GITHUB_REPOSITORY}" --draft=false

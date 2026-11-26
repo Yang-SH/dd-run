@@ -40,13 +40,28 @@ try {
 
   $exe = "dist/dd-run-$Version.exe"
   $sidecarDir = "dist/extensions.d"
+  $manifest = "$sidecarDir/com.ddrun.filesearch.json"
+  $sidecar = "$sidecarDir/dd-ext-search.exe"
+  $sig = "$manifest.sig"
   $zip = "dist/dd-run-$Version-portable.zip"
 
-  if (-not (Test-Path $exe)) { throw "缺宿主单文件：$exe（先跑 tools/package.sh）" }
-  if (-not (Test-Path $sidecarDir)) { throw "缺 sidecar 目录：$sidecarDir" }
+  foreach ($required in @($exe, $manifest, $sidecar)) {
+    if (-not (Test-Path $required -PathType Leaf)) { throw "缺必需成员：$required（先跑 tools/package.sh）" }
+  }
 
-  $members = @(Get-ChildItem $sidecarDir -File | Sort-Object Name)
-  if ($members.Count -eq 0) { throw "$sidecarDir 为空（至少应有清单 + dd-ext-search.exe）" }
+  $allowed = @("com.ddrun.filesearch.json", "com.ddrun.filesearch.json.sig", "dd-ext-search.exe")
+  $unexpected = @(Get-ChildItem $sidecarDir | Where-Object { $allowed -notcontains $_.Name })
+  if ($unexpected.Count -gt 0) {
+    throw "extensions.d 含未知成员，拒绝打包：$($unexpected.Name -join ', ')"
+  }
+  $members = @(Get-ChildItem $sidecarDir -File | Where-Object { $allowed -contains $_.Name } | Sort-Object Name)
+
+  if (Test-Path $sig -PathType Leaf) {
+    $cli = "dist/dev/dd-run-cli.exe"
+    if (-not (Test-Path $cli -PathType Leaf)) { throw "存在 .sig 但缺验签 CLI：$cli" }
+    & $cli --verify-ext-sig --manifest $manifest --exe $sidecar
+    if ($LASTEXITCODE -ne 0) { throw "随包 .sig 验签失败，拒绝打包" }
+  }
 
   if (Test-Path $zip) { Remove-Item $zip -Force }
   Add-Type -AssemblyName System.IO.Compression
